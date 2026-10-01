@@ -5,6 +5,8 @@ package routeros
 import (
 	"fmt"
 	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 )
 
 // The RouterOS command templates the setup wizard renders (#320), moved
@@ -578,18 +580,10 @@ func pushEnvelope(address, token, kind, varName string) []string {
 const addressListCountKind = "address-list-count"
 
 // blocklistListPrefix is what every address list the blocklist builder
-// writes is named under: mv-bl-<key>, and mv-bl-spamhaus6 for IPv6.
+// writes is named under: mv-bl-<key>, and mv-bl-spamhaus6 for IPv6
+// (blcatalogue.ListName; TestBlocklistPrefixCoversEveryCatalogueName
+// holds the two together).
 const blocklistListPrefix = "mv-bl-"
-
-// blocklistListNames is every address list the blocklist builder can
-// write (BUILD.md part 3's catalogue, ListNames). Fixed rather than read
-// off the router, so the count block is the same text whichever lists a
-// router has on: re-pasting the push changes nothing when a list is
-// added or removed.
-var blocklistListNames = []string{
-	"mv-bl-spamhaus", "mv-bl-spamhaus6", "mv-bl-et", "mv-bl-cins",
-	"mv-bl-blde", "mv-bl-greensnow", "mv-bl-dshield", "mv-bl-bindef",
-}
 
 // addressListCountBlock renders #1360's count page: for each blocklist
 // name and each family, one record {list, family, count, loadedAt}. The
@@ -603,8 +597,13 @@ var blocklistListNames = []string{
 // which is also what a router holding none of these lists sends for
 // every record.
 func addressListCountBlock(address, token string) string {
-	quoted := make([]string, len(blocklistListNames))
-	for i, n := range blocklistListNames {
+	// Every list the catalogue can write, fixed rather than read off the
+	// router, so the block is the same text whichever lists a router has
+	// on: re-pasting the push changes nothing when a list is added or
+	// removed.
+	names := blcatalogue.ListNames()
+	quoted := make([]string, len(names))
+	for i, n := range names {
 		quoted[i] = `"` + n + `"`
 	}
 	const varName = "blc"

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 	"github.com/tomlawesome/mikroview/internal/logging"
 )
 
@@ -278,6 +279,44 @@ func TestKnownSourcesMatchesRegistryOrder(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("KnownSources()[%d] = %s, want %s (registry order matters -- see orderedEnabledSources' doc comment)", i, got[i], want[i])
 		}
+	}
+}
+
+// #1360: the router's ET list (the blocklist builder's catalogue) and
+// the one MikroView flags from must be the same file, or what the
+// router drops and what MikroView flags drift apart. Spamhaus differs by
+// design for now: the catalogue loads Spamhaus's JSON files, which it
+// recommends, while this fetcher still reads drop.txt -- moving it is its
+// own issue (BUILD.md, "What stays out"). The test pins that difference
+// too, so closing it is a deliberate change here rather than an
+// accident.
+func TestFeedURLsMatchTheBlocklistCatalogue(t *testing.T) {
+	et, ok := blcatalogue.Lookup("et")
+	if !ok {
+		t.Fatal("the catalogue has no et list")
+	}
+	if got := registryBySource[SourceEmergingThreatsCompromised].URL; got != et.URL {
+		t.Errorf("Emerging Threats: MikroView flags from %q but the router is told to load %q", got, et.URL)
+	}
+
+	spamhaus, ok := blcatalogue.Lookup("spamhaus")
+	if !ok {
+		t.Fatal("the catalogue has no spamhaus list")
+	}
+	if got := registryBySource[SourceSpamhausDROP].URL; got != "https://www.spamhaus.org/drop/drop.txt" || spamhaus.URL != "https://www.spamhaus.org/drop/drop_v4.json" {
+		t.Errorf("Spamhaus: fetcher %q, catalogue %q -- the drop.txt/JSON difference is deliberate until its own issue moves the fetcher; update this test with that change", got, spamhaus.URL)
+	}
+
+	// The catalogue marks as many lists FlaggedByMikroView as there are
+	// feeds MikroView flags from.
+	var flagged int
+	for _, l := range blcatalogue.Lists() {
+		if l.FlaggedByMikroView {
+			flagged++
+		}
+	}
+	if flagged != len(feedRegistry) {
+		t.Errorf("the catalogue marks %d lists FlaggedByMikroView, but MikroView flags from %d feeds", flagged, len(feedRegistry))
 	}
 }
 
