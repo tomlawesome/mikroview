@@ -188,7 +188,7 @@ check(shellCheck.controllerState === 'activated', `the new worker is the one in 
 
 await signInAgain()
 
-const bannerAfterQuietReload = await page.getByText('mikroview has been upgraded to a newer version').count()
+const bannerAfterQuietReload = await page.getByText('MikroView has been upgraded to a newer version').count()
 check(bannerAfterQuietReload === 0, 'no freshness banner once the automatic reload has landed on the new version')
 
 const versionAfterQuietReload = await currentVersion()
@@ -217,7 +217,7 @@ check(
 // is the one that, before claimUnauthorized existed, reloaded this tab
 // as a session expiry under the typing, banner never shown (CI
 // pipeline 1896).
-const banner = page.getByText('mikroview has been upgraded to a newer version')
+const banner = page.getByText('MikroView has been upgraded to a newer version')
 await banner.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
 check(await banner.count(), 'the banner shows once a mismatch is found while the field is busy')
 

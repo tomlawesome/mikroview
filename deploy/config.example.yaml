@@ -106,12 +106,14 @@ devices:
 
 # RouterOS config backups over SFTP (issue #394, optional): a small
 # write-only SFTP drop box a router's own scheduled script pushes its
-# `/system backup save` and `/export` into. Off by default -- a second
-# listening port, opened only once you turn it on -- and turning it on
-# here is not enough on its own: also uncomment the matching port in
-# docker-compose.yml's `ports:`, or the router can never reach it
-# (#1220). Login is the device
-# name and that device's ingest token (no separate credential to
+# `/system backup save` and `/export` into. The switch is in Settings ->
+# router backups now (#1361), not here -- opening it re-checks the
+# admin's password, closing does not. A fresh install starts closed.
+# The port below is always published by docker-compose.yml regardless
+# (a container's port mapping can't follow the switch at runtime), so
+# nothing here is needed just to publish it -- only to change the
+# address or the vault's directory from their defaults. Login is the
+# device name and that device's ingest token (no separate credential to
 # invent); a login can only write into its own folder and cannot list,
 # read, delete, rename or overwrite anything. Every pair is encrypted
 # under history.keyFile above -- the same "no key, no storage" rule:
@@ -119,12 +121,11 @@ devices:
 # keeping anything unencrypted. 10 generations kept per router, 16 MiB
 # per file, oldest dropped first. Port 47022 is a fixed, deliberately
 # unconventional default (not 22 or 2222, which draw scanner traffic).
-# The setup wizard's step 6 prints the exact router-side script once a
-# key is mounted and this is turned on. See docs/configuration.md's
-# "Router backups" section and SECURITY.md for the on-path caveat:
-# RouterOS never verifies this server's host key.
+# The setup wizard's backup step prints the exact router-side script
+# once a key is mounted and the drop box is open. See
+# docs/configuration.md's "Router backups" section and SECURITY.md for
+# the on-path caveat: RouterOS never verifies this server's host key.
 # backup:
-#   enabled: false
 #   listen: ":47022"
 #   vaultDir: /var/lib/mikroview/router-backups   # default: beside the data directory
 

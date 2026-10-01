@@ -592,3 +592,55 @@ describe('a stale enrol or register response is ignored once the operator has le
     expect(wizardState.registerError).toBeNull()
   })
 })
+
+// #1361: what The router's Back up nightly choice reads and does.
+describe('the drop box (#1361)', () => {
+  function backups(port?: string) {
+    return {
+      enabled: true,
+      keyUnreadable: false,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      port,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    }
+  }
+
+  it('dropBoxClosed is only ever true after the backups read landed with no port, on an SFTP install', () => {
+    wizardState.reset()
+    expect(wizardState.dropBoxClosed).toBe(false)
+    wizardState.backups = backups(':47022')
+    expect(wizardState.dropBoxClosed).toBe(false)
+    wizardState.backups = backups(undefined)
+    expect(wizardState.dropBoxClosed).toBe(true)
+    wizardState.backupTransport = 'https'
+    expect(wizardState.dropBoxClosed).toBe(false)
+    wizardState.reset()
+  })
+
+  it('dropBoxSwitched folds the switch into the backups read, and re-renders the block only once one stands', async () => {
+    wizardState.reset()
+    vi.mocked(fetchSetupCommands).mockReset()
+    wizardState.backups = backups(undefined)
+    await wizardState.dropBoxSwitched({ open: true, port: '47022' })
+    expect(wizardState.backups?.port).toBe('47022')
+    expect(vi.mocked(fetchSetupCommands)).not.toHaveBeenCalled()
+
+    await wizardState.dropBoxSwitched({ open: false })
+    expect(wizardState.backups?.port).toBeUndefined()
+
+    wizardState.status = status()
+    wizardState.ledgerDevice = 'rb5009'
+    wizardState.token = 'tok-ingest'
+    const rendered = { steps: {} } as never
+    wizardState.commands = rendered
+    vi.mocked(fetchSetupCommands).mockResolvedValue(rendered)
+    await wizardState.dropBoxSwitched({ open: true, port: '47022' })
+    expect(vi.mocked(fetchSetupCommands)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchSetupCommands).mock.calls[0][0]).toMatchObject({ device: 'rb5009', token: 'tok-ingest' })
+    wizardState.reset()
+  })
+})
+

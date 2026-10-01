@@ -190,7 +190,17 @@ func UndoCaTrustCommands(dialect string) string {
 // an earlier setup -- another action, or a built-in repointed here --
 // shows up. A router whose script still reports only "mikroview" is
 // reporting a stale script, and the fix is the same paste.
-const WizardVersion = 4
+//
+// Bumped to 5 by issue #1405: PushBlock's ip-service record now also
+// requests RouterOS's own "dynamic" property, so mikroview can tell its
+// four dynamic /ip/service rows (dhcpclient, btest, discover,
+// reverse-proxy) from the eight an operator actually configures, rather
+// than showing all twelve as if they were management services. A router
+// whose script still omits "dynamic" is still handled correctly (the
+// server falls back to RouterOS's own address-key distinction), so this
+// bump is a nudge to re-paste for the more direct signal, not a
+// correctness requirement the way earlier bumps were.
+const WizardVersion = 5
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
@@ -427,10 +437,16 @@ var blockSpecs = map[string]blockSpec{
 	// inferring it from traffic. Field names are RouterOS 7's documented
 	// /ip/service properties -- see internal/ingest.IPServiceEntry's own
 	// doc comment for whether they were confirmed against a live router.
+	//
+	// dynamic was added by #1405: a real router's /ip/service table also
+	// returns four rows RouterOS runs itself (dhcpclient, btest,
+	// discover, reverse-proxy), and this is what lets mikroview tell
+	// those apart from the eight above -- see
+	// internal/ingest.IPServiceEntry.IsDynamic.
 	"ip-service": {
 		varName: "svc",
 		source:  "/ip/service",
-		record:  `{"name"=($v->"name"); "disabled"=($v->"disabled"); "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate")}`,
+		record:  `{"name"=($v->"name"); "disabled"=($v->"disabled"); "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}`,
 	},
 }
 

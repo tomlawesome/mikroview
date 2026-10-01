@@ -169,6 +169,7 @@ if (types.length >= 2) {
 
   await page.locator('.btc:has-text("Internal reconnaissance")').click()
   await page.waitForFunction(() => document.querySelector('input[aria-label="Filter by flag type"]').value === '', null, { timeout: 5000 })
+  // safe: waitForFunction above throws on timeout
   check(true, 'clicking the cell again clears the filter')
 }
 

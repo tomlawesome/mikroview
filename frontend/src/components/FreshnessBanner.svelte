@@ -23,7 +23,7 @@
 
 {#if freshnessState.banner}
   <div class="banner" role="status">
-    <span class="line">mikroview has been upgraded to a newer version</span>
+    <span class="line">MikroView has been upgraded to a newer version</span>
     <button type="button" class="link" onclick={() => freshnessState.reloadNow()}>reload</button>
   </div>
 {/if}

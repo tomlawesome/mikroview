@@ -124,6 +124,7 @@ if (first.ok && resolveRaised.ok) {
   await expectRow.waitFor({ timeout: 15000 })
   await expectRow.locator('button.v.expected').click()
   await expectRow.locator('.stamp.expected').waitFor({ timeout: 5000 })
+  // safe: waitFor above throws on timeout
   check(true, 'calling expected stamps the row and clears the flag')
 
   const judged = await waitForApiFlag(EXPECT_IP, (f) => f.cleared && f.verdict === 'expected')
@@ -231,6 +232,7 @@ if (first.ok && resolveRaised.ok) {
     )
   }
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the expectation flow cannot run without both port-scan flags')
 }
 

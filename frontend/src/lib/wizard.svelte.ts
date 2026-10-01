@@ -43,6 +43,7 @@ import type {
   EnrolmentToken,
   RefusedSender,
   RouterBackupsResponse,
+  RouterBackupSwitchState,
   SetupCommandsResponse,
   SetupMark,
   SetupStatus,
@@ -358,6 +359,32 @@ class WizardState {
     }
   }
 
+  // dropBoxClosed is what The router's Back up nightly choice reads
+  // (#1361): the drop box is known to be closed. Three things have to be
+  // true, so that this never claims "closed" without having asked: the
+  // drop box is the way in at all (an HTTPS-only install has no port to
+  // open, #955), GET /api/router-backups has answered on this open, and
+  // its live port read (RouterBackupsResponse.port) came back empty.
+  get dropBoxClosed(): boolean {
+    return this.backupTransport === 'sftp' && this.backups !== null && !this.backups.port
+  }
+
+  // dropBoxSwitched folds the drop box's own switch (#1361) straight into
+  // this session's copy of the backups read -- the same "show the write's
+  // own answer, don't wait for the next poll" rule EngineRoom's
+  // routerBackupSwitchChanged keeps -- and, when the block has already
+  // been rendered (the operator came Back from Paste once to open it),
+  // asks for it again: internal/api/setupcommands.go leaves the backup
+  // section blank while the drop box is closed, so the block that stands
+  // is missing the part this switch just made possible. The same
+  // device/token key ensureIngestToken used, so the re-render carries the
+  // ingest token the backup script embeds.
+  async dropBoxSwitched(next: RouterBackupSwitchState): Promise<void> {
+    if (this.backups) this.backups = { ...this.backups, port: next.open ? next.port : undefined }
+    if (!this.commands) return
+    await this.refreshCommands({ device: this.ledgerDevice || undefined, token: this.token || undefined })
+  }
+
   get marks(): SetupMark[] {
     return this.status?.marks ?? []
   }
@@ -467,8 +494,9 @@ class WizardState {
   }
 
   // launch opens the ledger at the first step still waiting. Evidence
-  // that arrived while it was closed is already green, because the
-  // ledger is rebuilt from the server's observations every time.
+  // that arrived while it was closed turns green once Wizard.svelte's
+  // open-time read lands: the ledger held here may be the sign-in one,
+  // so the wizard reads it again and re-places the run on it (#1404).
   launch() {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'

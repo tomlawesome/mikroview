@@ -508,10 +508,13 @@ type SetupInstance struct {
 	Hosts      []string
 	SyslogPort string
 	// BackupPort is the router-backup SFTP drop box's own port (#394,
-	// config's backup.listen) -- separate from SyslogPort, since it is
-	// a different listener entirely. Empty when backup.enabled is
-	// false: step 6 has no address to render a script for.
-	BackupPort string
+	// config's backup.listen) -- separate from SyslogPort, since it is a
+	// different listener entirely. A live read (#1361), not a value fixed
+	// at startup like the others here: the drop box is now switched on
+	// and off from Settings with no restart, so this asks main's
+	// backupRuntime what is actually listening right now. "" while the
+	// drop box is closed: step 6 has no address to render a script for.
+	BackupPort func() string
 	// BackupKeyUnreadable is #1264 finding 5: true when history.keyFile
 	// names a file that could not be read (missing, truncated, wrong --
 	// anything other than simply being unset), set once at startup by
@@ -536,6 +539,16 @@ type SetupInstance struct {
 	// enumerate; the wizard still has the browser's own host to fall
 	// back to.
 	Candidates []string
+}
+
+// BackupPortNow is the nil-safe read of BackupPort: a Server built with
+// no backupRuntime wired up (most tests, and any build that omits the
+// feature) reads as closed rather than panicking on a nil func.
+func (si SetupInstance) BackupPortNow() string {
+	if si.BackupPort == nil {
+		return ""
+	}
+	return si.BackupPort()
 }
 
 func nonNilStrings(v []string) []string {

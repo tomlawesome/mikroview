@@ -245,8 +245,11 @@ check(!!rerolledLine, `Reroll changes the token on the page (now ends in "${toke
 // --- f. Copy: the router's turn begins ---------------------------------
 
 await body.locator('button.primary:text-is("Copy")').click()
-await waitForCondition(async () => ((await text(body.locator('h3'))) === 'The router’s turn.' ? true : null), 5000)
-check(true, 'Copy starts the router’s turn')
+// waitForCondition returns null on timeout rather than throwing, so the
+// result must be checked -- an unconditional pass here would say nothing
+// about whatever heading was actually showing.
+const copyStarted = await waitForCondition(async () => ((await text(body.locator('h3'))) === 'The router’s turn.' ? true : null), 5000)
+check(!!copyStarted, 'Copy starts the router’s turn')
 
 // Standing in for the router's own `/tool fetch` of the first section of
 // the block: this harness drives a real browser and a real listener but
@@ -351,8 +354,11 @@ try {
   check(false, `a plain line from ${WRONG_IP} should now be accepted: ${e}`)
 }
 
-await waitForCondition(async () => ((await text(body.locator('h3'))) === `${ROUTER_NAME} is sending.` ? true : null), 10000)
-check(true, 'everything chosen (cert, logs; push and backup both left dark) has arrived')
+// waitForCondition returns null on timeout rather than throwing, so the
+// result must be checked -- an unconditional pass here would say nothing
+// about whatever heading was actually showing.
+const sendingArrived = await waitForCondition(async () => ((await text(body.locator('h3'))) === `${ROUTER_NAME} is sending.` ? true : null), 10000)
+check(!!sendingArrived, 'everything chosen (cert, logs; push and backup both left dark) has arrived')
 
 // --- j. Closed port: the window is spent, so a stranger is refused too --
 
@@ -387,6 +393,7 @@ await foot.locator('button.primary:text-is("Next")').click()
 await foot.locator('button:text-is("Skip this step")').click()
 await foot.locator('button.primary:text-is("Finish")').click()
 await wiz.waitFor({ state: 'hidden', timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'Finish leaves the wizard (admin lands back on Entities -- deckCards.ts’s shared card)')
 
 // --- l. Entities: the refused cards, and no accept control on them ------

@@ -126,6 +126,7 @@ check(
   `and says config.yaml decides its name (nameSource=${declared?.nameSource}, name="${declared?.name}")`,
 )
 if (!declared) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the rename cannot be exercised without the declared-router baseline')
   done()
 }
@@ -156,6 +157,7 @@ check(
   `the enrol line from ${UNDECLARED_IP} attributes the address to ${UNDECLARED_ID} (got ${JSON.stringify(undeclared?.acceptedIp)})`,
 )
 if (!undeclared) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the rename cannot be exercised without a device to rename')
   done()
 }
@@ -180,6 +182,7 @@ try {
 }
 check(rowFound, `a row from the undeclared router rendered, showing ${UNDECLARED_ID}`)
 if (!rowFound) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the editor cannot be exercised on a row that never rendered')
   done()
 }

@@ -73,7 +73,7 @@
   {n === 1 ? 'thing stands' : 'things stand'} on evidence{#if k}; {k} {k === 1 ? 'was' : 'were'} set aside{/if}. Finish
   takes you to the fall, with {wizardRun.name} already flowing.
 </p>
-<Track stations={wizardRun.trackStations} compact />
+<Track stations={wizardRun.trackStations} stage={wizardRun.stage} compact />
 <div class="ledger">
   {#each rows as r (r.t)}
     <div class="row" class:skip={!r.done} style:--ink={r.done && r.ink ? `var(--ink-${r.ink})` : null}>

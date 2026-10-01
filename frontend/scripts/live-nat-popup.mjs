@@ -355,6 +355,7 @@ await openRowSheet(UNLOGGED_SRC)
   const out = page.locator('.sheet .entry.out')
   check((await out.count()) === 5, `all five ruled-out rules are still rendered (${await out.count()})`)
   await out.first().waitFor({ state: 'visible', timeout: 5000 })
+  // safe: waitFor above throws on timeout
   check(true, 'ruled-out entries stay visible and readable rather than being dropped')
 
   // The row itself carries no rule decoration: a guess must never sit on
@@ -433,6 +434,7 @@ await page.locator(`.grid .row:has-text("${HOLD_SLUG}")`).first().waitFor({
   state: 'visible',
   timeout: 20000,
 })
+// safe: waitFor above throws on timeout
 check(true, 'closing the popup releases the hold and the held events appear')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)

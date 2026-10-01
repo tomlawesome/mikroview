@@ -29,7 +29,7 @@ describe('the freshness banner', () => {
     ;(freshnessState as unknown as { banner: boolean }).banner = true
     const { container } = render(FreshnessBanner)
 
-    expect(container.querySelector('.line')?.textContent).toBe('mikroview has been upgraded to a newer version')
+    expect(container.querySelector('.line')?.textContent).toBe('MikroView has been upgraded to a newer version')
   })
 
   it('has no ✕', () => {

@@ -104,6 +104,7 @@ for (const [rule, line] of fixtures) {
   allArrived = allArrived && arrived
 }
 if (!allArrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped the rest -- token interactions cannot be exercised on rows that never arrived')
   done()
 }
@@ -165,6 +166,7 @@ try {
 }
 check(ready, 'the live view loaded (filter bar rendered)')
 if (!ready) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the bar never rendered')
   done()
 }
@@ -252,6 +254,7 @@ if (chainRowVisible) {
   const ifaceAfterOut = await waitForInputValue('input[aria-label="Interface"]', 'ether1')
   check(ifaceAfterOut === 'ether1', `clicking the "out" interface token filters to it (got "${ifaceAfterOut}")`)
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped the chain-select and interface-token checks -- their row never rendered')
 }
 
@@ -337,6 +340,7 @@ if (hasUnknownOption) {
     'a row with a source address but an undetermined country still shows under the "Unknown" country filter',
   )
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped the Unknown-country selection check -- the option was never offered')
 }
 

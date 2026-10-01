@@ -122,6 +122,7 @@ async function waitForLanding(page) {
 // From the stream, where session() left us.
 await page.click(DETAIL)
 await waitForLanding(page)
+// safe: waitForLanding's waitForFunction throws on timeout
 check(true, 'clicking `details` from the stream lands on the ingest section')
 
 // And from somewhere else entirely: the link states a destination, not a
@@ -132,6 +133,7 @@ check(true, 'clicking `details` from the stream lands on the ingest section')
 await goTo(page, 'Flags')
 await page.click(DETAIL)
 await waitForLanding(page)
+// safe: waitForLanding's waitForFunction throws on timeout
 check(true, 'clicking `details` from the docket lands on the ingest section too')
 
 // The section is centred, not merely somewhere on the page:
@@ -200,6 +202,7 @@ const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`
 await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, 'the viewer account is removed again')
 
 // --- 5: Clear all removes the drawer, not just hides it --------------------

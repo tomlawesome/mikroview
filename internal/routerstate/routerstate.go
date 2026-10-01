@@ -655,6 +655,13 @@ func (s *Store) PPPActive(device string) (sessions []ingest.PPPActiveSession, up
 // no ordinal of its own. ok is false when nothing has been pushed for
 // that device+kind yet, the same "no data yet" convention every other
 // accessor here uses.
+//
+// RouterOS's own dynamic /ip/service rows (dhcpclient, btest, discover,
+// reverse-proxy) are left out here rather than stored filtered, so both
+// callers of this accessor -- the /services endpoint and the WAN-edge
+// panel -- get the same, already-correct list without each repeating the
+// check (#1405). IsDynamic covers a router that hasn't re-pasted the
+// current push script too.
 func (s *Store) IPServices(device string) (services []ingest.IPServiceEntry, updatedAt time.Time, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -664,7 +671,12 @@ func (s *Store) IPServices(device string) (services []ingest.IPServiceEntry, upd
 		return nil, time.Time{}, false
 	}
 	for _, p := range ks.pages {
-		services = append(services, p.IPServices...)
+		for _, svc := range p.IPServices {
+			if svc.IsDynamic() {
+				continue
+			}
+			services = append(services, svc)
+		}
 	}
 	sort.SliceStable(services, func(i, j int) bool { return services[i].Name < services[j].Name })
 	return services, ks.updatedAt, true

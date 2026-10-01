@@ -293,6 +293,7 @@ if (raised.every((r) => r.ok)) {
     'and the box is empty when the reopened flag is looked at again',
   )
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the drawer cannot be driven without its two port-scan flags')
 }
 
