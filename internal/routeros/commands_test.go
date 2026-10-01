@@ -247,9 +247,13 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		`"inInterface"=($v->"in-interface")`,
 		`"outInterface"=($v->"out-interface")`,
 		// #435's rule counters -- the cost the Log every rule helper shows
-		// beside a tick-box before any logging is switched on.
-		`"packets"=($v->"packets")`,
-		`"bytes"=($v->"bytes")`,
+		// beside a tick-box before any logging is switched on -- and
+		// disabled, read back by the rule's own id (#1409): print
+		// as-value carries no counters on 7.18.2 or 7.24.4, and no
+		// disabled on 7.18.2.
+		`"disabled"=[/ip/firewall/filter get ($v->".id") disabled]`,
+		`"packets"=[/ip/firewall/filter get ($v->".id") packets]`,
+		`"bytes"=[/ip/firewall/filter get ($v->".id") bytes]`,
 		// The wrapping that makes it a list of records rather than one
 		// merged map -- silently wrong without it.
 		`{$rec}`,
@@ -257,6 +261,23 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		if !strings.Contains(block, want) {
 			t.Errorf("pushBlock(filter-rule) missing %q:\n%s", want, block)
 		}
+	}
+	for _, field := range []string{"disabled", "packets", "bytes"} {
+		if off := `($v->"` + field + `")`; strings.Contains(block, off) {
+			t.Errorf("pushBlock(filter-rule) reads %s off print as-value, which sends null for it (#1409):\n%s", field, block)
+		}
+	}
+}
+
+// #1409: 7.18.2's print as-value leaves an address-list entry's dynamic
+// out, so it is read back by the entry's own id.
+func TestPushBlockReadsAddressListDynamicWithGet(t *testing.T) {
+	block := PushBlock("h", "t", "address-list", "a")
+	if want := `"dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]`; !strings.Contains(block, want) {
+		t.Errorf("pushBlock(address-list) missing %q:\n%s", want, block)
+	}
+	if strings.Contains(block, `($v->"dynamic")`) {
+		t.Errorf("pushBlock(address-list) reads dynamic off print as-value, which 7.18.2 leaves out:\n%s", block)
 	}
 }
 

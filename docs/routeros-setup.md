@@ -499,7 +499,7 @@ real RouterOS 7.23.3 router before writing this down:
 ```
 :local recs [:toarray ""]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
-  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=[/ip/firewall/filter get ($v->".id") disabled]; "packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$recs}]
@@ -534,9 +534,16 @@ the array RouterOS sends or as a comma-joined string, so
 `packets` and `bytes` were added for issue #435: RouterOS keeps a
 per-rule hit counter whether or not the rule logs, so the "Log every
 rule" helper can show a rule's real cost — "fired 41,000 times in the
-last day" — beside its tick-box before you switch logging on for it. Same
-shape as every other RouterOS integer here: `:serialize to=json` emits
-them as a float, which MikroView's decoder already expects.
+last day" — beside its tick-box before you switch logging on for it.
+
+`disabled`, `packets` and `bytes` are read with `get` by the rule's own
+`.id` rather than off `$v`, because `print as-value` does not carry
+them (issue #1409): on RouterOS 7.18.2 and 7.24.4 alike it leaves out
+both counters, so `($v->"packets")` sends nothing, and on 7.18.2 it
+leaves out `disabled` too, so a disabled rule arrives looking enabled.
+`get` answers all three on both
+(`docs/routeros-verification-logs/<version>-push-filter-counters.log`).
+A counter can pass 2^31 on a busy rule; MikroView takes it up to 2^53.
 
 `routerosVersion` on the payload (not on a record — it describes the
 router, not a rule) is the router telling MikroView which RouterOS it is
@@ -641,8 +648,8 @@ to cover more than filter rules and DHCP/ARP:
 
 | `kind` | Source command | Fields |
 |---|---|---|
-| `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `disabled`, `packets`, `bytes` |
+| `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, and `dynamic` read with `get` (7.18.2's `print as-value` leaves it out) |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, and `disabled`, `packets`, `bytes` read with `get` -- see the example above |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `logPrefix` ← `log-prefix`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |

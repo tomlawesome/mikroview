@@ -181,19 +181,20 @@ type FilterRule struct {
 	// hit counter whether or not the rule logs, so the Log every rule
 	// helper can show "fired 41,000 times in the last day" beside a
 	// tick-box before any logging is switched on -- cost, from the
-	// router's own evidence, ahead of the decision to watch. Both are
-	// RouterOSInt (not RouterOSInt64): :serialize to=json emits them as
-	// the same float shape every other RouterOS integer here uses, and
-	// this schema follows FilterRule's own precedent of a plain int32
-	// range rather than WireguardPeer.RX/TX's wider type -- a fixed
-	// contract decision (#435), not an oversight; a counter that
-	// genuinely outgrows int32 is a rule worth flagging on its own
-	// terms; refusing the push. A push made before this field existed
-	// omits it, which decodes as 0 -- the same "absent means not yet
-	// reported" reading Disabled documents above, not "fired zero
-	// times".
-	Packets RouterOSInt `json:"packets"`
-	Bytes   RouterOSInt `json:"bytes"`
+	// router's own evidence, ahead of the decision to watch. A push made
+	// before this field existed omits it, which decodes as 0 -- the same
+	// "absent means not yet reported" reading Disabled documents above,
+	// not "fired zero times".
+	//
+	// Both are RouterOSInt64, WireguardPeer.RX/TX's type, since #1409.
+	// #435 chose a plain int32 range, but no push ever carried a counter
+	// to test that against: the script read them off `print as-value`,
+	// which leaves them out on every RouterOS release checked, so every
+	// push sent null. The script now reads them with `get`, and a busy
+	// rule passes 2 GiB without doing anything unusual -- int32 would
+	// refuse that router's whole filter page.
+	Packets RouterOSInt64 `json:"packets"`
+	Bytes   RouterOSInt64 `json:"bytes"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule.
@@ -615,20 +616,21 @@ func (f *RouterOSFlag) UnmarshalJSON(data []byte) error {
 // disabled, an unlogged rule's log and log-prefix, a "from" rule's
 // dst-address-list -- and decodes to the zero value. Packets and Bytes
 // are read with `get` by the push script, since `print as-value` leaves
-// them out (internal/routeros blockSpecs["raw-rule"]).
+// them out (internal/routeros blockSpecs["raw-rule"]), and are 64-bit
+// for the same reason FilterRule's are (#1409).
 type RawRule struct {
-	Ordinal        RouterOSInt `json:"ordinal"`
-	Family         string      `json:"family"`
-	Comment        string      `json:"comment"`
-	Chain          string      `json:"chain"`
-	Action         string      `json:"action"`
-	SrcAddressList string      `json:"srcAddressList"`
-	DstAddressList string      `json:"dstAddressList"`
-	LogPrefix      string      `json:"logPrefix"`
-	Log            bool        `json:"log"`
-	Disabled       bool        `json:"disabled"`
-	Packets        RouterOSInt `json:"packets"`
-	Bytes          RouterOSInt `json:"bytes"`
+	Ordinal        RouterOSInt   `json:"ordinal"`
+	Family         string        `json:"family"`
+	Comment        string        `json:"comment"`
+	Chain          string        `json:"chain"`
+	Action         string        `json:"action"`
+	SrcAddressList string        `json:"srcAddressList"`
+	DstAddressList string        `json:"dstAddressList"`
+	LogPrefix      string        `json:"logPrefix"`
+	Log            bool          `json:"log"`
+	Disabled       bool          `json:"disabled"`
+	Packets        RouterOSInt64 `json:"packets"`
+	Bytes          RouterOSInt64 `json:"bytes"`
 }
 
 // Address families a RawRule or AddressListCount may name: the RouterOS
