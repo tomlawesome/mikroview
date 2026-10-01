@@ -211,6 +211,11 @@ func UndoCaTrustCommands(dialect string) string {
 // its address-list page outgrows /tool fetch's ~64 KiB body and stops
 // arriving, which is why the builder re-sets the push script as its
 // first part and a re-paste is worth nudging everywhere.
+//
+// Still 6 after #1409, which changed the filter-rule and address-list
+// blocks on the same unreleased branch: one bump per released change to
+// the script is what tells a router it is behind, and no router has run
+// a 6 that lacks #1409's reads.
 const WizardVersion = 6
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
@@ -434,6 +439,13 @@ var blockSpecs = map[string]blockSpec{
 	// counter whether or not the rule logs, so the Log every rule helper
 	// can show a rule's real cost -- "fired 41,000 times in the last
 	// day" -- beside its tick-box before any logging is switched on.
+	//
+	// disabled and the counters are read with `get` by the rule's .id,
+	// the way raw-rule below reads them and for the same reason (#1409):
+	// on a real CHR, 7.18.2 and 7.24.4 alike, `print as-value` leaves
+	// packets and bytes out of every row, so ($v->"packets") sent null on
+	// every push, and on 7.18.2 it leaves disabled out too, so a disabled
+	// rule arrived enabled.
 	"filter-rule": {
 		varName: "rule",
 		source:  "/ip/firewall/filter",
@@ -441,17 +453,22 @@ var blockSpecs = map[string]blockSpec{
 			`"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ` +
 			`"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ` +
 			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ` +
-			`"disabled"=($v->"disabled"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}`,
+			`"disabled"=[/ip/firewall/filter get ($v->".id") disabled]; ` +
+			`"packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}`,
 	},
 	// The where is #1360's: the blocklist builder's lists (mv-bl-*) run
 	// to 15,000 entries, which would overflow /tool fetch's ~64 KiB POST
 	// body and stop this whole page arriving. They reach MikroView as a
 	// count instead -- the address-list-count block below.
+	//
+	// dynamic is read with `get` by the entry's .id (#1409): on 7.18.2
+	// `print as-value` leaves it out of every row, so a timed or
+	// rule-added entry arrived as if the operator had written it.
 	"address-list": {
 		varName: "al",
 		source:  "/ip/firewall/address-list",
 		where:   `!(list~"^` + blocklistListPrefix + `")`,
-		record:  `{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}`,
+		record:  `{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]}`,
 	},
 	// raw-rule is #1360's: the blocklist builder's drop rules sit in raw
 	// prerouting (owner, answer 11a), on both families, and their

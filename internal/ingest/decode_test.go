@@ -1014,6 +1014,113 @@ func TestDecodeRealRawRulePush(t *testing.T) {
 	}
 }
 
+// TestDecodeRealFilterRuleCounters is #1409's: the filter-rule page a
+// real CHR produced on 2026-10-01 from blockSpecs["filter-rule"], saved
+// as a script under the push policy and run with its fetch swapped for
+// :put (docs/routeros-verification-logs/<version>-push-filter-counters.log).
+// One rule an output-chain ping moved (3 packets, 168 bytes), one
+// disabled, one enabled and unlogged. disabled and the counters are read
+// with get, so they arrive as booleans and whole numbers on both
+// releases -- where the script before #1409, reading them off print
+// as-value, sent null for both counters everywhere and, on 7.18.2, null
+// for disabled even on the disabled rule (the "before" bodies, same
+// transcripts).
+func TestDecodeRealFilterRuleCounters(t *testing.T) {
+	bodies := map[string]string{
+		"7.18.2": `{"kind":"filter-rule","page":1,"pages":1,"records":[
+		  {"action":"accept","bytes":168,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":false,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":3,"protocol":"icmp","srcAddress":null,"srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":0,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":false,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":0,"protocol":null,"srcAddress":null,"srcAddressList":null}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`,
+		"7.24.4": `{"kind":"filter-rule","page":1,"pages":1,"records":[
+		  {"action":"accept","bytes":168,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":false,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":3,"protocol":"icmp","srcAddress":null,"srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":0,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":false,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":0,"protocol":null,"srcAddress":null,"srcAddressList":null}
+		],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`,
+	}
+	want := []struct {
+		comment        string
+		disabled       bool
+		packets, bytes int64
+	}{
+		{"probe: counted", false, 3, 168},
+		{"probe: disabled", true, 0, 0},
+		{"probe: enabled, unlogged", false, 0, 0},
+	}
+	for version, body := range bodies {
+		p := decodeOK(t, body)
+		if p.RouterOSVersion != version+" (stable)" || len(p.FilterRules) != len(want) {
+			t.Fatalf("%s: decoded %q with %d rules, want %d", version, p.RouterOSVersion, len(p.FilterRules), len(want))
+		}
+		for i, w := range want {
+			got := p.FilterRules[i]
+			if got.Comment != w.comment || got.Disabled != w.disabled || int64(got.Packets) != w.packets || int64(got.Bytes) != w.bytes {
+				t.Errorf("%s rule %d = %q disabled=%v packets=%d bytes=%d, want %q disabled=%v packets=%d bytes=%d",
+					version, i, got.Comment, got.Disabled, got.Packets, got.Bytes, w.comment, w.disabled, w.packets, w.bytes)
+			}
+		}
+	}
+
+	// The defect, from the same transcripts: the old script's 7.18.2 page
+	// decodes, but says the disabled rule is enabled and nothing fired.
+	before := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[
+		  {"action":"accept","bytes":null,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":null,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":null,"protocol":"icmp","srcAddress":null,"srcAddressList":null},
+		  {"action":"drop","bytes":null,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":null,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":null,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},
+		  {"action":"drop","bytes":null,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":null,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":null,"protocol":null,"srcAddress":null,"srcAddressList":null}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`)
+	if r := before.FilterRules[1]; r.Disabled || before.FilterRules[0].Packets != 0 {
+		t.Errorf("the pre-#1409 7.18.2 body decoded disabled=%v packets=%d -- this test no longer pins what was wrong", r.Disabled, before.FilterRules[0].Packets)
+	}
+}
+
+// TestDecodeRealAddressListDynamic is #1409's other half: the
+// address-list page from the same CHR runs. On 7.18.2 the script before
+// #1409 sent "dynamic":null for the timed entry, so it decoded as an
+// operator's own; read with get it arrives true on both releases.
+func TestDecodeRealAddressListDynamic(t *testing.T) {
+	for version, body := range map[string]string{
+		"7.18.2": `{"kind":"address-list","page":1,"pages":1,"records":[
+		  {"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},
+		  {"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`,
+		"7.24.4": `{"kind":"address-list","page":1,"pages":1,"records":[
+		  {"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},
+		  {"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}
+		],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`,
+	} {
+		p := decodeOK(t, body)
+		want := []AddressListEntry{
+			{List: "mgmt", Address: "192.0.2.1", Comment: "operator entry"},
+			{List: "scanners", Address: "192.0.2.2", Comment: "timed entry, so dynamic", Dynamic: true},
+		}
+		if len(p.AddressList) != len(want) {
+			t.Fatalf("%s: decoded %d entries, want %d", version, len(p.AddressList), len(want))
+		}
+		for i, w := range want {
+			if got := p.AddressList[i]; got != w {
+				t.Errorf("%s entry %d = %+v, want %+v", version, i, got, w)
+			}
+		}
+	}
+}
+
+// TestRuleCountersPast2GiBDecode is #1409's width fix. Not a CHR body:
+// pushing 2 GiB through a software-emulated router to move a real
+// counter that far is not practical here, so the values are written in
+// the shape the CHR bodies above show for a counter (a bare whole
+// number) and in :serialize's float shape for one. int32 refused both,
+// and with them the whole page.
+func TestRuleCountersPast2GiBDecode(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"action":"accept","bytes":5000000000,"chain":"forward","comment":"busy","disabled":false,"ordinal":0,"packets":3000000000.000000}]}`)
+	if r := p.FilterRules[0]; r.Bytes != 5000000000 || r.Packets != 3000000000 {
+		t.Errorf("filter rule counters = %d/%d, want 3000000000/5000000000", r.Packets, r.Bytes)
+	}
+	p = decodeOK(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"action":"drop","bytes":5000000000,"chain":"prerouting","comment":"busy","disabled":false,"family":"ip","ordinal":0,"packets":3000000000}]}`)
+	if r := p.RawRules[0]; r.Bytes != 5000000000 || r.Packets != 3000000000 {
+		t.Errorf("raw rule counters = %d/%d, want 3000000000/5000000000", r.Packets, r.Bytes)
+	}
+}
+
 // TestDecodeRealAddressListCountPush is the body a real RouterOS 7.24.4
 // CHR produced from the address-list-count block on 2026-10-01
 // (docs/routeros-verification-logs/7.24.4-push-blocklist.log): every

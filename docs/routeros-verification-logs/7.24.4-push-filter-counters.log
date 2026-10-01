@@ -1,0 +1,214 @@
+# #1409: the filter-rule and address-list push blocks' disabled, packets,
+# bytes and dynamic, before (141f81e2, read off print as-value) and after
+# (read with get by .id), on a real CHR 7.24.4, 2026-10-01.
+# Each block once at the console with its /tool fetch swapped for :put,
+# then the new pair saved as a script under the push policy (read,test)
+# and run. Then: what get does for an entry that vanished mid-loop, and
+# the payload size, old against new, on a 100-rule table.
+# Fixture is probe data: documentation addresses plus the QEMU SLIRP
+# gateway (10.0.2.2), so a rule's counter moves. No token: "tok".
+
+== :put [/system resource get version]
+:put [/system resource get version]
+7.24.4 (stable)
+[admin@CHR] >
+== /ip firewall filter add chain=output action=accept protocol=icmp dst-address=10.0.2.2 log=yes log-prefix="A|probe|" comment="probe: counted"
+/ip firewall filter add chain=output action=accept protocol=icmp dst-address=10.0.2.2 log=yes log-prefix="A|probe|" comment="probe: counted"
+[admin@CHR] >
+== /ip firewall filter add chain=input action=drop src-address=192.0.2.9 disabled=yes comment="probe: disabled"
+/ip firewall filter add chain=input action=drop src-address=192.0.2.9 disabled=yes comment="probe: disabled"
+[admin@CHR] >
+== /ip firewall filter add chain=forward action=drop connection-state=invalid comment="probe: enabled, unlogged"
+/ip firewall filter add chain=forward action=drop connection-state=invalid comment="probe: enabled, unlogged"
+[admin@CHR] >
+== /ip firewall address-list add list=mgmt address=192.0.2.1 comment="operator entry"
+/ip firewall address-list add list=mgmt address=192.0.2.1 comment="operator entry"
+[admin@CHR] >
+== /ip firewall address-list add list=scanners address=192.0.2.2 timeout=1h comment="timed entry, so dynamic"
+/ip firewall address-list add list=scanners address=192.0.2.2 timeout=1h comment="timed entry, so dynamic"
+[admin@CHR] >
+== /ip firewall address-list add list=mv-bl-et address=198.51.100.7 comment="blocklist entry, left out"
+/ip firewall address-list add list=mv-bl-et address=198.51.100.7 comment="blocklist entry, left out"
+[admin@CHR] >
+== /ping 10.0.2.2 count=3
+/ping 10.0.2.2 count=3
+  SEQ HOST                                     SIZE TTL TIME       STATUS                                                                                                                              
+    0 10.0.2.2                                   56 255 26ms618us 
+    1 10.0.2.2                                   56 255 5ms172us  
+    2 10.0.2.2                                   56 255 9ms478us  
+    sent=3 received=3 packet-loss=0% min-rtt=5ms172us avg-rtt=13ms756us max-rtt=26ms618us 
+
+[admin@CHR] >
+== /ip firewall filter print stats
+/ip firewall filter print stats
+Flags: X - DISABLED
+Columns: CHAIN, ACTION, BYTES, PACKETS
+#   CHAIN    ACTION  BYTES  PACKETS
+;;; probe: counted
+0   output   accept    168        3
+;;; probe: disabled
+1 X input    drop        0        0
+;;; probe: enabled, unlogged
+2   forward  drop        0        0
+[admin@CHR] >
+== /ip firewall address-list print
+/ip firewall address-list print
+Flags: D - DYNAMIC
+Columns: LIST, ADDRESS, CREATION-TIME, TIMEOUT
+#   LIST      ADDRESS       CREATION-TIME        TIMEOUT
+;;; operator entry
+0   mgmt      192.0.2.1     2026-10-01 18:04:22         
+;;; timed entry, so dynamic
+1 D scanners  192.0.2.2     2026-10-01 18:04:23  59m52s 
+;;; blocklist entry, left out
+2   mv-bl-et  198.51.100.7  2026-10-01 18:04:25         
+[admin@CHR] >
+== :put [/ip firewall filter print as-value]
+:put [/ip firewall filter print as-value]
+.id=*1;action=accept;chain=output;comment=probe: counted;dst-address=10.0.2.2;dynamic=false;invalid=false;log=true;log-prefix=A|probe|;protocol=icmp;.id=*2;action=drop;chain=input;comment=probe: disabled;disabled=true;dynamic=false;invalid=false;src-address=192.0.2.9;.id=*3;action=drop;chain=forward;comment=probe: enabled, unlogged;connection-state=invalid;dynamic=false;invalid=false
+[admin@CHR] >
+== :put [/ip firewall filter print stats as-value]
+:put [/ip firewall filter print stats as-value]
+.id=*1;action=accept;bytes=168;chain=output;comment=probe: counted;dynamic=false;invalid=false;packets=3;.id=*2;action=drop;bytes=0;chain=input;comment=probe: disabled;disabled=true;dynamic=false;invalid=false;packets=0;.id=*3;action=drop;bytes=0;chain=forward;comment=probe: enabled, unlogged;dynamic=false;invalid=false;packets=0
+[admin@CHR] >
+== :foreach v in=[/ip firewall filter print as-value] do={ :put (($v->"comment") . ": disabled=" . [/ip firewall filter get ($v->".id") disabled] . " packets=" . [/ip firewall filter get ($v->".id") packets] . " bytes=" . [/ip firewall filter get ($v->".id") bytes]) }
+:foreach v in=[/ip firewall filter print as-value] do={ :put (($v->"comment") . ": disabled=" . [/ip firewall filter get ($v->".id") disabled] . " packets=" . [/ip firewall filter get ($
+v->".id") packets] . " bytes=" . [/ip firewall filter get ($v->".id") bytes]) }
+probe: counted: disabled=false packets=3 bytes=168
+probe: disabled: disabled=true packets=0 bytes=0
+probe: enabled, unlogged: disabled=false packets=0 bytes=0
+[admin@CHR] >
+== :put [/ip firewall address-list print as-value]
+:put [/ip firewall address-list print as-value]
+.id=*1;address=192.0.2.1;comment=operator entry;creation-time=2026-10-01 18:04:22;disabled=false;dynamic=false;list=mgmt;.id=*2;address=192.0.2.2;comment=timed entry, so dynamic;creation-time=2026-10-01 18:04:23;disabled=false;dynamic=true;list=scanners;timeout=00:59:47;.id=*3;address=198.51.100.7;comment=blocklist entry, left out;creation-time=2026-10-01 18:04:25;disabled=false;dynamic=false;list=mv-bl-et
+[admin@CHR] >
+== :foreach v in=[/ip firewall address-list print as-value] do={ :put (($v->"address") . ": dynamic=" . [/ip firewall address-list get ($v->".id") dynamic]) }
+:foreach v in=[/ip firewall address-list print as-value] do={ :put (($v->"address") . ": dynamic=" . [/ip firewall address-list get ($v->".id") dynamic]) }
+192.0.2.1: dynamic=false
+192.0.2.2: dynamic=true
+198.51.100.7: dynamic=false
+[admin@CHR] >
+
+# BEFORE (141f81e2): filter-rule block
+== :local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=($v->"disabled"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$ruleRecs}]; :put $rulePayload
+:local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action
+"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress
+"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=($v->"disabled"); "packets"=($v->"packets"); "by
+tes"=($v->"bytes")}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wi
+zardVersion"=6; "records"=$ruleRecs}]; :put $rulePayload
+{"kind":"filter-rule","page":1,"pages":1,"records":[{"action":"accept","bytes":null,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":null,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":null,"protocol":"icmp","srcAddress":null,"srcAddressList":null},{"action":"drop","bytes":null,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":null,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},{"action":"drop","bytes":null,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":null,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":null,"protocol":null,"srcAddress":null,"srcAddressList":null}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# AFTER (#1409): filter-rule block
+== :local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=[/ip/firewall/filter get ($v->".id") disabled]; "packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$ruleRecs}]; :put $rulePayload
+:local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action
+"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress
+"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=[/ip/firewall/filter get ($v->".id") disabled]; 
+"packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"
+="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$ruleRecs}]; :put $rulePayload
+{"kind":"filter-rule","page":1,"pages":1,"records":[{"action":"accept","bytes":168,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":false,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":3,"protocol":"icmp","srcAddress":null,"srcAddressList":null},{"action":"drop","bytes":0,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":0,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},{"action":"drop","bytes":0,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":false,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":0,"protocol":null,"srcAddress":null,"srcAddressList":null}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# BEFORE (141f81e2): address-list block
+== :local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put $alPayload
+:local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"
+=($v->"comment"); "dynamic"=($v->"dynamic")}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resour
+ce get version]; "wizardVersion"=6; "records"=$alRecs}]; :put $alPayload
+{"kind":"address-list","page":1,"pages":1,"records":[{"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},{"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# AFTER (#1409): address-list block
+== :local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put $alPayload
+:local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"
+=($v->"comment"); "dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=
+1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put $alPayload
+{"kind":"address-list","page":1,"pages":1,"records":[{"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},{"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# AFTER, saved as a script under the push policy and run
+== /system script add name=mv-push-1409 policy=read,test source=":local ruleRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"dstPort\"=(\$v->\"dst-port\"); \"protocol\"=(\$v->\"protocol\"); \"log\"=(\$v->\"log\"); \"dstAddress\"=(\$v->\"dst-address\"); \"srcAddress\"=(\$v->\"src-address\"); \"connectionState\"=(\$v->\"connection-state\"); \"inInterface\"=(\$v->\"in-interface\"); \"outInterface\"=(\$v->\"out-interface\"); \"disabled\"=[/ip/firewall/filter get (\$v->\".id\") disabled]; \"packets\"=[/ip/firewall/filter get (\$v->\".id\") packets]; \"bytes\"=[/ip/firewall/filter get (\$v->\".id\") bytes]}; :set ruleRecs (\$ruleRecs, {\$rec}) }; :local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$ruleRecs}]; :put \$rulePayload;:local alRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~\"^mv-bl-\")] do={ :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=[/ip/firewall/address-list get (\$v->\".id\") dynamic]}; :set alRecs (\$alRecs, {\$rec}) }; :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$alRecs}]; :put \$alPayload"
+/system script add name=mv-push-1409 policy=read,test source=":local ruleRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {\"ordinal\"=\$i; \"co
+mment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"dstPort\"=(\$v->\"dst-port\
+"); \"protocol\"=(\$v->\"protocol\"); \"log\"=(\$v->\"log\"); \"dstAddress\"=(\$v->\"dst-address\"); \"srcAddress\"=(\$v->\"src-address\"); \"connectionState\"=(\$v->\"connection-state\"); \"inInterfa
+ce\"=(\$v->\"in-interface\"); \"outInterface\"=(\$v->\"out-interface\"); \"disabled\"=[/ip/firewall/filter get (\$v->\".id\") disabled]; \"packets\"=[/ip/firewall/filter get (\$v->\".id\") packets]; \
+"bytes\"=[/ip/firewall/filter get (\$v->\".id\") bytes]}; :set ruleRecs (\$ruleRecs, {\$rec}) }; :local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"rout
+erosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$ruleRecs}]; :put \$rulePayload;:local alRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/address-list print as-value
+ where !(list~\"^mv-bl-\")] do={ :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=[/ip/firewall/address-list get (\$v->\".id\") dynamic
+]}; :set alRecs (\$alRecs, {\$rec}) }; :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersi
+on\"=6; \"records\"=\$alRecs}]; :put \$alPayload"
+[admin@CHR] >
+== /system script run mv-push-1409
+/system script run mv-push-1409
+{"kind":"filter-rule","page":1,"pages":1,"records":[{"action":"accept","bytes":168,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":false,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":3,"protocol":"icmp","srcAddress":null,"srcAddressList":null},{"action":"drop","bytes":0,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":0,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},{"action":"drop","bytes":0,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":false,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":0,"protocol":null,"srcAddress":null,"srcAddressList":null}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+{"kind":"address-list","page":1,"pages":1,"records":[{"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},{"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# An entry that vanishes between print and get: a 3s timed entry, the loop waiting 4s before its get
+== /ip firewall address-list add list=scanners address=192.0.2.3 timeout=3s comment="expires mid-loop"
+/ip firewall address-list add list=scanners address=192.0.2.3 timeout=3s comment="expires mid-loop"
+[admin@CHR] >
+== :local n 0; :foreach v in=[/ip firewall address-list print as-value where !(list~"^mv-bl-")] do={ :delay 4s; :set n ($n + 1); :put (($v->"address") . ": dynamic=" . [/ip/firewall/address-list get ($v->".id") dynamic] . " typeof=" . [:typeof [/ip/firewall/address-list get ($v->".id") dynamic]]) }; :put ("loop finished, " . $n . " rows")
+:local n 0; :foreach v in=[/ip firewall address-list print as-value where !(list~"^mv-bl-")] do={ :delay 4s; :set n ($n + 1); :put (($v->"address") . ": dynamic=" . [/ip/firewall/address
+-list get ($v->".id") dynamic] . " typeof=" . [:typeof [/ip/firewall/address-list get ($v->".id") dynamic]]) }; :put ("loop finished, " . $n . " rows")
+192.0.2.1: dynamic=false typeof=bool
+192.0.2.2: dynamic=true typeof=bool
+192.0.2.3: dynamic= typeof=nil
+loop finished, 3 rows
+[admin@CHR] >
+== /ip firewall filter add chain=forward action=accept comment="probe: removed"
+/ip firewall filter add chain=forward action=accept comment="probe: removed"
+[admin@CHR] >
+== :local id [/ip firewall filter find comment="probe: removed"]; /ip firewall filter remove $id; :put ("removed rule packets=" . [/ip/firewall/filter get $id packets] . " typeof=" . [:typeof [/ip/firewall/filter get $id packets]]); :put "still running"
+:local id [/ip firewall filter find comment="probe: removed"]; /ip firewall filter remove $id; :put ("removed rule packets=" . [/ip/firewall/filter get $id packets] . " typeof=" . [:type
+of [/ip/firewall/filter get $id packets]]); :put "still running"
+removed rule packets= typeof=nil
+still running
+[admin@CHR] >
+
+# Payload size, old against new, after 100 more filter rules and 100 more address-list entries
+== :for i from=1 to=100 do={ /ip firewall filter add chain=forward action=accept src-address=("192.0.2." . $i) comment=("bulk " . $i) }
+:for i from=1 to=100 do={ /ip firewall filter add chain=forward action=accept src-address=("192.0.2." . $i) comment=("bulk " . $i) }
+[admin@CHR] >
+== :for i from=1 to=100 do={ /ip firewall address-list add list=bulk address=("203.0.113." . $i) comment=("bulk " . $i) }
+:for i from=1 to=100 do={ /ip firewall address-list add list=bulk address=("203.0.113." . $i) comment=("bulk " . $i) }
+[admin@CHR] >
+== :put [/ip firewall filter print count-only]
+:put [/ip firewall filter print count-only]
+103
+103
+[admin@CHR] >
+== :put [/ip firewall address-list print count-only where !(list~"^mv-bl-")]
+:put [/ip firewall address-list print count-only where !(list~"^mv-bl-")]
+102
+102
+[admin@CHR] >
+# filter-rule :len, before then after
+== :local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=($v->"disabled"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$ruleRecs}]; :put [:len $rulePayload]
+:local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action
+"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress
+"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=($v->"disabled"); "packets"=($v->"packets"); "by
+tes"=($v->"bytes")}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wi
+zardVersion"=6; "records"=$ruleRecs}]; :put [:len $rulePayload]
+31217
+[admin@CHR] >
+== :local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=[/ip/firewall/filter get ($v->".id") disabled]; "packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$ruleRecs}]; :put [:len $rulePayload]
+:local ruleRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/filter print as-value] do={ :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action
+"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress
+"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=[/ip/firewall/filter get ($v->".id") disabled]; 
+"packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}; :set ruleRecs ($ruleRecs, {$rec}) }; :local rulePayload [:serialize to=json value={"kind"
+="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$ruleRecs}]; :put [:len $rulePayload]
+30703
+[admin@CHR] >
+# address-list :len, before then after
+== :local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put [:len $alPayload]
+:local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"
+=($v->"comment"); "dynamic"=($v->"dynamic")}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resour
+ce get version]; "wizardVersion"=6; "records"=$alRecs}]; :put [:len $alPayload]
+7966
+[admin@CHR] >
+== :local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put [:len $alPayload]
+:local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"
+=($v->"comment"); "dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=
+1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put [:len $alPayload]
+7966
+[admin@CHR] >
