@@ -156,8 +156,8 @@ type List struct {
 
 // LeftOut is one list considered and not offered, with why.
 type LeftOut struct {
-	Name string
-	Why  string
+	Name string `json:"name"`
+	Why  string `json:"why"`
 }
 
 // Reviewed is the day the catalogue was last read against its sources:
