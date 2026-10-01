@@ -170,3 +170,4 @@ each, recorded together because the cause is shared (#831's contention):
 ## frontend LiveTable.svelte.test.ts: "keeps the flat stripes when events arrive during a round trip through group mode" (#1308)
 
 - 2026-09-30 · fe8d1919 + local test edits (feature/1374-wizard, local `npm test -- --coverage`, host shared with other agents' vitest runs) · timed out at 30s twice under coverage; passed on the same code without coverage locally and in CI with coverage (pipeline 1838, test:frontend). The branch does not touch LiveTable. First sighting.
+- 2026-10-01 · 09363519 + local edits (review/1386-journey, local `npm test -- --coverage`, host shared with a live-env build and a Playwright capture at the same time) · timed out at 30s again under coverage; passed alone on the same code (70/70). The branch does not touch LiveTable. Second sighting.
