@@ -83,21 +83,35 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, password []byte) (*ssh.Perm
 	return &ssh.Permissions{Extensions: map[string]string{"device": device}}, nil
 }
 
-// ListenAndServe accepts connections on addr until ctx is done, same
-// shutdown contract as main.go's other listeners (see syslog.ListenTLS):
-// it returns nil on a clean context cancellation and a real error
-// otherwise.
+// ListenAndServe binds addr and serves it; see Serve for the shutdown
+// contract and for why a caller that needs to know synchronously whether
+// the bind itself succeeded calls net.Listen itself instead.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("backupsftp: listening on %s: %w", addr, err)
 	}
+	return s.Serve(ctx, ln)
+}
+
+// Serve accepts connections on an already-bound listener until ctx is
+// done or the listener closes, whichever comes first -- the same
+// shutdown contract as main.go's other listeners (see syslog.ListenTLS):
+// it returns nil on a clean context cancellation and a real error
+// otherwise.
+//
+// Factored out of ListenAndServe (#1361) so main's backupRuntime can call
+// net.Listen itself, synchronously, before this ever starts: a caller
+// turning the drop box on from the admin UI needs "the port is already in
+// use" to come back as an answer to that one request (a 409), not as a
+// log line from a goroutine nobody is waiting on.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
 		ln.Close()
 	}()
 
-	s.log.Info(fmt.Sprintf("router backup drop box listening on %s", addr))
+	s.log.Info(fmt.Sprintf("router backup drop box listening on %s", ln.Addr()))
 	cfg := s.config()
 	for {
 		nc, err := ln.Accept()

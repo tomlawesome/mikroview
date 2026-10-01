@@ -449,7 +449,7 @@ its own reads and writes. The only way to avoid that is not retaining
 history at all, which is why staying off is a real, supported choice
 rather than a lesser one.
 
-### Router backups over SFTP (optional, off by default)
+### Router backups over SFTP (issue #394)
 
 Issue #394: a router's own scheduled script (the setup wizard's step 6
 prints it) pushes two files a night -- the binary `.backup` that
@@ -458,32 +458,45 @@ reading -- into a small SFTP server MikroView runs for exactly this.
 **MikroView is the place you turn to when the router is gone**, so the
 copies have to be usable with nothing else in hand.
 
+**The switch is in Settings, not here (#1361).** The drop box's on/off
+control is Settings → router backups' own "drop box: closed / open on
+port N" row, admin-only: opening it re-checks the admin's password and
+shows the trust caveat below, closing needs an admin but no password,
+since closing is the safe direction. A fresh install starts closed. The
+setup wizard's backup step offers the same control directly, in place of
+a per-router script it cannot yet print.
+
+`backup.enabled` and the `MIKROVIEW_BACKUP_ENABLED` environment variable
+are retired. An existing `config.yaml` that still carries
+`backup.enabled: true` keeps loading: that value seeds the switch's
+starting position exactly once, the first time this version runs with
+nothing stored in Settings yet, logged when it does, and is never
+consulted again after that. Delete the key whenever convenient; leaving
+it in place is harmless.
+
 ```yaml
 backup:
-  enabled: false
   listen: ":47022"
   vaultDir: ""
 ```
 
-- `backup.enabled` — the switch. Off by default: this opens a second
-  listening port, only once you have decided to use it. The wizard's
-  step 6 is what an operator actually flips this from in practice.
 - `backup.listen` — the drop box's bind address. Defaults to `:47022`,
   a fixed, deliberately unconventional port (not 22 or 2222, which draw
   scanner traffic) — change it only if you need a different port
-  mapped through a firewall or a container network.
+  mapped through a firewall or a container network. Config-file only:
+  the switch above only opens or closes a listener on this address, it
+  never changes what the address is.
 - `backup.vaultDir` — where encrypted generations live on disk. Left
   empty, MikroView puts them beside the data directory. Config-file
   only, same as `history.dir`.
 
-**Turning this on also means publishing the port.** `backup.enabled:
-true` alone does not make the drop box reachable — the router still
-needs a path to it. `deploy/docker-compose.yml`'s `ports:` carries a
-matching entry, commented out beside the HTTPS and redirect mappings;
-uncomment it (keeping it in step with `backup.listen`) when you turn
-this on, or the router's script times out partway through the upload
-rather than failing cleanly (#1220). The setup wizard's step 6 names
-the port next to the script it hands over, for the same reason.
+**The port is always published (#1361).** `install.sh` and
+`deploy/docker-compose.yml` both publish `47022/tcp` unconditionally now
+-- a container's own port mapping cannot be flipped on and off the way
+the switch above can, at any moment, with no restart. While the drop box
+is closed nothing is listening on it and a connecting router simply gets
+"connection refused"; the setup wizard names the port next to the script
+it hands over once the drop box is open.
 
 **No key, no backups.** Every pair is encrypted under `history.keyFile`
 (above) — the same key, the same "no key, no storage" rule #853 applies
@@ -2432,7 +2445,7 @@ device-attributed exception:
   flag's note above, it lives only where it was written, in the
   vault's sealed index.
 - The optional vault passphrase lock (see [Router backups over
-  SFTP](#router-backups-over-sftp-optional-off-by-default)) logs each of
+  SFTP](#router-backups-over-sftp-issue-394)) logs each of
   its own changes: `router_backup.locked`, `router_backup.unlocked`,
   `router_backup.unlock_failed` (a wrong passphrase, whether unlocking
   or removing), `router_backup.passphrase_set`,
@@ -2444,7 +2457,7 @@ device-attributed exception:
   are attributed to `system` against the vault: no admin asked for
   either, and while the first is in force the history is being cycled
   rather than grown (see [Router backups over
-  SFTP](#router-backups-over-sftp-optional-off-by-default)). The detail
+  SFTP](#router-backups-over-sftp-issue-394)). The detail
   carries the free, floor and total byte counts that made the decision.
 - A backup arriving over the HTTPS ingest channel (`POST
   /api/ingest/router-backup`) is `ingest.router_backup`; a refused push
@@ -4748,7 +4761,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_HISTORY_DAYS` | `history.days` -- below 1 the 30-day default is applied |
 | `MIKROVIEW_HISTORY_MAX_BYTES` | `history.maxBytes` -- below 1 MiB the 1 GiB default is applied |
 | `MIKROVIEW_HISTORY_DIR` | `history.dir` -- where the daily history files live. Left empty, they sit beside the data directory |
-| `MIKROVIEW_BACKUP_ENABLED` | `backup.enabled` -- turns the router-backup SFTP drop box on (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `MIKROVIEW_BACKUP_ENABLED` | `backup.enabled` -- retired (#1361): read once, only to seed the drop box switch's starting position on an instance with nothing stored in Settings yet (see [Router backups over SFTP](#router-backups-over-sftp-issue-394)) |
 | `MIKROVIEW_BACKUP_LISTEN` | `backup.listen` -- the drop box's bind address, default `:47022` |
 | `MIKROVIEW_BACKUP_VAULT_DIR` | `backup.vaultDir` -- where encrypted generations live. Left empty, they sit beside the data directory |
 
@@ -5092,7 +5105,7 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/config/snapshots` | admin-only: given `{"text": "...", "note": "..."}`, keeps a snapshot (secrets put back) and returns its metadata (the list's shape), 201. 503 with no retention key. Audited as `config.snapshot` |
 | `GET /api/config/snapshots/{id}` | admin-only, within the unlock: one snapshot in the list's shape plus its `text`, secrets masked (their values become the ones this session's placeholders stand for). 404 for an unknown id; 401 `{"reauth": true}` once the unlock has lapsed |
 | `DELETE /api/config/snapshots/{id}` | admin-only: deletes one snapshot, 204. Audited as `config.snapshot.delete` |
-| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-issue-394)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
 | `POST /api/router-backups/{device}/{generation}/protect` | admin-only: mark a generation kept, given `{"comment": "..."}` -- required, one line, 1 to 120 characters, control characters refused. Moves it out of the ten-generation cycle into a pool of its own for that router, with no limit on how many it holds. 400 for a missing or over-length comment, 404 if the vault holds no such router or generation, 409 if it is already kept. Answers with the router's whole block (both lists), so the screen renders what the vault now holds. Audited as `router_backup.protected` |
 | `DELETE /api/router-backups/{device}/{generation}/protect` | admin-only: release a kept generation back into the cycling ten, in its place by age -- the one way to free vault space by hand. 404 if it is not kept. Same response shape as keeping it above. Audited as `router_backup.unprotected` |
@@ -5108,7 +5121,7 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/droplist/key` | admin-only: mint the droplist-pull key a router's scheduled fetch presents at `GET /api/droplist.rsc` -- an optional body `{"address": "..."}` (empty body still allowed, same fallback to Host as `GET /api/droplist`'s `address` parameter) sets what the returned `scheduler` command fetches from. Returns `{"key": "...", "createdAt": ..., "scheduler": "..."}`, the raw key and the filled-in scheduler command both shown exactly once (#1225). Minting again **replaces** any existing key rather than adding a second one, since every router fetches the same feed with the same credential; audited as `droplist.key_minted` |
 | `DELETE /api/droplist/key` | admin-only: revoke the droplist-pull key. 204 on success, 404 if none exists. Audited as `droplist.key_revoked` |
 | `GET /api/droplist.rsc` | droplist-pull-token-only, not session-gated and not reachable with any other token kind (#1224) -- the RouterOS-importable script a router's own scheduled `/tool fetch` pulls: a staging-list build followed by a live-list swap, so a fetch or import failure never leaves the live list empty (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)). `Cache-Control: no-store`; 401 (carrying `WWW-Authenticate: Bearer realm="mikroview"`, RFC 9110 §15.5.2, so RouterOS's own `/tool fetch` can parse the refusal instead of erroring on the missing header) with no key or an invalid/revoked one, 429 over the same per-token rate limit ingest pushes use. Never audited per pull -- the key's own `lastUsedAt` (visible on `GET /api/droplist`) is the record |
-| `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
+| `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-issue-394) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
 | `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; turning it off stops writing and keeps every retained file (#1354) -- deleting them is the route below. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |

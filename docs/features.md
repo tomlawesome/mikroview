@@ -25,14 +25,15 @@
   Behavioral flags (see below) can still persist to a small JSON file
   as before, since they're meant to stay visible until a human clears
   them.
-- **Router backups**: an optional SFTP drop box (`backup:` in
-  config.yaml, off by default) where the router's own nightly script
+- **Router backups**: an optional SFTP drop box, switched on and off
+  from Settings → router backups (off by default), where the router's
+  own nightly script
   pushes its binary `.backup` and plain-text `.rsc` export, so the
   copies are still to hand when the router itself is gone. An admin
   can mark a generation kept, with a comment saying why, so it sits
   outside the usual ten-generation retention until released back into
   it. See
-  [docs/configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default).
+  [docs/configuration.md](configuration.md#router-backups-over-sftp-issue-394).
 - **Behavioral flags**: watches for port scans, per-source activity
   spikes, repeated attempts against critical ports (SSH, RDP, Winbox,
   ...) from external IPs, and network-wide volume spikes — each raises a

@@ -114,8 +114,8 @@ run() {
 ARGS=(); ENV_VARS=(); WITH_DOCKER=true
 run default
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "default run exits 0 (rc=$rc, out: $out)"
-check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
-  "default run line: latest, mikroview name, both named volumes, 6514/443"
+check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -p 47022:47022 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
+  "default run line: latest, mikroview name, both named volumes, 6514/443/47022"
 check "$(case "$out" in *"SECURITY.md"*) echo false;; *) echo true;; esac)" \
   "#1282: no resolvable digest (stub inspect prints nothing) means no SECURITY.md line"
 
@@ -156,6 +156,20 @@ ARGS=(); ENV_VARS=(MIKROVIEW_HTTPS_PORT=8443 MIKROVIEW_SYSLOG_PORT=16514); WITH_
 run port-override
 check "$(case "$calls" in *"-p 16514:6514 -p 8443:8080"*) echo true;; *) echo false;; esac)" \
   "MIKROVIEW_HTTPS_PORT/MIKROVIEW_SYSLOG_PORT land in the run line"
+
+# --- #1361: the router-backup drop box's port is always published,
+# and MIKROVIEW_BACKUP_PORT can move it the same way the other two do ---
+ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+run backup-port-default
+check "$(case "$calls" in *"-p 47022:47022"*) echo true;; *) echo false;; esac)" \
+  "the router-backup drop box's port (47022) is published by default"
+check "$(case "$out" in *"nothing answers"*"Settings"*) echo true;; *) echo false;; esac)" \
+  "the final output warns that nothing answers on it until an admin opens the drop box"
+
+ARGS=(); ENV_VARS=(MIKROVIEW_BACKUP_PORT=17022); WITH_DOCKER=true
+run backup-port-override
+check "$(case "$calls" in *"-p 17022:47022"*) echo true;; *) echo false;; esac)" \
+  "MIKROVIEW_BACKUP_PORT lands in the run line"
 
 # --- an existing container is stopped/removed before re-creation -----------
 ARGS=(); ENV_VARS=(STUB_EXISTS=1); WITH_DOCKER=true
