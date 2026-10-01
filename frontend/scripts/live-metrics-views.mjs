@@ -156,6 +156,7 @@ await goTo(page, 'Metrics')
 
 // --- The default view, actually drawn -----------------------------------
 await page.locator(SEISMOGRAPH).waitFor({ state: 'visible', timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'Metrics opens on the seismograph and draws it')
 
 const buttons = await page.$$eval(`${VIEW_SWITCH} button.sw`, (els) => els.map((e) => e.textContent.trim()))

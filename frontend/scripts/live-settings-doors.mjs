@@ -131,6 +131,7 @@ check(
 await revoke.click()
 await revoke.click()
 await page.waitForSelector(`${KEYS} .prow:has-text("${KEY_NAME}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, 'a second click on the armed button revokes the key')
 
 const afterRevoke = await page.request.get(`${URL_BASE}/api/tokens`).then((r) => r.json())
@@ -207,6 +208,7 @@ check(
 await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, 'a second click on the armed button removes the account')
 
 const usersAfter = await page.request.get(`${URL_BASE}/api/auth/users`).then((r) => r.json())

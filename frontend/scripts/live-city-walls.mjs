@@ -99,6 +99,7 @@ if (!prePushed) {
   const preGates = await page.locator('[data-card="topography"] .city [data-gate]').count()
   check(preGates === 0, `before any push the walls stand with no gates (${preGates} gate posts)`)
 } else {
+  // safe: real state branch (an earlier scenario already pushed), not a swallowed failure
   check(true, 'an earlier scenario already pushed a rule table -- the pre-push honesty state is asserted on standalone runs')
 }
 

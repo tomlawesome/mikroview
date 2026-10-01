@@ -467,8 +467,9 @@ class WizardState {
   }
 
   // launch opens the ledger at the first step still waiting. Evidence
-  // that arrived while it was closed is already green, because the
-  // ledger is rebuilt from the server's observations every time.
+  // that arrived while it was closed turns green once Wizard.svelte's
+  // open-time read lands: the ledger held here may be the sign-in one,
+  // so the wizard reads it again and re-places the run on it (#1404).
   launch() {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'

@@ -62,6 +62,7 @@ const line =
 const arrived = await waitForArrival(line)
 check(arrived, `the ${RULE} test event reached the server`)
 if (!arrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped the rest -- the seeding event never arrived')
   done()
 }

@@ -149,6 +149,7 @@ check((await saved.textContent())?.trim() === 'saved ▾', 'reading "saved ▾"'
 await saved.click()
 const menu = page.locator(`${CARD} .fpmenu`)
 await menu.waitFor({ state: 'visible', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'clicking it opens the list')
 check((await saved.getAttribute('aria-expanded')) === 'true', 'and says so')
 
@@ -165,6 +166,7 @@ check(
 
 await page.keyboard.press('Escape')
 await menu.waitFor({ state: 'detached', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Escape closes it')
 
 // Set a filter, and the save entry appears. The name comes from a

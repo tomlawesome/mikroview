@@ -138,6 +138,7 @@ check(
 
 await clickSvgText(page, page.locator(`${topo} .deg-go`))
 await page.waitForSelector('.page.wiz', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the statement\'s "Run setup… ▸" opens the wizard')
 // No explicit close any more -- the full-screen wizard has none (DESIGN.md,
 // "Superseded: the wizard as a modal"). Nothing between here and the
