@@ -167,17 +167,18 @@ func TestLiveScriptsUseTheSharedStoreBlock(t *testing.T) {
 // reads as deliberate.
 func TestEveryLiveCheckIsRun(t *testing.T) {
 	excluded := map[string]string{
-		"frontend/scripts/live-browser.mjs":       "the shared helper every scenario imports, not a scenario",
-		"frontend/scripts/live-routeros-real.mjs": "needs a real CHR booted; run by make live-routeros-container",
-		"scripts/live-env.sh":                     "the shared environment helper",
-		"scripts/live-container.sh":               "the shared environment helper, container flavour",
-		"scripts/live-stores.sh":                  "the shared store block, sourced not run",
-		"scripts/live-slot.sh":                    "the shared port allocator, sourced not run (#660)",
-		"scripts/live-routeros.sh":                "boots the CHR; driven by make live-routeros-container",
-		"scripts/live-routeros-step0.sh":          "a probe driven by live-routeros.sh, not a standalone check",
-		"scripts/live-rule-coverage-probe.sh":     "a probe driven by live-routeros.sh, not a standalone check",
-		"scripts/live-web-dist.sh":                "sourced by the checks and by its own test, never run standalone (#1337)",
-		"scripts/live-web-dist.test.sh":           "a plain bash unit test with no server involved, run by gate:scripts instead (#1337)",
+		"frontend/scripts/live-browser.mjs":          "the shared helper every scenario imports, not a scenario",
+		"frontend/scripts/live-routeros-real.mjs":    "needs a real CHR booted; run by make live-routeros-container",
+		"frontend/scripts/live-freshness-reload.mjs": "restarts the server mid-run (#1363); needs its own instance, not the shared one -- run standalone by scripts/live-freshness-reload.sh",
+		"scripts/live-env.sh":                        "the shared environment helper",
+		"scripts/live-container.sh":                  "the shared environment helper, container flavour",
+		"scripts/live-stores.sh":                     "the shared store block, sourced not run",
+		"scripts/live-slot.sh":                       "the shared port allocator, sourced not run (#660)",
+		"scripts/live-routeros.sh":                   "boots the CHR; driven by make live-routeros-container",
+		"scripts/live-routeros-step0.sh":             "a probe driven by live-routeros.sh, not a standalone check",
+		"scripts/live-rule-coverage-probe.sh":        "a probe driven by live-routeros.sh, not a standalone check",
+		"scripts/live-web-dist.sh":                   "sourced by the checks and by its own test, never run standalone (#1337)",
+		"scripts/live-web-dist.test.sh":              "a plain bash unit test with no server involved, run by gate:scripts instead (#1337)",
 	}
 
 	runners := map[string]string{
