@@ -365,7 +365,9 @@ func TestPushBlockRenamesIPAddressFields(t *testing.T) {
 }
 
 // #1329: the pushed /ip/service table, same renaming contract as the
-// filter-rule and ip-address cases above.
+// filter-rule and ip-address cases above. "dynamic" was added by #1405
+// so the server can tell RouterOS's own dhcpclient/btest/discover/
+// reverse-proxy rows apart from the eight an operator configures.
 func TestPushBlockRenamesIPServiceFields(t *testing.T) {
 	block := PushBlock("h", "t", "ip-service", "a")
 	for _, want := range []string{
@@ -375,6 +377,7 @@ func TestPushBlockRenamesIPServiceFields(t *testing.T) {
 		`"port"=($v->"port")`,
 		`"address"=($v->"address")`,
 		`"certificate"=($v->"certificate")`,
+		`"dynamic"=($v->"dynamic")`,
 		`{$rec}`,
 	} {
 		if !strings.Contains(block, want) {
@@ -1087,7 +1090,7 @@ func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // a normal token's rendered output is byte-for-byte identical.
 func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
-	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=4; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=5; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1119,7 +1122,7 @@ func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // loggingPushBlock: captured before quote() was added to token.
 func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
-	want := ":local matchNames \"\"\n:local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"target\") = \"remote\" and ($v->\"remote\") = \"192.0.2.10\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\"); \"srcAddress\"=($v->\"src-address\")}\n    :set logRecs ($logRecs, {$rec})\n    :set matchNames ($matchNames . \",\" . ($v->\"name\") . \",\")\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if ($matchNames ~ (\",\".($v->\"action\").\",\")) do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=4; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local matchNames \"\"\n:local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"target\") = \"remote\" and ($v->\"remote\") = \"192.0.2.10\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\"); \"srcAddress\"=($v->\"src-address\")}\n    :set logRecs ($logRecs, {$rec})\n    :set matchNames ($matchNames . \",\" . ($v->\"name\") . \",\")\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if ($matchNames ~ (\",\".($v->\"action\").\",\")) do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=5; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}

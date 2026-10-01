@@ -648,7 +648,7 @@ to cover more than filter rules and DHCP/ARP:
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
 | `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |
 | `ip-address` | `/ip/address print as-value` | `address`, `network`, `interface`, `comment` |
-| `ip-service` | `/ip/service print as-value` | `name`, `disabled`, `port`, `address` (the address restriction — send as-is; empty/absent means no restriction, reachable from anywhere), `certificate` (the certificate *name* only, for `www-ssl`/`api-ssl`) |
+| `ip-service` | `/ip/service print as-value` | `name`, `disabled`, `port`, `address` (the address restriction — send as-is; empty means no restriction, reachable from anywhere), `certificate` (the certificate *name* only, for `www-ssl`/`api-ssl`; `none` when unset, which MikroView reads as no certificate), `dynamic` |
 | `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
 | `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address` (**send the array as-is**), `endpointAddress` ← `endpoint-address`, `comment`, `lastHandshake` ← `last-handshake` (absent if never handshaken), `currentEndpointAddress` ← `current-endpoint-address`, `rx`, `tx`, `disabled`, `interface` ← `interface` (which WireGuard interface this peer belongs to) |
 | `ppp-active` | `/ppp/active print as-value` | `name`, `service`, `address`, `callerId` ← `caller-id`, `uptime` -- covers L2TP, PPTP, SSTP and OVPN alike; a session's presence in the push is itself the up/down signal |
@@ -658,10 +658,17 @@ to cover more than filter rules and DHCP/ARP:
 management services (`telnet`, `ftp`, `www`, `www-ssl`, `ssh`, `api`,
 `api-ssl`, `winbox`) actually are, rather than inferring exposure from
 traffic. Its field names are RouterOS 7's documented `/ip/service`
-properties, not yet confirmed against a live router the way
-`filter-rule` and `nat-rule` were -- verify them on a real CHR before
-relying on the shapes above, the same caution issue #243's `dstPort`
-landmine earned every other field in this table.
+properties, confirmed against a live CHR 7.23.3 router (#1405).
+
+A real router's `/ip/service` table actually returns twelve rows, not
+eight: the four extra (`dhcpclient`, `btest`, `discover`,
+`reverse-proxy`) are RouterOS's own runtime services, marked
+`dynamic=yes` and carrying no `address` property at all -- unlike the
+eight above, which always carry `address` (empty when unrestricted).
+`dynamic` is what lets MikroView leave those four out of what it shows
+as a router's management services; a router still running a script
+pasted before this field existed is still handled correctly, since
+MikroView falls back to the address-key distinction on the server side.
 
 Every block's payload may carry `"routerosVersion"=[/system/resource get
 version]` alongside `kind`/`page`/`pages`, exactly as 4c's does. It is

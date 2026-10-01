@@ -1017,6 +1017,13 @@ func main() {
 	auditStore, err := audit.OpenWithBackend(auditBackend)
 	mustOpenStore(auditLog, err)
 
+	// One-time sweep for ingest tokens a router removal orphaned before
+	// #1385 taught handleDeviceDelete to revoke a device's tokens as
+	// part of the same delete (#1399). Needs devices, tokenStore and
+	// auditStore all loaded, so it runs here, after the last of the
+	// three opens above; every later restart finds nothing left to do.
+	api.RevokeOrphanedIngestTokens(devices, tokenStore, auditStore)
+
 	// The suggestion candidate pool (#243 slice 5): watchlist entries
 	// suggested from data RouterOS has already pushed. Persistence
 	// itself is optional -- losing this on restart just means every
