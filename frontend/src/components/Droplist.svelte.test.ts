@@ -16,6 +16,9 @@ vi.mock('../lib/api', () => ({
   mintDroplistKey: vi.fn(),
   revokeDroplistKey: vi.fn(),
   fetchSetupCommands: vi.fn(),
+  fetchBlocklistBuilder: vi.fn(() => new Promise(() => {})),
+  fetchBlocklistCommands: vi.fn(),
+  createToken: vi.fn(),
 }))
 
 import {
@@ -357,5 +360,23 @@ describe('a pending draft from a flag\'s block… (#1225)', () => {
     expect((screen.getByLabelText('reason') as HTMLInputElement).value).toBe('distributed brute-force from 203.0.113.5')
     expect(createDroplistEntry).not.toHaveBeenCalled()
     expect(droplistNavState.pendingDraft).toBeNull()
+  })
+})
+
+// #1360: the blocklist builder's door is one line in the group.
+describe('the blocklist builder door', () => {
+  it('opens the builder for the group’s router', async () => {
+    const { blocklistState } = await import('../lib/blocklist.svelte')
+    blocklistState.reset()
+    render(Droplist, {
+      props: {
+        resp: resp({ routers: [{ device: 'rb5009', held: 3, total: 3, confirmedAt: '2026-09-14T00:00:00Z' }] }),
+        onrefresh: vi.fn(),
+      },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Block known-bad addresses…' }))
+    expect(blocklistState.open).toBe(true)
+    expect(blocklistState.device).toBe('rb5009')
+    blocklistState.reset()
   })
 })
