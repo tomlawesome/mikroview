@@ -1049,7 +1049,17 @@ gate:image:
         docker push "$IMAGE:latest"
       fi
       # Retag in the registry, without pulling: the shards name this tag.
-      docker buildx imagetools create -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+      # --prefer-index=false: $IMAGE:$TAG is a single manifest (built
+      # --provenance=false --sbom=false above), and imagetools create
+      # otherwise wraps it in a new OCI index under a different digest
+      # (#1407). Then confirm the tag actually landed on that digest.
+      docker buildx imagetools create --prefer-index=false -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+      src_digest="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')"
+      got_digest="$(docker buildx imagetools inspect "$IMAGE:$CI_COMMIT_REF_SLUG" --format '{{.Manifest.Digest}}')"
+      if [ "$got_digest" != "$src_digest" ]; then
+        echo "retag moved the digest: $IMAGE:$CI_COMMIT_REF_SLUG is $got_digest, expected $src_digest from $IMAGE:$TAG" >&2
+        exit 1
+      fi
     - *reuse_evidence
   artifacts:
     paths:
