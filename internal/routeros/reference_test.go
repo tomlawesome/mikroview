@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 )
 
 //go:embed reference/menus.json
@@ -107,7 +109,27 @@ func TestEmittedCommandsUseKnownMenus(t *testing.T) {
 		// they are the same console paths the router runs when the
 		// scheduler fires.
 		"ScheduleCommands": ScheduleCommands(PushScript(address, "tok", []string{"filter-rule", "address-list", "raw-rule", "address-list-count"}, dialect), dialect),
+		// #1360's blocklist builder: its undo lines and the block's own
+		// console commands outside the guards.
+		"BlocklistUndoAll": BlocklistUndoAll(),
 	}
+	for _, l := range blcatalogue.Lists() {
+		undo, err := BlocklistUndo(l.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocks["BlocklistUndo("+l.Key+")"] = undo
+	}
+	var lists []BlocklistChoice
+	for _, l := range blcatalogue.Lists() {
+		lists = append(lists, BlocklistChoice{Key: l.Key, Direction: l.DefaultDirection, IPv6: l.IPv6, Log: true, Refresh: l.RefreshDefaultFor(true)})
+	}
+	block, err := BlocklistBlock(BlocklistRequest{RouterOSVersion: "7.24.4", Lists: lists,
+		OnRouter: map[string]bool{RawRuleKey("ip", "mikroview blocklist: spamhaus (to)"): true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks["BlocklistBlock"] = block.CopyText()
 
 	checked := 0
 	for name, block := range blocks {
