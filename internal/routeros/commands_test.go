@@ -386,6 +386,101 @@ func TestPushBlockRenamesIPServiceFields(t *testing.T) {
 	}
 }
 
+// #1360: the raw table, both families into one record list, with the
+// same renaming contract as filter-rule's -- plus the family stamp and
+// the get-by-.id reads a real CHR showed print as-value cannot replace.
+func TestPushBlockRenamesRawRuleFields(t *testing.T) {
+	block := PushBlock("h", "t", "raw-rule", "a")
+	for _, family := range []struct{ name, menu string }{{"ip", "/ip/firewall/raw"}, {"ipv6", "/ipv6/firewall/raw"}} {
+		for _, want := range []string{
+			family.menu + " print as-value]",
+			`{"family"="` + family.name + `"; "ordinal"=$i;`,
+			// print as-value carries no counters on 7.18.2 or 7.24.4, and
+			// no disabled on 7.18.2 -- read back by the row's own id.
+			`"disabled"=[` + family.menu + ` get ($v->".id") disabled]`,
+			`"packets"=[` + family.menu + ` get ($v->".id") packets]`,
+			`"bytes"=[` + family.menu + ` get ($v->".id") bytes]`,
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("pushBlock(raw-rule) missing %q:\n%s", want, block)
+			}
+		}
+	}
+	for _, want := range []string{
+		`"srcAddressList"=($v->"src-address-list")`,
+		`"dstAddressList"=($v->"dst-address-list")`,
+		`"logPrefix"=($v->"log-prefix")`,
+		`"log"=($v->"log")`,
+		`"comment"=($v->"comment")`,
+		`"kind"="raw-rule"`,
+		`{$rec}`,
+	} {
+		if n := strings.Count(block, want); n == 0 {
+			t.Errorf("pushBlock(raw-rule) missing %q:\n%s", want, block)
+		}
+	}
+	if n := strings.Count(block, `:set rawRecs ($rawRecs, {$rec})`); n != 2 {
+		t.Errorf("pushBlock(raw-rule) appends to rawRecs in %d loops, want 2 (one per family, one list):\n%s", n, block)
+	}
+	if strings.Contains(block, familyMenu) {
+		t.Errorf("pushBlock(raw-rule) left the %q placeholder in what a router runs:\n%s", familyMenu, block)
+	}
+}
+
+// #1360: one record per blocklist name per family, built from the
+// router's own count -- never an entry. The names are the fixed list, so
+// the block is the same text whatever a router has on.
+func TestPushBlockSendsBlocklistCountsNotEntries(t *testing.T) {
+	block := PushBlock("h", "t", "address-list-count", "a")
+	for _, name := range blocklistListNames {
+		if !strings.Contains(block, `"`+name+`"`) {
+			t.Errorf("pushBlock(address-list-count) does not count %s:\n%s", name, block)
+		}
+	}
+	for _, want := range []string{
+		`[/ip/firewall/address-list print count-only where list=$n]`,
+		`[/ipv6/firewall/address-list print count-only where list=$n]`,
+		`[/ip/firewall/address-list get ([find where list=$n]->0) creation-time]`,
+		`[/ipv6/firewall/address-list get ([find where list=$n]->0) creation-time]`,
+		`{{"list"=$n; "family"="ip"; "count"=$c4; "loadedAt"=$t4}}`,
+		`{{"list"=$n; "family"="ipv6"; "count"=$c6; "loadedAt"=$t6}}`,
+		`"kind"="address-list-count"`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("pushBlock(address-list-count) missing %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, `"address"=`) || strings.Contains(block, "print as-value") {
+		t.Errorf("pushBlock(address-list-count) reads entries, which is what it exists not to send:\n%s", block)
+	}
+	if again := PushBlock("h", "t", "address-list-count", "a"); again != block {
+		t.Error("pushBlock(address-list-count) is not the same text twice")
+	}
+}
+
+// #1360: the mv-bl-* exclusion belongs to the address-list block and to
+// nothing else -- every other block, the count block included, must
+// still see those lists.
+func TestBlocklistExclusionIsInTheAddressListBlockOnly(t *testing.T) {
+	const exclusion = `where !(list~"^mv-bl-")`
+	al := PushBlock("h", "t", "address-list", "a")
+	if !strings.Contains(al, `[/ip/firewall/address-list print as-value `+exclusion+`]`) {
+		t.Errorf("the address-list block does not leave out the blocklist lists:\n%s", al)
+	}
+	kinds := []string{addressListCountKind, loggingKind}
+	for kind := range blockSpecs {
+		kinds = append(kinds, kind)
+	}
+	for _, kind := range kinds {
+		if kind == "address-list" {
+			continue
+		}
+		if block := PushBlock("h", "t", kind, "a"); strings.Contains(block, "^mv-bl-") || strings.Contains(block, "!(list~") {
+			t.Errorf("pushBlock(%s) carries the blocklist exclusion:\n%s", kind, block)
+		}
+	}
+}
+
 func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	cmd := RuleTaggingCommands("a")
 	want := "/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix=\"D|drop|\"\n" +
@@ -1090,7 +1185,7 @@ func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // a normal token's rendered output is byte-for-byte identical.
 func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
-	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=5; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1122,7 +1217,7 @@ func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // loggingPushBlock: captured before quote() was added to token.
 func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
-	want := ":local matchNames \"\"\n:local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"target\") = \"remote\" and ($v->\"remote\") = \"192.0.2.10\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\"); \"srcAddress\"=($v->\"src-address\")}\n    :set logRecs ($logRecs, {$rec})\n    :set matchNames ($matchNames . \",\" . ($v->\"name\") . \",\")\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if ($matchNames ~ (\",\".($v->\"action\").\",\")) do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=5; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local matchNames \"\"\n:local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"target\") = \"remote\" and ($v->\"remote\") = \"192.0.2.10\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\"); \"srcAddress\"=($v->\"src-address\")}\n    :set logRecs ($logRecs, {$rec})\n    :set matchNames ($matchNames . \",\" . ($v->\"name\") . \",\")\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if ($matchNames ~ (\",\".($v->\"action\").\",\")) do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1186,6 +1281,13 @@ func TestPushScriptStampsEveryBlockWithTheWizardVersion(t *testing.T) {
 	stamp := fmt.Sprintf(`"wizardVersion"=%d`, WizardVersion)
 	if n := strings.Count(script, stamp); n != 3 {
 		t.Errorf("pushScript carried %q %d times, want 3 (two tables plus the logging block):\n%s", stamp, n, script)
+	}
+	// #1360's two kinds are blocks like any other: each stamps the
+	// version, so a router whose script carries them says which wizard
+	// wrote it from whichever page arrives.
+	blocklist := PushScript("h", "t", []string{"address-list", "raw-rule", "address-list-count"}, "a")
+	if n := strings.Count(blocklist, stamp); n != 4 {
+		t.Errorf("pushScript with the blocklist kinds carried %q %d times, want 4:\n%s", stamp, n, blocklist)
 	}
 	if !strings.Contains(script, `"routerosVersion"=[/system/resource get version]; "wizardVersion"=`) {
 		t.Errorf("the wizard stamp is not on the envelope beside routerosVersion:\n%s", script)

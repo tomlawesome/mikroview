@@ -141,6 +141,8 @@ type Payload struct {
 	PPPActive           []PPPActiveSession
 	Logging             []LoggingEntry
 	IPServices          []IPServiceEntry
+	RawRules            []RawRule
+	AddressListCounts   []AddressListCount
 }
 
 // RecordCount returns how many records are in whichever slice matches
@@ -173,6 +175,10 @@ func (p Payload) RecordCount() int {
 		return len(p.Logging)
 	case KindIPService:
 		return len(p.IPServices)
+	case KindRawRule:
+		return len(p.RawRules)
+	case KindAddressListCount:
+		return len(p.AddressListCounts)
 	default:
 		return 0
 	}
@@ -256,6 +262,10 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		out.Logging, err = decodeRecords[LoggingEntry](wire.Records)
 	case KindIPService:
 		out.IPServices, err = decodeRecords[IPServiceEntry](wire.Records)
+	case KindRawRule:
+		out.RawRules, err = decodeRecords[RawRule](wire.Records)
+	case KindAddressListCount:
+		out.AddressListCounts, err = decodeRecords[AddressListCount](wire.Records)
 	default:
 		return Payload{}, ErrUnknownKind
 	}
@@ -554,4 +564,46 @@ func (e IPServiceEntry) validate() error {
 		return err
 	}
 	return validateFieldText("certificate", e.Certificate)
+}
+
+// validateFamily refuses any family but the two menu roots the push
+// script reads. The value is the script's own literal, never router
+// data, so anything else is a script MikroView did not write.
+func validateFamily(f string) error {
+	if f != FamilyIP && f != FamilyIPv6 {
+		return fmt.Errorf("ingest: family %q is neither %q nor %q", f, FamilyIP, FamilyIPv6)
+	}
+	return nil
+}
+
+func (r RawRule) validate() error {
+	if err := validateFamily(r.Family); err != nil {
+		return err
+	}
+	for _, f := range []struct{ name, v string }{
+		{"comment", r.Comment},
+		{"chain", r.Chain},
+		{"action", r.Action},
+		{"srcAddressList", r.SrcAddressList},
+		{"dstAddressList", r.DstAddressList},
+		{"logPrefix", r.LogPrefix},
+	} {
+		if err := validateFieldText(f.name, f.v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c AddressListCount) validate() error {
+	if err := validateFamily(c.Family); err != nil {
+		return err
+	}
+	if c.Count < 0 {
+		return fmt.Errorf("ingest: count %d is negative", c.Count)
+	}
+	if err := validateFieldText("list", c.List); err != nil {
+		return err
+	}
+	return validateFieldText("loadedAt", c.LoadedAt)
 }

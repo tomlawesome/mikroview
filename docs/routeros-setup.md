@@ -652,6 +652,8 @@ to cover more than filter rules and DHCP/ARP:
 | `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
 | `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address` (**send the array as-is**), `endpointAddress` ← `endpoint-address`, `comment`, `lastHandshake` ← `last-handshake` (absent if never handshaken), `currentEndpointAddress` ← `current-endpoint-address`, `rx`, `tx`, `disabled`, `interface` ← `interface` (which WireGuard interface this peer belongs to) |
 | `ppp-active` | `/ppp/active print as-value` | `name`, `service`, `address`, `callerId` ← `caller-id`, `uptime` -- covers L2TP, PPTP, SSTP and OVPN alike; a session's presence in the push is itself the up/down signal |
+| `raw-rule` | `/ip/firewall/raw print as-value`, then `/ipv6/firewall/raw print as-value`, into one list | `family` (`ip` or `ipv6`, written by the script), `ordinal` (loop index, per family), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `dstAddressList` ← `dst-address-list`, `logPrefix` ← `log-prefix`, `log`, and `disabled`, `packets`, `bytes` read with `get` -- see [4c-iii](#4c-iii-blocklist-rules-and-counts) |
+| `address-list-count` | `print count-only` on both address-list menus, per blocklist name | `list`, `family`, `count`, `loadedAt` -- see [4c-iii](#4c-iii-blocklist-rules-and-counts) |
 
 `ip-service` (#1329) is pushed by default, same as `address-list` and
 `ip-address` above -- it tells MikroView what the router's own
@@ -710,6 +712,72 @@ router's traffic simply shows unnamed hosts.
 No `read,write` or `sensitive` policy is needed for any of this —
 `read,test` (below) is enough, and WireGuard *private* keys never
 appear in a `read`-policy script's view at all, only public ones.
+
+### 4c-iii. Blocklist rules and counts
+
+MikroView's blocklist page writes address lists named `mv-bl-<list>`
+(`mv-bl-spamhaus6` for IPv6) and drop rules in raw prerouting. The push
+script the wizard renders today (version 6) does three things for them,
+verified against real RouterOS 7.18.2 and 7.24.4 routers
+(`docs/routeros-verification-logs/<version>-push-blocklist.log`):
+
+- **The `address-list` block leaves them out**, with
+  `print as-value where !(list~"^mv-bl-")`. A blocklist can hold 15,000
+  entries, far more than the roughly 64 KiB `/tool fetch` can POST, and
+  an address-list page that size would stop arriving at all.
+- **A `raw-rule` block** sends both raw tables in one page:
+
+```
+:local rawRecs [:toarray ""]
+:foreach i,v in=[/ip/firewall/raw print as-value] do={
+  :local rec {"family"="ip"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ip/firewall/raw get ($v->".id") disabled]; "packets"=[/ip/firewall/raw get ($v->".id") packets]; "bytes"=[/ip/firewall/raw get ($v->".id") bytes]}
+  :set rawRecs ($rawRecs, {$rec})
+}
+:foreach i,v in=[/ipv6/firewall/raw print as-value] do={
+  :local rec {"family"="ipv6"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ipv6/firewall/raw get ($v->".id") disabled]; "packets"=[/ipv6/firewall/raw get ($v->".id") packets]; "bytes"=[/ipv6/firewall/raw get ($v->".id") bytes]}
+  :set rawRecs ($rawRecs, {$rec})
+}
+:local rawPayload [:serialize to=json value={"kind"="raw-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$rawRecs}]
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$rawPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+```
+
+  `disabled`, `packets` and `bytes` are read with `get` by the rule's own
+  `.id` rather than off `$v`, because `print as-value` does not carry
+  them: on both releases it leaves out the counters, and on 7.18.2 it
+  leaves out `disabled` even for a disabled rule, so that rule would
+  arrive looking enabled. (`print stats as-value` has the counters but
+  drops `src-address-list`, `log` and `log-prefix`, so neither print
+  alone is enough.)
+- **An `address-list-count` block** sends how many entries each
+  blocklist holds instead of the entries. It counts every name the page
+  can write, on both families, whether or not the router holds that
+  list, so the block reads the same whichever lists are on:
+
+```
+:local blcRecs [:toarray ""]
+:foreach n in={"mv-bl-spamhaus";"mv-bl-spamhaus6";"mv-bl-et";"mv-bl-cins";"mv-bl-blde";"mv-bl-greensnow";"mv-bl-dshield";"mv-bl-bindef"} do={
+  :local c4 [/ip/firewall/address-list print count-only where list=$n]
+  :local t4 ""
+  :if ($c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=$n]->0) creation-time] }
+  :set blcRecs ($blcRecs, {{"list"=$n; "family"="ip"; "count"=$c4; "loadedAt"=$t4}})
+  :local c6 [/ipv6/firewall/address-list print count-only where list=$n]
+  :local t6 ""
+  :if ($c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=$n]->0) creation-time] }
+  :set blcRecs ($blcRecs, {{"list"=$n; "family"="ipv6"; "count"=$c6; "loadedAt"=$t6}})
+}
+:local blcPayload [:serialize to=json value={"kind"="address-list-count"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$blcRecs}]
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$blcPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+```
+
+  `loadedAt` is the first entry's `creation-time`, in the router's own
+  clock and format (`2026-10-01 04:17:02`), or empty for a list the
+  router does not hold. The blocklist loader fills a `-next` list and
+  then renames it with `set list=`, and that rename keeps each entry's
+  `creation-time`, so this is when the list was loaded. The two locals
+  per family carry their own names (`c4`/`c6`) because both sit in one
+  `do={}` scope.
+
+Both blocks need only the `read,test` policy the rest of the push uses.
 
 ### 4d. Pagination, for a large rule set
 
