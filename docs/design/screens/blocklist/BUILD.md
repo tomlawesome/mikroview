@@ -619,3 +619,53 @@ station and chip, the rail receipt.
 - No owner question arises from this review.
 
 Written by Fable 5.1, 2026-10-02.
+
+## Addendum — the rail's rows 1–4 on the tail (#1417, 2026-10-02)
+
+**Ruling: as drawn — rows 1–4 are not clickable on the tail.** They
+keep their `done` look (tick disc and receipt in the row's ink, title
+in `--fg-muted`); they take neither `locked` nor any new class. Only
+Where setup stands stays live, as Back.
+
+Why. `round-2/tail.html` already draws it: on the build scene every
+numbered row renders `disabled` and only the tick row carries
+`data-act="goto-stand"`. The build departed from that (a defect under
+"Building a ratified design"). It is also the rail's own rule — "once
+the router is answering nothing goes back": on Where setup stands
+(stage `done`) rows 1–4 are already disabled, and the tail is one step
+past it, so a row that moved from the tail could do what the same row
+cannot do one step earlier. Making them a second Back was considered
+and rejected: clicking **The router** and landing on Where setup
+stands is a surprise, and the ledger there is the real way back (each
+row's Undo, "undo everything on the router first"). Not `locked`:
+that class means "ahead of you, after the step before it"; these rows
+are behind.
+
+What to build, without asking:
+
+- `frontend/src/lib/wizardRun.ts`, `railRows`: the `can` expression
+  excludes `block` as it excludes `watch`, `tune` and `done` —
+  `s.stage !== 'block'` added to the chain, `back ||` left in front
+  so the stand row stays clickable. No change to `n`, `state`,
+  `locked` or `current`.
+- `frontend/src/lib/wizardRun.svelte.ts`, `gotoStep`: keep both
+  guards as they are (the stand → `blockBack()` line, then the
+  `ask`/`paste` return). The rail no longer calls it for rows 1–4 on
+  the tail; the guard stays as the belt.
+- `frontend/src/components/wizard/Wizard.svelte`: the rail's comment
+  gains one line — "On the tail only Where setup stands is live, as
+  Back." No markup change: `disabled={!r.can}` already renders it,
+  `aria-disabled` stays unset (not locked), no `title`.
+- `wizard.css`: nothing. `.step-row:disabled` (opacity 1, default
+  cursor) and `:hover:not(:disabled)` already give the drawn look.
+- Tests. `wizardRun.test.ts`, "goes back to nothing once the router is
+  answering": add `block` to the stage loop with `ev({ cert, tail:
+  offer })`, asserting rows 0–3 `can === false`, row 4 (`stand`)
+  `can === true`, row 5 (`block`) `can === true`. `Wizard.svelte.test.ts`,
+  "Wizard: the first-run tail": on the stage, `rows().slice(0, 4)` are
+  all `disabled` with `aria-disabled` null, `rows()[4]` is enabled, and
+  clicking `rows()[4]` returns to Where setup stands.
+- Screenshots: `tail-02` needs no recapture; the only visible change
+  is that rows 1–4 no longer highlight on hover.
+
+Written by Fable 5.1, 2026-10-02.
