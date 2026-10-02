@@ -58,15 +58,20 @@
   // Said before the redirect rather than after it: with SSO configured,
   // creating the account sends the browser to the provider, and being
   // bounced somewhere unannounced is how a sign-in page loses someone.
+  //
+  // #1415: the form also asks for the one-time setup code from the
+  // server's log (docs/design/screens/setup-code/DESIGN.md), so both
+  // variants say so.
   const createSubtitle = $derived(
     authState.ssoAvailable
-      ? 'No account exists yet. Whoever completes this form becomes the admin — then you sign in with SSO ' +
-        'to connect it, and this password stays as your way in if your provider is ever unreachable.'
-      : 'No account exists yet. Whoever completes this form becomes the admin.',
+      ? "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes " +
+        'the admin — then you sign in with SSO to connect it, and this password stays as your way in if your ' +
+        'provider is ever unreachable.'
+      : "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes the admin.",
   )
 
-  async function createAdmin(username: string, password: string): Promise<string | null> {
-    const err = await register(username, password)
+  async function createAdmin(setupCode: string, username: string, password: string): Promise<string | null> {
+    const err = await register(username, password, setupCode)
     if (err) return err
 
     if (authState.ssoAvailable) {
@@ -124,7 +129,8 @@
     subtitle={createSubtitle}
     submitLabel="Create account"
     confirmPassword
-    onsubmit={createAdmin}
+    setupCode
+    onSubmitSetup={createAdmin}
   />
 {:else}
   <AuthScreen gate onEnter={() => (entered = true)} />

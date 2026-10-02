@@ -32,6 +32,14 @@ func TestRegisterWithoutSetupCodeIsRefused(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 for a first-run registration without the setup code", resp.StatusCode)
 	}
+	// The create-account screen shows this body as it comes, so it is
+	// the ratified copy (docs/design/screens/setup-code/DESIGN.md,
+	// "States and copy"), not a developer's wording.
+	body, _ := io.ReadAll(resp.Body)
+	const want = "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one"
+	if got := strings.TrimSpace(string(body)); got != want {
+		t.Errorf("body = %q, want the screen's copy %q", got, want)
+	}
 	if n := s.Auth.Count(); n != 0 {
 		t.Errorf("Count() = %d after a refused registration, want 0 -- the first visitor took admin without the code", n)
 	}
@@ -138,7 +146,7 @@ func TestRegisterWithAWrongSetupCodeIs401(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), "server's log") {
+	if !strings.Contains(string(body), "MikroView's log") {
 		t.Errorf("body = %q, want it to say where the code is", body)
 	}
 	if s.Auth.Count() != 0 {
