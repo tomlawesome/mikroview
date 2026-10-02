@@ -1294,6 +1294,20 @@ Restoring is your own act on the replacement router
 (`/system backup load`) — MikroView never connects to a router to apply
 one; it only ever reads the header to confirm what arrived.
 
+## 8. Block known-bad addresses (optional)
+
+MikroView's blocklist page (Settings ▸ drop list ▸ **Block known-bad
+addresses…**, or the wizard's optional last row on first run) builds a
+block that makes this router fetch published known-bad lists from their
+own sources and drop what is on them in raw prerouting. Paste it like
+the blocks above; it re-sets the push from step 4 with the two kinds in
+[4c-iii](#4c-iii-blocklist-rules-and-counts), so the page can see what
+the router holds. The lists, their terms and the undo are in
+[configuration.md](configuration.md#block-known-bad-addresses-on-the-router-optional-1360).
+It needs RouterOS 7.18 or later; checked end to end on real 7.18.2,
+7.22.3 and 7.24.4 routers
+(`docs/routeros-verification-logs/<version>-blocklist.log`).
+
 ## Adding another router
 
 In the app, the Entities screen's "+ add a router" berth opens the same

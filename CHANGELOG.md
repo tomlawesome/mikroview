@@ -18,6 +18,29 @@ rewritten.
 
 ### Added
 
+- **Block known-bad addresses on the router** (#1360, round 2 ratified
+  2026-10-01). Settings ▸ drop list ▸ "Block known-bad addresses…" opens
+  a page that builds one RouterOS block making the router fetch
+  published lists straight from their sources -- Spamhaus DROP and
+  Emerging Threats on by default; CINS Army, blocklist.de strongips,
+  GreenSnow, DShield and Binary Defense offered, the last four labelled
+  "no licence stated" or "not for business use" -- and drop what is on
+  them in raw prerouting, first. MikroView prints the block and never
+  runs it or serves a list. The choices follow the router's own pushed
+  RouterOS version (7.18 and later); each list has its own Undo, and the
+  foot an undo for everything. On first run the wizard offers it once,
+  as an optional sixth row after Where setup stands. Drops log as
+  `D|bl-<list>|`.
+- **Two push kinds: `raw-rule` and `address-list-count`** (#1360). The
+  push now sends both raw tables with their counters, and how many
+  entries each blocklist holds rather than the entries; the
+  address-list page leaves the blocklists out. The wizard's script
+  version is now **6**: a router on 5 keeps pushing correctly until it
+  loads a blocklist, after which its address-list page would outgrow
+  what `/tool fetch` can post -- which is why the blocklist block re-sets
+  the push as its first part, and why the setup page nudges every router
+  to re-paste.
+
 - **The router-backup drop box is switched on and off from Settings, not
   config.yaml** (#1361, owner decision 2026-09-30). Settings → router
   backups has a "drop box: closed / open on port N" row: opening it
@@ -119,6 +142,13 @@ rewritten.
 
 ### Fixed
 
+- **The wizard's saved scripts paste whole on RouterOS 7.18** (#1360).
+  Before 7.19 the RouterOS console drops a line break typed inside a
+  quoted argument, so the push and backup scripts the wizard hands over
+  saved on a 7.18 router as one run-on line and did nothing. Their line
+  breaks now go in as `\n`, so each script is one console line and
+  saves the same on every release. Re-paste step 4 (and 6) on a 7.18
+  router.
 - **A router's own management services no longer come mixed in with
   four of RouterOS's own runtime services** (#1405). A real router's
   `/ip/service` table also returns `dhcpclient`, `btest`, `discover` and
