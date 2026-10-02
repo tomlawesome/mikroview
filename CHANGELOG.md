@@ -172,6 +172,16 @@ rewritten.
   the wizard prints, line breaks written as `\n`, and a test holds the
   guide to the generator. If you pasted 7c by hand on a 7.18 router,
   paste it again.
+- **The guide's hand-built push and HTTPS backup scripts save whole on
+  7.18** (#1416). Steps 4e and 7c-ii told you to escape the script's
+  quotes, backslashes and `$` before putting it in `source="…"`, but
+  not to join its lines, so on a 7.18 router it saved as one run-on
+  line that did nothing. The rule now says to write each line break as
+  `\n`, backslashes first, which makes it one console line; a test
+  applies the rule to the guide's own blocks and holds the result to
+  what the wizard prints. Checked on CHR 7.18.2 and 7.24.4. If you
+  built either script by hand on a 7.18 router, build and paste it
+  again.
 - **The drop list's setup card pastes on a router with no raw rules
   yet** (#1413). Its firewall rule was added with `place-before=0`,
   which RouterOS refuses on an empty raw table ("no such item", seen on
@@ -189,6 +199,11 @@ rewritten.
   since MikroView falls back to a check of its own. A TLS service with
   no certificate set, which a router reports as the literal word `none`,
   now reads as no certificate rather than showing that word.
+- **On the wizard's blocklist step, the rail's first four rows no
+  longer look clickable** (#1417). They highlighted on hover but did
+  nothing when clicked. They now read as done steps you cannot go back
+  to, as they already do on Where setup stands; Where setup stands
+  itself stays clickable and takes you back there.
 
 ### Removed
 

@@ -1,0 +1,11 @@
+import { chromium } from '/home/codex/projects/mikroview/frontend/node_modules/playwright/index.mjs';
+import fs from 'node:fs';
+const candidates = ['/opt/pw-browsers/chromium', ...fs.existsSync('/opt/pw-browsers') ? fs.readdirSync('/opt/pw-browsers').filter(d => d.startsWith('chromium-')).map(d => `/opt/pw-browsers/${d}/chrome-linux/chrome`) : []];
+const executablePath = candidates.find(p => fs.existsSync(p));
+const browser = await chromium.launch(executablePath ? { executablePath } : {});
+const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
+await page.goto('file:///tmp/mv-1360/round-1/builder.html');
+await page.waitForTimeout(300);
+await page.screenshot({ path: '/tmp/mv-1360/round-1/builder.png' });
+await browser.close();
+console.log('captured with', executablePath ?? 'playwright default');

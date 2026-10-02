@@ -1,0 +1,179 @@
+# #1416: docs/routeros-setup.md 4e (mv-push) and 7c-ii (mv-backup-https) pasted
+# into a real CHR 7.24.4, 2026-10-02. Each script line was built from the guide's
+# own blocks with the placeholders filled (address 10.0.2.2:9, token faketoken):
+# BEFORE with the guide's old rule (quotes, backslashes and dollars escaped,
+# line breaks left in), sent once with its line breaks as LF and once as CR;
+# AFTER with the new rule (line breaks written as \n, so one console line).
+# Pasted over the serial console with scripts/live-routeros-console.py. The
+# runs end at "Connection refused": that is the placeholder address, reached
+# only by a script that parsed. Before 7.19 an LF line break inside the open
+# quoted source is dropped, so the saved script has 0 line breaks and fails.
+== :put [/system resource get version]
+:put [/system resource get version]
+7.24.4 (stable)
+[admin@CHR] >
+# body has 22 line breaks
+
+## mv-push BEFORE (guide at dev 40378da7), line breaks sent as LF: pasted 4816 bytes, 45 console lines
+== <paste of the guide's mv-push script line>
+{"...   :set arpRecs (\$arpRecs, {\$rec})
+{"... }
+{"... :local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"records\"=\$arpRecs}]
+{"... /tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-ce
+rtificate=yes output=none" }
+[admin@CHR] >
+== :local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . "
+ chars, " . $n . " line breaks")
+saved: 2142 chars, 22 line breaks
+[admin@CHR] >
+== /system script run mv-push
+/system script run mv-push
+      status: failed
+  downloaded: 0KiB  
+failure: Connection refused
+[admin@CHR] >
+== /system script remove [find name=mv-push]
+/system script remove [find name=mv-push]
+[admin@CHR] >
+# body has 22 line breaks
+
+## mv-push BEFORE (guide at dev 40378da7), line breaks sent as CR: pasted 4816 bytes, 45 console lines
+== <paste of the guide's mv-push script line>
+{"...   :set arpRecs (\$arpRecs, {\$rec})
+{"... }
+{"... :local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"records\"=\$arpRecs}]
+{"... /tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-ce
+rtificate=yes output=none" }
+[admin@CHR] >
+== :local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . "
+ chars, " . $n . " line breaks")
+saved: 2142 chars, 22 line breaks
+[admin@CHR] >
+== /system script run mv-push
+/system script run mv-push
+      status: failed
+  downloaded: 0KiB  
+failure: Connection refused
+[admin@CHR] >
+== /system script remove [find name=mv-push]
+/system script remove [find name=mv-push]
+[admin@CHR] >
+# body has 22 line breaks
+
+## mv-push AFTER (this fix): pasted 4860 bytes, 1 console lines
+== <paste of the guide's mv-push script line>
+easePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \"page\"=1; \"pages\"=1; \"records\"=\$leaseRecs}]\n/tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-dat
+a=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-certificate=yes output=none\n\n:local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp pr
+int as-value] do={\n  :local rec {\"address\"=(\$v->\"address\"); \"mac\"=(\$v->\"mac-address\")}\n  :set arpRecs (\$arpRecs, {\$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"
+; \"page\"=1; \"pages\"=1; \"records\"=\$arpRecs}]\n/tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/js
+on,Authorization: Bearer faketoken\") check-certificate=yes output=none" }
+[admin@CHR] >
+== :local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . "
+ chars, " . $n . " line breaks")
+saved: 2142 chars, 22 line breaks
+[admin@CHR] >
+== /system script run mv-push
+/system script run mv-push
+      status: failed
+  downloaded: 0KiB  
+failure: Connection refused
+[admin@CHR] >
+== /system script remove [find name=mv-push]
+/system script remove [find name=mv-push]
+[admin@CHR] >
+# body has 40 line breaks
+
+## mv-backup-https BEFORE (guide at dev 40378da7), line breaks sent as LF: pasted 5992 bytes, 81 console lines
+== <paste of the guide's mv-backup-https script line>
+ck-certificate=yes output=none
+{"...   :set rscSent (\$rscSent + \$rscTake)
+{"...   :set rscIndex (\$rscIndex + 1)
+{"... }
+{"... /file remove mv-export.rsc" }
+[admin@CHR] >
+== :local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len
+ $s] . " chars, " . $n . " line breaks")
+saved: 2760 chars, 40 line breaks
+[admin@CHR] >
+== /system script run mv-backup-https
+/system script run mv-backup-https
+Saving system configuration
+Configuration backup saved
+failure: Connection refused
+[admin@CHR] >
+== :put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+:put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+2
+[admin@CHR] >
+== /file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+/file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+[admin@CHR] >
+== /system script remove [find name=mv-backup-https]
+/system script remove [find name=mv-backup-https]
+[admin@CHR] >
+# body has 40 line breaks
+
+## mv-backup-https BEFORE (guide at dev 40378da7), line breaks sent as CR: pasted 5992 bytes, 81 console lines
+== <paste of the guide's mv-backup-https script line>
+ck-certificate=yes output=none
+{"...   :set rscSent (\$rscSent + \$rscTake)
+{"...   :set rscIndex (\$rscIndex + 1)
+{"... }
+{"... /file remove mv-export.rsc" }
+[admin@CHR] >
+== :local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len
+ $s] . " chars, " . $n . " line breaks")
+saved: 2760 chars, 40 line breaks
+[admin@CHR] >
+== /system script run mv-backup-https
+/system script run mv-backup-https
+Saving system configuration
+Configuration backup saved
+failure: Connection refused
+[admin@CHR] >
+== :put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+:put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+2
+[admin@CHR] >
+== /file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+/file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+[admin@CHR] >
+== /system script remove [find name=mv-backup-https]
+/system script remove [find name=mv-backup-https]
+[admin@CHR] >
+# body has 40 line breaks
+
+## mv-backup-https AFTER (this fix): pasted 6072 bytes, 1 console lines
+== <paste of the guide's mv-backup-https script line>
+(([:deserialize from=json (\$rscBeginResp->\"data\")])->\"transferId\")\n:local rscSent 0\n:local rscIndex 0\n:while (\$rscSent < \$rscSize) do={\n  :local rscTake (\$rscSize - \$rscSent)\n  :if (\$rs
+cTake > 32768) do={ :set rscTake 32768 }\n  :local rscChunk [/file read file=mv-export.rsc offset=\$rscSent chunk-size=\$rscTake as-value]\n  :local rscData64 [:convert (\$rscChunk->\"data\") from=raw
+ to=base64]\n  :local rscSlice [:serialize to=json value={\"op\"=\"slice\"; \"transferId\"=\$rscTransferId; \"index\"=\$rscIndex; \"data\"=\$rscData64}]\n  /tool fetch url=\"https://10.0.2.2:9/api/ing
+est/router-backup\" http-method=post http-data=\$rscSlice http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-certificate=yes output=none\n  :set rscSent (\$rs
+cSent + \$rscTake)\n  :set rscIndex (\$rscIndex + 1)\n}\n/file remove mv-export.rsc" }
+[admin@CHR] >
+== :local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len
+ $s] . " chars, " . $n . " line breaks")
+saved: 2760 chars, 40 line breaks
+[admin@CHR] >
+== /system script run mv-backup-https
+/system script run mv-backup-https
+Saving system configuration
+Configuration backup saved
+failure: Connection refused
+[admin@CHR] >
+== :put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+:put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+2
+[admin@CHR] >
+== /file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+/file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+[admin@CHR] >
+== /system script remove [find name=mv-backup-https]
+/system script remove [find name=mv-backup-https]
+[admin@CHR] >
