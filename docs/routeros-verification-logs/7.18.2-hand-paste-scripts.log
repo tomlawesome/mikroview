@@ -1,0 +1,173 @@
+# #1416: docs/routeros-setup.md 4e (mv-push) and 7c-ii (mv-backup-https) pasted
+# into a real CHR 7.18.2, 2026-10-02. Each script line was built from the guide's
+# own blocks with the placeholders filled (address 10.0.2.2:9, token faketoken):
+# BEFORE with the guide's old rule (quotes, backslashes and dollars escaped,
+# line breaks left in), sent once with its line breaks as LF and once as CR;
+# AFTER with the new rule (line breaks written as \n, so one console line).
+# Pasted over the serial console with scripts/live-routeros-console.py. The
+# runs end at "Connection refused": that is the placeholder address, reached
+# only by a script that parsed. Before 7.19 an LF line break inside the open
+# quoted source is dropped, so the saved script has 0 line breaks and fails.
+== :put [/system resource get version]
+:put [/system resource get version]
+7.18.2 (stable)
+[admin@MikroTik] >
+# body has 22 line breaks
+
+## mv-push BEFORE (guide at dev 40378da7), line breaks sent as LF: pasted 4816 bytes, 45 console lines
+== <paste of the guide's mv-push script line>
+"=(\$v->\"host-name\"); \"mac\"=(\$v->\"mac-address\"); \"address\"=(\$v->\"address\")}  :set leaseRecs (\$leaseRecs, {\$rec})}:local leasePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \
+"page\"=1; \"pages\"=1; \"records\"=\$leaseRecs}]/tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/jso
+n,Authorization: Bearer faketoken\") check-certificate=yes output=none:local arpRecs [:toarray \"\"]:foreach i,v in=[/ip/arp print as-value] do={  :local rec {\"address\"=(\$v->\"address\"); \"mac\"=(
+\$v->\"mac-address\")}  :set arpRecs (\$arpRecs, {\$rec})}:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"records\"=\$arpRecs}]/tool fetch url=\"https://10.0.
+2.2:9/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-certificate=yes output=none" }
+[admin@MikroTik] >
+== :local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s
+] . " chars, " . $n . " line breaks")
+saved: 2120 chars, 0 line breaks
+[admin@MikroTik] >
+== /system script run mv-push
+/system script run mv-push
+expected end of command (line 1 column 26)
+[admin@MikroTik] >
+== /system script remove [find name=mv-push]
+/system script remove [find name=mv-push]
+[admin@MikroTik] >
+# body has 22 line breaks
+
+## mv-push BEFORE (guide at dev 40378da7), line breaks sent as CR: pasted 4816 bytes, 45 console lines
+== <paste of the guide's mv-push script line>
+{...   :set arpRecs (\$arpRecs, {\$rec})
+{... }
+{... :local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"records\"=\$arpRecs}]
+{... /tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-cer
+tificate=yes output=none" }
+[admin@MikroTik] >
+== :local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s
+] . " chars, " . $n . " line breaks")
+saved: 2142 chars, 22 line breaks
+[admin@MikroTik] >
+== /system script run mv-push
+/system script run mv-push
+  status: failed
+failure: Connection refused
+[admin@MikroTik] >
+== /system script remove [find name=mv-push]
+/system script remove [find name=mv-push]
+[admin@MikroTik] >
+# body has 22 line breaks
+
+## mv-push AFTER (this fix): pasted 4860 bytes, 1 console lines
+== <paste of the guide's mv-push script line>
+cal leasePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \"page\"=1; \"pages\"=1; \"records\"=\$leaseRecs}]\n/tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post htt
+p-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-certificate=yes output=none\n\n:local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/a
+rp print as-value] do={\n  :local rec {\"address\"=(\$v->\"address\"); \"mac\"=(\$v->\"mac-address\")}\n  :set arpRecs (\$arpRecs, {\$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"
+arp\"; \"page\"=1; \"pages\"=1; \"records\"=\$arpRecs}]\n/tool fetch url=\"https://10.0.2.2:9/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: applicati
+on/json,Authorization: Bearer faketoken\") check-certificate=yes output=none" }
+[admin@MikroTik] >
+== :local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-push] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s
+] . " chars, " . $n . " line breaks")
+saved: 2142 chars, 22 line breaks
+[admin@MikroTik] >
+== /system script run mv-push
+/system script run mv-push
+  status: failed
+failure: Connection refused
+[admin@MikroTik] >
+== /system script remove [find name=mv-push]
+/system script remove [find name=mv-push]
+[admin@MikroTik] >
+# body has 40 line breaks
+
+## mv-backup-https BEFORE (guide at dev 40378da7), line breaks sent as LF: pasted 5992 bytes, 81 console lines
+== <paste of the guide's mv-backup-https script line>
+ken\") check-certificate=yes as-value output=user]:local rscTransferId (([:deserialize from=json (\$rscBeginResp->\"data\")])->\"transferId\"):local rscSent 0:local rscIndex 0:while (\$rscSent < \$rsc
+Size) do={  :local rscTake (\$rscSize - \$rscSent)  :if (\$rscTake > 32768) do={ :set rscTake 32768 }  :local rscChunk [/file read file=mv-export.rsc offset=\$rscSent chunk-size=\$rscTake as-value]  :
+local rscData64 [:convert (\$rscChunk->\"data\") from=raw to=base64]  :local rscSlice [:serialize to=json value={\"op\"=\"slice\"; \"transferId\"=\$rscTransferId; \"index\"=\$rscIndex; \"data\"=\$rscD
+ata64}]  /tool fetch url=\"https://10.0.2.2:9/api/ingest/router-backup\" http-method=post http-data=\$rscSlice http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") ch
+eck-certificate=yes output=none  :set rscSent (\$rscSent + \$rscTake)  :set rscIndex (\$rscIndex + 1)}/file remove mv-export.rsc" }
+[admin@MikroTik] >
+== :local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . 
+[:len $s] . " chars, " . $n . " line breaks")
+saved: 2720 chars, 0 line breaks
+[admin@MikroTik] >
+== /system script run mv-backup-https
+/system script run mv-backup-https
+syntax error (line 1 column 49)
+[admin@MikroTik] >
+== :put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+:put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+0
+[admin@MikroTik] >
+== /file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+/file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+[admin@MikroTik] >
+== /system script remove [find name=mv-backup-https]
+/system script remove [find name=mv-backup-https]
+[admin@MikroTik] >
+# body has 40 line breaks
+
+## mv-backup-https BEFORE (guide at dev 40378da7), line breaks sent as CR: pasted 5992 bytes, 81 console lines
+== <paste of the guide's mv-backup-https script line>
+k-certificate=yes output=none
+{...   :set rscSent (\$rscSent + \$rscTake)
+{...   :set rscIndex (\$rscIndex + 1)
+{... }
+{... /file remove mv-export.rsc" }
+[admin@MikroTik] >
+== :local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . 
+[:len $s] . " chars, " . $n . " line breaks")
+saved: 2760 chars, 40 line breaks
+[admin@MikroTik] >
+== /system script run mv-backup-https
+/system script run mv-backup-https
+Saving system configuration
+Configuration backup saved
+failure: Connection refused
+[admin@MikroTik] >
+== :put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+:put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+2
+[admin@MikroTik] >
+== /file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+/file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+[admin@MikroTik] >
+== /system script remove [find name=mv-backup-https]
+/system script remove [find name=mv-backup-https]
+[admin@MikroTik] >
+# body has 40 line breaks
+
+## mv-backup-https AFTER (this fix): pasted 6072 bytes, 1 console lines
+== <paste of the guide's mv-backup-https script line>
+erId (([:deserialize from=json (\$rscBeginResp->\"data\")])->\"transferId\")\n:local rscSent 0\n:local rscIndex 0\n:while (\$rscSent < \$rscSize) do={\n  :local rscTake (\$rscSize - \$rscSent)\n  :if 
+(\$rscTake > 32768) do={ :set rscTake 32768 }\n  :local rscChunk [/file read file=mv-export.rsc offset=\$rscSent chunk-size=\$rscTake as-value]\n  :local rscData64 [:convert (\$rscChunk->\"data\") fro
+m=raw to=base64]\n  :local rscSlice [:serialize to=json value={\"op\"=\"slice\"; \"transferId\"=\$rscTransferId; \"index\"=\$rscIndex; \"data\"=\$rscData64}]\n  /tool fetch url=\"https://10.0.2.2:9/ap
+i/ingest/router-backup\" http-method=post http-data=\$rscSlice http-header-field=(\"Content-Type: application/json,Authorization: Bearer faketoken\") check-certificate=yes output=none\n  :set rscSent 
+(\$rscSent + \$rscTake)\n  :set rscIndex (\$rscIndex + 1)\n}\n/file remove mv-export.rsc" }
+[admin@MikroTik] >
+== :local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . [:len $s] . " chars, " . $n . " line breaks")
+:local s [/system script get [find name=mv-backup-https] source]; :local n 0; :for i from=0 to=([:len $s]-1) do={ :if ([:pick $s $i]="\n") do={ :set n ($n+1) } }; :put ("saved: " . 
+[:len $s] . " chars, " . $n . " line breaks")
+saved: 2760 chars, 40 line breaks
+[admin@MikroTik] >
+== /system script run mv-backup-https
+/system script run mv-backup-https
+Saving system configuration
+Configuration backup saved
+failure: Connection refused
+[admin@MikroTik] >
+== :put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+:put [:len [/file find where name~"^mv-(backup.backup|export.rsc)"]]
+2
+[admin@MikroTik] >
+== /file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+/file remove [find where name~"^mv-(backup.backup|export.rsc)"]
+[admin@MikroTik] >
+== /system script remove [find name=mv-backup-https]
+/system script remove [find name=mv-backup-https]
+[admin@MikroTik] >

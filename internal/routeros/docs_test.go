@@ -68,15 +68,14 @@ func docLine(t *testing.T, path, marker string) string {
 //
 // Excluded on purpose, and not a gap this test should close:
 //   - The two `/system script add name=mv-push|mv-backup-https` lines
-//     (steps 4e, 7c-ii). Their source="..." in the doc is prose
-//     ("<the blocks from 4c and 4c-ii, escaped for the quotes: ...>"),
-//     because the real escaped body is too long to spell out in a guide
-//     -- there is no literal text here to compare a generator's output
-//     against. TestScheduleCommands and friends already pin the real
-//     scriptAdd output byte for byte; this file only reaches the
-//     scheduler lines that follow them, which are printed in full.
-//     Step 7c's mv-backup line is printed in full, and
-//     TestDocBackupScriptIsOneLine holds it to BackupScript.
+//     (steps 4e, 7c-ii). Their source="..." in the doc is a rule, not
+//     text ("<the blocks from 4c and 4c-ii as one line: first every \
+//     becomes \\, ...>"), because the real escaped body is too long to
+//     spell out in a guide. TestDocHandEscapeRuleMatchesGenerators
+//     applies that rule to the doc's own blocks and holds the result to
+//     ScheduleCommands and BackupPushScheduleCommands. Step 7c's
+//     mv-backup line is printed in full, and TestDocBackupScriptIsOneLine
+//     holds it to BackupScript.
 //   - Steps 1-2's logging action/rule guards (SyslogCommands). They
 //     predate the disabled=no fix and never needed it: /system logging
 //     action and /system logging have no `disabled` property that a
@@ -207,5 +206,79 @@ func TestDocBackupScriptIsOneLine(t *testing.T) {
 	got := docLine(t, setupDoc, `/system script find name=mv-backup]`)
 	if got != want {
 		t.Errorf("routeros-setup.md step 7c's script line does not match BackupScript:\n doc:       %s\n generator: %s", got, want)
+	}
+}
+
+// #1416: routeros-setup.md 4e and 7c-ii cannot print their script add in
+// full, so they give the operator a rule for turning the blocks above
+// them into the source="..." value. Before #1416 the rule escaped
+// quotes, backslashes and dollars but left the line breaks in, and a
+// 7.18 console drops a line break pasted inside a quoted string (the
+// fault #1412 fixed in 7c), so the hand-built script saved as one
+// run-on line. This test reads the rule the doc states, applies it step
+// by step in the doc's order to the doc's own blocks, and holds the
+// finished line to the generator the wizard uses, byte for byte -- so
+// the rule, the blocks and the wizard cannot drift apart unnoticed.
+// The old and new forms pasted into real CHRs:
+// docs/routeros-verification-logs/{7.18.2,7.24.4}-hand-paste-scripts.log.
+func TestDocHandEscapeRuleMatchesGenerators(t *testing.T) {
+	setupDoc := filepath.Join("..", "..", "docs", "routeros-setup.md")
+	// The rule as the doc words it. applyDocRule below performs exactly
+	// these steps in this order; change one and the other must follow.
+	const rule = `as one line: first every \ becomes \\, then every " becomes \", every $ becomes \$, and every line break becomes \n>`
+	const same = `<the same one-line source>`
+	applyDocRule := func(body string) string {
+		body = strings.ReplaceAll(body, `\`, `\\`)
+		body = strings.ReplaceAll(body, `"`, `\"`)
+		body = strings.ReplaceAll(body, `$`, `\$`)
+		return strings.ReplaceAll(body, "\n", `\n`)
+	}
+
+	for _, c := range []struct {
+		name, marker, placeholder string
+		body                      string
+		generator                 func(body string) string
+	}{
+		{
+			name:        "mv-push (step 4e)",
+			marker:      `/system script find name=mv-push]`,
+			placeholder: `<the blocks from 4c and 4c-ii ` + rule,
+			// "all the blocks from 4c and 4c-ii concatenated in order"
+			body: docFence(t, setupDoc, `"kind"="filter-rule"`) + "\n\n" + docFence(t, setupDoc, `"kind"="dhcp-lease"`),
+			generator: func(body string) string {
+				return routeros.ScheduleCommands(body, "a")
+			},
+		},
+		{
+			name:        "mv-backup-https (step 7c-ii)",
+			marker:      `/system script find name=mv-backup-https]`,
+			placeholder: `<the script above ` + rule,
+			body:        docFence(t, setupDoc, `"kind"="backup"`),
+			generator: func(body string) string {
+				return routeros.BackupPushScheduleCommands(body, "a")
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			line := docLine(t, setupDoc, c.marker)
+			if strings.Count(line, c.placeholder) != 1 || strings.Count(line, same) != 1 {
+				t.Fatalf("routeros-setup.md's line no longer states the rule this test applies;\n want %q and %q in:\n %s", c.placeholder, same, line)
+			}
+			source := applyDocRule(c.body)
+			got := strings.Replace(strings.Replace(line, c.placeholder, source, 1), same, source, 1)
+			if strings.Contains(got, "\n") {
+				t.Fatalf("the doc's rule leaves a line break in the command, which 7.18 drops")
+			}
+			want := strings.SplitN(c.generator(c.body), "\n", 2)[0]
+			if got != want {
+				t.Errorf("the doc's rule applied to its own blocks does not give the generator's script line:\n doc rule:  %s\n generator: %s", got, want)
+			}
+		})
+	}
+
+	// 7c-ii says BackupPushScript renders "the exact script above"; hold
+	// it to that, so the body the rule is applied to is the wizard's own.
+	if got, want := docFence(t, setupDoc, `"kind"="backup"`), routeros.BackupPushScript("<mikroview-host:port>", "<your ingest token>", "a"); got != want {
+		t.Errorf("routeros-setup.md 7c-ii's script does not match BackupPushScript:\n doc:\n%s\n generator:\n%s", got, want)
 	}
 }
