@@ -94,9 +94,11 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     self-hosted Authentik/Keycloak/Zitadel issuer already restricts
     login to a directory you run. That property is false for a public
     provider -- every Google account validates against
-    `accounts.google.com` -- and combined with "first account becomes
-    admin", such a deployment would hand admin to whoever reached the
-    login page first. **Multi-tenant issuers (Google, Apple, and
+    `accounts.google.com` -- so such a deployment would let anyone with
+    an account there sign in. (Before #1415, combined with "first
+    account becomes admin", it would have handed admin to whoever
+    reached the login page first; SSO no longer creates the first
+    account at all.) **Multi-tenant issuers (Google, Apple, and
     Microsoft's shared `/common`, `/organizations`, `/consumers`
     endpoints) are refused at startup and cannot be enabled by
     configuration.** SSO stays off, the reason is logged, and local
@@ -123,14 +125,32 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     → PKCE exchange → RS256 token verification → account provisioning →
     session flow, including a repeat login correctly reusing the same
     account.
-- **First-run registration happens in the web UI**, not via a CLI
-  command -- whoever loads MikroView first sees a one-time screen asking
-  them to create the admin account. There is no second option on that
-  screen; see the "no way to run without authentication" point below.
-  Don't leave MikroView reachable by an untrusted network before it is
-  completed: whoever gets there first claims the admin role.
-- **"Whoever gets there first" means exactly one winner, enforced
-  atomically.** First-run registration is resolved under a single lock:
+- **First-run registration happens in the web UI, and needs a setup
+  code from the server's log** (#1415). A server that starts with no
+  accounts makes a one-time 80-bit code, prints it once as a warning
+  line in its own log, and keeps only its SHA-256 hash, in memory.
+  Creating the admin account needs that code, so reaching MikroView's
+  address is not enough to claim it: you also need to read its log,
+  which means access to the host or container. An empty accounts store
+  is not only a fresh install -- a deleted or emptied file, a wrong
+  path, an unmounted volume or a botched restore all start with no
+  accounts -- and before this, the first visitor to any of them became
+  admin. The code is compared in constant time, stops working the
+  moment any account exists, is never written anywhere, and dies with
+  the process (a restart prints a new one; a reload that finds the
+  accounts document emptied issues a new one too, never the old one).
+  Attempts are rate-limited per address with the sign-in limiter and
+  checked before the password is hashed, so a guess costs the server
+  one hash comparison; a wrong code answers 401 and logs the address.
+  **SSO cannot create the first account**: the OIDC sign-in routes
+  answer "setup required" while no account exists, and the account
+  store refuses to provision one, so the first admin is always local
+  and links SSO afterwards. The CLI commands never create accounts. The
+  same design as gauntlet's ADR-0003; see
+  [docs/configuration.md](docs/configuration.md#the-setup-code) for
+  where to find the code and what an unexpected one means.
+- **Exactly one first admin, enforced atomically.** First-run
+  registration is resolved under a single lock:
   concurrent attempts cannot all succeed. The precondition is re-checked
   with the write lock held rather than before taking it, which matters
   because password hashing (Argon2id, ~100ms by design) runs first and

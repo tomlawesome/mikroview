@@ -272,6 +272,25 @@ rewritten.
 
 ### Security
 
+- **The first admin needs a setup code from the server's log** (#1415).
+  Until now the first account created on an empty accounts store became
+  admin, whoever made it -- and an empty store is not only a fresh
+  install: a deleted or emptied accounts file, a wrong `auth.storePath`,
+  an unmounted volume or a botched restore all start with no accounts.
+  A server with no accounts now prints a one-time code once, as a
+  warning line in its log (`docker logs mikroview | grep 'setup code'`),
+  and `POST /api/auth/register` needs it as `setupCode`: 401 for a wrong
+  or missing code (logged with the address), 429 once the address has
+  spent the sign-in limit. The code is held in memory only, stops
+  working once any account exists, and a restart prints a new one.
+  SSO can no longer create the first account: the SSO sign-in routes
+  answer 503 "setup required" until the local admin exists, and every
+  account SSO creates is a regular user. Scripts that create the first
+  admin through the API must read the code from the log first. If you
+  see a setup code on a deployment that already had accounts, don't
+  create a new admin -- find where the accounts went; see
+  [docs/configuration.md](docs/configuration.md#the-setup-code).
+
 - **Removing a router revokes its upload token** (#1385). Until now a
   removed router's ingest token still authenticated log pushes and SFTP
   backups under that router's name. If the revoke cannot be saved, the
