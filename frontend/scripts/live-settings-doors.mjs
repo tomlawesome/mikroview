@@ -186,7 +186,7 @@ await viewerPage.click('button[type="submit"]')
 // step. enrolFactorAndSignIn only resolves once the door is cleared and
 // #main-content is up, so a rejection here is a genuine failure to sign
 // in, not a shortcut around the assertion below.
-const signedIn = await enrolFactorAndSignIn(viewerPage).then(() => true, () => false)
+const signedIn = await enrolFactorAndSignIn(viewerPage, VIEWER_PASS).then(() => true, () => false)
 check(signedIn, 'the freshly let-in viewer account can actually sign in')
 await browser.close()
 

@@ -137,6 +137,13 @@ check(
   'adding asks for a name before the browser prompt fires',
 )
 await page.fill('input[placeholder="this laptop"]', 'live-check authenticator')
+// #1418/#1422: adding now also needs the account's current password,
+// checked server-side before the browser prompt ever fires.
+check(
+  await visible('input[type="password"]'),
+  'adding also asks for the current password before the browser prompt fires',
+)
+await page.fill('input[type="password"]', PASS)
 await page.click('button:has-text("Continue")')
 
 // The ceremony (navigator.credentials.create(), begin -> browser prompt

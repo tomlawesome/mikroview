@@ -914,11 +914,17 @@ export async function completeSecondFactor(page) {
  * only place it exists, so it is threaded straight into freshTotpCode as
  * a plain local value rather than read from the admin's env var.
  *
+ * password is the account's own sign-in password, just typed into the
+ * form this helper is called right after -- #1418/#1422 gate
+ * totp/enrol on it the same way handleAuthPasskeyDelete already gated
+ * removal, so a session cookie alone is no longer enough to mint this
+ * account's first factor.
+ *
  * Not retried, for the reason freshTotpCode's own comment gives: a
  * refused code is a spent login attempt against the same five-per-five-
  * minutes budget every other sign-in shares.
  */
-export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
+export async function enrolFactorAndSignIn(page, password, urlBase = URL_BASE) {
   const call = (path, data) =>
     page.request.fetch(`${urlBase}${path}`, {
       method: 'POST',
@@ -936,7 +942,7 @@ export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
   // cookie is certainly already set by the time the fetch below sends it.
   await page.waitForSelector('main.door', { timeout: 15000 })
 
-  const enrolRes = await call('/api/auth/totp/enrol')
+  const enrolRes = await call('/api/auth/totp/enrol', { password })
   if (enrolRes.status() !== 200) {
     throw new Error(`POST /api/auth/totp/enrol answered ${enrolRes.status()} -- cannot enrol a factor for this account`)
   }

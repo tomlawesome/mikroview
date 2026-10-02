@@ -2,16 +2,19 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   // Authenticator app (TOTP) second factor, from the account menu (#1249).
   //
-  // Four screens, one component: status (on/off, and the way into either
-  // direction), enrol (QR + the same secret as text beside it, always --
-  // the issue is explicit that the text is not a fallback for a broken
-  // scanner, it is shown unconditionally -- plus the code box that
-  // confirms it), the ten recovery codes (shown once, closed only by the
-  // explicit "I have saved these" rather than the header X/Escape/
-  // backdrop every other overlay here answers to), and turning it off
-  // (password-gated, like changePassword -- there is deliberately no way
-  // to do this without one; a lost phone goes through the CLI recovery
-  // path instead, not this dialog).
+  // Five screens, one component: status (on/off, and the way into either
+  // direction), a password check before enrolling (#1418/#1422 -- a
+  // session alone must not be enough to mint this account's first
+  // factor, same re-check budget and same beat as turning it off below),
+  // enrol (QR + the same secret as text beside it, always -- the issue is
+  // explicit that the text is not a fallback for a broken scanner, it is
+  // shown unconditionally -- plus the code box that confirms it), the ten
+  // recovery codes (shown once, closed only by the explicit "I have saved
+  // these" rather than the header X/Escape/backdrop every other overlay
+  // here answers to), and turning it off (password-gated, like
+  // changePassword -- there is deliberately no way to do this without
+  // one; a lost phone goes through the CLI recovery path instead, not
+  // this dialog).
   //
   // Structure and styling deliberately mirror ChangePasswordOverlay,
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
@@ -34,7 +37,7 @@
   // account's recovery codes were already minted by an earlier passkey
   // -- confirming still turns the factor on, it just has no fresh codes
   // to show (see confirm() below).
-  type Step = 'status' | 'enrolling' | 'codes' | 'on-done' | 'turning-off' | 'off-done'
+  type Step = 'status' | 'enrol-password' | 'enrolling' | 'codes' | 'on-done' | 'turning-off' | 'off-done'
 
   let step = $state<Step>('status')
   let uri = $state('')
@@ -98,17 +101,27 @@
     if (e.target === e.currentTarget && step !== 'codes' && !busy) close()
   }
 
+  // Reached from the status screen's "Set up authenticator app" --
+  // #1418/#1422 needs the password checked before the secret is ever
+  // minted, so this just opens the password step rather than calling
+  // startEnrol() itself.
+  function beginEnrol() {
+    error = null
+    password = ''
+    step = 'enrol-password'
+  }
+
   async function startEnrol() {
     error = null
     busy = true
     // enrolTOTP throws rather than returning text on a 401 -- the same
     // session-death case AuthEnrolFactor's own forced-enrolment door
-    // guards against (see enrolTOTP's comment in lib/api.ts). Routed the
-    // same way here: this overlay's own header X/Escape/backdrop would
-    // otherwise offer a way out that doesn't actually work, since the
-    // session behind it is already gone.
+    // guards against (see enrolTOTP's comment in lib/api.ts). A wrong
+    // password (or a spent re-check budget) comes back as text instead,
+    // the one exception to that -- shown here and the caller stays on
+    // this password step to retry, same as turnOff below.
     try {
-      const result = await enrolTOTP()
+      const result = await enrolTOTP(password)
       if (typeof result === 'string') {
         error = result
         return
@@ -116,6 +129,7 @@
       uri = result.uri
       secret = secretFromUri(result.uri)
       code = ''
+      password = ''
       step = 'enrolling'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -245,10 +259,29 @@
               Turn off
             </button>
           {:else}
-            <button type="button" class="confirm" disabled={busy} onclick={startEnrol}>
-              {busy ? 'Starting…' : 'Set up authenticator app'}
+            <button type="button" class="confirm" onclick={beginEnrol}>
+              Set up authenticator app
             </button>
           {/if}
+        </div>
+      {/if}
+
+      {#if step === 'enrol-password'}
+        <div class="body">
+          <p>Confirm your password before setting up an authenticator app.</p>
+          <label>
+            Password
+            <input type="password" bind:value={password} autocomplete="current-password" />
+          </label>
+          {#if error}<p class="error">{error}</p>{/if}
+        </div>
+        <div class="actions">
+          <button type="button" class="cancel" onclick={() => ((step = 'status'), (password = ''), (error = null))} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" class="confirm" disabled={busy || !password} onclick={startEnrol}>
+            {busy ? 'Checking…' : 'Continue'}
+          </button>
         </div>
       {/if}
 

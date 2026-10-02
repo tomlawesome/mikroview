@@ -472,9 +472,15 @@ EOF
   # The secret is exported rather than kept, because enrolling a factor
   # also puts a second step in front of every sign-in: live-browser.mjs
   # needs it to finish the login it starts with MV_PASS.
-  totp_secret="$(curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
-    -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/enrol" \
+  # #1418/#1422: totp/enrol now needs the account's own password in the
+  # body, re-checked server-side on the same budget handleTOTPDelete
+  # uses -- sent over stdin, same as the register call above, so it
+  # never sits in this process's argv.
+  totp_secret="$(printf '{"password":"%s"}' "$MV_PASS" |
+    curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+      -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+      --data-binary @- \
+      "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/enrol" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"])')"
 
   # RFC 6238 over the standard library: HMAC-SHA1 of the big-endian

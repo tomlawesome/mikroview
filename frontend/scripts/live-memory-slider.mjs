@@ -333,7 +333,7 @@ await reader.goto(URL_BASE, { waitUntil: 'networkidle' })
 await reader.fill('input[autocomplete="username"]', USER_NAME)
 await reader.fill('input[autocomplete="current-password"]', USER_PASS)
 await reader.click('button[type="submit"]')
-await enrolFactorAndSignIn(reader)
+await enrolFactorAndSignIn(reader, USER_PASS)
 await goTo(reader, 'Settings')
 await reader.waitForSelector(MEMG)
 
