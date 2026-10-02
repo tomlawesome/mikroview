@@ -120,7 +120,7 @@ async function signIn(username, password) {
   await p.fill('input[autocomplete="username"]', username)
   await p.fill('input[autocomplete="current-password"]', password)
   await p.click('button[type="submit"]')
-  await enrolFactorAndSignIn(p)
+  await enrolFactorAndSignIn(p, password)
   return { browser, page: p }
 }
 

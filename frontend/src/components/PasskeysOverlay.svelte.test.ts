@@ -77,6 +77,7 @@ describe('a session that died mid-request (401) is routed to sign-in', () => {
     await screen.findByText(/add a passkey/i)
     await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
 
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -183,9 +184,10 @@ describe('adding a passkey', () => {
     await openAdding()
 
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
-    expect(registerPasskey).toHaveBeenCalledWith('this laptop')
+    expect(registerPasskey).toHaveBeenCalledWith('this laptop', 'hunter2')
     const block = await screen.findByTestId('recovery-codes')
     expect(block.textContent).toContain('a')
     expect(authState.passkeyCount).toBe(1)
@@ -196,6 +198,7 @@ describe('adding a passkey', () => {
     await openAdding()
 
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(screen.queryByTestId('recovery-codes')).toBeNull()
@@ -207,10 +210,30 @@ describe('adding a passkey', () => {
     await openAdding()
 
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(await screen.findByText(/didn't complete/i)).toBeTruthy()
     expect(authState.passkeyCount).toBe(0)
+  })
+
+  // #1418: a wrong password is refused by beginPasskeyRegistration before
+  // the browser is ever asked for anything -- registerPasskey forwards it
+  // here unchanged, same shape as the ceremony's own refusal just above,
+  // and never treated as the session being gone (that's a 401 thrown as
+  // an ApiError, covered by the describe block above).
+  it('shows the incorrect-password refusal and stays put to retry, with the name kept', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue('incorrect password')
+    await openAdding()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    expect(registerPasskey).toHaveBeenCalledWith('this laptop', 'wrong')
+    expect(await screen.findByText('incorrect password')).toBeTruthy()
+    expect(authState.passkeyCount).toBe(0)
+    expect(screen.getByLabelText('Name')).toHaveProperty('value', 'this laptop')
   })
 
   // Matches AuthenticatorOverlay's own codes-screen guard: the ten codes
@@ -224,6 +247,7 @@ describe('adding a passkey', () => {
     await openAdding()
 
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('recovery-codes')
 
@@ -239,6 +263,7 @@ describe('adding a passkey', () => {
     await openAdding()
 
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('recovery-codes')
 
@@ -265,6 +290,7 @@ describe('closing is blocked while a request is in flight', () => {
     await screen.findByText(/add a passkey/i)
     await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByText(/waiting for your browser/i)
     return (v: { passkey: PasskeySummary; recoveryCodes: string[] | null }) => resolveRegister(v)
@@ -411,6 +437,7 @@ describe('X4-F1: beforeunload guard on the codes step', () => {
     await screen.findByText(/add a passkey/i)
     await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('recovery-codes')
 

@@ -238,7 +238,7 @@ if (token) {
     await vp.fill('input[autocomplete="username"]', VIEWER_USER)
     await vp.fill('input[autocomplete="current-password"]', VIEWER_PASS)
     await vp.click('button[type="submit"]')
-    await enrolFactorAndSignIn(vp)
+    await enrolFactorAndSignIn(vp, VIEWER_PASS)
     await goTo(vp, 'Fleet')
 
     const card = vp.locator('.fcard', { hasText: CURRENT_ID })

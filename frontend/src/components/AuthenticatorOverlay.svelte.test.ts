@@ -59,6 +59,8 @@ describe('a session that died mid-request (401) is routed to sign-in', () => {
     render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
   })
@@ -71,6 +73,8 @@ describe('a session that died mid-request (401) is routed to sign-in', () => {
     vi.mocked(confirmTOTP).mockRejectedValue(new ApiError('sign in first', 401))
     render(AuthenticatorOverlay, { open: true })
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('totp-secret')
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
 
@@ -97,6 +101,43 @@ describe('the status screen', () => {
   })
 })
 
+// #1418/#1422: starting enrolment now needs the caller's password,
+// checked on the same click that used to go straight to enrolTOTP.
+describe('starting enrolment needs the password first (#1418, #1422)', () => {
+  it('asks for the password before calling enrolTOTP at all', async () => {
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+
+    expect(screen.getByLabelText('Password')).toBeTruthy()
+    expect(enrolTOTP).not.toHaveBeenCalled()
+  })
+
+  it('sends the password typed in and stays on the password screen for a wrong one', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue('incorrect password')
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    expect(enrolTOTP).toHaveBeenCalledWith('wrong')
+    expect(await screen.findByText('incorrect password')).toBeTruthy()
+    expect(screen.getByLabelText('Password')).toBeTruthy()
+    expect(screen.queryByTestId('totp-secret')).toBeNull()
+  })
+
+  it('Cancel returns to the status screen', async () => {
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+
+    await fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    expect(screen.getByRole('button', { name: /set up authenticator app/i })).toBeTruthy()
+    expect(screen.queryByLabelText('Password')).toBeNull()
+  })
+})
+
 describe('enrol shows the QR and the secret as text beside it, always (#1249)', () => {
   it('extracts and shows the secret from the returned otpauth URI', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue({
@@ -105,18 +146,23 @@ describe('enrol shows the QR and the secret as text beside it, always (#1249)', 
     render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(await screen.findByTestId('totp-secret')).toHaveProperty('textContent', 'JBSWY3DPEHPK3PXP')
     // The canvas is present too -- the QR is not a substitute for the
     // text, both are drawn at once.
     expect(document.querySelector('canvas')).toBeTruthy()
+    expect(enrolTOTP).toHaveBeenCalledWith('hunter2')
   })
 
-  it('shows the enrol error and stays on the status screen when it fails', async () => {
+  it('shows the enrol error and stays on the password screen when it fails', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue('the server could not do that (500)')
     render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
     expect(screen.queryByTestId('totp-secret')).toBeNull()
@@ -130,6 +176,8 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
     })
     render(AuthenticatorOverlay, { open: true })
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('totp-secret')
   }
 
@@ -237,6 +285,8 @@ describe('closing is blocked while a request is in flight', () => {
     )
     render(AuthenticatorOverlay, { open: true })
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('totp-secret')
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
@@ -365,6 +415,8 @@ describe('X4-F1: beforeunload guard on the codes step', () => {
     })
     render(AuthenticatorOverlay, { open: true })
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByTestId('totp-secret')
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))

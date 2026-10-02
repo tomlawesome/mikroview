@@ -22,6 +22,7 @@ import {
   fetchSetupCommands,
   finishPasskeyRegistration,
   geoLookup,
+  INCORRECT_PASSWORD,
   login,
   mintDroplistKey,
   onForcedAuthGate,
@@ -583,10 +584,37 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('enrolTOTP returns the otpauth URI on success', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ uri: 'otpauth://totp/MikroView:tom?secret=ABC&issuer=MikroView' }) })))
-    const result = await enrolTOTP()
+  // #1418/#1422: enrolment is gated by the caller's current password.
+  it('enrolTOTP sends the password and returns the otpauth URI on success', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ uri: 'otpauth://totp/MikroView:tom?secret=ABC&issuer=MikroView' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await enrolTOTP('hunter2')
     expect(result).toEqual({ uri: 'otpauth://totp/MikroView:tom?secret=ABC&issuer=MikroView' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/totp/enrol')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  // A wrong password (or a spent re-check budget) answers 401 with this
+  // exact plain body -- returned as text, shown in the form, rather than
+  // thrown as the "session is gone" case below.
+  it('enrolTOTP returns the incorrect-password refusal as text, not thrown', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => INCORRECT_PASSWORD })))
+    const result = await enrolTOTP('wrong')
+    expect(result).toBe(INCORRECT_PASSWORD)
+  })
+
+  it('enrolTOTP returns the too-many-attempts refusal as text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 429, text: async () => 'too many attempts, try again later' })),
+    )
+    const result = await enrolTOTP('hunter2')
+    expect(result).toBe('too many attempts, try again later')
   })
 
   it('confirmTOTP returns the ten recovery codes on success', async () => {
@@ -628,9 +656,9 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     await expect(confirmTOTP('123456')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
-  it('enrolTOTP throws on a 401, rather than returning it as text', async () => {
+  it('enrolTOTP throws on any other 401, rather than returning it as text', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
-    await expect(enrolTOTP()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+    await expect(enrolTOTP('hunter2')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
   it('disableTOTP posts the password and reads signedOut off the body on success', async () => {
@@ -795,14 +823,40 @@ describe('the passkey calls (#1250)', () => {
     await expect(fetchPasskeys()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
-  it('beginPasskeyRegistration posts an empty body and returns the library\'s own creation options', async () => {
+  // #1418: starting registration is gated by the caller's current password.
+  it('beginPasskeyRegistration posts the password and returns the library\'s own creation options', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ publicKey: { challenge: 'c' } }) }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await beginPasskeyRegistration()
+    const result = await beginPasskeyRegistration('hunter2')
     expect(result).toEqual({ publicKey: { challenge: 'c' } })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/passkeys/register/begin')
     expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  // A wrong password (or a spent re-check budget) answers 401 with this
+  // exact plain body -- returned as text, not thrown, the one exception
+  // to the 401-means-session-gone rule below.
+  it('beginPasskeyRegistration returns the incorrect-password refusal as text, not thrown', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => INCORRECT_PASSWORD })))
+    const result = await beginPasskeyRegistration('wrong')
+    expect(result).toBe(INCORRECT_PASSWORD)
+  })
+
+  // An SSO-only account has no password to check -- refused with 409,
+  // same as totp/enrol's own rule.
+  it('beginPasskeyRegistration returns the SSO-only refusal as text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 409,
+        text: async () => 'this account signs in through your identity provider -- a passkey is not offered',
+      })),
+    )
+    const result = await beginPasskeyRegistration('hunter2')
+    expect(result).toBe('this account signs in through your identity provider -- a passkey is not offered')
   })
 
   it('finishPasskeyRegistration posts the credential JSON and the name together', async () => {
@@ -821,9 +875,9 @@ describe('the passkey calls (#1250)', () => {
 
   // Same reasoning as confirmTOTP/enrolTOTP above -- these are two of
   // the same four forced-enrolment routes.
-  it('beginPasskeyRegistration throws on a 401, rather than returning it as text', async () => {
+  it('beginPasskeyRegistration throws on any other 401, rather than returning it as text', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
-    await expect(beginPasskeyRegistration()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+    await expect(beginPasskeyRegistration('hunter2')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
   it('finishPasskeyRegistration throws on a 401, rather than returning it as text', async () => {
