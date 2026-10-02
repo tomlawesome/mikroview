@@ -83,7 +83,10 @@ func NewSetup(address, key string) Setup {
 	// rule has no name; dropListRuleComment is the same marker
 	// DisableRule already matches on. place-before is placement, not a
 	// property, so it belongs to the add branch alone -- a rule that is
-	// already there keeps the position it already has.
+	// already there keeps the position it already has. And place-before=0
+	// is refused on an empty raw table ("no such item", real CHRs at
+	// 7.18.2 and 7.24.4, #1413), so the add branch adds plainly there,
+	// the way the blocklist builder's rules do (routeros.rawRuleAdd).
 	//
 	// Both set branches name disabled=no (v0.6.0 pre-release audit,
 	// Security stage). `set` changes only the properties it names, and
@@ -94,8 +97,8 @@ func NewSetup(address, key string) Setup {
 	return Setup{
 		Scheduler: routeros.SchedulerAdd(ListName, fmt.Sprintf(`interval=5m on-event="%s"`,
 			routeros.QuoteScriptString(inner))),
-		Rule: fmt.Sprintf(`:if ([:len [/ip firewall raw find comment="%s"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=%s action=drop comment="%s" place-before=0 } else={ /ip firewall raw set [find comment="%s"] chain=prerouting src-address-list=%s action=drop disabled=no }`,
-			dropListRuleComment, ListName, dropListRuleComment, dropListRuleComment, ListName),
+		Rule: fmt.Sprintf(`:if ([:len [/ip firewall raw find comment="%[1]s"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=%[2]s action=drop comment="%[1]s" } else={ /ip firewall raw add chain=prerouting src-address-list=%[2]s action=drop comment="%[1]s" place-before=0 } } else={ /ip firewall raw set [find comment="%[1]s"] chain=prerouting src-address-list=%[2]s action=drop disabled=no }`,
+			dropListRuleComment, ListName),
 		DisableRule: fmt.Sprintf(`/ip firewall raw disable [find comment="%s"]`, dropListRuleComment),
 		EmptyList: fmt.Sprintf(`/system scheduler disable [find name=%s]; /ip firewall address-list remove [find list=%s]`,
 			ListName, ListName),
