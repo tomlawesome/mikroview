@@ -14,8 +14,8 @@ func TestRowFor(t *testing.T) {
 	}{
 		{"the floor", "7.18", true, "a", ""},
 		{"mid-range", "7.20.1", true, "a", ""},
-		{"the unexercised release", "7.24", true, "a",
-			"7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. Nothing about 7.24.0 has been exercised, so this row's boundary is unverified rather than known-good."},
+		{"the release that renamed a service property", "7.24", true, "a",
+			"7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. A real CHR 7.24 ran the push on 2026-10-01 (#1411, docs/routeros-verification-logs/7.24-push-ip-service-address.log): it is the release that renamed /ip/service's address restriction to available-from, which the push reads under either name."},
 		{"read but not run", "7.24.1", true, "a", ""},
 		{"newest exercised", "7.24.2", true, "a", ""},
 		{"the certificate-store release", "7.24.3", true, "a",
@@ -50,8 +50,8 @@ func TestRowsMatchTheContract(t *testing.T) {
 	want := []Row{
 		{From: "7.18", To: "7.23.3", Dialect: "a", VerifiedBy: "exercised on CHR 7.23.3, 2026-09-04", Note: ""},
 		{
-			From: "7.24", To: "7.24", Dialect: "a", VerifiedBy: "release notes read 2026-08-29",
-			Note: "7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. Nothing about 7.24.0 has been exercised, so this row's boundary is unverified rather than known-good.",
+			From: "7.24", To: "7.24", Dialect: "a", VerifiedBy: "exercised on CHR 7.24, 2026-10-01",
+			Note: "7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. A real CHR 7.24 ran the push on 2026-10-01 (#1411, docs/routeros-verification-logs/7.24-push-ip-service-address.log): it is the release that renamed /ip/service's address restriction to available-from, which the push reads under either name.",
 		},
 		{From: "7.24.1", To: "7.24.1", Dialect: "a", VerifiedBy: "release notes read 2026-08-29", Note: ""},
 		{From: "7.24.2", To: "7.24.2", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.2, 2026-09-04", Note: ""},

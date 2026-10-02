@@ -206,6 +206,18 @@ check(held['mv-bl-spamhaus'] >= 1000, f"mv-bl-spamhaus holds {held['mv-bl-spamha
 check(held['mv-bl-et'] >= 100, f"mv-bl-et holds {held['mv-bl-et']} (>= 100)")
 for n in lists[2:] + ['mv-bl-spamhaus6']:
     check(held[n] > 0, f'{n} holds {held[n]}')
+# A list's scheduler can fire while this runs (its next start time is
+# whenever the CHR's clock says): wait for every script job to end before
+# asking what the loaders left behind.
+waited = time.time()
+for _ in range(180):
+    # Only the loaders' jobs: the console command asking is a job itself.
+    jobs = run(':put [:len [/system script job find where script~"^mv-bl-"]]', quiet=True).split('\n')
+    if any(l.strip() == '0' for l in jobs):
+        break
+    time.sleep(10)
+out(f'# waited {time.time() - waited:.0f}s for any loader a scheduler started to end')
+run('/system script job print without-paging')
 check(value('[:len [/ip firewall address-list find where list~"-next\\$"]]') == '0', 'no staging list left behind')
 check(value('[:len [/file find where name~"^mv-bl-"]]') == '0', 'no fetched file left behind')
 run('/ip firewall raw print without-paging')
@@ -249,7 +261,7 @@ check(value('[:len [/system script find where name=mv-push]]') == '1' and value(
 
 out('\n## 5. A loader fed a hostile file\n')
 et_loader = next(c for c in block if c.startswith(':if ([:len [/system script find name=mv-bl-et]]'))
-probe = et_loader.replace('https://rules.emergingthreats.net/blockrules/compromised-ips.txt', os.environ['PROBE_URL'])
+probe = re.sub(r'https?://[^"\\]*/compromised-ips\.txt', os.environ['PROBE_URL'], et_loader)
 probe = probe.replace(' check-certificate=yes output=file', ' output=file')
 out('# The ET loader as generated, its URL pointed at ' + os.environ['PROBE_URL'] + ', served by a throwaway nginx container:')
 for l in open(os.environ['PROBE_FILE']).read().rstrip('\n').split('\n'):
@@ -262,6 +274,29 @@ got = sorted(l.split()[-1] for l in run(':foreach i in=[/ip firewall address-lis
 check(got == sorted(['192.0.2.10', '198.51.100.0/24', '203.0.113.7', '8.8.4.4']), f'only the public addresses loaded: {got}')
 for cmd in undo_all:
     run(cmd, quiet=True)
+
+if 'days=mon,tue,wed,thu,fri' in ''.join(block):
+    out('\n## 6. Weekdays: a day schedule fires on each listed day and skips the rest\n')
+    out('# A probe scheduler shaped like the ET weekdays schedule, logging instead of fetching.')
+    out('# The CHR clock is set to just before 04:31 on Thursday 2026-10-01 before the probe is')
+    out('# added (a probe added at the real time and then overtaken by a clock jump forward does')
+    out('# not fire), then moved to Friday and to Saturday.')
+    run('/system clock set date=2026-10-01 time=04:30:50')
+    run('/system scheduler add name=probe-weekdays interval=0s days=mon,tue,wed,thu,fri start-time=04:31:00 on-event=":log info probe-weekdays fired"')
+    run(':delay 15s')
+    thursday = value('[/system scheduler get [find name=probe-weekdays] run-count]')
+    run('/system clock set date=2026-10-02 time=04:30:50')
+    run(':delay 15s')
+    friday = value('[/system scheduler get [find name=probe-weekdays] run-count]')
+    run('/system clock set date=2026-10-03 time=04:30:50')
+    run(':delay 15s')
+    saturday = value('[/system scheduler get [find name=probe-weekdays] run-count]')
+    run('/system scheduler print detail without-paging where name=probe-weekdays')
+    # The scheduler's own run-count, not the log: the router's memory log
+    # rotates the line out under the block's own entries (7.24.4).
+    check((thursday, friday, saturday) == ('1', '2', '2'), f'it fired on Thursday and Friday and not on Saturday (run-count {thursday}, {friday}, {saturday})')
+    check(value('[/system scheduler get [find name=probe-weekdays] next-run]').startswith('2026-10-05'), 'the next run is Monday')
+    check(value('[:len [/system scheduler find where name=probe-weekdays and comment~"not supported"]]') == '0', 'no RouterOS warning on interval=0s with days=')
 
 out()
 out('RESULT: ' + ('PASS' if not failures else 'FAIL -- ' + '; '.join(failures)))

@@ -28,20 +28,21 @@ type Row struct {
 // 7.24.0 keeps its own row, but no longer because of a dialect
 // difference: #924 showed the "find bug" it was split out for was our
 // own missing `where`, not anything RouterOS changed. The row stays
-// because it is the one version in the range nothing has ever been run
-// against, which is worth seeing rather than folding away.
+// because 7.24.0 is where /ip/service's address became available-from
+// (#1411), which is worth seeing rather than folding away.
 //
 // VerifiedBy is honest, not aspirational: "exercised" means a real
 // router ran these commands, "release notes read" means someone read
 // what changed and found nothing that moved them. 7.23.3 and 7.24.2
 // were exercised by the CHR job (#894) on 2026-09-04 -- the first two
-// releases anything was ever actually run against. The 7.24 and 7.24.1
-// rows were read on 2026-08-29 and have not been run since.
+// releases anything was ever actually run against. 7.24 was run on a
+// real CHR on 2026-10-01 (#1411); the 7.24.1 row was read on 2026-08-29
+// and has not been run since.
 var Rows = []Row{
 	{From: "7.18", To: "7.23.3", Dialect: "a", VerifiedBy: "exercised on CHR 7.23.3, 2026-09-04", Note: ""},
 	{
-		From: "7.24", To: "7.24", Dialect: "a", VerifiedBy: "release notes read 2026-08-29",
-		Note: "7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. Nothing about 7.24.0 has been exercised, so this row's boundary is unverified rather than known-good.",
+		From: "7.24", To: "7.24", Dialect: "a", VerifiedBy: "exercised on CHR 7.24, 2026-10-01",
+		Note: "7.24.0 was recorded as having a `find` argument-lookup bug fixed in 7.24.1. That was a misreading of #924: the bulk tagging command was missing `where`, which is a syntax error on every release tested, not a 7.24.0 defect. A real CHR 7.24 ran the push on 2026-10-01 (#1411, docs/routeros-verification-logs/7.24-push-ip-service-address.log): it is the release that renamed /ip/service's address restriction to available-from, which the push reads under either name.",
 	},
 	{From: "7.24.1", To: "7.24.1", Dialect: "a", VerifiedBy: "release notes read 2026-08-29", Note: ""},
 	{From: "7.24.2", To: "7.24.2", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.2, 2026-09-04", Note: ""},
