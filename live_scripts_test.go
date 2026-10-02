@@ -170,6 +170,7 @@ func TestEveryLiveCheckIsRun(t *testing.T) {
 		"frontend/scripts/live-browser.mjs":          "the shared helper every scenario imports, not a scenario",
 		"frontend/scripts/live-routeros-real.mjs":    "needs a real CHR booted; run by make live-routeros-container",
 		"frontend/scripts/live-freshness-reload.mjs": "restarts the server mid-run (#1363); needs its own instance, not the shared one -- run standalone by scripts/live-freshness-reload.sh",
+		"frontend/scripts/live-setup-code.mjs":       "needs an instance with no account yet (#1415); the shared one holds its admin -- run standalone by scripts/live-setup-code.sh",
 		"scripts/live-env.sh":                        "the shared environment helper",
 		"scripts/live-container.sh":                  "the shared environment helper, container flavour",
 		"scripts/live-stores.sh":                     "the shared store block, sourced not run",
