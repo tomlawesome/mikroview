@@ -808,15 +808,23 @@ failing (say, a momentary network blip) doesn't stop the others in the
 same run.
 
 ```
-:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>" } else={ /system script set [find name=mv-push] policy=read,test source="<the same escaped blocks>" }
+:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii as one line: first every \ becomes \\, then every " becomes \", every $ becomes \$, and every line break becomes \n>" } else={ /system script set [find name=mv-push] policy=read,test source="<the same one-line source>" }
 :if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
 /system script run mv-push
 ```
 
-The escaping is not optional: inside `source="…"` RouterOS reads `$v`
-as a variable to substitute, so an unescaped script is saved with its
-variables already replaced by nothing. If you would rather not do it
-by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**,
+The escaping is not optional, and neither is its order: inside
+`source="…"` RouterOS reads `$v` as a variable to substitute, so an
+unescaped script is saved with its variables already replaced by
+nothing. Backslashes go first, so the `\` the other three steps add are
+not doubled. Line breaks become `\n` because before RouterOS 7.19 the
+terminal drops a line break pasted inside a quoted string: a source
+spread over several lines saves on 7.18 as one run-on line that does
+nothing (#1416). Written as `\n`, the whole command is one line, and the
+script RouterOS saves still has one command per line. This is exactly
+what the wizard does to the same blocks.
+
+If you would rather not do it by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**,
 its Push router state step) prints these three lines as one block with
 your host, your token and the escaping already in it — copy, paste,
 done. WinBox's script dialog
@@ -1236,15 +1244,16 @@ To paste it by hand instead:
 ```
 
 ```
-:if ([:len [/system script find name=mv-backup-https]] = 0) do={ /system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>" } else={ /system script set [find name=mv-backup-https] policy=read,write,test,sensitive source="<the same escaped script>" }
+:if ([:len [/system script find name=mv-backup-https]] = 0) do={ /system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above as one line: first every \ becomes \\, then every " becomes \", every $ becomes \$, and every line break becomes \n>" } else={ /system script set [find name=mv-backup-https] policy=read,write,test,sensitive source="<the same one-line source>" }
 :if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" disabled=no }
 /system script run mv-backup-https
 ```
 
-Same escaping rule as step 4e, and for the same reason — this script
-is nothing but `$bakSize`, `$rscSlice` and their kin, and an
-unescaped `source="…"` would save it with every one of them expanded
-away. WinBox's **Source** field takes the script as printed above,
+Same rule as step 4e, in the same order, and for the same reasons —
+this script is nothing but `$bakSize`, `$rscSlice` and their kin, and
+an unescaped `source="…"` would save it with every one of them expanded
+away; left on several lines, it saves on 7.18 as one run-on line
+(#1416). WinBox's **Source** field takes the script as printed above,
 unescaped.
 
 Same binary/export pair as 7c (unencrypted restore copy, `hide-sensitive`
