@@ -22,6 +22,10 @@
 #     was submitted.
 #   - "old" has no /api/auth/totp/* routes at all (a 404), matching
 #     every pre-v0.6.1 image, and never gates anything.
+# "new" also stands for a release with #1415's first-run setup code: its
+# register refuses (401) any body whose setupCode is not the code it
+# "logged" -- which record-upgrade-fixture.sh hands session.py as
+# MV_SETUP_CODE -- while "old" takes no code, as every earlier release.
 # Both must let the recorded session run to completion, and the
 # manifest session.py prints on stdout must say which happened
 # (secondFactorEnrolled), so record-upgrade-fixture.sh's own
@@ -99,6 +103,9 @@ def totp_code(secret_bytes, counter, digits=6):
 
 state = {"confirmed": mode != "new", "secret": None}
 
+# A fake code in the shape the real server logs (#1415).
+SETUP_CODE = "abcd-efgh-jkmn-pqrs"
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -128,7 +135,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._reply(200, {})
 
         if path == "/api/auth/register":
-            self._body()
+            body = self._body()
+            log("REGISTER setupCode " + ("present" if "setupCode" in body else "absent"))
+            if mode == "new" and body.get("setupCode") != SETUP_CODE:
+                return self._reply(401, None)
             return self._reply(201, {"username": "upgrade-fixture-admin", "role": "admin"}, cookie="sid=1")
 
         if path == "/api/auth/totp/enrol":
@@ -209,12 +219,13 @@ except OSError:
   return 1
 }
 
-# run_case <mode> <https-port> <syslog-port> -- starts a fresh fake
-# server for <mode>, drives the real session.py against it exactly as
-# record-upgrade-fixture.sh's `docker run` line would (same argv
-# shape), and leaves $OUT/$RC/$LOG set for the caller's checks.
+# run_case <mode> <https-port> <syslog-port> [setup-code] -- starts a
+# fresh fake server for <mode>, drives the real session.py against it
+# exactly as record-upgrade-fixture.sh's `docker run` line would (same
+# argv shape, the setup code in MV_SETUP_CODE when there is one), and
+# leaves $OUT/$RC/$LOG set for the caller's checks.
 run_case() {
-  local mode="$1" https_port="$2" syslog_port="$3"
+  local mode="$1" https_port="$2" syslog_port="$3" setup_code="${4:-}"
   LOG="$TMP/log-$mode"
   : > "$LOG"
   python3 "$TMP/fake_server.py" "$https_port" "$syslog_port" "$mode" "$LOG" "$TMP/cert.pem" "$TMP/key.pem" &
@@ -222,7 +233,7 @@ run_case() {
   wait_for_port "$https_port" || { echo "fake server for $mode never opened $https_port"; kill "$SERVER_PID" 2>/dev/null || true; exit 1; }
 
   set +e
-  OUT="$(python3 "$ROOT/scripts/upgrade-fixture-session.py" \
+  OUT="$(MV_SETUP_CODE="$setup_code" python3 "$ROOT/scripts/upgrade-fixture-session.py" \
     "https://127.0.0.1:$https_port" 127.0.0.1 "$syslog_port" A "v-test-$mode" plain no)"
   RC=$?
   set -e
@@ -232,11 +243,13 @@ run_case() {
 }
 
 # --- v0.6.1-shaped server: the forced-enrolment door is up ----------
-run_case new 18443 11514
+run_case new 18443 11514 abcd-efgh-jkmn-pqrs
 check "$([ "$RC" -eq 0 ] && echo true || echo false)" "session.py completes against a server enforcing the second-factor door (rc=$RC)"
 if [ "$RC" -ne 0 ]; then
   printf '    %s\n' "${OUT//$'\n'/$'\n    '}"
 fi
+check "$(grep -q 'REGISTER setupCode present' "$LOG" && echo true || echo false)" "session.py registered the first admin with the setup code it was handed (#1415)"
+check "$(grep -q 'abcd-efgh-jkmn-pqrs' <<<"$OUT" && echo false || echo true)" "the setup code is nowhere in the manifest session.py prints"
 
 enrolled="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['secondFactorEnrolled'])" "$OUT" 2>/dev/null || echo ERROR)"
 check "$([ "$enrolled" = "True" ] && echo true || echo false)" "manifest reports secondFactorEnrolled=true when the door was up"
@@ -254,6 +267,7 @@ enrolled_old="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['seco
 check "$([ "$enrolled_old" = "False" ] && echo true || echo false)" "manifest reports secondFactorEnrolled=false when the server has no such route"
 check "$(grep -q 'POST /api/auth/totp/enrol' "$LOG" && echo true || echo false)" "session.py still tried the enrol route once (that 404 is the detection, not a version check)"
 check "$(! grep -q 'POST /api/auth/totp/confirm' "$LOG" && echo true || echo false)" "session.py never called confirm once enrol itself 404'd"
+check "$(grep -q 'REGISTER setupCode absent' "$LOG" && echo true || echo false)" "session.py sends no setupCode when it was handed none, as against a release before #1415"
 
 echo
 if [ "$fails" -ne 0 ]; then

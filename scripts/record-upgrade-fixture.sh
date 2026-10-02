@@ -74,6 +74,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The first admin needs the setup code from the server's log (#1415).
+. "$ROOT/scripts/setup-code.sh"
 
 MODE="file"
 VERSION=""
@@ -354,6 +356,26 @@ if [ -n "$(ls -A "$WORKDIR/etc")" ]; then
 fi
 docker start "$CONTAINER_NAME" >/dev/null
 
+# #1415: from that release on, the first admin needs the one-time setup
+# code the server prints when it opens an empty accounts store. The
+# session container cannot read this container's log, so it is read
+# here. Every release since v0.1.0 logs one auth line once the store is
+# open -- "N account(s) registered" or "no account yet" -- and the code,
+# when there is one, comes before it; so wait for that line rather than
+# for a code an older release will never print. A timeout is not fatal
+# here: the session's own register call then fails and says why.
+log "waiting for the server to open its accounts store"
+SETUP_CODE=""
+for _ in $(seq 1 240); do
+  server_log="$(docker logs "$CONTAINER_NAME" 2>&1 || true)"
+  if printf '%s\n' "$server_log" | grep -qE 'account\(s\) registered|no account yet'; then
+    SETUP_CODE="$(printf '%s\n' "$server_log" | mv_setup_code_in)"
+    break
+  fi
+  sleep 0.25
+done
+unset server_log
+
 log "driving the scripted session"
 DECLARED_ROUTER_ARG=no
 $NEEDS_DEVICE_DECLARATION && DECLARED_ROUTER_ARG=yes
@@ -362,8 +384,10 @@ $NEEDS_DEVICE_DECLARATION && DECLARED_ROUTER_ARG=yes
 # so `cat` inside the helper sees exactly the file on this side
 # regardless of which host the daemon actually runs on. Its own stdout
 # stays the manifest JSON and nothing else, same contract as before.
+# The setup code goes in by name (`-e MV_SETUP_CODE`, the value taken
+# from this environment), so it is on no command line.
 set +e
-docker run -i --rm --network "container:${CONTAINER_NAME}" "$HELPER_IMAGE" \
+MV_SETUP_CODE="$SETUP_CODE" docker run -i --rm -e MV_SETUP_CODE --network "container:${CONTAINER_NAME}" "$HELPER_IMAGE" \
   sh -c "apk add --no-cache python3 >/dev/null && cat > /tmp/session.py && exec python3 /tmp/session.py \
     https://127.0.0.1:8080 127.0.0.1 ${SYSLOG_PORT} ${GENERATION} ${VERSION} ${SYSLOG_MODE} ${DECLARED_ROUTER_ARG}" \
   < "$ROOT/scripts/upgrade-fixture-session.py" \

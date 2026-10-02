@@ -23,6 +23,7 @@ cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
 . "$REPO/scripts/live-slot.sh"
 . "$REPO/scripts/live-web-dist.sh"
+. "$REPO/scripts/setup-code.sh"
 
 DIR="$(mktemp -d)"
 # Port comes from the shared standalone allocator (live-slot.sh), not a
@@ -89,10 +90,15 @@ ok "a real instance started against the source directory"
 
 # Real state, written through the real API rather than by planting files:
 # an account is the thing an operator cannot afford to lose, and it also
-# exercises the recovery pepper and the accounts store together.
-create="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \
+# exercises the recovery pepper and the accounts store together. The
+# first admin needs the setup code the source instance logged (#1415),
+# sent over stdin so it never sits in a process listing.
+setup_code="$(mv_wait_setup_code 40 cat "$SRC/server.log")" || setup_code=""
+check "$([ -n "$setup_code" ] && echo 0 || echo 1)" "the empty source instance logged a setup code for its first admin"
+create="$(printf '{"username":"migrate-test","password":"correct horse battery staple 42","setupCode":"%s"}' "$setup_code" |
+  curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-  -d '{"username":"migrate-test","password":"correct horse battery staple 42"}' 2>/dev/null || true)"
+  --data-binary @- 2>/dev/null || true)"
 check "$([ "$create" = "200" ] || [ "$create" = "201" ] && echo 0 || echo 1)" \
   "an admin account was created through the real API (got $create)"
 
@@ -147,7 +153,11 @@ check "$([ "$code" = "200" ] && echo 0 || echo 1)" "the account created before t
 
 # Registration is closed on the destination: an account already exists,
 # so the migrated instance is not offering to create a second admin over
-# the top of the first. 409 is auth.ErrRegistrationClosed.
+# the top of the first. 409 is auth.ErrRegistrationClosed, answered
+# before any setup code is looked at -- and the destination, holding an
+# account, logs none.
+check "$(grep -q 'create the first admin with setup code' "$DST/server.log" && echo 1 || echo 0)" \
+  "the migrated instance logged no setup code, so it knows the migrated account exists"
 second="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
   -d '{"username":"second-admin","password":"correct horse battery staple 42"}' 2>/dev/null || true)"
