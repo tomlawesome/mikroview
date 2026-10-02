@@ -203,12 +203,16 @@ class BlocklistState {
     return ok
   }
 
+  // A row's undo and the undo for everything never show together: the
+  // same lines would show twice (built review, 2026-10-02).
   toggleUndo(key: string) {
     this.undoOpen = this.undoOpen === key ? '' : key
+    if (this.undoOpen) this.showUndoAll = false
   }
 
   toggleUndoAll() {
     this.showUndoAll = !this.showUndoAll
+    if (this.showUndoAll) this.undoOpen = ''
   }
 
   // reset is for tests and sign-out.

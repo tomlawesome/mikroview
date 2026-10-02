@@ -128,12 +128,13 @@ describe('the cards', () => {
     expect(hintsFor('dshield', true).block).toMatch(/whole \/24/)
   })
 
-  it('wears each drawn list’s ink, and a neutral one for the lists round 2 did not draw', () => {
+  it('wears each drawn list’s ink, one shared ink for the four labelled lists, and muted for a key it does not know', () => {
     expect(inkFor('spamhaus')).toBe('var(--ink-spamhaus)')
     expect(inkFor('et')).toBe('var(--ink-et)')
     expect(inkFor('cins')).toBe('var(--ink-cins)')
     expect(inkFor('push')).toBe('var(--ink-push)')
-    expect(inkFor('greensnow')).toBe('var(--ink-list)')
+    for (const key of ['blde', 'greensnow', 'dshield', 'bindef']) expect(inkFor(key)).toBe('var(--ink-labelled)')
+    expect(inkFor('nonesuch')).toBe('var(--fg-muted)')
   })
 })
 
@@ -141,6 +142,7 @@ describe('the copy row', () => {
   it('counts lists and parts as drawn', () => {
     expect(partsSummary(2, 8)).toBe('Copy — 2 lists · 8 parts')
     expect(partsSummary(1, 5)).toBe('Copy — 1 list · 5 parts')
+    expect(partsSummary(0, 1)).toBe('Copy — no lists chosen')
   })
 
   it('says which parts are new: the drawn "Parts 5–7 are new; re-pasting 1–4 changes nothing."', () => {
@@ -160,6 +162,7 @@ describe('the copy row', () => {
 
   it('names the parts in the block head', () => {
     expect(blockHead(builder(), { parts: drawnParts, copyText: 'x' })).toBe('8 parts, in order — the push, Spamhaus DROP, Emerging Threats, run now')
+    expect(blockHead(builder(), { parts: [], copyText: '' })).toBe('0 parts')
   })
 })
 
@@ -181,6 +184,8 @@ describe('the rail and the ledger', () => {
     const b = builder({ standing: 'below-floor', routerosVersion: '7.12.1' })
     const rows = railRows(b, defaultChoices(b))
     expect(rows.slice(1).every((r) => r.receipt === 'after the upgrade' && r.state === 'off')).toBe(true)
+    const np = builder({ standing: 'no-push', routerosVersion: '' })
+    expect(railRows(np, defaultChoices(np)).slice(1).every((r) => r.receipt === 'after the first push' && r.state === 'off')).toBe(true)
   })
 
   it('writes the held row as drawn, with Undo, and the flags fact only where MikroView flags from the list', () => {

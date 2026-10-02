@@ -195,8 +195,20 @@ describe('Builder', () => {
 
   it('says a router that has not pushed is waiting for its push', async () => {
     await openOn(builder({ standing: 'no-push', routerosVersion: '', reportedAt: undefined }))
-    expect(screen.getByText(/rb5009 has not pushed yet/)).toBeTruthy()
     expect(screen.queryAllByRole('region').length).toBe(0)
+    const paras = [...document.querySelectorAll('.warnbox p')].map((p) => p.textContent)
+    expect(paras).toEqual([
+      'rb5009 has not pushed yet. This page writes its block for the RouterOS version the push reports, and nothing has arrived from this router.',
+      'Run setup first (Admin ▸ Run setup…): its one paste installs the push.',
+      'The first push tells this page the version, and the lists appear here.',
+    ])
+    expect(document.querySelector('.warnbox pre')).toBeNull()
+    expect(screen.getByText('no push yet — version unknown').classList.contains('warn')).toBe(true)
+    expect(document.querySelector('.att.push')).toBeNull()
+    const receipts = [...document.querySelectorAll('.rail .step-row .step-receipt')].slice(1).map((r) => r.textContent)
+    expect(receipts.every((r) => r === 'after the first push')).toBe(true)
+    expect(document.querySelector('.foot .fhint')?.textContent).toBe('MikroView never connects to the router — it writes for the version the router’s push reports')
+    expect(screen.getByText('Not yet on this router.')).toBeTruthy()
   })
 
   it('reads held, in the block and not now from the router’s own push', async () => {
@@ -233,6 +245,83 @@ describe('Builder', () => {
     expect(rail[2].style.getPropertyValue('--ink')).toBe('var(--ink-et)')
     const ledger = [...document.querySelectorAll('.ledger .row')] as HTMLElement[]
     expect(ledger[1].style.getPropertyValue('--ink')).toBe('var(--ink-et)')
+  })
+
+  it('closes a row’s undo when Undo everything opens, and Undo everything when a row’s opens', async () => {
+    await openOn(builder())
+    const foot = document.querySelector('.foot') as HTMLElement
+    const undoAll = () => [...foot.querySelectorAll('button')].find((b) => /^(Undo everything|Hide the undo lines)/.test(b.textContent ?? '')) as HTMLElement
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await fireEvent.click(undoAll())
+    expect(blocklistState.undoOpen).toBe('')
+    const wrap = screen.getByLabelText('Undo everything').closest('.undo') as HTMLElement
+    expect(wrap).toBeTruthy()
+    expect(wrap.querySelector('.note')?.textContent).toBe(
+      'Paste on the router. Every list goes — rules, scripts, schedulers and the lists themselves; the push script stays, so MikroView sees them leave at the next push and every row goes back to not now.',
+    )
+    expect(undoAll().textContent).toBe('Hide the undo lines')
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(blocklistState.showUndoAll).toBe(false)
+    expect(screen.queryByLabelText('Undo everything')).toBeNull()
+  })
+
+  it('wears one shared ink on the four labelled lists', async () => {
+    await openOn(builder())
+    for (const name of ['blocklist.de strongips', 'GreenSnow', 'DShield top 20', 'Binary Defense banlist']) {
+      expect(card(name).style.getPropertyValue('--ink')).toBe('var(--ink-labelled)')
+    }
+  })
+
+  it('says nothing is waiting when the router holds every list in the block', async () => {
+    const b = builder()
+    b.lists[1] = { ...b.lists[1], state: 'held', count: 633, loadedAt: '2026-10-01 04:31:00', firedToday: 3, flags24h: 0 }
+    await openOn(b)
+    const obs = document.querySelector('.obs') as HTMLElement
+    expect(obs.classList.contains('quiet')).toBe(true)
+    expect(obs.textContent).toBe('Nothing waiting. rb5009 holds every list in the block; a paste now only applies a changed choice — it sets, never adds.')
+  })
+
+  it('offers nothing to copy with no list on', async () => {
+    const b = builder({ lists: builder().lists.map((l) => ({ ...l, state: 'off' as const })) })
+    await openOn(b)
+    for (const name of ['Spamhaus DROP', 'Emerging Threats compromised IPs']) {
+      await fireEvent.click(card(name).querySelector('.top .seg button:last-child') as HTMLElement)
+    }
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Copy — no lists chosen' }).length).toBe(2))
+    for (const btn of screen.getAllByRole('button', { name: 'Copy — no lists chosen' })) expect((btn as HTMLButtonElement).disabled).toBe(true)
+    expect(document.querySelector('.copyrow .note')?.textContent).toBe('Turn a list on above; the block is empty.')
+    const pre = screen.getByLabelText('RouterOS block to paste')
+    expect(pre.querySelectorAll('.sec').length).toBe(0)
+    expect(pre.querySelector('.fold')?.textContent).toBe('# nothing to paste — every list is Not now')
+    expect(document.querySelector('.obs')).toBeNull()
+    expect(document.querySelector('.blockhead .n')?.textContent).toBe('0 parts')
+  })
+
+  it('reads the own drop list from its fetch: set up and empty, or never fetched', async () => {
+    await openOn(builder({ ownDroplist: { held: 0, total: 0, fetchedAt: '2026-10-01T14:35:00Z' } }))
+    let own = document.querySelector('.rail .step-row') as HTMLElement
+    expect(own.classList.contains('done')).toBe(true)
+    expect(own.querySelector('.step-n')?.textContent).toBe('✓')
+    expect(own.querySelector('.step-receipt')?.textContent).toMatch(/^0 addresses · fetched \d\d:\d\d · from Settings$/)
+    blocklistState.reset()
+    cleanup()
+    await openOn(builder({ ownDroplist: { held: 0, total: 3 } }))
+    own = document.querySelector('.rail .step-row') as HTMLElement
+    expect(own.classList.contains('off')).toBe(true)
+    expect(own.querySelector('.step-n')?.textContent).toBe('–')
+    expect(own.querySelector('.step-receipt')?.textContent).toBe('not on this router · Settings ▸ drop list')
+  })
+
+  it('shows the live pill at zero lines, as the wizard’s bar does', async () => {
+    await openOn(builder())
+    const right = document.querySelector('.bar .right') as HTMLElement
+    expect(right.textContent).toContain('live · 0/s')
+    expect(right.textContent).toContain('0 lines')
+  })
+
+  it('counts the lists left out in words', async () => {
+    await openOn(builder({ leftOut: Array.from({ length: 10 }, (_, i) => ({ name: `list ${i}`, why: 'why' })) }))
+    expect(document.querySelector('details.more summary')?.textContent).toContain('Considered and left out — ten lists')
   })
 
   it('goes back to the drop list from the foot', async () => {
