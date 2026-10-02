@@ -33,13 +33,23 @@
   // 'no-passkey' are the same choose stage, differing only in whether
   // the passkey key is live -- a runtime fact here (passkeyUsable
   // below), two hand-drawn scenes there.
-  type Stage = 'choose' | 'totp' | 'passkey' | 'codes'
+  //
+  // 'totp-password' (#1418/#1422) is this door's own addition, not in
+  // the mockup: the authenticator-app key used to call enrolTOTP() the
+  // instant it was clicked, but starting enrolment now needs the
+  // password checked first (same reasoning as AuthenticatorOverlay's own
+  // 'enrol-password' step). The passkey side needs no equivalent extra
+  // stage -- its password is asked for in the same form as the name,
+  // mirroring PasskeysOverlay's own 'adding' step, since both are
+  // collected before the ceremony starts either way.
+  type Stage = 'choose' | 'totp-password' | 'totp' | 'passkey' | 'codes'
 
   let stage = $state<Stage>('choose')
   let uri = $state('')
   let secret = $state('')
   let code = $state('')
   let name = $state('')
+  let password = $state('')
   let recoveryCodes = $state<string[]>([])
   let codesCopied = $state(false)
   let error = $state<string | null>(null)
@@ -82,7 +92,17 @@
     return s.match(/.{1,4}/g)?.join(' ') ?? s
   }
 
-  async function chooseTOTP() {
+  // Reached by clicking the authenticator-app key -- #1418/#1422 needs
+  // the password checked before enrolTOTP ever mints a secret, so this
+  // just opens that password stage rather than calling enrolTOTP itself.
+  function chooseTOTPPassword() {
+    error = null
+    codesLost = false
+    password = ''
+    stage = 'totp-password'
+  }
+
+  async function startTotpEnrol() {
     error = null
     codesLost = false
     busy = true
@@ -93,9 +113,11 @@
     // through the same door everyone else's expired session does,
     // rather than stranding this one on an error line with no way past
     // it. See enrolTOTP's own comment for why a 401 here is never
-    // anything else.
+    // anything else. A wrong password (or a spent re-check budget) comes
+    // back as text instead, the one exception to that -- shown here and
+    // the caller stays on this password stage to retry.
     try {
-      const result = await enrolTOTP()
+      const result = await enrolTOTP(password)
       if (typeof result === 'string') {
         error = result
         return
@@ -103,6 +125,7 @@
       uri = result.uri
       secret = secretFromUri(result.uri)
       code = ''
+      password = ''
       stage = 'totp'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -119,6 +142,7 @@
     error = null
     codesLost = false
     name = ''
+    password = ''
     stage = 'passkey'
   }
 
@@ -136,7 +160,7 @@
     error = null
     codesLost = false
     busy = true
-    // Same reasoning as chooseTOTP above -- confirmTOTP throws on a 401.
+    // Same reasoning as startTotpEnrol above -- confirmTOTP throws on a 401.
     try {
       const result = await confirmTOTP(code)
       if (typeof result === 'string') {
@@ -179,11 +203,15 @@
     error = null
     codesLost = false
     busy = true
-    // Same reasoning as chooseTOTP above -- registerPasskey forwards
+    // Same reasoning as startTotpEnrol above -- registerPasskey forwards
     // beginPasskeyRegistration/finishPasskeyRegistration's own 401 throw
-    // unchanged.
+    // unchanged. #1418: a wrong password (or a spent re-check budget)
+    // comes back as a plain string too, before the browser is ever asked
+    // for anything -- the FR2-F1 re-check below still applies (nothing
+    // has happened yet, so it just confirms mustEnrolSecondFactor is
+    // still true) and the caller stays on this same stage to retry.
     try {
-      const result = await registerPasskey(name.trim())
+      const result = await registerPasskey(name.trim(), password)
       if (typeof result === 'string') {
         // FR2-F1: same reasoning as confirm() above.
         await authState.check()
@@ -194,6 +222,7 @@
         }
         return
       }
+      password = ''
       authState.passkeyCount += 1
       if (result.recoveryCodes) {
         recoveryCodes = result.recoveryCodes
@@ -246,7 +275,7 @@
       <div class="thread" aria-label="Steps: choose, prove it, keep the codes, enter">
         {#if stage === 'choose'}
           <div class="thr"><span class="on">choose</span><span class="sep">·</span>prove it<span class="sep">·</span>keep the codes<span class="sep">·</span>enter</div>
-        {:else if stage === 'totp' || stage === 'passkey'}
+        {:else if stage === 'totp-password' || stage === 'totp' || stage === 'passkey'}
           <div class="thr">choose<span class="sep">·</span><span class="on">prove it</span><span class="sep">·</span>keep the codes<span class="sep">·</span>enter</div>
         {:else}
           <div class="thr">choose<span class="sep">·</span>prove it<span class="sep">·</span><span class="on">keep the codes</span><span class="sep">·</span>enter</div>
@@ -265,7 +294,7 @@
             step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
             key, prove it works, and you&rsquo;re in.</p>
           <div class="keys">
-            <button type="button" class="key" onclick={chooseTOTP} disabled={busy}>
+            <button type="button" class="key" onclick={chooseTOTPPassword} disabled={busy}>
               <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
               <span class="cname">Authenticator app</span>
               <span class="cdesc">a code from an app on your phone &mdash; Google
@@ -306,6 +335,39 @@
           {#if error}<p class="error">{error}</p>{/if}
           <p class="noexit">no skipping this one &mdash; every account here needs a
             second step before the door opens.</p>
+        </section>
+      {:else if stage === 'totp-password'}
+        <section class="state" aria-label="Authenticator app: confirm your password">
+          <h1>Confirm your password</h1>
+          <p class="subtitle">Setting up an authenticator app needs your password
+            once more.</p>
+          <form
+            class="cred pkform"
+            onsubmit={(e) => {
+              e.preventDefault()
+              void startTotpEnrol()
+            }}
+            aria-label="Confirm your password"
+          >
+            <label class="seclabel" for="enrol-totp-password">Password</label>
+            <input
+              id="enrol-totp-password"
+              type="password"
+              autocomplete="current-password"
+              bind:value={password}
+            />
+            {#if error}<p class="error">{error}</p>{/if}
+            <div class="center">
+              <button class="enter" type="submit" disabled={busy || !password}>
+                {busy ? 'Checking…' : 'Continue'}
+              </button>
+            </div>
+          </form>
+          {#if passkeyUsable}
+            <button class="link-btn" type="button" onclick={choosePasskey} disabled={busy}>
+              Use a passkey instead
+            </button>
+          {/if}
         </section>
       {:else if stage === 'totp'}
         <section class="state" aria-label="Authenticator app: scan and confirm">
@@ -369,6 +431,16 @@
           <form class="cred pkform" onsubmit={addPasskey} aria-label="Add a passkey">
             <label class="seclabel" for="enrol-name">Name</label>
             <input id="enrol-name" type="text" placeholder="this laptop" bind:value={name} />
+            <!-- #1418: checked server-side by beginPasskeyRegistration
+                 before the browser is ever asked for anything -- same
+                 fold as PasskeysOverlay's own 'adding' step. -->
+            <label class="seclabel" for="enrol-passkey-password">Password</label>
+            <input
+              id="enrol-passkey-password"
+              type="password"
+              autocomplete="current-password"
+              bind:value={password}
+            />
             <p class="aside">Adding it turns this on and signs out everywhere else
               this account is currently signed in. You&rsquo;ll stay signed in here.</p>
             {#if codesLost}
@@ -384,16 +456,18 @@
             {:else}
               {#if error}<p class="error">{error}</p>{/if}
               <div class="center">
-                <button class="enter" type="submit" disabled={busy}>
+                <button class="enter" type="submit" disabled={busy || !password}>
                   {busy ? 'Waiting…' : 'Add passkey'}
                 </button>
               </div>
             {/if}
           </form>
-          <!-- Same reason as the passkey link above: chooseTOTP awaits
-               enrolTOTP(), so a second click before that settles must
-               not be possible. -->
-          <button class="link-btn" type="button" onclick={chooseTOTP} disabled={busy}>
+          <!-- Same reason as the passkey link above: chooseTOTPPassword
+               moves straight to a new stage, but that stage's own
+               Continue awaits startTotpEnrol(), so a second click before
+               that settles must not be possible -- disabled matches the
+               same busy flag. -->
+          <button class="link-btn" type="button" onclick={chooseTOTPPassword} disabled={busy}>
             Use an authenticator app instead
           </button>
         </section>

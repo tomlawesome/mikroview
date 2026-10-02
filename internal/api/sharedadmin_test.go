@@ -77,7 +77,7 @@ func buildSharedAdmin(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("registering the shared admin account failed: %d", resp.StatusCode)
 	}
-	secret, codes, counter := totpEnrolAndConfirm(t, client, ts)
+	secret, codes, counter := totpEnrolAndConfirm(t, client, ts, fixtureAdminPassword)
 
 	data, err := os.ReadFile(path)
 	if err != nil {

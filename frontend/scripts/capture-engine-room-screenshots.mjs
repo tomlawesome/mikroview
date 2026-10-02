@@ -203,9 +203,11 @@ async function signedInPage(scheme) {
   })
   if (!login.ok()) throw new Error(`jenny could not sign in to enrol a factor (${login.status()})`)
 
+  // #1418/#1422: totp/enrol now needs jenny's own password in the body.
   const enrol = await jpage.request.fetch(`${URL_BASE}/api/auth/totp/enrol`, {
     method: 'POST',
     headers: jsonHeaders,
+    data: { password: EXTRA_PASS },
   })
   if (!enrol.ok()) throw new Error(`jenny's TOTP enrol failed (${enrol.status()})`)
   const secret = new URL((await enrol.json()).uri).searchParams.get('secret')

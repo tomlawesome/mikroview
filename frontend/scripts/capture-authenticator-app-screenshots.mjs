@@ -253,6 +253,10 @@ await page.waitForTimeout(1000)
   // secondFactorEnrolPaths refuses everything else).
   await door.waitForSelector('main.door', { timeout: 15000 })
   await door.click('button.key:has-text("Authenticator app")')
+  // #1418/#1422: starting enrolment now needs the account's own password
+  // first, on its own stage before the secret is minted.
+  await door.fill('#enrol-totp-password', doorPass)
+  await door.click('form[aria-label="Confirm your password"] button.enter')
   await door.waitForSelector('[data-testid="totp-secret"]', { timeout: 10000 })
   // groupSecret() (AuthEnrolFactor.svelte) renders the secret in space-
   // separated groups of four, for reading while typing it in by hand --
@@ -303,6 +307,9 @@ await page.waitForTimeout(1000)
   await modal().locator('button:has-text("Add passkey")').waitFor({ timeout: 10000 })
   await modal().locator('button:has-text("Add passkey")').click()
   await modal().locator('input[placeholder="this laptop"]').fill('capture-script throwaway')
+  // #1418/#1422: adding now also asks for the current password, in the
+  // same form, before the browser prompt fires.
+  await modal().locator('input[autocomplete="current-password"]').fill(PASS)
   await modal().locator('button:has-text("Continue")').click()
   // The admin's TOTP factor (live-env.sh's own) already minted recovery
   // codes, so registering a second factor always takes the "already
@@ -341,6 +348,10 @@ await page.click(`${ACTIVE} .account button.chip`)
 await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
 await page.click(`${ACTIVE} .account .menu button.row:text-is("Authenticator app")`)
 await modal().locator('.actions button.confirm:text-is("Set up authenticator app")').click()
+// #1418/#1422: starting enrolment now needs the password confirmed on
+// its own step before the secret is minted.
+await modal().locator('input[autocomplete="current-password"]').fill(PASS)
+await modal().locator('.actions button.confirm:text-is("Continue")').click()
 await modal().locator('[data-testid="totp-secret"]').waitFor({ timeout: 10000 })
 // QRCode.toCanvas (lib/qrcode.ts) draws asynchronously -- give it a
 // moment so the screenshot doesn't catch a blank canvas.

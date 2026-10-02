@@ -174,7 +174,7 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await enrolFactorAndSignIn(viewerPage)
+await enrolFactorAndSignIn(viewerPage, VIEWER_PASS)
 
 await openAccountMenu(viewerPage)
 const viewerLabels = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))

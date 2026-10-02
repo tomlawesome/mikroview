@@ -83,7 +83,7 @@ async function signInHere(p, username, password, { enrol = false } = {}) {
   await p.fill('input[autocomplete="current-password"]', password)
   await p.click('button[type="submit"]')
   if (enrol) {
-    await enrolFactorAndSignIn(p)
+    await enrolFactorAndSignIn(p, password)
   } else {
     await completeSecondFactor(p)
     await p.waitForSelector('#main-content', { timeout: 15000 })

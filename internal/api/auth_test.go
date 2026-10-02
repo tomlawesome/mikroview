@@ -491,7 +491,7 @@ func TestLogoutAllEndsEverySessionButTheCallers(t *testing.T) {
 	// factor lives on the account rather than the session and deviceB's
 	// own plain-password login above would otherwise stall on the
 	// pending-login step once the account holds one.
-	totpEnrolAndConfirm(t, deviceA, ts)
+	totpEnrolAndConfirm(t, deviceA, ts, "password123")
 
 	callResp := postJSON(t, deviceA, ts.URL+"/api/auth/logout-all", map[string]any{})
 	callResp.Body.Close()
@@ -762,7 +762,7 @@ func TestUserListIsAdminOnly(t *testing.T) {
 	// Enrolled too, so the 403 below is actually proving the admin-only
 	// gate rather than being masked by #1253's door refusing a
 	// still-factor-less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts)
+	totpEnrolAndConfirm(t, viewerClient, ts, "password456")
 
 	// 403, not an empty list: who holds an account and which one is the
 	// admin is exactly what an attacker wants in order to pick a target.

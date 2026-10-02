@@ -71,11 +71,16 @@ function describeCeremonyError(err: unknown): string {
 // this account already having declined the ceremony -- so
 // PasskeysOverlay's "adding" step has exactly one shape to render either
 // way, matching enrolTOTP/confirmTOTP's own string-or-result convention.
-export async function registerPasskey(name: string): Promise<PasskeyRegistrationFinish | string> {
+//
+// #1418: password is the caller's current password, checked server-side
+// by beginPasskeyRegistration before anything else happens -- a wrong one
+// (or a spent re-check budget, or an SSO-only account's 409) comes back
+// here unchanged, before the browser is ever asked for anything.
+export async function registerPasskey(name: string, password: string): Promise<PasskeyRegistrationFinish | string> {
   if (!passkeysSupported()) {
     return "This browser can't create a passkey -- try updating it, or use your authenticator app instead."
   }
-  const begin = await beginPasskeyRegistration()
+  const begin = await beginPasskeyRegistration(password)
   if (typeof begin === 'string') return begin
 
   let credential: Credential | null
