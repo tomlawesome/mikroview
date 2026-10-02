@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-journey: Next at Paste is replaced before reachFinish can click it
+
+- 2026-10-02 · 4e365d14 (feature/1360-blocklist-builder, !1130) · pipeline 1948, `gate:scenarios 3/4` (job 29290) · `reachFinish` timed out clicking a disabled Next that was then detached. Likely a race already on dev: Run setup… places the walk on the sign-in ledger (Next shown), then Wizard.svelte re-places it on a fresh read (#1404) straight onto Finish, after the scenario has already chosen the Next route. Shard 3/4 passed 27/27 on 0a189b34 locally (`scripts/gate-local.sh --shard 3/4`).
+
 ## live scenarios: the second-factor step refuses a fresh code in every shard at once
 
 - 2026-10-01 · 6ecdc169 (fix/1386-journey-review, !1129) · pipeline 1932, `gate:scenarios 1/4`–`4/4` (jobs 28871–28874) · `the second-factor step refused a fresh code from MV_TOTP_SECRET` in all four shards, each at its first sign-in. The commit only reworded DESIGN.md over 070cb2ee, which passed every shard in pipeline 1928; the four retried jobs (28992–28995) passed on the same commit. Four shards failing together points at the host (clock or load) rather than any one scenario.
