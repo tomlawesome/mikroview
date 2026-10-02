@@ -1774,14 +1774,16 @@ rather than leaving the router with two schedulers and two rules:
 
 ```
 :if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" } else={ /system scheduler set [find name=mikroview-drop] interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" disabled=no }
-:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }
+:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" } else={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }
 ```
 
 The scheduler is what keeps the router current -- it re-runs the fetch
 and import every 5 minutes, so an entry you add or remove reaches the
 router on its own, with nothing to re-paste. The firewall rule is what
 actually drops the traffic; without it the address list fills but
-nothing is blocked. Two more commands are rendered alongside these, for
+nothing is blocked. It goes first in the raw table (`place-before=0`),
+except on a raw table with no rules yet, where RouterOS refuses that
+placement and the rule is simply added (#1413). Two more commands are rendered alongside these, for
 undoing either one without retyping: one disables the rule, the other
 empties the address list. The fetch uses `check-certificate=yes`, so it
 needs the same trust as the wizard's Trust the certificate step, and the

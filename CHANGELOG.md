@@ -172,6 +172,12 @@ rewritten.
   the wizard prints, line breaks written as `\n`, and a test holds the
   guide to the generator. If you pasted 7c by hand on a 7.18 router,
   paste it again.
+- **The drop list's setup card pastes on a router with no raw rules
+  yet** (#1413). Its firewall rule was added with `place-before=0`,
+  which RouterOS refuses on an empty raw table ("no such item", seen on
+  7.18.2 and 7.24.4), so the rule never went in. The card now adds the
+  rule plainly when the raw table is empty and first in the table
+  otherwise, as the blocklist builder's rules do.
 - **A router's own management services no longer come mixed in with
   four of RouterOS's own runtime services** (#1405). A real router's
   `/ip/service` table also returns `dhcpclient`, `btest`, `discover` and
