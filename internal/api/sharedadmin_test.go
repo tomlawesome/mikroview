@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // The first (always-admin) account every admin-gated fixture below runs
@@ -66,16 +67,12 @@ func buildSharedAdmin(t *testing.T) {
 	t.Helper()
 	s := newAuthTestServer(t)
 	path := filepath.Join(t.TempDir(), "users.json")
-	st, err := auth.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Auth = st
+	s.Auth = openTestAuthStore(t, persist.NewFileBackend(path))
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	resp := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: fixtureAdminUsername, Password: fixtureAdminPassword})
+	resp := postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, fixtureAdminUsername, fixtureAdminPassword))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("registering the shared admin account failed: %d", resp.StatusCode)

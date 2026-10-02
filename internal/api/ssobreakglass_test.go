@@ -34,7 +34,7 @@ func TestCompletedAdminLinkKeepsTheLocalPassword(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/oidc/link inside doOIDCLinkFlow below
 
 	resp := doOIDCLinkFlow(t, ts, client)
@@ -73,7 +73,7 @@ func TestCompletedNonAdminLinkStillRemovesTheLocalPassword(t *testing.T) {
 	defer ts.Close()
 
 	admin := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users below
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
@@ -109,7 +109,7 @@ func TestOIDCLinkStartAsksTheAdminForNothingExtra(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/oidc/link below
 
 	resp := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
@@ -130,7 +130,7 @@ func TestCompletedLinkRecordsWhatItCostTheAccount(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/oidc/link inside doOIDCLinkFlow below
 
 	resp := doOIDCLinkFlow(t, ts, client)
@@ -159,7 +159,7 @@ func TestOIDCLinkRefusesASecondConnect(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/oidc/link inside doOIDCLinkFlow below
 	doOIDCLinkFlow(t, ts, client).Body.Close()
 

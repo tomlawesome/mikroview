@@ -914,12 +914,8 @@ const mintFailPassword = "mint-fail-password-placeholder"
 func mintFailServer(t *testing.T) (s *Server, ts *httptest.Server, browser, otherDevice *http.Client, budget *recoveryCodesSaveBudgetBackend) {
 	t.Helper()
 	budget = &recoveryCodesSaveBudgetBackend{left: 1000}
-	authStore, err := auth.OpenWithBackend(budget)
-	if err != nil {
-		t.Fatal(err)
-	}
 	s, _ = newTestServer(t)
-	s.Auth = authStore
+	s.Auth = openTestAuthStore(t, budget)
 	rp, err := NewRelyingParty("https://passkeys.example.org")
 	if err != nil {
 		t.Fatal(err)
@@ -929,7 +925,7 @@ func mintFailServer(t *testing.T) (s *Server, ts *httptest.Server, browser, othe
 	t.Cleanup(ts.Close)
 
 	browser = &http.Client{Jar: mustCookieJar(t)}
-	reg := postJSON(t, browser, ts.URL+"/api/auth/register", credentialsRequest{Username: totpBilboUsername, Password: mintFailPassword})
+	reg := postJSON(t, browser, ts.URL+"/api/auth/register", setupRequest(t, s, totpBilboUsername, mintFailPassword))
 	reg.Body.Close()
 	if reg.StatusCode != http.StatusCreated {
 		t.Fatalf("register returned %d", reg.StatusCode)

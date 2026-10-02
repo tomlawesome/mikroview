@@ -164,7 +164,7 @@ func TestIngestRouteRefusesAPushFromAnUnenrolledAddress(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
 	raw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", admin, time.Now())
 	if err != nil {
@@ -198,7 +198,7 @@ func TestIngestRouteRejectsAReadOnlyToken(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
 	apiRaw, _, err := s.Tokens.Create("birdcage", auth.TokenKindAPI, "", admin, time.Now())
 	if err != nil {
@@ -323,7 +323,7 @@ func TestIngestRouteRateLimitsPerToken(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
 
 	// Two routers, two addresses -- an address belongs to one router.

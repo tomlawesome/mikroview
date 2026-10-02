@@ -4,6 +4,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +147,30 @@ func TestBackendPicksUpAnotherProcessesWrite(t *testing.T) {
 		}
 		if _, err := server.Authenticate("alice", "password123", time.Now()); err == nil {
 			t.Error("the old password still works on the running store")
+		}
+	})
+}
+
+// The setup code is decided by the document, not by this process's
+// memory (#1415): once another process has written an account, the
+// running server's code is dead and SSO may provision again.
+func TestBackendAnotherProcessesAccountEndsSetup(t *testing.T) {
+	eachAuthBackend(t, func(t *testing.T, open func() *Store) {
+		server := open()
+		if _, _, err := server.FindOrCreateOIDCUser("https://idp.example", "sub-1", "sso", time.Now()); !errors.Is(err, ErrSetupRequired) {
+			t.Fatalf("SSO on an empty store = %v, want ErrSetupRequired", err)
+		}
+
+		cli := open()
+		if _, err := cli.Register("alice", "password123", time.Now()); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+
+		if err := server.CheckSetupCode("AAAA-AAAA-AAAA-AAAA"); !errors.Is(err, ErrRegistrationClosed) {
+			t.Errorf("CheckSetupCode after another process created an account = %v, want ErrRegistrationClosed", err)
+		}
+		if _, _, err := server.FindOrCreateOIDCUser("https://idp.example", "sub-1", "sso", time.Now()); err != nil {
+			t.Errorf("SSO once an account exists = %v, want it provisioned", err)
 		}
 	})
 }

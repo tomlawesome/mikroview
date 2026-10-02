@@ -168,15 +168,17 @@ var exemptPaths = map[string]bool{
 // this window, closing the gap where live data (events/flags/stats)
 // used to be readable by anyone who reached mikroview before a decision
 // was made (see requireAuth's doc comment).
+//
+// The OIDC login/callback pair is not here: SSO never creates the first
+// account (auth.ErrSetupRequired, #1415). The first admin is a local
+// account created with the setup code from the server's log, and links
+// SSO afterwards. Before #1415 the pair was exempt so the first-ever
+// login could be through SSO; that made the first visitor at the
+// identity provider the admin.
 var bootstrapExemptPaths = map[string]bool{
 	"/api/healthz":       true,
 	"/api/auth/session":  true,
 	"/api/auth/register": true,
-	// So the very first-ever login can happen via SSO -- symmetric with
-	// /api/auth/register already being bootstrap-exempt for the local-
-	// password path.
-	"/api/auth/oidc/login":    true,
-	"/api/auth/oidc/callback": true,
 }
 
 // sessionUser resolves r's session cookie to a user, if any -- shared by
@@ -804,6 +806,9 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 // message via writeAuthError -- never echoed verbatim to the client,
 // only logged server-side.
 var authErrorMessages = map[error]string{
+	// #1415: the first admin needs the one-time code the server logged.
+	auth.ErrSetupCodeInvalid:   "invalid setup code -- the current one is in the server's log",
+	auth.ErrSetupRequired:      "no account exists yet -- create the first admin with the setup code before signing in through SSO",
 	auth.ErrRegistrationClosed: "registration is closed -- an account already exists",
 	auth.ErrNotPersisted:       "this deployment has no persistent storage configured -- an administrator needs to set one up before an account can be created",
 	auth.ErrUsernameTaken:      "that username is already taken",
@@ -862,8 +867,9 @@ func authErrorLogLine(method, path string, err error) string {
 	return fmt.Sprintf("%q %q: %q", method, path, fmt.Sprint(err))
 }
 
-// credentialsRequest is the body of both login and first-run
-// registration: the username and password, and nothing else.
+// credentialsRequest is the body of login: the username and password,
+// and nothing else. First-run registration adds the setup code
+// (registerRequest).
 //
 // It briefly carried the doc comment of a deleted handleAuthSkip
 // function, left behind when that handler was removed. Go attaches a
@@ -878,16 +884,61 @@ type credentialsRequest struct {
 	Password string `json:"password"`
 }
 
+// registerRequest is the body of first-run registration: the
+// credentials plus the one-time setup code the server announced in its
+// log (auth.Store.CheckSetupCode, #1415). Same shape as gauntlet's.
+type registerRequest struct {
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	SetupCode string `json:"setupCode"`
+}
+
 // handleAuthRegister creates the first (and only ever self-service)
-// account, always as admin -- see auth.Store.Register.
+// account, always as admin -- see auth.Store.Register -- and only for a
+// caller who shows the setup code from the server's log (#1415).
+//
+// Order matters: the attempt is reserved against the client address
+// first (the same limiter and budget as login, so probing for the code
+// is noticed and throttled), then the code is checked, and only then is
+// the password hashed -- a wrong code costs the server one hash
+// comparison, never 64 MiB of Argon2. The reservation is released once
+// the code is right, whatever happens after it: the budget guards the
+// code, not the operator's typing of a username or password.
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
-	var req credentialsRequest
+	var req registerRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	user, err := s.Auth.Register(req.Username, req.Password, time.Now())
+	now := time.Now()
+	ipKey := "ip:" + s.clientIP(r)
+	if !s.LoginLimiter.Reserve(ipKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if err := s.Auth.CheckSetupCode(req.SetupCode); err != nil {
+		status := http.StatusInternalServerError
+		switch err {
+		case auth.ErrSetupCodeInvalid:
+			// Quoted: the address may come from a forwarded-for header
+			// a client controls (clientip.go), and the username is
+			// whatever the client sent.
+			authLog.Warn(fmt.Sprintf("refused first-run registration for %q from %q: wrong setup code", req.Username, s.clientIP(r)))
+			writeUnauthorized(w, authErrorMessages[auth.ErrSetupCodeInvalid])
+			return
+		case auth.ErrRegistrationClosed:
+			status = http.StatusConflict
+		case auth.ErrNotPersisted:
+			status = http.StatusServiceUnavailable
+		}
+		s.LoginLimiter.Release(ipKey, now)
+		writeAuthError(w, r, err, status)
+		return
+	}
+	s.LoginLimiter.Release(ipKey, now)
+
+	user, err := s.Auth.Register(req.Username, req.Password, now)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {

@@ -34,6 +34,10 @@ func TestListWithSecondFactorsReadsTheStoreOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The admin first -- SSO never provisions the first account (#1415).
+	// Named to sort after the three below, whose positions the checks
+	// at the end rely on.
+	seedAdmin(t, s, "zadmin")
 	now := time.Now()
 	// OIDC accounts, so no password has to be hashed to make them.
 	var ids []string
