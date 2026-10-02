@@ -81,6 +81,21 @@ async function reachFinish() {
 
 await reachFinish()
 await finish.click()
+
+// --- The way out's groups, as the box leaves (#1386) ----------------------
+// Read the moment the journey starts: the bar's wordmark is the ride's
+// alone from Finish until the ride lands (`.page.wiz.live` drops), and
+// the chips and the strip stay as the record (ak-bar, ak-strip on
+// <body> from the start, as an.js had them).
+await page.waitForFunction(() => document.body.classList.contains('journey'), { timeout: 5000 })
+const started = await page.evaluate(() => ({
+  akBar: document.body.classList.contains('ak-bar'),
+  akStrip: document.body.classList.contains('ak-strip'),
+  barLive: !!document.querySelector('.page.wiz.live'),
+}))
+check(started.akBar && started.akStrip, 'the bar\'s chips and the strip stay as the record while the box leaves')
+check(!started.barLive, 'the bar gives up its wordmark while the ride carries it')
+
 await wizard.waitFor({ state: 'detached' })
 
 const fallCentred = () => {
@@ -108,6 +123,47 @@ if (process.env.MV_SHOT) await page.screenshot({ path: process.env.MV_SHOT })
 await page.locator('.offer button.later').click()
 await offer.waitFor({ state: 'detached' })
 check((await offer.count()) === 0, '"not now" takes the offer down')
+
+// --- What stands bare under the swell (#1386, DESIGN.md's sixth beat) ---
+// Under the cover the fall's frame stands bare: its columns strike at
+// 4.45s, the axis and the body fade in at 4.8s (<body> gains ak-fb),
+// the side rail comes with the last beat (`journey` comes off). The
+// rules are journey.css's, read off the real stylesheet with the
+// journey's classes put on <body> by hand once the fall stands still --
+// the journey's own clock is not a thing a shared host can be asked to
+// sample at the right moment (wizardJourney.test.ts pins the clock; this
+// pins what the classes do to the fall). jsdom does not cascade
+// stylesheets, so this cannot live in vitest.
+// The axis and the body fade over 600ms and the NOW line pulses, so
+// each state is read after its transition has run, and "on" is read
+// off the axis labels (the NOW line's pulse never sits at exactly 1).
+const readFall = () =>
+  page.evaluate(() => {
+    const op = (sel) => {
+      const el = document.querySelector(sel)
+      return el ? getComputedStyle(el).opacity : 'missing'
+    }
+    return { axis: op('.fall .rig svg .tlab'), now: op('.fall .rig svg .nowline'), dot: op('.fall .rig svg .now-dot'), rail: op('.deck-shell .roll-rail') }
+  })
+const bodyClasses = (add, remove) => page.evaluate(([a, r]) => { document.body.classList.add(...a); document.body.classList.remove(...r) }, [add, remove])
+const still = await readFall()
+await bodyClasses(['journey', 'am'], [])
+await page.waitForTimeout(800)
+const underTheSwell = await readFall()
+await bodyClasses(['ak-fb'], [])
+await page.waitForTimeout(800)
+const bodyBeat = await readFall()
+await bodyClasses([], ['journey', 'am', 'ak-fb'])
+await page.waitForTimeout(800)
+const after = await readFall()
+check(still.axis === '1' && still.rail === '1', `the fall stands before the check -- got ${JSON.stringify(still)}`)
+check(
+  underTheSwell.axis === '0' && underTheSwell.now === '0' && underTheSwell.dot === '0',
+  `the fall's axis and NOW line stand bare under the swell -- got ${JSON.stringify(underTheSwell)}`,
+)
+check(underTheSwell.rail === '0', `the deck's roll rail waits for the last beat -- got ${underTheSwell.rail}`)
+check(bodyBeat.axis === '1' && bodyBeat.rail === '0', `the body's beat brings the axis but not the rail -- got ${JSON.stringify(bodyBeat)}`)
+check(after.axis === '1' && after.rail === '1', `the fall and the rail stand once the journey is off -- got ${JSON.stringify(after)}`)
 
 // --- Once: a second Finish lands on the fall with no offer ---------------
 await goTo(page, 'Run setup…')

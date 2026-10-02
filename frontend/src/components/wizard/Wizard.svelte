@@ -111,7 +111,14 @@
     if (wizardJourney.rows) away = false
     if (wizardJourney.landed) live = true
   })
+  // The footer strikes last (5.35s), after the form's rows: on the way
+  // in it stays away past the rail's beat, until the journey's own.
+  const footAway = $derived(away || (wizardJourney.phase === 'in' && !wizardJourney.foot))
   const goingOut = $derived(wizardJourney.phase === 'out')
+  // The bar's wordmark goes as the ride leaves it on the way out and
+  // comes back when the ride lands (an.js's wayOut: barwm opacity 0,
+  // restored in landed). Otherwise two wordmarks stand for 3.7s.
+  const barLive = $derived(live && (!goingOut || wizardJourney.landed))
 
   // While open: the ledger, the backups and the refused senders on one
   // cadence, then the run's own bookkeeping (the live rate).
@@ -216,7 +223,7 @@
 </script>
 
 {#if wizardState.open}
-  <div class="page wiz" class:live>
+  <div class="page wiz" class:live={barLive}>
     <div class="bar">
       <span class="wm">MIKRO<em>VIEW</em></span>
       <div class="chips">
@@ -301,7 +308,7 @@
         {/if}
       </div>
       {/if}
-      <div class="foot" class:away>
+      <div class="foot" class:away={footAway}>
         {#if foot.left}
           <button type="button" class:primary={foot.left.primary} disabled={foot.left.disabled} onclick={() => act(foot.left!.action)}>
             {foot.left.label}

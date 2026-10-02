@@ -50,10 +50,28 @@ body.journey .wiz .body > * { opacity: 0; transform: translateY(12px); }
 body.journey .wiz .main { will-change: transform; }
 
 /* and the fall arrives in groups: its columns, then its body and axis,
-   then the side rail (which appears without transition) */
-body.journey .fall .bar, body.journey .fall .attention, body.journey .fall .fall-foot { opacity: 0; transition: opacity 600ms ease; }
-body.journey.ak-fb .fall .bar, body.journey.ak-fb .fall .attention, body.journey.ak-fb .fall .fall-foot { opacity: 1; }
+   then the side rail (which appears without transition). The rig's
+   bands are the columns; everything else drawn in the rig -- the time
+   axis, the NOW line, the port and peak labels, the horizons -- is the
+   axis and the body, and stands bare under the swell until its beat
+   (an.css's .fallbody and .axis). The deck's roll rail is the side
+   rail: it comes with the last beat, as `journey` comes off. */
+body.journey .fall .bar, body.journey .fall .attention, body.journey .fall .fall-foot,
+body.journey .fall .rig svg > :not(.band) { opacity: 0; transition: opacity 600ms ease; }
+body.journey.ak-fb .fall .bar, body.journey.ak-fb .fall .attention, body.journey.ak-fb .fall .fall-foot,
+body.journey.ak-fb .fall .rig svg > :not(.band) { opacity: 1; }
 body.journey .fall .rig g.band { opacity: 0; }
+/* The NOW line and its dot pulse (Fall.svelte's fall-pulse animates
+   opacity), which would override the opacity above: the pulse waits
+   for the body's beat too. */
+body.journey .fall .rig svg .nowline, body.journey .fall .rig svg .now-dot { animation: none; }
+body.journey .deck-shell .roll-rail { opacity: 0; transition: none; }
+
+/* Reduced motion: both journeys are a short crossfade (DESIGN.md). The
+   held door fades over the wizard that has mounted under it; the wizard
+   page fades over the fall standing behind it. wizardJourney.svelte.ts
+   puts the class on and takes it off after CROSSFADE_MS. */
+body.journey-fade .door-hold, body.journey-fade .page.wiz { transition: opacity 300ms ease; opacity: 0; }
 
 /* every group strikes on like a tube: dark, a flash, a dip, then
    steady. The stagger is an animation-delay written through the CSSOM. */
@@ -68,7 +86,8 @@ body.am .fall .rig g.band { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .journey-fx, .ride { display: none !important; }
   body.journey .wiz .body > *, body.journey .wiz .chips, body.journey .wiz .right, body.journey .wiz .striprow,
-  body.journey .fall .bar, body.journey .fall .attention, body.journey .fall .fall-foot, body.journey .fall .rig g.band { opacity: 1; transform: none; transition: none; }
+  body.journey .fall .bar, body.journey .fall .attention, body.journey .fall .fall-foot, body.journey .fall .rig g.band,
+  body.journey .fall .rig svg > :not(.band), body.journey .deck-shell .roll-rail { opacity: 1; transform: none; transition: none; }
   body.am .strike { animation: none; opacity: 1; transform: none; }
   body.am .wiz .rail li { opacity: 1; }
 }

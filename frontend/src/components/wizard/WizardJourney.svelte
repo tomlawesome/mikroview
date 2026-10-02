@@ -86,7 +86,15 @@
             },
           ],
           [4800, () => strike([...(document.querySelector('.wiz .body')?.children ?? [])] as HTMLElement[], 120)],
-          [5350, () => strike([...document.querySelectorAll<HTMLElement>('.wiz .foot')], 0)],
+          [
+            5350,
+            () => {
+              // The footer's own beat: it stays away until here (an.js
+              // removed #foot's `away` at 5350, not with the rail).
+              wizardJourney.foot = true
+              strike([...document.querySelectorAll<HTMLElement>('.wiz .foot')], 0)
+            },
+          ],
         ],
         landed: () => {
           wizardJourney.landed = true
@@ -120,7 +128,12 @@
     const bar = document.querySelector<HTMLElement>('.wiz .bar .wm')
     if (!bar) return false
     wizardJourney.begin('out')
-    body().classList.add('journey', 'am')
+    // ak-bar and ak-strip from the start: the bar's chips and the strip
+    // are the record and stay as the box leaves (DESIGN.md: "the bar's
+    // chips as the record"). In an.js they were still on <body> from
+    // the way in, which its done() never removed; wayIn's done() here
+    // does, so the way out puts them back.
+    body().classList.add('journey', 'am', 'ak-bar', 'ak-strip')
     // The canvas and ride mount this frame; two frames on, as wayIn
     // waits, both are in the DOM and the bar's rect is settled.
     raf(() => {

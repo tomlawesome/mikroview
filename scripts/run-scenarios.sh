@@ -63,6 +63,15 @@ scenarios() {
       # Needs a real RouterOS CHR booted alongside the instance, which the
       # plain targets do not stand up. Run by `make live-routeros-container`.
       *live-routeros-real.mjs) continue ;;
+      # #1363: restarts the server mid-run (live-env.sh's `upgrade`) to
+      # simulate a real upgrade. Every other scenario shares this one
+      # instance and depends on state an earlier one left in it (see the
+      # live-check skill, "a scenario cannot be judged on its own") --
+      # restarting it here would silently wipe that for everything after
+      # it in filename order. Run standalone instead: scripts/live-
+      # freshness-reload.sh, its own instance, picked up by
+      # run-live-scripts.sh after this shared one is already down.
+      *live-freshness-reload.mjs) continue ;;
     esac
     echo "$scenario"
   done
