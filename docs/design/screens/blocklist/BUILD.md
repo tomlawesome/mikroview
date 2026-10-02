@@ -442,3 +442,180 @@ message, and `D|drop|spamhaus|` is 16 characters.
 
 Written by Fable 5.1, 2026-10-01; catalogue copy and defaults added
 the same day.
+
+## Built review (2026-10-02)
+
+Reviewed: the eight built screenshots (page 7.24.4, 7.19.4, below
+floor, left-out open, undo open; tail 01–03) against `round-2/shots/`,
+and the built `frontend/src/components/blocklist/`, `lib/blocklistBuild.ts`,
+`lib/wizardRun.ts`. Everything not listed below matches the drawing and
+stands. Each item names where it lands; a builder applies it without
+asking.
+
+### The builder's reported departures
+
+- **Bar, wordmark and strip from the real `wizard.css`** (upper-case
+  chips; one flat strip on the page, the fall's lanes on the tail):
+  accepted. The page is not a walk, so a flat strip is honest.
+- **Part 1 is the three-command push re-set, `mv-push` named as the
+  wizard names it**: accepted as the copy text. The *preview* must
+  change (below, "The block's first screen").
+- **Eight rail and ledger rows, the body scrolling**: accepted. Two
+  consequences fixed below (the undo-all lines, the stand row).
+
+### The parked calls
+
+**1 — ink for the four admitted lists: one shared ink, not neutral,
+not four.** Seven inks is noise and the palette has no four free hues
+that stay clear of amber (`--drop`), purple (`--marked`), teal
+(`--natted`), decision blue (`--log`), accept green and the warn
+orange. Neutral is wrong because `--fg-muted` is the *off* colour: a
+labelled list switched on reads as off (dot, card border, rail tick,
+ledger tick, bar chip). One shared ink says what the owner's 1b+1c
+said: these four are the class you take on your own judgement.
+
+- `builder.css` `:root`: replace `--ink-list: var(--fg-muted)` with
+  `--ink-labelled: var(--lane-guest)` (rose, `#d76a9e`; the only hue
+  not already a meaning on these screens — the wizard's rules ink
+  never shares a surface with a list ink, since the wizard's ledger
+  stays green).
+- `blocklistBuild.ts` `DRAWN_INKS`: add `blde`, `greensnow`, `dshield`,
+  `bindef` → `'var(--ink-labelled)'`; `inkFor`'s fallback stays
+  `var(--fg-muted)` for a key the catalogue does not know.
+- Nothing else changes: the facts line's caveat slot stays `--fg-dim`
+  mono as the other facts; the ink is identity, the label text is the
+  meaning.
+
+**2 — "Undo everything" opens under the ledger: keep, with three
+fixes.** Same home as the wizard's own undo-everything, same toggle
+label ("Hide the undo lines"), so the operator meets one idiom.
+
+- `BuilderBody.svelte`: the bare `<pre aria-label="Undo everything">`
+  gains the per-row undo's `.undo` wrapper and a note:
+  "Paste on the router. Every list goes — rules, scripts, schedulers
+  and the lists themselves; the push script stays, so MikroView sees
+  them leave at the next push and every row goes back to **not now**."
+- `lib/blocklist.svelte.ts`: `toggleUndoAll()` closes an open per-row
+  undo (`undoOpen = null`) and `toggleUndo(key)` closes undo-all, so
+  the same lines never show twice.
+- With eight rows the pre lands below the fold at 1000 px and the foot
+  button appears to do nothing: on opening, `scrollIntoView({ block:
+  'nearest', behavior: 'smooth' })` the `.undo` wrapper (the page body
+  is what scrolls).
+
+**3 — the undrawn states.**
+
+- **3a — observation line when every chosen list is already held:
+  show one, not none.** `BuilderBody.svelte`, a third branch, class
+  `obs quiet`: "**Nothing waiting.** {name} holds every list in the
+  block; a paste now only applies a changed choice — it sets, never
+  adds."
+  And the state no branch covers, **no list on at all**: the Copy
+  buttons (copy row and foot) disabled with label "Copy — no lists
+  chosen"; the copy-row note "Turn a list on above; the block is
+  empty."; the block pre shows one `.fold` line "# nothing to paste —
+  every list is Not now" and no parts; no observation line;
+  `blockHead` reads "0 parts". (`partsSummary` keeps its shape for
+  every other count.)
+- **3b — the drop-list rail row when the router holds nothing.** Two
+  states, keyed on `ownDroplist.fetchedAt`, not on `held`:
+  set up on the router but empty → tick in `--ink-own`, receipt
+  "0 addresses · fetched 14:35 · from Settings" (the existing branch,
+  with `held` 0 allowed); never fetched → dash, `off`, receipt
+  "not on this router · Settings ▸ drop list" (the tail's own idiom
+  for a set-aside thing). "none on this router · from Settings" goes.
+- **3c — the no-push foot.** `Builder.svelte` foot hint for
+  `standing === 'no-push'`: "MikroView never connects to the router —
+  it writes for the version the router's push reports". Below floor
+  keeps "— the upgrade is yours to run".
+- **3d — the no-push warnbox: BUILD.md's line is the lead, not the
+  whole box.** Mirror the below-floor box's four beats:
+  `<p><b>{name} has not pushed yet.</b> This page writes its block for
+  the RouterOS version the push reports, and nothing has arrived from
+  this router.</p>`
+  `<p>Run setup first (Admin ▸ Run setup…): its one paste installs the
+  push.</p>`
+  `<p>The first push tells this page the version, and the lists appear
+  here.</p>` — no command box (MikroView has nothing to print until the
+  push exists). Bar: `att warn` chip "no push yet — version unknown"
+  in place of the push chip. Rail receipts: "after the first push"
+  where below-floor says "after the upgrade" (`railRows`, the `below`
+  branch, keyed on `standing`). Hint under the title stays "Not yet on
+  this router."
+
+### Other differences, screen by screen
+
+Page, 7.24.4 and 7.19.4 (`page-7.24.4.png`, `page-7.19.4.png`):
+
+- **The block's first screen — must change.** Part 1 now fills the
+  198 px pre (two comment lines, three wrapped commands, a two-line
+  fold): the operator sees only the push and must scroll to find any
+  list. Drawn: part 1 is one line and part 2 is on the first screen.
+  `internal/routeros/blocklist.go` `pushPart`: `shown` carries only the
+  script add-or-set line (source elided as now); the scheduler line
+  and `/system script run mv-push` stay in `Commands`/`copyText` and
+  are named in the fold, which becomes "   the push script, re-set
+  with the two new kinds · N lines · its schedule and run line re-set
+  unchanged · a new token; the one before stays valid until revoked in
+  Settings". The copy text is unchanged. Same rule as the loaders:
+  the preview summarises, the copy is complete.
+- **Live pill hidden at 0 lines — must change.** `Builder.svelte`
+  `.bar .right` is wrapped in `{#if lines > 0}`; the wizard's bar shows
+  "live · 0/s · 0 lines" at zero (`tail-01.png`). Drop the guard.
+- **"Considered and left out — 10 lists" — must change** to "ten
+  lists": `words()` exists in `BuilderBody.svelte`; the screenshot
+  shows the numeral, so verify `data.leftOut.length` reaches it.
+- Accepted as data or as the ratified build: no "drop list · N held"
+  chip when the router holds none; "fired 0 today"; "catalogue
+  reviewed 2026-10-01"; `mv-push`; the 7.19.4 block hiding `days` and
+  the 7.24 tag.
+
+Below floor (`page-below-floor.png`): matches, eight rows; the own
+drop-list row takes 3b.
+
+Left-out open (`page-more.png`): ten rows, abuse.ch split four ways —
+accepted (BUILD.md, 2026-10-01). Summary word above.
+
+Undo open (`page-undo.png`): the lines remove by `(from)` and `(to)`
+comment separately and sweep the IPv6 list — accepted, that is the
+generator's naming (part 4) and the drawing's single-comment line was
+the sketch. Note copy matches.
+
+Tail 01 (`tail-01.png`):
+
+- **Ledger row names the long form — must change.** "MikroView flags
+  them from Spamhaus DROP and Emerging Threats compromised IPs" →
+  "… and Emerging Threats": `wizardRun.ts`, the tail's ledger receipt,
+  use the catalogue's `short`, not `name`, for every list named there.
+- Rail row, foot, track: match.
+
+Tail 02 (`tail-02.png`):
+
+- **"Where setup stands" rail row is dim with a dashed disc — must
+  change.** Drawn (and `tail-01.png` itself): tick disc, title in
+  `--fg-muted` like rows 1–4, clickable — it is where Back goes. On
+  stage `block` the stand row must not take the `locked` class or
+  `disabled`; `railRows`/`reachedIdx` in `wizardRun.ts` (reached is 4
+  on `block`, so find what sets `locked`/`!can` on index 4 and exclude
+  the `block` stage as `done` is).
+- **Foot Copy renders at half opacity — must change.** Drawn: full
+  `--accent`, Finish ghost. `footSpec` sets `disabled: !copyLabel`;
+  the label is present in the shot, so the paleness comes from
+  elsewhere — bind the button exactly as the page's foot does
+  (`disabled={!blocklistState.block?.copyText}`, class `primary`) and
+  recapture.
+- Copy row, observation line ("Nothing to wait for until you paste…"),
+  ledger with amber 1 and 2: match.
+
+Tail 03 (`tail-03.png`): matches — the proof row, Undo, the "2 lists"
+station and chip, the rail receipt.
+
+### Carry-over
+
+- The stage's ledger shows eight rows under a 198 px block: accepted
+  with the page's.
+- A per-row Undo open plus eight rows pushes the last rows under the
+  foot: the body scrolls; accepted.
+- No owner question arises from this review.
+
+Written by Fable 5.1, 2026-10-02.
