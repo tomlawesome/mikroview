@@ -36,9 +36,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// The three fields and the button, in the order somebody fills them in.
+// A setup code in the shape the server prints (#1415); fake, like every
+// value here.
+const CODE = 'abcd-efgh-jkmn-pqrs'
+
+// The four fields and the button, in the order somebody fills them in.
 async function createTheAdmin() {
   await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+  await fireEvent.input(screen.getByLabelText('setup code'), { target: { value: CODE } })
   await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'tom' } })
   await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
   await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
@@ -179,13 +184,78 @@ describe('AuthSetup', () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 
     render(AuthSetup)
-    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
-    await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'tom' } })
-    await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
-    await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
-    await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+    await createTheAdmin()
 
     expect(await screen.findByText('username already taken')).toBeTruthy()
     expect(wizardJourney.pending).toBe(false)
+  })
+
+  // #1415 (docs/design/screens/setup-code/DESIGN.md): the first admin
+  // needs the one-time code from the server's log. The field comes
+  // first, above account, with the note saying where to find it above
+  // the field.
+  it('asks for the setup code first, with a note saying where it is', async () => {
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+
+    const code = screen.getByRole('textbox', { name: 'setup code' })
+    const account = screen.getByRole('textbox', { name: 'account' })
+    expect(code.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const note = screen.getByText(/It's in MikroView's log from when it last started/)
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      "It's in MikroView's log from when it last started (docker compose logs mikroview), on the line " +
+        'that says “create the first admin with setup code”. Lost it? Restart MikroView and it prints a new one.',
+    )
+    expect(note.compareDocumentPosition(code) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    expect(
+      screen.getByText('No account exists yet. Whoever completes this form, with the setup code from ' + "MikroView's log, becomes the admin."),
+    ).toBeTruthy()
+  })
+
+  it('names the setup code in the SSO variant of the subtitle too', async () => {
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+
+    expect(
+      screen.getByText(
+        "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes the " +
+          'admin — then you sign in with SSO to connect it, and this password stays as your way in if your ' +
+          'provider is ever unreachable.',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('refuses an empty setup code before anything else, without calling register', async () => {
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+
+    expect(await screen.findByText("Enter the setup code from MikroView's log.")).toBeTruthy()
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it('sends the setup code to register', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    await waitFor(() => expect(register).toHaveBeenCalledWith('tom', 'hunter2222', CODE))
+  })
+
+  it("shows the server's refusal and keeps the typed code so a typo can be fixed", async () => {
+    const refusal = "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one"
+    vi.mocked(register).mockResolvedValue(refusal)
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    const error = await screen.findByText(refusal)
+    expect(error.classList.contains('error')).toBe(true)
+    expect((screen.getByRole('textbox', { name: 'setup code' }) as HTMLInputElement).value).toBe(CODE)
   })
 })

@@ -408,8 +408,8 @@ class AuthState {
   // register/login/logout are thin wrappers over lib/api.ts's calls,
   // updating local state on success -- register/login return an error
   // string on failure (for the form to display) rather than throwing.
-  async register(username: string, password: string): Promise<string | null> {
-    const err = await register(username, password);
+  async register(username: string, password: string, setupCode: string): Promise<string | null> {
+    const err = await register(username, password, setupCode);
     if (err) return err;
     await this.check();
     return null;

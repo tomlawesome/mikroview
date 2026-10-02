@@ -807,7 +807,9 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 // only logged server-side.
 var authErrorMessages = map[error]string{
 	// #1415: the first admin needs the one-time code the server logged.
-	auth.ErrSetupCodeInvalid:   "invalid setup code -- the current one is in the server's log",
+	// The create-account screen shows this as it comes -- the design's
+	// own copy (docs/design/screens/setup-code/DESIGN.md).
+	auth.ErrSetupCodeInvalid:   "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one",
 	auth.ErrSetupRequired:      "no account exists yet -- create the first admin with the setup code before signing in through SSO",
 	auth.ErrRegistrationClosed: "registration is closed -- an account already exists",
 	auth.ErrNotPersisted:       "this deployment has no persistent storage configured -- an administrator needs to set one up before an account can be created",
