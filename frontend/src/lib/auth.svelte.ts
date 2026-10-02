@@ -43,6 +43,23 @@ export const pageReload = {
   },
 };
 
+// #1363: a server restart -- every upgrade is one -- ends every session
+// (SessionStore is memory-only), so after an upgrade an open tab's next
+// poll answers 401 and handleUnauthorized below would reload it at
+// once: on a busy tab, out from under whatever the operator was typing,
+// before the freshness check (which owns the reload-or-banner decision
+// for an upgrade) ever got its say. Registered once by main.ts with
+// freshnessState.claimUnauthorized -- freshness.svelte.ts imports this
+// file, so the hook keeps that import one-way. Resolves true when the
+// 401 was the upgrade and freshness has dealt with it; false (or no
+// hook at all, as in every test that never wires one) means the
+// ordinary bounce below.
+let unauthorizedClaim: (() => Promise<boolean>) | null = null;
+
+export function onUnauthorizedClaim(claim: (() => Promise<boolean>) | null): void {
+  unauthorizedClaim = claim;
+}
+
 // The way-out beat flag has to outlive the reload, so it rides in
 // sessionStorage (tab-scoped, like the wizard's history key) and is
 // consumed exactly once by consumeJustSignedOut().
@@ -539,16 +556,40 @@ class AuthState {
     return err;
   }
 
+  // Set while unauthorizedClaim (see its own comment above) is deciding,
+  // so the rest of a burst of 401s waits on that one answer.
+  private unauthorizedClaimPending = false;
+
   // Called by any fetch wrapper that gets a 401 mid-session (an expired
   // or reset-invalidated session). The state guard is what stops a
   // burst of 401s from several in-flight polls reloading more than
   // once.
   handleUnauthorized() {
-    if (
+    if (!this.inSession()) return;
+    if (!unauthorizedClaim) {
+      this.bounceUnauthorized();
+      return;
+    }
+    if (this.unauthorizedClaimPending) return;
+    this.unauthorizedClaimPending = true;
+    unauthorizedClaim()
+      .catch(() => false)
+      .then((claimed) => {
+        this.unauthorizedClaimPending = false;
+        if (!claimed) this.bounceUnauthorized();
+      });
+  }
+
+  private inSession(): boolean {
+    return (
       this.state === "authenticated" ||
       this.state === "must-change-password" ||
       this.state === "must-enrol-factor"
-    ) {
+    );
+  }
+
+  private bounceUnauthorized() {
+    if (this.inSession()) {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";

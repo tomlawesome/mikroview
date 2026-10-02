@@ -10,9 +10,9 @@
   // whose version is at or past that entry's From.
   //
   // A separate component, not inline in SetupWizard.svelte, so the
-  // follow-up issue (showing this beside the drop-list setup card and
-  // the attach journey, neither of which fetches setup commands today)
-  // is a one-line add rather than a copy of this markup.
+  // follow-up issue (showing this beside the drop-list setup card,
+  // which does not fetch setup commands today) is a one-line add rather
+  // than a copy of this markup.
   import { prose, UPGRADE_STEP_LABELS } from '../lib/setupsteps'
   import type { SetupCommandsResponse } from '../lib/types'
 

@@ -53,6 +53,7 @@ import {
 import { blocklistState } from '../../lib/blocklist.svelte'
 import { wizardState } from '../../lib/wizard.svelte'
 import { wizardRun } from '../../lib/wizardRun.svelte'
+import { wizardJourney } from '../../lib/wizardJourney.svelte'
 import type { Device, SetupStatus } from '../../lib/types'
 import Wizard from './Wizard.svelte'
 
@@ -363,6 +364,46 @@ describe('Wizard: the full-screen shell', () => {
     render(Wizard)
     await tick()
     expect(document.querySelector('.page.wiz')).toBeNull()
+  })
+
+  // The way in's beats (#1386, DESIGN.md's sixth beat): the rail and
+  // the body stand as the rows strike (4.55s); the footer has its own
+  // beat (5.35s) and stays away until it. It used to come with the
+  // rail, 800ms early, and then strike a second time.
+  it('on the way in, the footer waits for its own beat after the rail and body stand', async () => {
+    wizardState.open = false
+    wizardJourney.begin('in')
+    wizardState.open = true
+    render(Wizard)
+    await tick()
+    const away = (sel: string) => document.querySelector(sel)?.classList.contains('away')
+    expect(away('.wiz .rail')).toBe(true)
+    expect(away('.wiz .body')).toBe(true)
+    expect(away('.wiz .foot')).toBe(true)
+    wizardJourney.rows = true
+    await tick()
+    expect(away('.wiz .rail')).toBe(false)
+    expect(away('.wiz .body')).toBe(false)
+    expect(away('.wiz .foot')).toBe(true)
+    wizardJourney.foot = true
+    await tick()
+    expect(away('.wiz .foot')).toBe(false)
+    wizardJourney.end()
+  })
+
+  // The way out: the bar's wordmark goes as the ride leaves it and comes
+  // back when the ride lands (an.js's wayOut). Otherwise the bar keeps
+  // its wordmark while a second one rides to the centre.
+  it('on the way out, the bar gives up its wordmark until the ride lands', async () => {
+    render(Wizard)
+    await waitFor(() => expect(document.querySelector('.page.wiz.live')).not.toBeNull())
+    wizardJourney.begin('out')
+    await tick()
+    expect(document.querySelector('.page.wiz.live')).toBeNull()
+    wizardJourney.landed = true
+    await tick()
+    expect(document.querySelector('.page.wiz.live')).not.toBeNull()
+    wizardJourney.end()
   })
 })
 

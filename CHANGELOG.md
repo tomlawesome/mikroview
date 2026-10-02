@@ -41,6 +41,22 @@ rewritten.
   the push as its first part, and why the setup page nudges every router
   to re-paste.
 
+- **An open tab notices a server upgrade by itself** (#1363, owner
+  decision 2026-09-30). Before this, an already-open page kept running
+  the app it loaded with even after the server behind it was upgraded,
+  and a normal reload did not fix it -- only a forced refresh did. Now
+  the page checks the running server's version -- every 60 seconds, when
+  the tab is looked at again, when the live connection reconnects, and
+  once after a request fails in a way that could mean an upgrade -- and
+  compares it against the version it was loaded with. If nothing would
+  be lost (no dialog open, no unsaved edit, no field mid-typed, and the
+  live view isn't held), it reloads itself, making sure the new app is
+  what actually loads. If something would be lost, it shows a line
+  instead -- "MikroView has been upgraded to a newer version" -- that
+  waits for a click; once shown it stays until reloaded and never
+  reloads on its own after that. The restart an upgrade involves also
+  signs every open tab out; that sign-out now gets the same treatment
+  rather than reloading a busy page straight to the sign-in screen.
 - **The router-backup drop box is switched on and off from Settings, not
   config.yaml** (#1361, owner decision 2026-09-30). Settings → router
   backups has a "drop box: closed / open on port N" row: opening it

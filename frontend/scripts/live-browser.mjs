@@ -180,6 +180,22 @@ export function feedSyslog(n, label = 'live-test-rule') {
 }
 
 /**
+ * upgradeServer rebuilds and restarts the running instance in place --
+ * same data, same config, same admin session -- with a new VERSION
+ * baked into both the Go binary and the frontend bundle it stamps
+ * (live-env.sh's `upgrade`). #1363's own case: an already-open tab
+ * whose server changed out from under it, which a fresh `up` cannot
+ * exercise since nothing has a tab open on it yet.
+ */
+export function upgradeServer() {
+  execFileSync(ENV_SCRIPT, ['upgrade'], {
+    stdio: 'ignore',
+    cwd: REPO,
+    timeout: 120_000,
+  })
+}
+
+/**
  * feedRaw delivers one exact syslog line, for a scenario needing a
  * specific event shape rather than feedSyslog's bulk pattern.
  *
