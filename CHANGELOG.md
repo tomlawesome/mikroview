@@ -199,6 +199,11 @@ rewritten.
   since MikroView falls back to a check of its own. A TLS service with
   no certificate set, which a router reports as the literal word `none`,
   now reads as no certificate rather than showing that word.
+- **On the wizard's blocklist step, the rail's first four rows no
+  longer look clickable** (#1417). They highlighted on hover but did
+  nothing when clicked. They now read as done steps you cannot go back
+  to, as they already do on Where setup stands; Where setup stands
+  itself stays clickable and takes you back there.
 
 ### Removed
 

@@ -257,8 +257,9 @@
          is locked -- dashed number, dim, disabled, titled with the
          reason. An earlier completed step is a real button while the run
          is still yours to change; once the router is answering nothing
-         goes back. Each row carries its receipt in the ink of what it
-         records (--ink, read by the done rules in wizard.css). -->
+         goes back. On the tail only Where setup stands is live, as Back.
+         Each row carries its receipt in the ink of what it records
+         (--ink, read by the done rules in wizard.css). -->
     <nav class="rail" class:away={away || goingOut} aria-label="Setup steps">
       <ol>
         {#each rows as r (r.id)}
