@@ -73,6 +73,25 @@ check "$(echo "$dying_out" | grep -q 'started: 2   reported: 1' && echo true || 
 check "$(echo "$dying_out" | grep -q '^==> 1 scenario(s) died without reporting' && echo true || echo false)" \
   "the summary names exactly one silent death"
 
+# #1419: a scenario that skips itself (live-passkeys.mjs outside
+# Chromium) used to exit 0 without printing any verdict at all, so it
+# counted as started but never reported -- indistinguishable from a
+# silent death on every Firefox/WebKit run. A SKIP verdict line is still
+# a `^RESULT: ` line, so it must count as reported like PASS or FAIL.
+skipping_log="$TMP/skipping.log"
+cat >"$skipping_log" <<'EOF'
+== scripts/live-cert-reload.sh
+PASS: SIGHUP swaps the certificate on both listeners.
+== frontend/scripts/live-passkeys.mjs
+RESULT: SKIP (needs Chromium's CDP WebAuthn domain, MV_BROWSER=firefox)
+EOF
+
+skipping_out="$(mv_gate_summary "$skipping_log")"
+check "$(echo "$skipping_out" | grep -q 'started: 2   reported: 2' && echo true || echo false)" \
+  "a skipped scenario's RESULT line counts as reported"
+check "$(echo "$skipping_out" | grep -q 'died without reporting' && echo false || echo true)" \
+  "a skipped scenario is not accused of a silent death"
+
 echo
 if [ "$fails" -ne 0 ]; then
   echo "RESULT: FAIL"
