@@ -523,7 +523,14 @@ describe('Wizard: the first-run tail', () => {
     await onTheLedger()
     await fireEvent.click(screen.getByRole('button', { name: 'Set it up' }))
     await waitFor(() => expect(wizardRun.stage).toBe('block'))
-    const stand = row('Where setup stands') as HTMLButtonElement
+    // Rows 1–4 are behind the tail: done, not clickable, and not locked
+    // either (#1417).
+    for (const r of rows().slice(0, 4)) {
+      expect(r.disabled).toBe(true)
+      expect(r.getAttribute('aria-disabled')).toBeNull()
+    }
+    const stand = rows()[4]
+    expect(stand.querySelector('.step-title')?.textContent).toBe('Where setup stands')
     expect(stand.disabled).toBe(false)
     expect(stand.classList.contains('locked')).toBe(false)
     expect(stand.querySelector('.step-n')?.textContent).toBe('✓')

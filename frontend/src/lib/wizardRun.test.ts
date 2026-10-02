@@ -103,8 +103,19 @@ describe('the rail', () => {
   })
 
   it('goes back to nothing once the router is answering', () => {
-    for (const stage of ['watch', 'tune', 'done'] as const) {
-      const rows = railRows(answered({ stage, copied: true }), ev({ cert: '2026-09-27T14:02:58Z' }))
+    const cert = '2026-09-27T14:02:58Z'
+    const offer = { state: 'offer' as const, lists: 0, rail: '', ledger: '', flaggedFrom: 'Spamhaus DROP and Emerging Threats' }
+    for (const stage of ['watch', 'tune', 'done', 'block'] as const) {
+      if (stage === 'block') {
+        // The tail (#1417): rows 1–4 are behind it and stay done, not
+        // clickable; only Where setup stands is live, as Back.
+        const rows = railRows(answered({ stage, copied: true }), ev({ cert, tail: offer }))
+        expect(rows.slice(0, 4).map((r) => r.can)).toEqual([false, false, false, false])
+        expect(rows[4]).toMatchObject({ id: 'stand', can: true })
+        expect(rows[5]).toMatchObject({ id: 'block', can: true })
+        continue
+      }
+      const rows = railRows(answered({ stage, copied: true }), ev({ cert }))
       expect(rows.every((r) => !r.can)).toBe(true)
     }
   })
