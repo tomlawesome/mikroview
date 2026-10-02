@@ -32,7 +32,7 @@ func regenerateCodes(t *testing.T, client *http.Client, ts *httptest.Server, pas
 func TestRecoveryCodesRegenerateWrongPasswordRefusesAndKeepsOldCodes(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	_, codes, _ := totpEnrolAndConfirm(t, bilbo, ts)
+	_, codes, _ := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	resp := regenerateCodes(t, bilbo, ts, "not-the-password")
 	defer resp.Body.Close()
@@ -74,7 +74,7 @@ func TestRecoveryCodesRegenerateRefusedWithoutASecondFactor(t *testing.T) {
 func TestRecoveryCodesRegenerateOldSetStopsWorkingImmediately(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	_, oldCodes, _ := totpEnrolAndConfirm(t, bilbo, ts)
+	_, oldCodes, _ := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	resp := regenerateCodes(t, bilbo, ts, totpBilboPassword)
 	defer resp.Body.Close()
@@ -122,7 +122,7 @@ func TestRecoveryCodesRegenerateOldSetStopsWorkingImmediately(t *testing.T) {
 func TestRecoveryCodesRegenerateDoesNotEndOtherSessions(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	deviceA := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	enrolAndRememberFactor(t, deviceA, ts, totpBilboUsername)
+	enrolAndRememberFactor(t, deviceA, ts, totpBilboUsername, totpBilboPassword)
 	deviceB := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
 
 	resp := regenerateCodes(t, deviceA, ts, totpBilboPassword)
@@ -150,7 +150,7 @@ func TestRecoveryCodesRegenerateDoesNotEndOtherSessions(t *testing.T) {
 func TestRecoveryCodesRegenerateAuditEntry(t *testing.T) {
 	_, ts, admin := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	resp := regenerateCodes(t, bilbo, ts, totpBilboPassword)
 	resp.Body.Close()
@@ -209,7 +209,7 @@ func TestRecoveryCodesRegenerateFailedWriteLeavesOldSetIntact(t *testing.T) {
 	if reg.StatusCode != http.StatusCreated {
 		t.Fatalf("register returned %d", reg.StatusCode)
 	}
-	_, oldCodes, _ := totpEnrolAndConfirm(t, client, ts)
+	_, oldCodes, _ := totpEnrolAndConfirm(t, client, ts, password)
 
 	budget.left = 0
 	resp := regenerateCodes(t, client, ts, password)
@@ -239,7 +239,7 @@ func TestRecoveryCodesRegenerateFailedWriteLeavesOldSetIntact(t *testing.T) {
 func TestRecoveryCodesRegenerateRequiresCSRFHeader(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	b, err := json.Marshal(recoveryCodesRegenerateRequest{Password: totpBilboPassword})
 	if err != nil {

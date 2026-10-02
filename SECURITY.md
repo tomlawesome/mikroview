@@ -328,6 +328,18 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   **not** end any other session: the set of factors protecting the
   account hasn't changed, so there is nothing for another session to
   have gotten away with.
+- **Adding a factor needs the account's password, not just a session**
+  (#1418, #1422). `POST /api/auth/totp/enrol` and
+  `POST /api/auth/passkeys/register/begin` both take `{password}`,
+  checked on the same rate-limited bucket as every other password
+  re-check in the account menu (401 wrong, 429 spent). Without it, a
+  stolen session cookie could add a factor of its own -- and on an
+  account with none yet, that becomes the first factor, which issues
+  the recovery codes and ends every other session, the owner's
+  included. This holds at the forced-enrolment door too. One passkey
+  registration stores at most one passkey: its challenge is spent the
+  moment a finish is accepted, so a copied ceremony cookie can't be
+  replayed to add a second.
 - **A factor is removed three ways, each guarded differently.** The
   account's own owner turns it off with their current password
   (`DELETE /api/auth/totp` for the authenticator app,

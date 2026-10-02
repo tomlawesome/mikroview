@@ -283,7 +283,7 @@ func TestForcedChangeTakesOnlyTheNewPasswordAndOpensTheApp(t *testing.T) {
 	// reset code (Authenticate treats it as the password), which now
 	// also only reaches the pending-factor step -- the remembered secret
 	// is what lets that second loggedInClient call complete it.
-	enrolAndRememberFactor(t, bilbo, ts, "bilbo")
+	enrolAndRememberFactor(t, bilbo, ts, "bilbo", resetOldPassword)
 
 	out := resetPassword(t, admin, ts, id)
 	client := loggedInClient(t, ts.URL, "bilbo", out.Code)
@@ -393,7 +393,7 @@ func TestForcedChangeThenForcedEnrolmentBothComplete(t *testing.T) {
 	}
 
 	// Enrolling clears the second door.
-	enrolAndRememberFactor(t, client, ts, "bilbo")
+	enrolAndRememberFactor(t, client, ts, "bilbo", resetNewPassword)
 
 	open, err := client.Get(ts.URL + "/api/flags")
 	if err != nil {

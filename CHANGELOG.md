@@ -287,6 +287,20 @@ rewritten.
 
 ### Security
 
+- **Adding a second factor needs your password** (#1418, #1422). Adding
+  a passkey or an authenticator app used to need only a signed-in
+  session, so someone holding a stolen session cookie could add one of
+  their own. On an account with no factor yet that made it the first
+  factor: they got the recovery codes, every other session was signed
+  out, and the owner was then locked out until an admin cleared it.
+  `POST /api/auth/passkeys/register/begin` and `POST /api/auth/totp/enrol`
+  now take `{password}`: 401 for a wrong one, 429 once the account's
+  password re-check limit is spent, and 409 for an SSO-only account
+  (passkeys were not refused there before). One passkey registration now
+  stores at most one passkey: a copy of its cookie can't be replayed to
+  add another. The account menu and the sign-in enrolment screen ask for
+  the password before showing the QR code or the passkey prompt.
+
 - **The first admin needs a setup code from the server's log** (#1415).
   Until now the first account created on an empty accounts store became
   admin, whoever made it -- and an empty store is not only a fresh
