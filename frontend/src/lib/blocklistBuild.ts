@@ -33,18 +33,23 @@ export type Choices = Record<string, CardChoice>
 
 // A list's ink, the custom property its card, part heads and rows wear
 // (round 2 README, "Gates": one ink per list). Round 2 drew three; the
-// four lists the owner admitted afterwards (1b+1c) have none drawn yet,
-// so they wear --ink-list, a neutral, until a design gives them one.
+// four lists the owner admitted afterwards (1b+1c) share one,
+// --ink-labelled (built review, 2026-10-02): the class taken on the
+// operator's own judgement. A key the catalogue does not know is muted.
 const DRAWN_INKS: Record<string, string> = {
   spamhaus: 'var(--ink-spamhaus)',
   et: 'var(--ink-et)',
   cins: 'var(--ink-cins)',
+  blde: 'var(--ink-labelled)',
+  greensnow: 'var(--ink-labelled)',
+  dshield: 'var(--ink-labelled)',
+  bindef: 'var(--ink-labelled)',
   push: 'var(--ink-push)',
   own: 'var(--ink-own)',
 }
 
 export function inkFor(key: string): string {
-  return DRAWN_INKS[key] ?? 'var(--ink-list)'
+  return DRAWN_INKS[key] ?? 'var(--fg-muted)'
 }
 
 // The rail's and the ledger's name for a list: the drawn "Emerging
@@ -178,8 +183,10 @@ export function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
-// partsSummary is the Copy button's label: "Copy — 2 lists · 8 parts".
+// partsSummary is the Copy button's label: "Copy — 2 lists · 8 parts",
+// and "Copy — no lists chosen" with every list at Not now.
 export function partsSummary(lists: number, parts: number): string {
+  if (lists === 0) return 'Copy — no lists chosen'
   return `Copy — ${plural(lists, 'list', 'lists')} · ${plural(parts, 'part', 'parts')}`
 }
 
@@ -260,17 +267,25 @@ export interface RailRow {
 // decision blue where it is in the block, dashed "not now" otherwise.
 export function railRows(b: BlocklistBuilder, c: Choices): RailRow[] {
   const below = b.standing !== 'ok'
+  // The own drop list is set up on the router once its pull key has
+  // fetched it, whether or not it holds anything yet (built review, 3b).
   const own = b.ownDroplist
-  const ownReceipt = own.held
-    ? `${plural(own.held, 'address', 'addresses')}${own.fetchedAt ? ` · fetched ${hmLocal(own.fetchedAt)}` : ''} · from Settings`
-    : 'none on this router · from Settings'
-  const rows: RailRow[] = [
-    { key: 'own', title: 'Your drop list', n: own.held ? '✓' : '–', state: own.held ? 'done' : 'off', receipt: ownReceipt, ink: inkFor('own') },
-  ]
+  const ownRow: RailRow = own.fetchedAt
+    ? {
+        key: 'own',
+        title: 'Your drop list',
+        n: '✓',
+        state: 'done',
+        receipt: `${plural(own.held, 'address', 'addresses')} · fetched ${hmLocal(own.fetchedAt)} · from Settings`,
+        ink: inkFor('own'),
+      }
+    : { key: 'own', title: 'Your drop list', n: '–', state: 'off', receipt: 'not on this router · Settings ▸ drop list', ink: inkFor('own') }
+  const rows: RailRow[] = [ownRow]
+  const after = b.standing === 'no-push' ? 'after the first push' : 'after the upgrade'
   b.catalogue.forEach((e, i) => {
     const row = b.lists.find((l) => l.key === e.key)
     let r: RailRow
-    if (below) r = { key: e.key, title: railName(e), n: '–', state: 'off', receipt: 'after the upgrade', ink: inkFor(e.key) }
+    if (below) r = { key: e.key, title: railName(e), n: '–', state: 'off', receipt: after, ink: inkFor(e.key) }
     else if (row && held(row)) {
       const fired = row.firedToday !== null ? ` · fired ${num(row.firedToday)} today` : ''
       r = { key: e.key, title: railName(e), n: '✓', state: 'done', receipt: `${num(row.count)} held · refreshed ${hm(row.loadedAt)}${fired}`, ink: inkFor(e.key) }
@@ -323,6 +338,7 @@ export function waitingLists(b: BlocklistBuilder, c: Choices): string[] {
 // blockHead is the block's own line: "8 parts, in order — the push,
 // Spamhaus DROP, Emerging Threats, run now".
 export function blockHead(b: BlocklistBuilder, block: BlocklistCommands): string {
+  if (block.parts.length === 0) return '0 parts'
   const names: string[] = []
   for (const p of block.parts) {
     if (p.ink === 'push') names.push('the push')
@@ -346,6 +362,11 @@ export function versionLine(b: BlocklistBuilder): { version: string; rest: strin
 }
 
 export const FOOT_HINT = 'Into the router’s terminal, not a script · the router does the fetching; MikroView only watches what comes back'
+
+// The foot's hint while the page has no block to offer: below the floor
+// the upgrade is the operator's; with no push yet the version is unknown.
+export const FOOT_HINT_BELOW = 'MikroView never connects to the router — the upgrade is yours to run'
+export const FOOT_HINT_NO_PUSH = 'MikroView never connects to the router — it writes for the version the router’s push reports'
 
 // The rail's foot-note (builder.html).
 export const RAIL_NOTE = 'Each list is fetched by the router, from its source. MikroView reads what the router pushes back — it never serves a list and never connects.'

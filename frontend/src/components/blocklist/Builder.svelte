@@ -14,7 +14,7 @@
 
   import { untrack } from 'svelte'
   import { blocklistState } from '../../lib/blocklist.svelte'
-  import { FOOT_HINT, RAIL_NOTE, hmLocal, inkFor, num, partsSummary, railRows } from '../../lib/blocklistBuild'
+  import { FOOT_HINT, FOOT_HINT_BELOW, FOOT_HINT_NO_PUSH, RAIL_NOTE, hmLocal, inkFor, num, partsSummary, railRows } from '../../lib/blocklistBuild'
   import { fallState, laneColors } from '../../lib/fall.svelte'
   import { wizardState } from '../../lib/wizard.svelte'
   import BuilderBody from './BuilderBody.svelte'
@@ -90,7 +90,9 @@
       <div class="chips" aria-label="Proofs so far">
         {#if data}
           <span class="att router"><i></i>{data.deviceName}</span>
-          {#if data.routerosVersion}
+          {#if data.standing === 'no-push'}
+            <span class="att warn"><i></i>no push yet — version unknown</span>
+          {:else if data.routerosVersion}
             <span class="att push"><i></i>push {hmLocal(data.reportedAt)} · RouterOS {data.routerosVersion}</span>
           {/if}
           {#if data.ownDroplist.held}
@@ -106,10 +108,8 @@
         {/if}
       </div>
       <div class="right">
-        {#if lines > 0}
-          <span class="att logs"><i></i>live · {rate}/s</span>
-          <span>{lines.toLocaleString()} lines</span>
-        {/if}
+        <span class="att logs"><i></i>live · {rate}/s</span>
+        <span>{lines.toLocaleString()} lines</span>
       </div>
     </div>
     <div class="striprow">
@@ -151,11 +151,11 @@
       <div class="foot">
         <button type="button" onclick={() => blocklistState.close()}>Back to the drop list</button>
         {#if below}
-          <span class="fhint">MikroView never connects to the router — the upgrade is yours to run</span>
+          <span class="fhint">{data?.standing === 'no-push' ? FOOT_HINT_NO_PUSH : FOOT_HINT_BELOW}</span>
         {:else}
           <button type="button" onclick={() => blocklistState.toggleUndoAll()}>{blocklistState.showUndoAll ? 'Hide the undo lines' : `Undo everything on ${data?.deviceName ?? ''}`}</button>
           <span class="fhint">{FOOT_HINT}</span>
-          <button type="button" class="primary" disabled={!blocklistState.block?.copyText} onclick={() => blocklistState.copy()}>{partsSummary(onCount, partCount)}</button>
+          <button type="button" class="primary" disabled={!blocklistState.block?.copyText || onCount === 0} onclick={() => blocklistState.copy()}>{partsSummary(onCount, partCount)}</button>
         {/if}
       </div>
     </div>

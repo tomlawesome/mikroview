@@ -41,7 +41,9 @@
   const name = $derived(data?.deviceName ?? '')
   const days = $derived(!!data?.catalogue.some((e) => e.refresh.some((r) => r.value === 'weekdays')))
   const onCount = $derived(data ? data.catalogue.filter((e) => choices[e.key]?.on).length : 0)
-  const parts = $derived(block?.parts ?? [])
+  // With every list at Not now there is nothing to paste: no parts, not
+  // the push alone (built review, 3a).
+  const parts = $derived(onCount === 0 ? [] : (block?.parts ?? []))
   const ledger = $derived(data ? ledgerView(data, choices) : [])
   const waiting = $derived(data ? waitingLists(data, choices) : [])
   const anyHeld = $derived(!!data?.lists.some((l) => l.state === 'held'))
@@ -52,6 +54,13 @@
     if (!data?.reportedAt) return ''
     const at = Date.parse(data.reportedAt) + 20 * 60 * 1000
     return at > Date.now() ? hmLocal(new Date(at).toISOString()) : ''
+  })
+
+  // The foot's undo for everything opens under the ledger, below the
+  // fold with eight rows: bring it into view (the body scrolls).
+  let undoAllEl = $state<HTMLElement | null>(null)
+  $effect(() => {
+    if (blocklistState.showUndoAll && undoAllEl) undoAllEl.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
   })
 
   function partHeadInk(p: BlocklistPart): string | null {
@@ -139,7 +148,9 @@
           <pre>{data.upgrade}</pre>
           <p>It reboots. The push after the reboot tells this page the new version, and the lists appear here.</p>
         {:else}
-          <p><b>{name} has not pushed yet</b> — this page writes for the version the push reports. Run the wizard’s push step first.</p>
+          <p><b>{name} has not pushed yet.</b> This page writes its block for the RouterOS version the push reports, and nothing has arrived from this router.</p>
+          <p>Run setup first (Admin ▸ Run setup…): its one paste installs the push.</p>
+          <p>The first push tells this page the version, and the lists appear here.</p>
         {/if}
       </div>
     </div>
@@ -174,21 +185,23 @@
     <div class="col right">
       <div class="blockhead">
         <h5>The block</h5>
-        <span class="n">{block ? blockHead(data, block) : ''}</span>
+        <span class="n">{block ? blockHead(data, { ...block, parts }) : ''}</span>
         <span class="live">rebuilt as you click</span>
       </div>
-      <pre class="script" aria-label="RouterOS block to paste">{#each parts as p, i (p.ordinal)}{#if i > 0}{'\n'}{/if}<span class="sec" style:--ink={partHeadInk(p)}># {p.ordinal} · {#if p.title}<b>{p.title}</b> — {/if}{@render spans(p.note)}</span>{#each p.shown as line, j (j)}{'\n'}{@render spans(line)}{/each}{#if p.fold?.length}{'\n'}<span class="fold">{@render spans(p.fold)}</span>{/if}{/each}</pre>
+      <pre class="script" aria-label="RouterOS block to paste">{#each parts as p, i (p.ordinal)}{#if i > 0}{'\n'}{/if}<span class="sec" style:--ink={partHeadInk(p)}># {p.ordinal} · {#if p.title}<b>{p.title}</b> — {/if}{@render spans(p.note)}</span>{#each p.shown as line, j (j)}{'\n'}{@render spans(line)}{/each}{#if p.fold?.length}{'\n'}<span class="fold">{@render spans(p.fold)}</span>{/if}{/each}{#if block && onCount === 0}<span class="fold"># nothing to paste — every list is Not now</span>{/if}</pre>
       {#if blocklistState.blockError}
         <p class="note" aria-live="polite">{blocklistState.blockError}</p>
       {/if}
       <div class="copyrow">
-        <button type="button" class="primary" disabled={!block?.copyText} onclick={() => blocklistState.copy()}>{partsSummary(onCount, parts.length)}</button>
-        <span class="note">{note}</span>
+        <button type="button" class="primary" disabled={!block?.copyText || onCount === 0} onclick={() => blocklistState.copy()}>{partsSummary(onCount, parts.length)}</button>
+        <span class="note">{onCount === 0 ? 'Turn a list on above; the block is empty.' : note}</span>
       </div>
       {#if waiting.length && anyHeld}
         <div class="obs waiting"><b>Waiting for the router.</b> The next push (every 20 min) says what {name} holds in {waiting.join(' and ')} and how often each rule has fired.</div>
       {:else if waiting.length}
         <div class="obs quiet"><b>Nothing to wait for until you paste.</b> After it, the router runs {onCount === 1 ? 'the script' : onCount === 2 ? 'both scripts' : 'the scripts'} at once; {nextPush ? `the push at ${nextPush}` : 'the next push'} says what {name} holds and how often each rule has fired.</div>
+      {:else if onCount > 0}
+        <div class="obs quiet"><b>Nothing waiting.</b> {name} holds every list in the block; a paste now only applies a changed choice — it sets, never adds.</div>
       {/if}
       <div class="ledgerh"><h5>Where it stands</h5><span>what {name} holds, from its own push{variant === 'page' ? ' · Undo per row' : ''}</span></div>
       <div class="ledger">
@@ -215,7 +228,10 @@
         {/each}
       </div>
       {#if blocklistState.showUndoAll}
-        <pre aria-label="Undo everything">{data.undoAll}</pre>
+        <div class="undo" bind:this={undoAllEl}>
+          <pre aria-label="Undo everything">{data.undoAll}</pre>
+          <p class="note">Paste on the router. Every list goes — rules, scripts, schedulers and the lists themselves; the push script stays, so MikroView sees them leave at the next push and every row goes back to <b>not now</b>.</p>
+        </div>
       {/if}
     </div>
   </div>

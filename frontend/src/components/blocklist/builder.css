@@ -12,14 +12,15 @@
    rules exactly where the drawing differs, and reach nothing else. */
 
 /* one ink per list (builder.html :root): the three round 2 drew, the
-   operator's own drop list, and --ink-list for the four lists admitted
-   after round 2, which have no ink drawn yet */
+   operator's own drop list, and one shared ink for the four labelled
+   lists admitted after round 2 (built review, 2026-10-02: rose, the one
+   hue not already a meaning on these screens) */
 :root {
   --ink-spamhaus: var(--drop);
   --ink-et: var(--marked);
   --ink-cins: var(--natted);
   --ink-own: var(--log);
-  --ink-list: var(--fg-muted);
+  --ink-labelled: var(--lane-guest);
 }
 
 /* ---- the bar's chips (builder.html .att.router/.own/.warn, and a list's chip in its ink) ---- */
@@ -137,8 +138,10 @@
 .wiz .body.wide .ledger .row .step-n.skip { border-style: dashed; color: var(--fg-dim); }
 .wiz .body.wide .ledger .row .r.skip { color: var(--fg-dim); }
 .wiz .body.wide .ledger .row .skip s { text-decoration-color: var(--fg-dim); }
-.wiz .body.wide .ledger .undo { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
-.wiz.page .body.wide .ledger .undo pre { font-size: 11px; line-height: 1.5; }
-.wiz .body.wide .ledger .undo .note { margin: 0; font-size: 11.5px; color: var(--fg-muted); }
-.wiz .body.wide .ledger .undo .note b { color: var(--fg); font-weight: 500; }
-.wiz .body.wide .ledger .undo .note .mono { font-size: inherit; }
+/* a row's undo, and the foot's undo for everything under the ledger */
+.wiz .body.wide .undo { display: flex; flex-direction: column; gap: 6px; }
+.wiz .body.wide .ledger .undo { grid-column: 1 / -1; }
+.wiz.page .body.wide .undo pre { font-size: 11px; line-height: 1.5; }
+.wiz .body.wide .undo .note { margin: 0; font-size: 11.5px; color: var(--fg-muted); }
+.wiz .body.wide .undo .note b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .undo .note .mono { font-size: inherit; }
