@@ -156,13 +156,15 @@
   const chips = $derived(chipsFor(answers, evidence))
   const ticks = $derived(stripFor(evidence))
   // The tail's Copy counts the builder's block, as the page's does.
+  const tailLists = $derived(blocklistState.data?.catalogue.filter((e) => blocklistState.choices[e.key]?.on).length ?? 0)
   const copyLabel = $derived.by(() => {
-    const d = blocklistState.data
     const parts = blocklistState.block?.parts.length ?? 0
-    if (!d || !parts) return ''
-    return partsSummary(d.catalogue.filter((e) => blocklistState.choices[e.key]?.on).length, parts)
+    if (!blocklistState.data || (!parts && tailLists > 0)) return ''
+    return partsSummary(tailLists, parts)
   })
-  const foot = $derived(footSpec(answers, evidence, copyLabel))
+  // Bound as the page's own Copy is: the block's copy text, and a list on.
+  const canCopy = $derived(!!blocklistState.block?.copyText && tailLists > 0)
+  const foot = $derived(footSpec(answers, evidence, copyLabel, canCopy))
 
   // The tail's stage is the blocklist builder's body, fetched as its own
   // chunk the first time a walk opens it: most walks never do, and the

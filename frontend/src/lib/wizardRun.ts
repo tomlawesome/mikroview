@@ -284,7 +284,10 @@ export function railRows(s: RunAnswers, ev: Evidence): RailRow[] {
   const reached = reachedIdx(s)
   const rows: RailRow[] = STEPS.map((d, i) => {
     const locked = i > reached
-    const can = !locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done'
+    // On the tail's stage Where setup stands is where Back goes: a live
+    // tick, clickable, not a dim step (built review, 2026-10-02).
+    const back = s.stage === 'block' && d.id === 'stand'
+    const can = back || (!locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done')
     return {
       id: d.id,
       title: d.title,
@@ -352,8 +355,10 @@ export interface FootSpec {
 }
 
 // copyLabel is the tail stage's Copy, as the builder counts its block
-// ("Copy — 2 lists · 8 parts").
-export function footSpec(s: RunAnswers, ev: Evidence, copyLabel = ''): FootSpec {
+// ("Copy — 2 lists · 8 parts"); canCopy is whether there is a block to
+// copy, bound as the page's own Copy is (the block's copy text, and a
+// list on), not read off the label.
+export function footSpec(s: RunAnswers, ev: Evidence, copyLabel = '', canCopy = false): FootSpec {
   const st = stageOf(s)
   if (st === 'block') {
     return {
@@ -361,7 +366,7 @@ export function footSpec(s: RunAnswers, ev: Evidence, copyLabel = ''): FootSpec 
       leftMore: ev.tail.state === 'done' ? [] : [{ label: 'Not now', action: 'block-not-now', primary: false, disabled: false }],
       hint: 'Not now leaves it in Settings ▸ drop list · Finish any time — the ledger keeps watching the router',
       right: [
-        { label: copyLabel || 'Copy', action: 'block-copy', primary: true, disabled: !copyLabel },
+        { label: copyLabel || 'Copy', action: 'block-copy', primary: true, disabled: !canCopy },
         { label: 'Finish', action: 'finish', primary: false, disabled: false },
       ],
     }

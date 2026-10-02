@@ -30,6 +30,7 @@ import {
   ledgerRows,
   refusedFixBlock,
   routerDone,
+  STEPS,
   trackStations,
   undoOrder,
   type Evidence,
@@ -484,6 +485,8 @@ class WizardRun {
 
   // An earlier completed row, while the run is still yours to change.
   gotoStep(i: number) {
+    // From the tail's stage, Where setup stands is Back.
+    if (this.stage === 'block' && i === STEPS.findIndex((d) => d.id === 'stand')) return this.blockBack()
     if (this.stage !== 'ask' && this.stage !== 'paste') return
     this.stage = 'ask'
     this.q = i === 0 ? 0 : 4
