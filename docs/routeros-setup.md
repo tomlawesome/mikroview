@@ -1091,24 +1091,17 @@ for this router, reuse it; nothing here needs a token of its own kind.
 ### 7c. The script
 
 ```
-:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="
-  /system backup save name=mv-backup dont-encrypt=yes
-  /export hide-sensitive file=mv-export
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
-  /file remove mv-backup.backup
-  /file remove mv-export.rsc
-" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="
-  /system backup save name=mv-backup dont-encrypt=yes
-  /export hide-sensitive file=mv-export
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
-  /file remove mv-backup.backup
-  /file remove mv-export.rsc
-" }
+:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n" }
 :if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" disabled=no }
 /system script run mv-backup
 ```
+
+The script's source is one line, its line breaks written as `\n`, on
+purpose: before RouterOS 7.19 the terminal drops a line break pasted
+inside a quoted string, so a source spread over several lines saves on
+7.18 as one run-on line that does nothing (#1412). Paste it as it
+stands; the script RouterOS saves still has one command per line — the
+backup, the export, the two uploads and the two removals.
 
 `<device>` is both the SFTP username and the destination file stem —
 it must be the router's own device id, the same identity the token is

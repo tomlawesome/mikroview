@@ -67,14 +67,16 @@ func docLine(t *testing.T, path, marker string) string {
 // fed the doc's own placeholder values.
 //
 // Excluded on purpose, and not a gap this test should close:
-//   - The three `/system script add name=mv-push|mv-backup|mv-backup-https`
-//     lines (steps 4e, 7c, 7c-ii). Their source="..." in the doc is prose
+//   - The two `/system script add name=mv-push|mv-backup-https` lines
+//     (steps 4e, 7c-ii). Their source="..." in the doc is prose
 //     ("<the blocks from 4c and 4c-ii, escaped for the quotes: ...>"),
 //     because the real escaped body is too long to spell out in a guide
 //     -- there is no literal text here to compare a generator's output
 //     against. TestScheduleCommands and friends already pin the real
 //     scriptAdd output byte for byte; this file only reaches the
 //     scheduler lines that follow them, which are printed in full.
+//     Step 7c's mv-backup line is printed in full, and
+//     TestDocBackupScriptIsOneLine holds it to BackupScript.
 //   - Steps 1-2's logging action/rule guards (SyslogCommands). They
 //     predate the disabled=no fix and never needed it: /system logging
 //     action and /system logging have no `disabled` property that a
@@ -186,5 +188,24 @@ func TestDocBlocklistPushBlocksMatchGenerators(t *testing.T) {
 				t.Errorf("routeros-setup.md's %s block does not match PushBlock:\n doc:\n%s\n generator:\n%s", kind, got, want)
 			}
 		})
+	}
+}
+
+// #1412: routeros-setup.md 7c prints the SFTP backup script for pasting
+// by hand. Before RouterOS 7.19 the console drops a line break typed
+// inside a quoted argument, so a multi-line source="..." saved as one
+// run-on line on 7.18 -- MikroView's floor -- and the script did
+// nothing. The wizard writes each break as \n (scriptSource); the guide
+// prints the same one line, held to BackupScript byte for byte with the
+// doc's own placeholders.
+func TestDocBackupScriptIsOneLine(t *testing.T) {
+	setupDoc := filepath.Join("..", "..", "docs", "routeros-setup.md")
+	want := routeros.BackupScript("<mikroview-host>", "47022", "<device>", "<token>", "a")
+	if strings.Contains(want, "\n") {
+		t.Fatalf("BackupScript spans lines, which 7.18 would join into one:\n%s", want)
+	}
+	got := docLine(t, setupDoc, `/system script find name=mv-backup]`)
+	if got != want {
+		t.Errorf("routeros-setup.md step 7c's script line does not match BackupScript:\n doc:       %s\n generator: %s", got, want)
 	}
 }

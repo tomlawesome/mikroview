@@ -165,6 +165,13 @@ rewritten.
   breaks now go in as `\n`, so each script is one console line and
   saves the same on every release. Re-paste step 4 (and 6) on a 7.18
   router.
+- **The hand-paste backup script in the RouterOS guide saves whole on
+  7.18** (#1412). `docs/routeros-setup.md` 7c printed the SFTP backup
+  script with its source over several lines, which a 7.18 console joins
+  into one run-on line that does nothing. It is now the same one line
+  the wizard prints, line breaks written as `\n`, and a test holds the
+  guide to the generator. If you pasted 7c by hand on a 7.18 router,
+  paste it again.
 - **A router's own management services no longer come mixed in with
   four of RouterOS's own runtime services** (#1405). A real router's
   `/ip/service` table also returns `dhcpclient`, `btest`, `discover` and
