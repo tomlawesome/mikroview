@@ -287,7 +287,9 @@ export function railRows(s: RunAnswers, ev: Evidence): RailRow[] {
     // On the tail's stage Where setup stands is where Back goes: a live
     // tick, clickable, not a dim step (built review, 2026-10-02).
     const back = s.stage === 'block' && d.id === 'stand'
-    const can = back || (!locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done')
+    // Rows 1–4 on the tail are behind it and stay done, not clickable:
+    // once the router is answering nothing goes back (#1417).
+    const can = back || (!locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done' && s.stage !== 'block')
     return {
       id: d.id,
       title: d.title,
