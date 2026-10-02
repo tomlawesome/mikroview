@@ -214,7 +214,7 @@ func TestSessionReportsMustEnrolSecondFactor(t *testing.T) {
 // screen the account can never satisfy.
 func TestSecondFactorDoorExemptsAnSSOProvisionedAccount(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

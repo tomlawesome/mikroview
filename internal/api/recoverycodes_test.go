@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
@@ -197,19 +196,15 @@ func (b *recoveryCodesSaveBudgetBackend) Describe() string {
 // afterward, exactly as if regenerating had never been attempted.
 func TestRecoveryCodesRegenerateFailedWriteLeavesOldSetIntact(t *testing.T) {
 	budget := &recoveryCodesSaveBudgetBackend{left: 1000} // generous through setup
-	authStore, err := auth.OpenWithBackend(budget)
-	if err != nil {
-		t.Fatal(err)
-	}
 	s, _ := newTestServer(t)
-	s.Auth = authStore
+	s.Auth = openTestAuthStore(t, budget)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
 	const username = "bilbo"
 	const password = "recovery-codes-budget-password"
 	client := &http.Client{Jar: mustCookieJar(t)}
-	reg := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: username, Password: password})
+	reg := postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, username, password))
 	reg.Body.Close()
 	if reg.StatusCode != http.StatusCreated {
 		t.Fatalf("register returned %d", reg.StatusCode)

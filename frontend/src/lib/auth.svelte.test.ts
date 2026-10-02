@@ -527,17 +527,17 @@ describe('AuthState.register', () => {
     vi.mocked(register).mockResolvedValue(null)
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'admin', role: 'admin' }))
 
-    const result = await authState.register('admin', 'hunter2')
+    const result = await authState.register('admin', 'hunter2', 'abcd-efgh-jkmn-pqrs')
 
     expect(result).toBeNull()
-    expect(register).toHaveBeenCalledWith('admin', 'hunter2')
+    expect(register).toHaveBeenCalledWith('admin', 'hunter2', 'abcd-efgh-jkmn-pqrs')
     expect(authState.state).toBe('authenticated')
   })
 
   it('returns the error without re-checking on failure', async () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 
-    const result = await authState.register('admin', 'hunter2')
+    const result = await authState.register('admin', 'hunter2', 'abcd-efgh-jkmn-pqrs')
 
     expect(result).toBe('username already taken')
     expect(fetchAuthSession).not.toHaveBeenCalled()

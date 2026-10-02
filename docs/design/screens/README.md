@@ -17,10 +17,12 @@ here (or in its issue body), never from the concept mockups.
 | The city (second view of the topography) | #854 | `city/` |
 | Log every rule (was Tune logging) | #1134 | `log-every-rule/` |
 | The stream | #1191 | `stream/` |
+| Blocklist builder, and the wizard's first-run tail | #1360 | `blocklist/` |
+| First run with a setup code | #1415 | `setup-code/` |
 
-`log-every-rule/` and `stream/` are the exceptions to the
-one-directory-per-round shape: each holds rulings on a page that was
-already built, not a round trail.
+`log-every-rule/`, `stream/` and `setup-code/` are the exceptions to
+the one-directory-per-round shape: each holds rulings on a page that
+was already built, not a round trail.
 
 Same mechanics as the concept rounds: self-contained HTML, no build
 step, the shared fictional data story, `capture.mjs` screenshots into

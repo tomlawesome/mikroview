@@ -68,6 +68,14 @@
     // longer mean what they say is a trap for whoever edits this next.
     factorOnly = false,
     onSubmitFactor,
+    // #1415's first run (docs/design/screens/setup-code/DESIGN.md): the
+    // create-account form also asks for the one-time setup code from
+    // MikroView's log, first, above the account field. Submitted through
+    // its own onSubmitSetup for the same reason onSubmitFactor is a
+    // distinct prop. Reuses the code state below; never set together
+    // with factorOnly.
+    setupCode = false,
+    onSubmitSetup,
     // #1250: the passkey alternative to onSubmitFactor above, for the
     // same pending login -- a distinct prop for the same reason
     // onSubmitFactor already is one (see its own comment): the primary
@@ -93,6 +101,8 @@
     passwordOnly?: boolean
     factorOnly?: boolean
     onSubmitFactor?: (code: string) => Promise<string | null>
+    setupCode?: boolean
+    onSubmitSetup?: (setupCode: string, username: string, password: string) => Promise<string | null>
     onLoginWithPasskey?: () => Promise<string | null>
   } = $props()
 
@@ -185,6 +195,13 @@
     // app's, and pointed at a field the error line below already covers.
     // The `required` attributes stay: they are what tells assistive tech
     // the fields are not optional, and they no longer trigger the bubble.
+    //
+    // #1415: the setup code is checked first, before the account -- the
+    // server checks it before anything else too.
+    if (setupCode && !code) {
+      error = "Enter the setup code from MikroView's log."
+      return
+    }
     if (!passwordOnly && !username) {
       error = 'Enter your account name.'
       return
@@ -204,7 +221,7 @@
     }
 
     submitting = true
-    const result = await onsubmit?.(username, password)
+    const result = setupCode ? await onSubmitSetup?.(code, username, password) : await onsubmit?.(username, password)
     submitting = false
     if (result) error = result
   }
@@ -312,6 +329,33 @@
               </label>
             {/if}
           {:else}
+            {#if setupCode}
+              <!-- #1415: the note before the field, because the
+                   operator looks for the thing before they type it; the
+                   field first, above account, because proof of host
+                   access is the key to this door. Letters and digits,
+                   so neither numeric input nor one-time-code autofill,
+                   and no reformatting: the server takes it with or
+                   without dashes, in either case. -->
+              <p class="subtitle-note">
+                It's in MikroView's log from when it last started (docker compose logs mikroview), on the line
+                that says “create the first admin with setup code”. Lost it? Restart MikroView and it prints a new
+                one.
+              </p>
+              <label>
+                <span class="sr-only">setup code</span>
+                <input
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="setup code"
+                  bind:value={code}
+                  required
+                />
+              </label>
+            {/if}
+
             <!-- "account" / "password" is the ratified scene's own copy
                  (round 15 amended its "passphrase"; "account" stood), and
                  it sits inside the field as the mockup draws it (owner,

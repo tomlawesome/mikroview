@@ -252,6 +252,10 @@ func TestPreferencesPatchReportsAFailedSaveAndChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Prefs = ps
+	// SSO never provisions the first account (#1415).
+	if _, err := s.Auth.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	u, _, err := s.Auth.FindOrCreateOIDCUser("https://idp.example", "subject-placeholder", "frodo", time.Now())
 	if err != nil {
 		t.Fatal(err)

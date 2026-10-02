@@ -110,8 +110,9 @@ func (fp *fakeOIDCProvider) signIDToken(t *testing.T) string {
 }
 
 // newOIDCTestServer builds a Server with a real internal/oidc.Client
-// wired against fp, and a fresh, undecided auth store so a successful
-// login provisions the first (admin) account.
+// wired against fp, and a fresh, undecided auth store -- the first
+// account is still to be registered with the setup code, and SSO is
+// closed until it is (#1415).
 func newOIDCTestServer(t *testing.T, fp *fakeOIDCProvider) *Server {
 	t.Helper()
 	s := newAuthTestServer(t)
@@ -131,6 +132,19 @@ func newOIDCTestServer(t *testing.T, fp *fakeOIDCProvider) *Server {
 	}
 	s.OIDC = client
 	s.OIDCState = codec
+	return s
+}
+
+// newOIDCTestServerWithAdmin is newOIDCTestServer past first-run setup:
+// the OIDC routes answer 503 and SSO provisions nothing while no account
+// exists (#1415), so a test of the sign-in flow itself starts from a
+// deployment that already has its local admin, as a real one does.
+func newOIDCTestServerWithAdmin(t *testing.T, fp *fakeOIDCProvider) *Server {
+	t.Helper()
+	s := newOIDCTestServer(t, fp)
+	if _, err := s.Auth.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
@@ -167,7 +181,7 @@ func TestOIDCCallbackNotFoundWhenNotConfigured(t *testing.T) {
 
 func TestOIDCLoginRedirectsToProviderWithPKCEAndSetsFlowCookie(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -239,7 +253,7 @@ func doFullOIDCLogin(t *testing.T, ts *httptest.Server) (*http.Response, string)
 
 func TestOIDCCallbackFullFlowCreatesSessionAndProvisionsUser(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -264,14 +278,14 @@ func TestOIDCCallbackFullFlowCreatesSessionAndProvisionsUser(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a user to be provisioned for the OIDC identity")
 	}
-	if u.Role != "admin" {
-		t.Errorf("Role = %q, want admin (first-ever account)", u.Role)
+	if u.Role != "user" {
+		t.Errorf("Role = %q, want user -- SSO never provisions the admin (#1415)", u.Role)
 	}
 }
 
 func TestOIDCCallbackRejectsMissingFlowCookie(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -285,14 +299,14 @@ func TestOIDCCallbackRejectsMissingFlowCookie(t *testing.T) {
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/?ssoError=state_mismatch" {
 		t.Errorf("response = %d %q, want a redirect to /?ssoError=state_mismatch", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if s.Auth.Count() != 0 {
-		t.Error("no account should have been created for a callback with no flow cookie")
+	if s.Auth.Count() != 1 {
+		t.Error("no account beyond the admin should have been created for a callback with no flow cookie")
 	}
 }
 
 func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -317,14 +331,14 @@ func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
 	if resp.Header.Get("Location") != "/?ssoError=state_mismatch" {
 		t.Errorf("Location = %q, want /?ssoError=state_mismatch", resp.Header.Get("Location"))
 	}
-	if s.Auth.Count() != 0 {
-		t.Error("no account should have been created for a state mismatch")
+	if s.Auth.Count() != 1 {
+		t.Error("no account beyond the admin should have been created for a state mismatch")
 	}
 }
 
 func TestOIDCCallbackRejectsProviderError(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -352,7 +366,7 @@ func TestOIDCCallbackRejectsProviderError(t *testing.T) {
 
 func TestOIDCCallbackClearsFlowCookieOnFailure(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
+	s := newOIDCTestServerWithAdmin(t, fp)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -410,7 +424,7 @@ func TestOIDCLinkStartRequiresTheCSRFHeader(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 
 	// Deliberately built by hand, without csrfHeaderName.
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/oidc/link", nil)
@@ -432,7 +446,7 @@ func TestOIDCLinkStartRequiresASession(t *testing.T) {
 
 	// An account exists, so auth is active, but this client has no session.
 	setup := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, setup, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, setup, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 
 	anon := &http.Client{Jar: mustCookieJar(t)}
 	resp := postJSON(t, anon, ts.URL+"/api/auth/oidc/link", map[string]any{})
@@ -449,7 +463,7 @@ func TestOIDCLinkStartRefusesAnAlreadySSOOnlyAccount(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	// alice is a local admin, so the forced-enrolment door (#1253) blocks
 	// every route but the enrolment ones -- including POST
 	// /api/auth/users below -- until she holds a confirmed factor.
@@ -486,7 +500,7 @@ func TestOIDCLinkTargetsTheSessionAccountNotTheRequestBody(t *testing.T) {
 	defer ts.Close()
 
 	admin := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users below
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
@@ -584,7 +598,7 @@ func TestOIDCLinkCompletesAndRotatesTheSession(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/oidc/link inside doOIDCLinkFlow below
 	alice, _ := s.Auth.ByUsername("alice")
 
@@ -635,7 +649,7 @@ func TestOIDCLinkRefusesWhenTheSessionChangedMidFlow(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users and /api/auth/oidc/link below
 	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
@@ -682,7 +696,7 @@ func TestOIDCLinkRefusesAnIdentityAlreadyLinkedElsewhere(t *testing.T) {
 	defer ts.Close()
 
 	admin := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/register", setupRequest(t, s, "alice", "password123")).Body.Close()
 	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users and /api/auth/oidc/link below
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 

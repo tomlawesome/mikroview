@@ -66,6 +66,7 @@ func TestSSOProvisioningKeepsAnEmailClaimAsTheUsername(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedAdmin(t, s, "admin")
 	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "tom@example.com", time.Now())
 	if err != nil {
 		t.Fatalf("FindOrCreateOIDCUser: %v", err)

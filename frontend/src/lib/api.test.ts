@@ -26,6 +26,7 @@ import {
   mintDroplistKey,
   onForcedAuthGate,
   regenerateRecoveryCodes,
+  register,
   renamePasskey,
   replayDefinition,
   revokeDroplistKey,
@@ -706,6 +707,35 @@ describe('regenerateRecoveryCodes (#1331)', () => {
     )
     const result = await regenerateRecoveryCodes('hunter2')
     expect(result).toBe('this account has no second factor yet')
+  })
+})
+
+// #1415: the first admin is created with the setup code from the
+// server's log. register() carries it as setupCode and shows the
+// server's refusal text unchanged, the same as login().
+describe('register: the first admin with a setup code (#1415)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the setup code alongside the account and password', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 201, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await register('tom', 'hunter2222', 'abcd-efgh-jkmn-pqrs')
+    expect(result).toBeNull()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/register')
+    expect(JSON.parse(init?.body as string)).toEqual({
+      username: 'tom',
+      password: 'hunter2222',
+      setupCode: 'abcd-efgh-jkmn-pqrs',
+    })
+  })
+
+  it('returns the server text unchanged on a wrong code', async () => {
+    const body = "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one"
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => body })))
+    expect(await register('tom', 'hunter2222', 'wrong')).toBe(body)
   })
 })
 

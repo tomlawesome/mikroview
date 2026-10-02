@@ -72,6 +72,11 @@ scenarios() {
       # freshness-reload.sh, its own instance, picked up by
       # run-live-scripts.sh after this shared one is already down.
       *live-freshness-reload.mjs) continue ;;
+      # #1415: needs an instance with no account, so the server has
+      # logged a setup code and shows the create-account screen; this one
+      # already holds its admin. Run standalone by
+      # scripts/live-setup-code.sh, its own instance, the same way.
+      *live-setup-code.mjs) continue ;;
     esac
     echo "$scenario"
   done

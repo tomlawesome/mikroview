@@ -39,7 +39,11 @@ script is short enough to read before you run it —
 [`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
 on GitHub.
 
-Open `https://<docker-host>`, create the admin account, and the setup
+Open `https://<docker-host>` and create the admin account. It asks for
+a one-time setup code that MikroView prints to its log, so only someone
+with access to the host can claim the admin role:
+`docker logs mikroview | grep 'setup code'`
+([more](docs/configuration.md#the-setup-code)). Then the setup
 wizard writes every RouterOS command with your values already filled in
 — syslog over TLS, RouterOS 7.18+. Paste it into the router once and the
 picture builds itself. The browser warns about the self-signed
