@@ -277,6 +277,20 @@ func (s *Server) handleAuthPasskeysList(w http.ResponseWriter, r *http.Request) 
 
 // ---- POST /api/auth/passkeys/register/begin ----
 
+type passkeyRegisterBeginRequest struct {
+	Password string `json:"password"`
+}
+
+// handleAuthPasskeysRegisterBegin starts registering a passkey on the
+// caller's own account, gated by their password (#1418). A session alone
+// is not enough: a passkey added to an account with no factor yet becomes
+// its first factor, which mints the recovery codes and revokes every
+// other session, so a stolen cookie could otherwise lock the owner out.
+// Same passwordRecheckLimiterKey budget handleAuthPasskeyDelete uses.
+//
+// One password-proved begin stores at most one passkey: register/finish
+// claims the ceremony's challenge (passkeyRegisterChallenges) before it
+// writes, so a copy of the sealed cookie cannot be replayed to add more.
 func (s *Server) handleAuthPasskeysRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r)
 	if user == nil {
@@ -287,6 +301,28 @@ func (s *Server) handleAuthPasskeysRegisterBegin(w http.ResponseWriter, r *http.
 		writePasskeysUnavailable(w, s.RelyingParty)
 		return
 	}
+	// SSO accounts are never offered a local factor -- handleTOTPEnrol's
+	// rule, for the same reason, and there is no password to check here.
+	if !user.LocalPassword() {
+		http.Error(w, "this account signs in through your identity provider -- a passkey is not offered", http.StatusConflict)
+		return
+	}
+	var req passkeyRegisterBeginRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	now := time.Now()
+	userKey := passwordRecheckLimiterKey(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
+		writeUnauthorized(w, "incorrect password")
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
 
 	// Re-read rather than trust userFromContext's copy, the same
 	// discipline #1249's TOTP handlers use (see auth.go's "#1249" section
@@ -323,7 +359,7 @@ func (s *Server) handleAuthPasskeysRegisterBegin(w http.ResponseWriter, r *http.
 	// bounds the ceremony's lifetime server-side, since go-webauthn's own
 	// Expires enforcement is off by default and webauthn.go (out of this
 	// slice) doesn't turn it on.
-	session.Expires = time.Now().Add(passkeyCeremonyCookieMaxAge)
+	session.Expires = now.Add(passkeyCeremonyCookieMaxAge)
 
 	encoded, err := passkeyRegisterSessionCodec.encode(*session)
 	if err != nil {
@@ -371,14 +407,16 @@ type passkeyRegisterFinishResponse struct {
 // The cookie is read but deliberately *not* cleared until the ceremony
 // and the store write both succeed -- the same "a wrong attempt doesn't
 // burn the ticket" shape handleAuthLoginFactor already gives the pending-
-// login cookie for a wrong TOTP code. A malformed body, a ceremony the
-// library refuses (wrong origin, wrong RPID, a tampered response), or a
-// store-layer refusal (duplicate, limit reached) all leave the sealed
-// session in place so a client that sends a corrected request can still
-// finish inside the same five-minute window, rather than being forced back
-// to register/begin over a problem that had nothing to do with the
-// challenge itself. Only a genuinely unreadable cookie (missing or fails
-// to decode) has nothing left to preserve.
+// login cookie for a wrong TOTP code. A malformed body or a ceremony the
+// library refuses (wrong origin, wrong RPID, a tampered response) leaves
+// the sealed session in place so a client that sends a corrected request
+// can still finish inside the same five-minute window, rather than being
+// forced back to register/begin over a problem that had nothing to do
+// with the challenge itself. Once the library accepts a credential the
+// ceremony is spent (#1418, see the claim below): a stored passkey, a
+// store-layer refusal (duplicate, limit reached) and a lost race all end
+// it, and the cookie is cleared with the answer. A genuinely unreadable
+// cookie (missing or fails to decode) has nothing left to preserve.
 func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r)
 	if user == nil {
@@ -427,7 +465,17 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 		return
 	}
 
+	// The library accepted it, so from here the ceremony is spent,
+	// whatever the store says next (#1418): one password-proved begin
+	// stores at most one passkey. Claimed before AddPasskey, so of two
+	// finishes racing on one cookie only one can store, and a copy of
+	// the sealed cookie taken before it was cleared is refused.
 	now := time.Now()
+	if !passkeyRegisterChallenges.claim(session.Challenge, session.Expires, now) {
+		s.clearPasskeyRegisterCookie(w)
+		writeUnauthorized(w, "start registration again")
+		return
+	}
 	pk := credentialToPasskey(*cred, s.RelyingParty.RPID, req.Name, now)
 	wasFirstFactor := !current.HasSecondFactor()
 
@@ -438,6 +486,7 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 		case errors.Is(err, auth.ErrPasskeyDuplicate), errors.Is(err, auth.ErrPasskeyLimitReached):
 			status = http.StatusConflict
 		}
+		s.clearPasskeyRegisterCookie(w)
 		writeAuthError(w, r, err, status)
 		return
 	}

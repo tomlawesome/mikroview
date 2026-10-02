@@ -244,6 +244,13 @@ func (c *spentChallenges) claim(challenge string, expires, now time.Time) bool {
 
 var passkeyAssertChallenges = &spentChallenges{}
 
+// passkeyRegisterChallenges does the same for registrations (#1418), so
+// one password-proved register/begin stores at most one passkey: a copy
+// of its sealed cookie replayed after the first finish is refused. Its
+// own set rather than the sign-in one's, though the two codecs already
+// keep a challenge from crossing between ceremonies.
+var passkeyRegisterChallenges = &spentChallenges{}
+
 // encode seals sd for the cookie value. The caller writes the result behind Max-Age (5
 // minutes per the design), which bounds how long a browser holds onto it; encode/decode
 // themselves place no separate limit on it (see errWebAuthnSessionInvalid's doc comment).

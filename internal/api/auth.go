@@ -1738,6 +1738,10 @@ type totpEnrolResponse struct {
 	Secret string `json:"secret"`
 }
 
+type totpEnrolRequest struct {
+	Password string `json:"password"`
+}
+
 // handleTOTPEnrol starts authenticator-app enrolment for the signed-in
 // caller's own account: a fresh secret is generated and stored pending,
 // not active until handleTOTPConfirm proves a code was produced from it
@@ -1745,6 +1749,13 @@ type totpEnrolResponse struct {
 // confirming simply replaces the pending secret -- that store method's
 // own behaviour -- so this handler doesn't need to notice that case
 // specially.
+//
+// Gated by the caller's password (#1422), on the passwordRecheckLimiterKey
+// budget handleTOTPDelete uses. A session alone is not enough: confirming
+// an account's first factor mints its recovery codes and revokes every
+// other session, so a stolen cookie could otherwise enrol an app of its
+// own and lock the owner out. handleAuthPasskeysRegisterBegin is gated
+// the same way for the same reason (#1418).
 func (s *Server) handleTOTPEnrol(w http.ResponseWriter, r *http.Request) {
 	user := userFromContext(r)
 	if user == nil {
@@ -1761,6 +1772,22 @@ func (s *Server) handleTOTPEnrol(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this account signs in through your identity provider -- an authenticator app is not offered", http.StatusConflict)
 		return
 	}
+	var req totpEnrolRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	now := time.Now()
+	userKey := passwordRecheckLimiterKey(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
+		writeUnauthorized(w, "incorrect password")
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
 
 	secret, err := auth.GenerateTOTPSecret()
 	if err != nil {

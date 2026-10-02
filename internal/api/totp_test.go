@@ -62,9 +62,9 @@ func totpBilboID(t *testing.T, s *Server) string {
 
 // totpEnrol posts the enrol step and decodes its response, failing the
 // test on anything but 200.
-func totpEnrol(t *testing.T, client *http.Client, ts *httptest.Server) totpEnrolResponse {
+func totpEnrol(t *testing.T, client *http.Client, ts *httptest.Server, password string) totpEnrolResponse {
 	t.Helper()
-	resp := postJSON(t, client, ts.URL+"/api/auth/totp/enrol", nil)
+	resp := postJSON(t, client, ts.URL+"/api/auth/totp/enrol", totpEnrolRequest{Password: password})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -91,9 +91,9 @@ func totpEnrol(t *testing.T, client *http.Client, ts *httptest.Server) totpEnrol
 // is then numerically identical to the one that just confirmed the
 // factor, which the replay guard correctly (and confusingly, for a test
 // that didn't expect it) refuses.
-func totpEnrolAndConfirm(t *testing.T, client *http.Client, ts *httptest.Server) ([]byte, []string, uint64) {
+func totpEnrolAndConfirm(t *testing.T, client *http.Client, ts *httptest.Server, password string) ([]byte, []string, uint64) {
 	t.Helper()
-	enrolled := totpEnrol(t, client, ts)
+	enrolled := totpEnrol(t, client, ts, password)
 	secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
 	if err != nil {
 		t.Fatalf("decoding the enrolled secret: %v", err)
@@ -173,9 +173,9 @@ func rememberTOTPFactor(base, username string, secret []byte, recoveryCodes []st
 // #1253's forced-enrolment door use this instead of a bare
 // totpEnrolAndConfirm, precisely so a later loggedInClient re-login as
 // that same account still works.
-func enrolAndRememberFactor(t *testing.T, client *http.Client, ts *httptest.Server, username string) {
+func enrolAndRememberFactor(t *testing.T, client *http.Client, ts *httptest.Server, username, password string) {
 	t.Helper()
-	secret, codes, counter := totpEnrolAndConfirm(t, client, ts)
+	secret, codes, counter := totpEnrolAndConfirm(t, client, ts, password)
 	rememberTOTPFactor(ts.URL, username, secret, codes, counter)
 }
 
@@ -293,7 +293,7 @@ func TestTOTPEnrolConfirmLoginFactorAndDelete(t *testing.T) {
 	s, ts, admin := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
 
-	secret, codes, confirmCounter := totpEnrolAndConfirm(t, bilbo, ts)
+	secret, codes, confirmCounter := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 	if len(codes) != 10 {
 		t.Fatalf("got %d recovery codes, want 10", len(codes))
 	}
@@ -366,7 +366,7 @@ func TestTOTPEnrolConfirmLoginFactorAndDelete(t *testing.T) {
 func TestTOTPDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
 	s, ts, _ := totpTestServer(t)
 	deviceA := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	enrolAndRememberFactor(t, deviceA, ts, totpBilboUsername)
+	enrolAndRememberFactor(t, deviceA, ts, totpBilboUsername, totpBilboPassword)
 	deviceB := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
 
 	resp := deleteJSON(t, deviceA, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: totpBilboPassword})
@@ -412,14 +412,14 @@ func TestTOTPDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
 	s.RelyingParty = rp
 
 	client := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	registerPasskey(t, client, ts, rp, "a spare key")
+	registerPasskey(t, client, ts, rp, totpBilboPassword, "a spare key")
 
 	// Not enrolAndRememberFactor: the passkey just registered already
 	// minted the account's recovery codes (mint-if-absent), so
 	// confirming TOTP here takes the AlreadyIssued branch and hands back
 	// no fresh codes -- enrolAndRememberFactor's own helper asserts
 	// exactly ten, which does not hold in this order.
-	enrolled := totpEnrol(t, client, ts)
+	enrolled := totpEnrol(t, client, ts, totpBilboPassword)
 	secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +469,7 @@ func TestTOTPDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
 func TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	secret, _, counter := totpEnrolAndConfirm(t, bilbo, ts)
+	secret, _, counter := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	pending := startTOTPLogin(t, ts, totpBilboUsername, totpBilboPassword)
 	code := auth.GenerateTOTPCode(secret, counter+1)
@@ -528,7 +528,7 @@ func TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins(t *testing.T) {
 func TestPasswordOnlyLoginOnFactorAccountNeverCreatesSession(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	resp := postJSON(t, client, ts.URL+"/api/auth/login",
@@ -574,7 +574,7 @@ func TestPasswordOnlyLoginOnFactorAccountNeverCreatesSession(t *testing.T) {
 func TestTOTPReplayOfSameCodeRefused(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	secret, _, confirmCounter := totpEnrolAndConfirm(t, bilbo, ts)
+	secret, _, confirmCounter := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	code := auth.GenerateTOTPCode(secret, confirmCounter+1)
 
@@ -637,7 +637,7 @@ func TestTOTPWindowToleranceContract(t *testing.T) {
 func TestTOTPRecoveryCodeSingleUse(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	_, codes, _ := totpEnrolAndConfirm(t, bilbo, ts)
+	_, codes, _ := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 	code := codes[0]
 
 	first := startTOTPLogin(t, ts, totpBilboUsername, totpBilboPassword)
@@ -673,7 +673,7 @@ func TestTOTPRecoveryCodeSingleUse(t *testing.T) {
 func TestPendingLoginCookieExpiry(t *testing.T) {
 	s, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	secret, _, confirmCounter := totpEnrolAndConfirm(t, bilbo, ts)
+	secret, _, confirmCounter := totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 	id := totpBilboID(t, s)
 
 	// The stale request carries a genuinely correct code -- generated at
@@ -780,7 +780,7 @@ func TestAdminCannotClearOwnTOTP(t *testing.T) {
 func TestTOTPAdminClearHappyPath(t *testing.T) {
 	s, ts, admin := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 	id := totpBilboID(t, s)
 
 	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id+"/totp", nil)
@@ -811,7 +811,7 @@ func TestTOTPAdminClearRefusals(t *testing.T) {
 	t.Run("a user-tier caller may not clear someone else's factor", func(t *testing.T) {
 		s, ts, _ := totpTestServer(t)
 		bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-		totpEnrolAndConfirm(t, bilbo, ts)
+		totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 		id := totpBilboID(t, s)
 
 		if _, err := s.Auth.CreateUser("operator", "operator-password-placeholder", auth.RoleUser, time.Now()); err != nil {
@@ -875,9 +875,9 @@ func TestTOTPEnrolRefusedForSSOAccount(t *testing.T) {
 func TestTOTPEnrolConflictWhenAlreadyActive(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
-	resp := postJSON(t, bilbo, ts.URL+"/api/auth/totp/enrol", nil)
+	resp := postJSON(t, bilbo, ts.URL+"/api/auth/totp/enrol", totpEnrolRequest{Password: totpBilboPassword})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("enrolling again while active got %d, want 409", resp.StatusCode)
@@ -892,7 +892,7 @@ func TestTOTPEnrolConflictWhenAlreadyActive(t *testing.T) {
 func TestTOTPConfirmRejectsBadCode(t *testing.T) {
 	_, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrol(t, bilbo, ts)
+	totpEnrol(t, bilbo, ts, totpBilboPassword)
 
 	resp := postJSON(t, bilbo, ts.URL+"/api/auth/totp/confirm", totpConfirmRequest{Code: "000000"})
 	defer resp.Body.Close()
@@ -973,7 +973,7 @@ func checkFirstFactorRotatedDespiteMintFailure(t *testing.T, s *Server, ts *http
 // retry can do it later, since confirming again needs a fresh secret.
 func TestTOTPConfirmWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
 	s, ts, browser, otherDevice, budget := mintFailServer(t)
-	enrolled := totpEnrol(t, browser, ts)
+	enrolled := totpEnrol(t, browser, ts, mintFailPassword)
 	secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
 	if err != nil {
 		t.Fatal(err)
@@ -1004,7 +1004,7 @@ func TestTOTPConfirmWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
 func TestTOTPDeleteWrongPassword(t *testing.T) {
 	s, ts, _ := totpTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 	id := totpBilboID(t, s)
 
 	resp := deleteJSON(t, bilbo, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: "not-the-password"})
@@ -1053,7 +1053,7 @@ func TestTheFactorIsVisibleToTheFrontend(t *testing.T) {
 	}
 
 	// bilbo enrols.
-	totpEnrolAndConfirm(t, bilbo, ts)
+	totpEnrolAndConfirm(t, bilbo, ts, totpBilboPassword)
 
 	if got := totpSessionHasTOTP(t, bilbo, ts); !got {
 		t.Error("bilbo's own session does not report the factor they just enrolled")

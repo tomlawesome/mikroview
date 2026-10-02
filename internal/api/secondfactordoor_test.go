@@ -170,7 +170,7 @@ func TestSecondFactorDoorOpensOnceAFactorIsEnrolled(t *testing.T) {
 		t.Fatalf("precondition: /api/flags = %d before enrolling, want 403", blocked.StatusCode)
 	}
 
-	totpEnrolAndConfirm(t, c, ts)
+	totpEnrolAndConfirm(t, c, ts, "password12345")
 
 	open, err := c.Get(ts.URL + "/api/flags")
 	if err != nil {
@@ -198,7 +198,7 @@ func TestSessionReportsMustEnrolSecondFactor(t *testing.T) {
 		t.Error("mustEnrolSecondFactor = false for a local account with no factor, want true")
 	}
 
-	totpEnrolAndConfirm(t, c, ts)
+	totpEnrolAndConfirm(t, c, ts, "password12345")
 
 	after := sessionOf(t, c, ts)
 	if after.MustEnrolSecondFactor {

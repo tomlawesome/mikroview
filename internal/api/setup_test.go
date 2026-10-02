@@ -390,7 +390,7 @@ func TestSetupAddressAdminOnly(t *testing.T) {
 	// Enrolled so the 403 below actually proves the admin-only gate,
 	// rather than being masked by #1253's door refusing a still-factor-
 	// less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts)
+	totpEnrolAndConfirm(t, viewerClient, ts, "password456")
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
 	defer resp.Body.Close()
@@ -515,7 +515,7 @@ func TestSetupBackupTransportAdminOnly(t *testing.T) {
 	// Enrolled so the 403 below actually proves the admin-only gate,
 	// rather than being masked by #1253's door refusing a still-factor-
 	// less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts)
+	totpEnrolAndConfirm(t, viewerClient, ts, "password456")
 
 	resp := putJSON(t, viewerClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
 	defer resp.Body.Close()
