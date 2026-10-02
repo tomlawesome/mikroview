@@ -5,6 +5,7 @@ package routeros
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -221,6 +222,30 @@ func TestBlocklistPushPartReSetsThePushScript(t *testing.T) {
 	}
 	if !strings.Contains(spansText(b.Parts[0].Fold), "re-set with the two new kinds") {
 		t.Errorf("part 1's fold = %q", spansText(b.Parts[0].Fold))
+	}
+}
+
+// Part 1's preview is one line, so part 2 is on the block's first screen
+// (built review, 2026-10-02): the script add-or-set alone, its source
+// elided; the scheduler and the run line stay in the copy and are named
+// in the fold. The preview summarises, the copy is complete.
+func TestBlocklistPushPartPreviewsOneLine(t *testing.T) {
+	b := mustBlock(t, BlocklistRequest{RouterOSVersion: "7.24.4", Push: testPush})
+	p := b.Parts[0]
+	if len(p.Steps) != 3 {
+		t.Fatalf("part 1 copies %d steps, want the script, its schedule and its run", len(p.Steps))
+	}
+	if len(p.Shown) != 1 {
+		t.Fatalf("part 1 shows %d lines, want the script add-or-set alone", len(p.Shown))
+	}
+	if got, want := spansText(p.Shown[0]), elided(p.Steps[0]); got != want {
+		t.Errorf("part 1 shows %q, want %q", got, want)
+	}
+	lines := strings.Count(PushScript(testPush.Address, testPush.Token, BlocklistPushKinds(testPush.Kinds), "a"), "\n") + 1
+	want := fmt.Sprintf("   the push script, re-set with the two new kinds · %d lines · its schedule and run line re-set unchanged · "+
+		"a new token; the one before stays valid until revoked in Settings", lines)
+	if got := spansText(p.Fold); got != want {
+		t.Errorf("part 1's fold = %q, want %q", got, want)
 	}
 }
 
@@ -614,7 +639,8 @@ func parseEntry(a string) (netip.Prefix, error) {
 func TestBlocklistShownFoldsOnlySources(t *testing.T) {
 	b := mustBlock(t, BlocklistRequest{RouterOSVersion: "7.19.4", Lists: allDefaults(t, false), Push: testPush})
 	for _, p := range b.Parts {
-		if len(p.Shown) != len(p.Steps) {
+		// Part 1 previews its first step alone (TestBlocklistPushPartPreviewsOneLine).
+		if p.Ink != "push" && len(p.Shown) != len(p.Steps) {
 			t.Fatalf("part %d shows %d lines for %d steps", p.Ordinal, len(p.Shown), len(p.Steps))
 		}
 		for i, line := range p.Shown {

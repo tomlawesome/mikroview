@@ -317,13 +317,18 @@ func pushPart(push BlocklistPush, dialect string) Part {
 	// escaped, see scriptSource), the scheduler, and a run.
 	steps := strings.Split(ScheduleCommands(body, dialect), "\n")
 	lines := strings.Count(body, "\n") + 1
+	// The preview is the script add-or-set alone, so part 2 is on the
+	// block's first screen (built review, 2026-10-02); the scheduler and
+	// the run line stay in the copy and are named in the fold. The
+	// preview summarises, the copy is complete -- as the loaders do.
 	return Part{
 		Ink:   "push",
 		Title: "The push",
 		Note: plain("updated once for every list: raw rules join the rule table it sends; lists named " +
 			"mv-bl-* are sent as a count (guarded: sets the script the wizard made)"),
-		Shown: shownSteps(steps),
+		Shown: shownSteps(steps[:1]),
 		Fold: plain(fmt.Sprintf("   the push script, re-set with the two new kinds · %d lines · "+
+			"its schedule and run line re-set unchanged · "+
 			"a new token; the one before stays valid until revoked in Settings", lines)),
 		Steps: steps,
 	}
