@@ -18,8 +18,30 @@ func newTestOIDCStore(t *testing.T) *Store {
 	return s
 }
 
-func TestFindOrCreateOIDCUserProvisionsFirstUserAsAdmin(t *testing.T) {
+// The first account is never an SSO one (#1415): while the store is
+// empty, an identity the provider vouches for is refused and nothing is
+// provisioned. The first admin is local, created with the setup code
+// from the server's log, and links SSO afterwards.
+func TestFindOrCreateOIDCUserRefusesTheFirstAccount(t *testing.T) {
 	s := newTestOIDCStore(t)
+
+	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", time.Now())
+	if err == nil {
+		t.Fatalf("FindOrCreateOIDCUser on an empty store = %+v (created=%v), want a refusal -- SSO made the first admin", u, created)
+	}
+	if created || u != nil {
+		t.Errorf("refusal still reported an account: %+v, created=%v", u, created)
+	}
+	if n := s.Count(); n != 0 {
+		t.Errorf("Count() = %d after the refusal, want 0", n)
+	}
+}
+
+func TestFindOrCreateOIDCUserProvisionsAnOrdinaryUser(t *testing.T) {
+	s := newTestOIDCStore(t)
+	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
 
 	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", time.Now())
 	if err != nil {
@@ -28,8 +50,8 @@ func TestFindOrCreateOIDCUserProvisionsFirstUserAsAdmin(t *testing.T) {
 	if !created {
 		t.Error("expected created=true for a brand-new identity")
 	}
-	if u.Role != RoleAdmin {
-		t.Errorf("Role = %q, want admin (first-ever account)", u.Role)
+	if u.Role != RoleUser {
+		t.Errorf("Role = %q, want user -- SSO never provisions the admin", u.Role)
 	}
 	if u.OIDCIssuer != "https://idp.example" || u.OIDCSubject != "sub-1" {
 		t.Errorf("identity not recorded: %+v", u)
@@ -41,6 +63,7 @@ func TestFindOrCreateOIDCUserProvisionsFirstUserAsAdmin(t *testing.T) {
 
 func TestFindOrCreateOIDCUserSecondIdentityIsRegularUser(t *testing.T) {
 	s := newTestOIDCStore(t)
+	seedAdmin(t, s, "admin")
 	now := time.Now()
 
 	if _, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", now); err != nil {
@@ -60,6 +83,7 @@ func TestFindOrCreateOIDCUserSecondIdentityIsRegularUser(t *testing.T) {
 
 func TestFindOrCreateOIDCUserReusesExistingIdentity(t *testing.T) {
 	s := newTestOIDCStore(t)
+	seedAdmin(t, s, "admin")
 	now := time.Now()
 
 	first, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", now)
@@ -81,8 +105,8 @@ func TestFindOrCreateOIDCUserReusesExistingIdentity(t *testing.T) {
 	if !second.LastLogin.Equal(later) {
 		t.Errorf("LastLogin = %v, want %v (repeat login should update it)", second.LastLogin, later)
 	}
-	if s.Count() != 1 {
-		t.Errorf("Count() = %d, want 1 -- a repeat login must not create a second account", s.Count())
+	if s.Count() != 2 {
+		t.Errorf("Count() = %d, want 2 (the admin and alice) -- a repeat login must not create another account", s.Count())
 	}
 }
 
@@ -145,6 +169,7 @@ func TestFindOrCreateOIDCUserSyntheticUsernameIsStableAcrossRetries(t *testing.T
 
 func TestFindOrCreateOIDCUserEmptyHintGetsSyntheticUsername(t *testing.T) {
 	s := newTestOIDCStore(t)
+	seedAdmin(t, s, "admin")
 	u, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "", time.Now())
 	if err != nil {
 		t.Fatalf("FindOrCreateOIDCUser: %v", err)
@@ -192,6 +217,7 @@ func TestFindOrCreateOIDCUserRefusesWhenNotPersisted(t *testing.T) {
 // distinguish "this username is SSO-only" purely from response time.
 func TestOIDCOnlyUserPasswordHashIsUnmatchableNotEmpty(t *testing.T) {
 	s := newTestOIDCStore(t)
+	seedAdmin(t, s, "admin")
 	now := time.Now()
 	u, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "sso-only", now)
 	if err != nil {
@@ -217,6 +243,7 @@ func TestOIDCOnlyUserPasswordHashIsUnmatchableNotEmpty(t *testing.T) {
 
 func TestByOIDCIdentityFindsProvisionedUser(t *testing.T) {
 	s := newTestOIDCStore(t)
+	seedAdmin(t, s, "admin")
 	now := time.Now()
 	created, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", now)
 	if err != nil {
@@ -305,6 +332,7 @@ func TestOIDCIdentityPersistsAndReloadsAcrossStoreOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	seedAdmin(t, s1, "admin")
 	now := time.Now()
 	created, _, err := s1.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", now)
 	if err != nil {
@@ -331,10 +359,14 @@ func TestOIDCIdentityPersistsAndReloadsAcrossStoreOpen(t *testing.T) {
 // retried login would silently mint a second account for the same
 // identity.
 func TestFindOrCreateOIDCUserRollsBackOnPersistFailure(t *testing.T) {
-	s, err := OpenWithBackend(failingSaveBackend{})
+	// One save: the admin's. An empty store refuses SSO provisioning
+	// before it tries to save anything (#1415), so the failing save has
+	// to land on a store that already holds its admin.
+	s, err := OpenWithBackend(&saveBudgetBackend{left: 1})
 	if err != nil {
 		t.Fatalf("OpenWithBackend: %v", err)
 	}
+	seedAdmin(t, s, "admin")
 
 	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", time.Now())
 	if err == nil {
@@ -346,8 +378,8 @@ func TestFindOrCreateOIDCUserRollsBackOnPersistFailure(t *testing.T) {
 	if u != nil {
 		t.Errorf("returned user = %+v, want nil after a failed persist", u)
 	}
-	if s.Count() != 0 {
-		t.Errorf("Count() = %d after a failed persist, want 0 -- the account must not exist in memory either", s.Count())
+	if s.Count() != 1 {
+		t.Errorf("Count() = %d after a failed persist, want 1 (the admin) -- the account must not exist in memory either", s.Count())
 	}
 	if _, ok := s.ByOIDCIdentity("https://idp.example", "sub-1"); ok {
 		t.Error("the identity index still resolves an account that was never durably created")

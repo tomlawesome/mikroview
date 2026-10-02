@@ -1468,7 +1468,7 @@ MikroView's own server output (not event data -- see `store.retention`
 above) is leveled and colorized, one line per entry:
 
 ```
-18:43:44 INFO  auth        │ no decision made yet -- showing the first-run choice screen
+18:43:44 INFO  auth        │ 1 account(s) registered -- authentication is active
 18:43:45 WARN  flags       │ permission denied opening flags.json -- continuing in-memory-only
 18:43:46 ERROR syslog-tls  │ listen tcp :6514: bind: address already in use
 ```
@@ -3615,8 +3615,9 @@ The first time MikroView loads with no accounts and no prior decision,
 it shows a one-time choice screen instead of the live view: **create
 the admin account**. That is the only option -- running without
 authentication was removed, and creating an account is the floor. It is
-a username and a password; the username can't be an email address, and
-SSO is never offered in its place. What happens straight afterwards
+a username and a password, plus the **setup code** from MikroView's own
+log (below); the username can't be an email address, and SSO is never
+offered in its place. What happens straight afterwards
 depends on whether your OIDC details are already in the config file --
 see [SSO is additive: keep a local
 admin](#sso-is-additive-keep-a-local-admin). See
@@ -3672,9 +3673,67 @@ auth:
   `storePath`, this really is optional: a deployment that never creates
   a token doesn't need it.
 
+### The setup code
+
+Creating the first account needs a one-time **setup code** that
+MikroView prints to its own log when it starts with no accounts (#1415).
+Knowing MikroView's address is not enough to become its admin: you also
+need to be able to read its log, which means access to the machine or
+container it runs on. It is one warning line from the `auth` component:
+
+```
+18:43:44 WARN  auth        │ no account exists yet -- create the first admin with setup code ABCD-EFGH-JKLM-NPQR (valid until an account exists or this process restarts)
+```
+
+For a container started by `install.sh` (named `mikroview` unless you
+set `MIKROVIEW_CONTAINER`):
+
+```sh
+docker logs mikroview | grep 'setup code'
+```
+
+With the bundled `deploy/docker-compose.yml`, from the directory
+holding it:
+
+```sh
+docker compose logs mikroview | grep 'setup code'
+```
+
+Running the binary directly, it is on standard output. Type the code
+into the create-account screen -- with or without the dashes, in either
+case.
+
+- **It works once.** As soon as any account exists the code stops
+  working, and the screen goes away.
+- **It lasts until MikroView restarts.** The code is held in memory
+  only, never written to disk, and MikroView never prints it again. Lost
+  it? Restart MikroView and read the new one -- the old one is dead.
+- **Wrong guesses count against the sign-in limit.** Guesses come from
+  the same per-address budget as sign-in attempts, so after a handful
+  the address has to wait before trying again, and each wrong code puts
+  a warning in the log naming the address it came from.
+- **It needs `log.level` at `warn` or below** (the default is `info`).
+  At `error` the line is not printed, and nobody can create the first
+  account until you lower it and restart.
+- **SSO can't create the first account.** While no account exists the
+  SSO sign-in routes answer "setup required"; create the local admin
+  with the code first, then connect SSO -- see [SSO is additive: keep a
+  local admin](#sso-is-additive-keep-a-local-admin).
+
+**A setup code when you weren't expecting one means MikroView has no
+accounts.** On a deployment that already had them, that is not a fresh
+install: a deleted or emptied accounts file, a wrong `auth.storePath`
+(or a volume that didn't mount, so the default path is empty), a
+Postgres DSN pointing at the wrong database, or a restore that left the
+accounts out. Don't create a new admin over it -- stop MikroView, find
+out where the accounts went, put them back (from a [backup](#backing-up-and-restoring)
+if you need to), and restart. The code only matters to someone who can
+read the log; it does not open anything by itself.
+
 **Once you create the account**, every request except `GET /api/healthz`
 and the login/session endpoints requires a valid session, permanently,
-from then on. Whoever completes the form becomes the admin.
+from then on. Whoever completes the form, with the setup code, becomes
+the admin.
 
 **Until then, MikroView serves nothing else.** There is no "run it
 without a login" option. An earlier version had one, and it was removed:
@@ -4284,9 +4343,11 @@ already handles that step.
 
 What this means in practice:
 
-- **First run always creates a local admin**, with a username and a
-  password. MikroView never offers SSO instead of that, even when SSO
-  is configured — the local account is step one either way.
+- **First run always creates a local admin**, with a username, a
+  password and the [setup code](#the-setup-code) from MikroView's log.
+  MikroView never offers SSO instead of that, even when SSO is
+  configured — the local account is step one either way, and SSO
+  sign-in is refused until it exists.
 - **Then one of two things happens.** If your OIDC details are already
   in the config file, MikroView sends you to your provider to sign in,
   and connects the identity you sign in with to the admin account you
@@ -4350,9 +4411,11 @@ The reason is that MikroView's OIDC support rests on the issuer URL
 issuer's own signing keys and your client ID, so pointing `issuerUrl` at
 a directory you run means only accounts in that directory can sign in.
 That isn't true of a public provider — every Google account on earth
-produces a valid token against `accounts.google.com` — and because the
-first account to register becomes an admin, such a deployment would hand
-admin to whoever reached the login page first.
+produces a valid token against `accounts.google.com` — so such a
+deployment would let anyone with an account there sign in. (SSO never
+creates the admin: the first account is a local one made with the
+[setup code](#the-setup-code). Before that rule, a public provider
+would have handed admin to whoever reached the login page first.)
 
 A safe configuration for a public provider is possible (pin a claim
 identifying the organisation), and MikroView deliberately does not offer
@@ -4419,8 +4482,9 @@ inherit a different MikroView account. A first-ever login via SSO
 just-in-time creates a local account (no pre-registration step), using
 the ID token's `preferred_username`/`email` claim as a display name
 only if it's free; otherwise a stable synthetic username is generated.
-The very first account overall (local or SSO, whichever happens first)
-becomes admin; every account after that is a regular user.
+Every account SSO creates is a regular user. SSO never creates the very
+first account: until the local admin exists (made with the [setup
+code](#the-setup-code)), SSO sign-in is refused.
 
 **Security**: only asymmetric-signed ID tokens are ever accepted
 (RS256/ES256/PS256) -- HS256 and `none` are rejected outright,
@@ -5154,7 +5218,7 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/suggestions/{id}/unhide` | user tier: return a hidden suggestion to undecided. Widened from admin by #653 |
 | `POST /api/suggestions/reset` | user tier, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body. Widened from admin by #653; the confirm body, not the role gate, is the safeguard against an accidental call |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
-| `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
+| `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist. Body `{username, password, setupCode}`; `setupCode` is the one-time code from the server's log ([The setup code](#the-setup-code)). 401 for a wrong or missing code, 429 once the address has spent the sign-in limit, 409 once an account exists |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |

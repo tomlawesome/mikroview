@@ -675,7 +675,7 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	// account at each of the other two roles through the store
 	// (self-registration is closed by then).
 	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register",
-		credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+		setupRequest(t, s, "admin", "password123")).Body.Close()
 	if _, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now()); err != nil {
 		t.Fatal(err)
 	}

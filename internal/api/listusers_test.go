@@ -20,6 +20,11 @@ import (
 // row reading the blanked copy instead of the live record shows up.
 func TestListUsersResponseIsUnchangedByTheBatchedRead(t *testing.T) {
 	s, _ := newTestServer(t)
+	// SSO never provisions the first account (#1415), so the admin
+	// comes first, as in a real deployment.
+	if _, err := s.Auth.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now()
 	var ids []string
 	for _, name := range []string{"bilbo", "frodo", "sam"} {

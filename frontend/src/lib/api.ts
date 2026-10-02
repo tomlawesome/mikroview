@@ -943,8 +943,12 @@ export async function fetchAuthSession(): Promise<AuthSession> {
 // register/login return the error message text on failure (shown
 // directly in the form) rather than throwing -- a wrong password is an
 // expected, common outcome for these two calls, not an exceptional one.
-export async function register(username: string, password: string): Promise<string | null> {
-  const res = await postJSON('/api/auth/register', { username, password })
+//
+// #1415: the first admin also needs the one-time setup code the server
+// printed in its log. A wrong one is a 401 whose plain body is the
+// screen's own copy, shown unchanged like every other refusal here.
+export async function register(username: string, password: string, setupCode: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/register', { username, password, setupCode })
   if (res.ok) return null
   return (await res.text()) || `register: ${res.status}`
 }
