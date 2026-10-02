@@ -33,9 +33,24 @@ vi.mock('../../lib/api', async (orig) => ({
   fetchRouterNat: vi.fn(),
   fetchWatchlistEntries: vi.fn(),
   mintEnrolment: vi.fn(),
+  fetchBlocklistBuilder: vi.fn(),
+  fetchBlocklistCommands: vi.fn(),
+  markSetupStep: vi.fn(),
+  createToken: vi.fn(),
 }))
 
-import { fetchDevices, fetchRefusedSenders, fetchRouterBackups, fetchSetupStatus } from '../../lib/api'
+import {
+  createToken,
+  fetchBlocklistBuilder,
+  fetchBlocklistCommands,
+  fetchDevices,
+  fetchRefusedSenders,
+  fetchRouterBackups,
+  fetchSetupStatus,
+  markSetupStep,
+  type BlocklistBuilder,
+} from '../../lib/api'
+import { blocklistState } from '../../lib/blocklist.svelte'
 import { wizardState } from '../../lib/wizard.svelte'
 import { wizardRun } from '../../lib/wizardRun.svelte'
 import { wizardJourney } from '../../lib/wizardJourney.svelte'
@@ -389,5 +404,166 @@ describe('Wizard: the full-screen shell', () => {
     await tick()
     expect(document.querySelector('.page.wiz.live')).not.toBeNull()
     wizardJourney.end()
+  })
+})
+
+// #1360's first-run tail (round 2, tail.html; owner, 2a).
+describe('Wizard: the first-run tail', () => {
+  const sending = () =>
+    status({
+      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.168.13.1', events: 69, decodedActions: 0 }],
+    })
+
+  function builder(held: boolean): BlocklistBuilder {
+    return {
+      device: 'rb5009',
+      deviceName: 'rb5009',
+      devices: [{ id: 'rb5009', name: 'rb5009' }],
+      routerosVersion: '7.24.4',
+      reportedAt: '2026-09-27T14:23:00Z',
+      reviewedVersion: '7.24.4',
+      minimumVersion: '7.18',
+      standing: 'ok',
+      pushCurrent: held,
+      catalogueDate: '2026-10-01',
+      catalogue: [
+        { key: 'spamhaus', name: 'Spamhaus DROP', short: 'Spamhaus DROP', url: 'u', terms: 't', default: true, defaultDirection: 'from', ipv6: true, refresh: [{ value: 'daily' }], refreshDefault: 'daily', facts: 'f', guide: 'g', flaggedByMikroView: true, startTime: '04:17' },
+        { key: 'et', name: 'Emerging Threats compromised IPs', short: 'Emerging Threats', url: 'u', terms: 't', default: true, defaultDirection: 'both', ipv6: false, refresh: [{ value: 'daily' }], refreshDefault: 'daily', facts: 'f', guide: 'g', flaggedByMikroView: true, startTime: '04:31' },
+      ],
+      leftOut: [],
+      lists: [
+        held
+          ? { key: 'spamhaus', state: 'held', count: 1692, count6: 0, loadedAt: '2026-09-27 14:07:10', firedToday: 3, flags24h: 0, undo: 'u' }
+          : { key: 'spamhaus', state: 'off', count: 0, count6: 0, firedToday: null, flags24h: null, undo: 'u' },
+        { key: 'et', state: 'off', count: 0, count6: 0, firedToday: null, flags24h: null, undo: 'u' },
+      ],
+      ownDroplist: { held: 0, total: 0 },
+      undoAll: '/ip firewall raw remove [find comment~"^mikroview blocklist: "]',
+      disableAll: 'd',
+    }
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchSetupStatus).mockResolvedValue(sending())
+    vi.mocked(fetchDevices).mockResolvedValue([device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })])
+    vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    vi.mocked(fetchRouterBackups).mockResolvedValue({ enabled: true, keyUnreadable: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, lock: 'open' } as never)
+    vi.mocked(fetchBlocklistBuilder).mockResolvedValue(builder(false))
+    vi.mocked(fetchBlocklistCommands).mockResolvedValue({ parts: [{ ordinal: 1, ink: 'push', title: 'The push', note: [], shown: [], commands: 'x' }], copyText: 'x' })
+    vi.mocked(markSetupStep).mockResolvedValue({ step: 8, outcome: 'skipped', actor: 'admin', at: '2026-09-27T14:10:00Z' } as never)
+    vi.mocked(createToken).mockResolvedValue({ value: 'tok' } as never)
+    wizardState.reset()
+    wizardRun.reset()
+    blocklistState.reset()
+    wizardState.status = sending()
+    wizardState.devices = [device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })]
+    wizardState.ledgerDevice = 'rb5009'
+    wizardState.open = true
+  })
+
+  afterEach(() => {
+    wizardState.reset()
+    wizardRun.reset()
+    blocklistState.reset()
+    vi.clearAllMocks()
+  })
+
+  async function onTheLedger() {
+    render(Wizard)
+    await waitFor(() => expect(wizardRun.stage).toBe('done'))
+    await waitFor(() => expect(blocklistState.data).not.toBeNull())
+    await tick()
+  }
+
+  it('offers a sixth row, a ledger row with Set it up, and a button beside Finish on the launch walk', async () => {
+    await onTheLedger()
+    expect(rows().map((b) => b.querySelector('.step-title')?.textContent)).toEqual([...TITLES, 'Block known-bad addresses'])
+    const tail = row('Block known-bad addresses')
+    expect(tail.classList.contains('offer')).toBe(true)
+    expect(tail.querySelector('.step-n')?.textContent).toBe('+')
+    expect(screen.getByText(/not blocked yet — rb5009 lets them in, and MikroView flags them from Spamhaus DROP and Emerging Threats ·/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Set it up' })).toBeTruthy()
+    const foot = Array.from(document.querySelectorAll<HTMLButtonElement>('.foot button')).map((b) => [b.textContent?.trim(), b.classList.contains('primary')])
+    expect(foot).toEqual([
+      ['Add another router', false],
+      ['Block known-bad addresses', false],
+      ['Finish', true],
+    ])
+    // An offer nobody took mints nothing.
+    expect(createToken).not.toHaveBeenCalled()
+  })
+
+  it('does not offer it on Add another router or Re-enrol…', async () => {
+    wizardState.openAddRouter()
+    const { unmount } = render(Wizard)
+    await tick()
+    expect(rows().length).toBe(5)
+    unmount()
+    wizardRun.reset()
+    wizardState.openReEnrol('rb5009')
+    render(Wizard)
+    await tick()
+    expect(wizardRun.tailOffered).toBe(false)
+    expect(fetchBlocklistBuilder).not.toHaveBeenCalled()
+  })
+
+  it('opens the builder in the wizard’s frame, with Back · Not now · Copy · Finish', async () => {
+    await onTheLedger()
+    await fireEvent.click(screen.getByRole('button', { name: 'Set it up' }))
+    await waitFor(() => expect(document.querySelector('.body.wide')).not.toBeNull())
+    expect(screen.getByText('Block known-bad addresses on rb5009.')).toBeTruthy()
+    expect(row('Block known-bad addresses').getAttribute('aria-current')).toBe('step')
+    await waitFor(() => expect(document.querySelector('.foot button.primary')?.textContent?.trim()).toBe('Copy — 2 lists · 1 part'))
+    expect(Array.from(document.querySelectorAll('.foot button')).map((b) => b.textContent?.trim())).toEqual(['Back', 'Not now', 'Copy — 2 lists · 1 part', 'Finish'])
+    expect((document.querySelector('.foot button.primary') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('keeps Where setup stands clickable on the stage, and it goes back', async () => {
+    await onTheLedger()
+    await fireEvent.click(screen.getByRole('button', { name: 'Set it up' }))
+    await waitFor(() => expect(wizardRun.stage).toBe('block'))
+    const stand = row('Where setup stands') as HTMLButtonElement
+    expect(stand.disabled).toBe(false)
+    expect(stand.classList.contains('locked')).toBe(false)
+    expect(stand.querySelector('.step-n')?.textContent).toBe('✓')
+    await fireEvent.click(stand)
+    expect(wizardRun.stage).toBe('done')
+  })
+
+  it('records Not now under record 8 and reads the row as set aside', async () => {
+    await onTheLedger()
+    await fireEvent.click(screen.getByRole('button', { name: 'Block known-bad addresses' }))
+    await waitFor(() => expect(wizardRun.stage).toBe('block'))
+    const notNow = Array.from(document.querySelectorAll<HTMLButtonElement>('.foot button')).find((b) => b.textContent?.trim() === 'Not now')
+    await fireEvent.click(notNow as HTMLButtonElement)
+    await waitFor(() => expect(wizardRun.stage).toBe('done'))
+    expect(markSetupStep).toHaveBeenCalledWith(8, 'skipped', 'not now · Settings ▸ drop list')
+    expect(screen.getAllByText('not now · Settings ▸ drop list').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Set it up' })).toBeNull()
+  })
+
+  it('turns the row into a proof with its receipt once the push holds a list', async () => {
+    vi.mocked(fetchBlocklistBuilder).mockResolvedValue(builder(true))
+    await onTheLedger()
+    expect(screen.getByText('Known-bad addresses dropped')).toBeTruthy()
+    expect(screen.getByText(/Spamhaus DROP 1,692 held · loaded 14:07 · confirmed by the push \d\d:\d\d · rules fired 3/)).toBeTruthy()
+    expect(row('Block known-bad addresses').classList.contains('done')).toBe(true)
+  })
+
+  it('shows no sixth row on Run setup… once record 8 holds a mark or a witness', async () => {
+    for (const st of [
+      { ...sending(), marks: [{ step: 8, outcome: 'skipped' as const, actor: 'admin', at: '2026-09-27T14:10:00Z' }] },
+      { ...sending(), witnesses: [{ step: 8, receipt: 'Spamhaus DROP 1,692 held · on rb5009', at: '2026-09-27T14:23:00Z' }] },
+    ]) {
+      vi.mocked(fetchSetupStatus).mockResolvedValue(st)
+      wizardState.status = st
+      const { unmount } = render(Wizard)
+      await waitFor(() => expect(wizardRun.stage).toBe('done'))
+      await tick()
+      expect(rows().length).toBe(5)
+      expect(screen.queryByRole('button', { name: 'Set it up' })).toBeNull()
+      unmount()
+    }
   })
 })

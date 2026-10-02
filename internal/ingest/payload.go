@@ -63,6 +63,15 @@ const (
 	// rather than inferred from traffic. See IPServiceEntry's own doc
 	// comment for what each row carries and why.
 	KindIPService Kind = "ip-service"
+	// KindRawRule is issue #1360's: /ip/firewall/raw and
+	// /ipv6/firewall/raw in one page, where the blocklist builder's drop
+	// rules sit. See RawRule.
+	KindRawRule Kind = "raw-rule"
+	// KindAddressListCount is issue #1360's other kind: how many entries
+	// each of the blocklist builder's address lists (mv-bl-*) holds, sent
+	// instead of the entries, which would not fit a push. See
+	// AddressListCount.
+	KindAddressListCount Kind = "address-list-count"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -172,19 +181,20 @@ type FilterRule struct {
 	// hit counter whether or not the rule logs, so the Log every rule
 	// helper can show "fired 41,000 times in the last day" beside a
 	// tick-box before any logging is switched on -- cost, from the
-	// router's own evidence, ahead of the decision to watch. Both are
-	// RouterOSInt (not RouterOSInt64): :serialize to=json emits them as
-	// the same float shape every other RouterOS integer here uses, and
-	// this schema follows FilterRule's own precedent of a plain int32
-	// range rather than WireguardPeer.RX/TX's wider type -- a fixed
-	// contract decision (#435), not an oversight; a counter that
-	// genuinely outgrows int32 is a rule worth flagging on its own
-	// terms; refusing the push. A push made before this field existed
-	// omits it, which decodes as 0 -- the same "absent means not yet
-	// reported" reading Disabled documents above, not "fired zero
-	// times".
-	Packets RouterOSInt `json:"packets"`
-	Bytes   RouterOSInt `json:"bytes"`
+	// router's own evidence, ahead of the decision to watch. A push made
+	// before this field existed omits it, which decodes as 0 -- the same
+	// "absent means not yet reported" reading Disabled documents above,
+	// not "fired zero times".
+	//
+	// Both are RouterOSInt64, WireguardPeer.RX/TX's type, since #1409.
+	// #435 chose a plain int32 range, but no push ever carried a counter
+	// to test that against: the script read them off `print as-value`,
+	// which leaves them out on every RouterOS release checked, so every
+	// push sent null. The script now reads them with `get`, and a busy
+	// rule passes 2 GiB without doing anything unusual -- int32 would
+	// refuse that router's whole filter page.
+	Packets RouterOSInt64 `json:"packets"`
+	Bytes   RouterOSInt64 `json:"bytes"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule.
@@ -470,6 +480,12 @@ const (
 // configurable services. On a real router the *dynamic* four never
 // carry an address property at all -- see IsDynamic.
 //
+// RouterOS 7.24 renamed address to available-from (#1411; 7.18.2 to
+// 7.23.3 say address, 7.24 and 7.24.4 say available-from, each checked
+// on a real CHR). The push sends both, as "address" and
+// "availableFrom", and UnmarshalJSON puts whichever the router filled
+// into Address, so nothing downstream knows which release it was.
+//
 // Field names are RouterOS 7's documented /ip/service properties (name,
 // port, address, certificate, disabled, dynamic), confirmed against a
 // live CHR 7.23.3 router (#1405). tls-version and vrf exist on a real
@@ -517,10 +533,20 @@ type IPServiceEntry struct {
 // the whole record and no longer enforces that option itself.
 func (e *IPServiceEntry) UnmarshalJSON(data []byte) error {
 	type ipServiceEntryAlias IPServiceEntry
+	// availableFrom is 7.24's name for address (#1411). It lands in
+	// Address when address itself is empty -- a router has one or the
+	// other, never both.
+	wire := struct {
+		*ipServiceEntryAlias
+		AvailableFrom RouterOSList `json:"availableFrom"`
+	}{ipServiceEntryAlias: (*ipServiceEntryAlias)(e)}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode((*ipServiceEntryAlias)(e)); err != nil {
+	if err := dec.Decode(&wire); err != nil {
 		return err
+	}
+	if len(e.Address) == 0 {
+		e.Address = wire.AvailableFrom
 	}
 
 	var probe map[string]json.RawMessage
@@ -530,7 +556,9 @@ func (e *IPServiceEntry) UnmarshalJSON(data []byte) error {
 	if _, ok := probe["dynamic"]; !ok {
 		e.dynamicKeyAbsent = true
 	}
-	if _, ok := probe["address"]; !ok {
+	_, hasAddress := probe["address"]
+	_, hasAvailableFrom := probe["availableFrom"]
+	if !hasAddress && !hasAvailableFrom {
 		e.addressKeyAbsent = true
 	}
 
@@ -588,6 +616,65 @@ func (f *RouterOSFlag) UnmarshalJSON(data []byte) error {
 		*f = "no"
 	}
 	return nil
+}
+
+// RawRule mirrors one /ip/firewall/raw or /ipv6/firewall/raw rule
+// (#1360). The blocklist builder writes its drop rules here -- raw
+// prerouting, placed first (owner, answer 11a) -- and the ledger reads
+// their counters to say how often each fired. Field types are
+// FilterRule's, for the same properties on a sibling menu; what is new
+// is Family, which menu the rule came from, and DstAddressList, the list
+// a "to" rule matches on.
+//
+// Ordinal is the position within its own family's table: an IPv4 rule
+// and an IPv6 rule can both be 0.
+//
+// Shapes confirmed on a real CHR (TestDecodeRealRawRulePush): an unset
+// property arrives as null rather than absent -- an enabled rule's
+// disabled, an unlogged rule's log and log-prefix, a "from" rule's
+// dst-address-list -- and decodes to the zero value. Packets and Bytes
+// are read with `get` by the push script, since `print as-value` leaves
+// them out (internal/routeros blockSpecs["raw-rule"]), and are 64-bit
+// for the same reason FilterRule's are (#1409).
+type RawRule struct {
+	Ordinal        RouterOSInt   `json:"ordinal"`
+	Family         string        `json:"family"`
+	Comment        string        `json:"comment"`
+	Chain          string        `json:"chain"`
+	Action         string        `json:"action"`
+	SrcAddressList string        `json:"srcAddressList"`
+	DstAddressList string        `json:"dstAddressList"`
+	LogPrefix      string        `json:"logPrefix"`
+	Log            bool          `json:"log"`
+	Disabled       bool          `json:"disabled"`
+	Packets        RouterOSInt64 `json:"packets"`
+	Bytes          RouterOSInt64 `json:"bytes"`
+}
+
+// Address families a RawRule or AddressListCount may name: the RouterOS
+// menu roots the push script reads, /ip and /ipv6.
+const (
+	FamilyIP   = "ip"
+	FamilyIPv6 = "ipv6"
+)
+
+// AddressListCount is how many entries one of the blocklist builder's
+// address lists holds on one family (#1360) -- the push sends a count
+// for every mv-bl-* name the catalogue knows, on both families, rather
+// than the entries: 15,000 of them would overflow the ~64 KiB body
+// /tool fetch can POST. A name the router does not hold arrives with
+// Count 0.
+//
+// LoadedAt is the router's own creation-time for the list's first entry,
+// in the router's local time and RouterOS's own format ("2026-10-01
+// 12:24:44" on 7.18 and later), or "" when the list is empty. Kept as
+// the router wrote it: the router's clock and timezone are its own, and
+// reading it as an instant is the ledger's call, not the schema's.
+type AddressListCount struct {
+	List     string      `json:"list"`
+	Family   string      `json:"family"`
+	Count    RouterOSInt `json:"count"`
+	LoadedAt string      `json:"loadedAt"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may

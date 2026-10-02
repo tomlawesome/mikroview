@@ -6,6 +6,13 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-journey: Next at Paste is replaced before reachFinish can click it
+
+- 2026-10-02 · 4e365d14 (feature/1360-blocklist-builder, !1130) · pipeline 1948, `gate:scenarios 3/4` (job 29290) · `reachFinish` timed out clicking a disabled Next that was then detached. Likely a race already on dev: Run setup… places the walk on the sign-in ledger (Next shown), then Wizard.svelte re-places it on a fresh read (#1404) straight onto Finish, after the scenario has already chosen the Next route. Shard 3/4 passed 27/27 on 0a189b34 locally (`scripts/gate-local.sh --shard 3/4`).
+
+## live scenarios: the second-factor step refuses a fresh code in every shard at once
+
+- 2026-10-01 · 6ecdc169 (fix/1386-journey-review, !1129) · pipeline 1932, `gate:scenarios 1/4`–`4/4` (jobs 28871–28874) · `the second-factor step refused a fresh code from MV_TOTP_SECRET` in all four shards, each at its first sign-in. The commit only reworded DESIGN.md over 070cb2ee, which passed every shard in pipeline 1928; the four retried jobs (28992–28995) passed on the same commit. Four shards failing together points at the host (clock or load) rather than any one scenario.
 ## live-nav-bottom-bar: the docked handle renders beside the bottom bar
 
 - 2026-10-01 · b30f3aec (chore/deps-2026-10-01, !1128) · pipeline 1901, `gate:scenarios 3/4` (job 28163) · `the docked handle does not render either -- the bar replaces both` failed; the rest of the scenario passed. The branch changes only jsdom (unit tests) and GitHub Actions pins, nothing a real browser loads; dev passed it in pipeline 1898 and the retried job 28310 passed on the same commit.
@@ -154,6 +161,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-city-river: wg0's bridge chip is not there on first read
 
 - 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.
+- 2026-10-01 · ac7de401 (dev, after merging !1127) · pipeline 1927, `gate:scenarios 1/4` (job 28727) · same check, same empty chip list. !1127 changes the upgrade-reload path and sign-out handling, nothing the city's chips read; !1127's own pipeline 1919 passed this scenario on 38fb2389. Second sighting.
 
 ## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
 

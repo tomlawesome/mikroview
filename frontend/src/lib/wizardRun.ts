@@ -13,7 +13,10 @@
 // router (the AGENTS.md invariant). Evidence is read; it is never
 // fetched from this module.
 
-export type StepId = 'router' | 'pass' | 'paste' | 'tune' | 'stand'
+// 'block' is the first-run tail (#1360): an offer after the five steps,
+// not a step of them -- STEPS stays five, and the rail adds the tail's
+// row only when Evidence.tail offers it.
+export type StepId = 'router' | 'pass' | 'paste' | 'tune' | 'stand' | 'block'
 
 export const STEPS: readonly { id: StepId; title: string }[] = [
   { id: 'router', title: 'The router' },
@@ -27,7 +30,9 @@ export const STEPS: readonly { id: StepId; title: string }[] = [
 // the router form, q === 4 the password); 'paste' is the block shown
 // and not yet copied; 'watch' is the router's turn; 'tune' the rule
 // list; 'done' the ledger.
-export type Stage = 'ask' | 'paste' | 'watch' | 'tune' | 'done'
+// 'block' is the tail's stage: the blocklist builder's body in the
+// wizard's frame (round 2's tail.html, ?scene=build).
+export type Stage = 'ask' | 'paste' | 'watch' | 'tune' | 'done' | 'block'
 
 // What this run has answered or done. Everything the operator can
 // change without the server knowing.
@@ -68,7 +73,26 @@ export interface Evidence {
   // The strip's boundaries once the push names them: lane ink ('' when
   // dark) and whether the boundary is watched.
   boundaries: { lane: string; watched: boolean; dark: boolean }[]
+  // The first-run tail (#1360): whether this walk offers it, and what
+  // the router holds of the lists once the paste has landed.
+  tail: Tail
 }
+
+// Tail is the first-run tail's standing (round 2, "The first-run tail"):
+// 'none' off this walk -- not a first run, or record 8 already holds a
+// mark or a witness; 'offer' until it is taken or set aside; 'skipped'
+// after this walk's Not now; 'done' once the router's push holds a list.
+export interface Tail {
+  state: 'none' | 'offer' | 'skipped' | 'done'
+  lists: number
+  // The rail's receipt and the ledger's, once done.
+  rail: string
+  ledger: string
+  // The lists MikroView flags from, as the offered row names them.
+  flaggedFrom: string
+}
+
+export const NO_TAIL: Tail = { state: 'none', lists: 0, rail: '', ledger: '', flaggedFrom: '' }
 
 export const NO_EVIDENCE: Evidence = {
   cert: '',
@@ -83,6 +107,7 @@ export const NO_EVIDENCE: Evidence = {
   tagged: false,
   tokenUntil: '',
   boundaries: [],
+  tail: NO_TAIL,
 }
 
 export function freshAnswers(): RunAnswers {
@@ -152,12 +177,13 @@ export function stageOf(s: RunAnswers): StepId {
   if (s.stage === 'ask') return s.q === 4 ? 'pass' : 'router'
   if (s.stage === 'watch') return 'paste'
   if (s.stage === 'done') return 'stand'
+  if (s.stage === 'block') return 'block'
   return s.stage
 }
 
 // Which steps are reached: everything up to the furthest the run has got.
 export function reachedIdx(s: RunAnswers): number {
-  if (s.stage === 'done') return 4
+  if (s.stage === 'done' || s.stage === 'block') return 4
   if (s.stage === 'tune') return 3
   if (s.stage === 'paste' || s.stage === 'watch') return 2
   return s.q === 4 ? 1 : 0
@@ -173,7 +199,7 @@ export function hms(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour12: false })
 }
 
-export type RowClass = '' | 'done' | 'chosen'
+export type RowClass = '' | 'done' | 'chosen' | 'offer'
 
 // The ink a row's receipt wears: the ink of what it records (DESIGN.md,
 // "One ink per thing"). '' is the rail's own muted colour.
@@ -231,7 +257,7 @@ export function rowState(s: RunAnswers, ev: Evidence, id: StepId): RowState {
       } else a.receipt = 'proposed from the push'
       break
     case 'stand':
-      a.cls = s.stage === 'done' ? 'done' : ''
+      a.cls = s.stage === 'done' || s.stage === 'block' ? 'done' : ''
       if (a.cls === 'done') a.ink = 'logs'
       break
   }
@@ -256,9 +282,12 @@ export interface RailRow {
 export function railRows(s: RunAnswers, ev: Evidence): RailRow[] {
   const cur = stageOf(s)
   const reached = reachedIdx(s)
-  return STEPS.map((d, i) => {
+  const rows: RailRow[] = STEPS.map((d, i) => {
     const locked = i > reached
-    const can = !locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done'
+    // On the tail's stage Where setup stands is where Back goes: a live
+    // tick, clickable, not a dim step (built review, 2026-10-02).
+    const back = s.stage === 'block' && d.id === 'stand'
+    const can = back || (!locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done')
     return {
       id: d.id,
       title: d.title,
@@ -269,11 +298,35 @@ export function railRows(s: RunAnswers, ev: Evidence): RailRow[] {
       can,
     }
   })
+  // The tail's row (round 2, tail.html's rail): a plus in a dashed ring,
+  // never locked -- an offer rather than a step -- until the push holds
+  // a list, then a proof like the others.
+  // It joins the rail at the ledger, the only place it opens from.
+  const t = ev.tail
+  if (t.state !== 'none' && (s.stage === 'done' || s.stage === 'block')) {
+    const done = t.state === 'done'
+    rows.push({
+      id: 'block',
+      title: 'Block known-bad addresses',
+      n: done ? '✓' : '+',
+      state: done
+        ? { cls: 'done', receipt: t.rail, ink: 'logs' }
+        : { cls: 'offer', receipt: t.state === 'skipped' ? 'not now · Settings ▸ drop list' : 'optional · first run only', ink: '' },
+      current: cur === 'block',
+      locked: false,
+      can: !done && (s.stage === 'done' || s.stage === 'block'),
+    })
+  }
+  return rows
 }
 
 // The footer, as renderFoot draws it: a left control, a hint, and the
 // right-hand controls, with Next's enabled state.
 export type FootAction =
+  | 'to-block'
+  | 'block-back'
+  | 'block-not-now'
+  | 'block-copy'
   | 'router-next'
   | 'back-router'
   | 'back-pass'
@@ -294,12 +347,30 @@ export interface FootButton {
 
 export interface FootSpec {
   left: FootButton | null
+  // leftMore follows left: the tail's stage draws Back and Not now
+  // together on the left of its hint.
+  leftMore?: FootButton[]
   hint: string
   right: FootButton[]
 }
 
-export function footSpec(s: RunAnswers, ev: Evidence): FootSpec {
+// copyLabel is the tail stage's Copy, as the builder counts its block
+// ("Copy — 2 lists · 8 parts"); canCopy is whether there is a block to
+// copy, bound as the page's own Copy is (the block's copy text, and a
+// list on), not read off the label.
+export function footSpec(s: RunAnswers, ev: Evidence, copyLabel = '', canCopy = false): FootSpec {
   const st = stageOf(s)
+  if (st === 'block') {
+    return {
+      left: { label: 'Back', action: 'block-back', primary: false, disabled: false },
+      leftMore: ev.tail.state === 'done' ? [] : [{ label: 'Not now', action: 'block-not-now', primary: false, disabled: false }],
+      hint: 'Not now leaves it in Settings ▸ drop list · Finish any time — the ledger keeps watching the router',
+      right: [
+        { label: copyLabel || 'Copy', action: 'block-copy', primary: true, disabled: !canCopy },
+        { label: 'Finish', action: 'finish', primary: false, disabled: false },
+      ],
+    }
+  }
   if (st === 'router') {
     const ok = routerDone(s)
     return {
@@ -340,10 +411,16 @@ export function footSpec(s: RunAnswers, ev: Evidence): FootSpec {
       ],
     }
   }
+  // The tail's offer beside Finish, on first run only; Finish stays the
+  // primary (owner, 2a).
+  const offer = ev.tail.state === 'offer'
   return {
     left: { label: 'Add another router', action: 'another', primary: false, disabled: false },
-    hint: '',
-    right: [{ label: 'Finish', action: 'finish', primary: true, disabled: false }],
+    hint: offer ? 'Optional, first run only — later it lives in Settings ▸ drop list' : '',
+    right: [
+      ...(offer ? [{ label: 'Block known-bad addresses', action: 'to-block' as const, primary: false, disabled: false }] : []),
+      { label: 'Finish', action: 'finish', primary: true, disabled: false },
+    ],
   }
 }
 
@@ -368,6 +445,7 @@ export function chipsFor(s: RunAnswers, ev: Evidence): Chip[] {
   }
   if (ev.backup) chips.push({ kind: 'backup', text: 'backup · 03:00' })
   if (ev.tagged) chips.push({ kind: 'rules', text: `${s.chosenCount} rules` })
+  if (ev.tail.state === 'done') chips.push({ kind: 'logs', text: `${ev.tail.lists} ${ev.tail.lists === 1 ? 'list' : 'lists'}` })
   return chips
 }
 
@@ -392,6 +470,7 @@ export function stripFor(ev: Evidence): StripTick[] {
 export function announce(rows: RailRow[]): string {
   const row = rows.find((r) => r.current)
   if (!row) return ''
+  if (row.id === 'block') return `${row.title} — ${row.state.receipt}`
   const n = row.id === 'stand' ? 'Where setup stands' : `Step ${row.n} of ${STEPS.length - 1}`
   const tail = row.state.receipt ? ` — ${row.state.receipt}` : ''
   return row.id === 'stand' ? `${n}${tail}` : `${n} — ${row.title}${tail}`
@@ -415,7 +494,7 @@ export function announce(rows: RailRow[]): string {
 export type TrackState = 'wait' | 'done' | 'skip' | 'alarm' | 'later'
 
 export interface TrackStation {
-  id: 'copy' | 'cert' | 'enrol' | 'push' | 'backup' | 'rules'
+  id: 'copy' | 'cert' | 'enrol' | 'push' | 'backup' | 'rules' | 'lists'
   lab: string
   st: string
   state: TrackState
@@ -486,6 +565,10 @@ export function trackStations(s: RunAnswers, ev: Evidence, copiedAt: string): Tr
       })
     }
   }
+  // The tail's station, once the push holds a list (tail.html's "2 lists").
+  if (ev.tail.state === 'done') {
+    stations.push({ id: 'lists', lab: `${ev.tail.lists} ${ev.tail.lists === 1 ? 'list' : 'lists'}`, st: ev.tail.rail, state: 'done' })
+  }
   return stations
 }
 
@@ -499,7 +582,7 @@ export function trackStations(s: RunAnswers, ev: Evidence, copiedAt: string): Tr
 // backup and rules are each either done with a receipt, or dashed and
 // struck with "not now · <consequence>" in the design's own words
 // (DESIGN.md, "✓ · Where setup stands").
-export type LedgerRowId = 'cert' | 'logs' | 'push' | 'backup' | 'tune'
+export type LedgerRowId = 'cert' | 'logs' | 'push' | 'backup' | 'tune' | 'block'
 
 export interface LedgerRow {
   done: boolean
@@ -512,6 +595,9 @@ export interface LedgerRow {
   // dashed, set-aside row is never offered Undo, since there is nothing
   // on the router to undo.
   u: LedgerRowId | ''
+  // offer marks the tail's row while it is still offered: neither a
+  // proof nor set aside, with Set it up where the others have Undo.
+  offer?: boolean
 }
 
 export function ledgerRows(s: RunAnswers, ev: Evidence): LedgerRow[] {
@@ -554,6 +640,23 @@ export function ledgerRows(s: RunAnswers, ev: Evidence): LedgerRow[] {
       const dark = ev.boundaries.filter((b) => b.dark).length
       rows.push({ done: false, t: 'Rules', r: `left dark · ${dark} boundaries log nothing`, ink: '', u: '' })
     }
+  }
+  // The first-run tail's row (round 2, tail.html): offered, set aside,
+  // or the proof once the router's push holds a list.
+  const t = ev.tail
+  if (t.state === 'offer') {
+    rows.push({
+      done: false,
+      offer: true,
+      t: 'Known-bad addresses',
+      r: `not blocked yet — ${s.name} lets them in${t.flaggedFrom ? `, and MikroView flags them from ${t.flaggedFrom}` : ''} · optional, and offered here on first run only`,
+      ink: '',
+      u: '',
+    })
+  } else if (t.state === 'skipped') {
+    rows.push({ done: false, t: 'Known-bad addresses', r: 'not now · Settings ▸ drop list', ink: '', u: '' })
+  } else if (t.state === 'done') {
+    rows.push({ done: true, t: 'Known-bad addresses dropped', r: t.ledger, ink: 'logs', u: 'block' })
   }
   return rows
 }

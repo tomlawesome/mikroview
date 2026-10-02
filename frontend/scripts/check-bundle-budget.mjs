@@ -27,7 +27,12 @@
 // 201,044 + ~15% is 230,000. Re-derived again on #1249 (2026-09-23),
 // which added the `qrcode` package for TOTP enrolment's QR code: the
 // bundle then measured 230,235 bytes gzipped (780,756 raw) -- already
-// over the old 230,000 gate -- and 230,235 + ~15% is 265,000.
+// over the old 230,000 gate -- and 230,235 + ~15% is 265,000. Raised
+// to 300,000 by the owner's decision on #1360 (2026-10-02): the
+// blocklist builder took the bundle to 265,556 bytes gzipped (897,943
+// raw), and the owner set a round figure rather than trim first --
+// ~13% headroom, in line with the ~15% used before. #1414 keeps the
+// trim open.
 //
 // Raise this only alongside a stated reason in the commit that does so,
 // and update docs/features.md's "UI" bullet (the shipped-bundle figure)
@@ -35,7 +40,7 @@
 // drift this check exists to close off. Do not "tidy" it down to match
 // whatever the bundle happens to measure today; that would turn the
 // very next legitimate feature PR into a spurious CI failure.
-const BUDGET_BYTES = 265_000
+const BUDGET_BYTES = 300_000
 
 import { readFileSync, existsSync, globSync } from 'node:fs'
 import { gzipSync, constants as zlibConstants } from 'node:zlib'

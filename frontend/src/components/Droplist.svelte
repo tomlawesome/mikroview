@@ -21,6 +21,7 @@
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { droplistNavState } from '../lib/droplistNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { blocklistState } from '../lib/blocklist.svelte'
   import {
     createDroplistEntry,
     deleteDroplistEntry,
@@ -42,6 +43,12 @@
      * rather than each control inferring the new state itself. */
     onrefresh: () => Promise<void>
   } = $props()
+
+  // The blocklist builder's door (#1360, BUILD.md part 8): one line,
+  // opening the page for this group's router -- the first that has
+  // reported its address lists, else the first the instance knows. The
+  // page carries its own router picker for the rest.
+  const blocklistDevice = $derived(resp.routers?.[0]?.device ?? appState.devices[0]?.id ?? '')
 
   const sortedEntries = $derived(
     [...resp.entries].sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime()),
@@ -299,6 +306,15 @@
         </button>
       </div>
       <button type="button" class="olink quiet" onclick={() => (justMinted = null)}>done</button>
+    </div>
+  {/if}
+
+  {#if blocklistDevice}
+    <div class="orow">
+      <span>lists</span>
+      <span class="ov">
+        <button type="button" class="olink" onclick={() => blocklistState.openFor(blocklistDevice)}>Block known-bad addresses…</button>
+      </span>
     </div>
   {/if}
 
