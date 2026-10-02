@@ -40,6 +40,10 @@ for script in scripts/live-*.sh; do
     # Needs a real RouterOS CHR booted alongside the instance. Run by
     # `make live-routeros-container`.
     scripts/live-routeros.sh) continue ;;
+    # Same: boots its own CHR at a RouterOS version it is given, and is
+    # run by hand and recorded (#1360). Run here with no version it
+    # prints its usage and exits 1, which failed gate:scripts on !1130.
+    scripts/live-blocklist-chr.sh) continue ;;
     # Probes driven by live-routeros.sh rather than standalone checks.
     scripts/live-routeros-step0.sh|scripts/live-rule-coverage-probe.sh) continue ;;
   esac
