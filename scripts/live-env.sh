@@ -13,6 +13,7 @@
 #
 # Usage:
 #   eval "$(scripts/live-env.sh up)"   # exports MV_URL, MV_USER, MV_PASS, MV_DIR
+#   MV_FIRST_RUN=1 scripts/live-env.sh up   # no account yet: the create-account screen
 #   scripts/live-env.sh syslog 200     # feed N synthetic firewall events
 #   scripts/live-env.sh down
 #
@@ -30,6 +31,8 @@ set -euo pipefail
 # standalone scripts -- two allocators handing out overlapping ranges,
 # which collided by construction rather than by luck.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-slot.sh"
+# The first admin needs the setup code from the server's log (#1415).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/setup-code.sh"
 
 # Defaults are derived per checkout, not fixed, because two live checks
 # running at once used to destroy each other rather than merely clash.
@@ -421,10 +424,35 @@ EOF
     sleep 0.25
   done
 
+  # MV_FIRST_RUN=1 leaves the instance as a fresh install is: no account,
+  # so the browser lands on the create-account screen and the setup code
+  # is still waiting in server.log. Only scripts/live-setup-code.sh asks
+  # for this -- every other check wants the admin below. MV_USER and
+  # MV_PASS are still exported, as the account the check should create.
+  if [ "${MV_FIRST_RUN:-}" = "1" ]; then
+    trap - EXIT
+    echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
+    echo "export MV_USER=$MV_USER"
+    echo "export MV_PASS=$MV_PASS"
+    echo "export MV_DIR=$MV_DIR"
+    echo "export MV_SYSLOG_TLS_PORT=$SYSLOG_TLS_PORT"
+    return 0
+  fi
+
+  # The first admin, with the setup code the server just logged (#1415)
+  # -- read from server.log the way an operator reads it, and sent over
+  # stdin so it never sits in a process listing. Nothing prints it: this
+  # function's stdout is eval'd by the caller.
+  local setup_code
+  setup_code="$(mv_wait_setup_code 40 cat "$MV_DIR/server.log")" || {
+    echo "live-env: no setup code in $MV_DIR/server.log -- the server did not log the first-run line" >&2
+    exit 1
+  }
   jar="$MV_DIR/admin.cookies"
-  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -c "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-    -d "{\"username\":\"$MV_USER\",\"password\":\"$MV_PASS\"}" \
-    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/register" >/dev/null
+  printf '{"username":"%s","password":"%s","setupCode":"%s"}' "$MV_USER" "$MV_PASS" "$setup_code" |
+    curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -c "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+      --data-binary @- \
+      "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/register" >/dev/null
 
   # Enrol an authenticator-app factor for the admin (#1253, #1335).
   #

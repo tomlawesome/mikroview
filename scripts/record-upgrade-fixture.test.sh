@@ -50,9 +50,12 @@ check() {
 #     what was staged after the real one is gone (the script's own
 #     cleanup trap removes it on exit).
 #   - on any `docker run`, consumes stdin (the real script pipes
-#     session.py in over it) and prints a fixed manifest, standing in
+#     session.py in over it), writes the MV_SETUP_CODE it was given to
+#     <capture-dir>.setup-code, and prints a fixed manifest, standing in
 #     for upgrade-fixture-session.py's real output.
-#   - anything else (rm, volume, network, create, start, stop, logs)
+#   - on `docker logs`, prints the two auth lines a #1415 release logs
+#     at startup on an empty store, the setup code among them (a fake).
+#   - anything else (rm, volume, network, create, start, stop)
 #     just succeeds, the way an idle throwaway container would.
 stub_docker() {
   local dir="$1" log="$2" capture="$3"
@@ -72,8 +75,14 @@ case "\$1" in
     esac
     exit 0
     ;;
+  logs)
+    echo "12:00:00 WARN  auth        │ no account exists yet -- create the first admin with setup code abcd-efgh-jkmn-pqrs (valid until an account exists or this process restarts)"
+    echo "12:00:00 INFO  auth        │ no account yet -- MikroView is showing the create-account screen, which asks for the setup code logged above (see docs/configuration.md)"
+    exit 0
+    ;;
   run)
     cat >/dev/null
+    printf '%s' "\${MV_SETUP_CODE:-}" > "\$CAPTURE.setup-code"
     cat <<'JSON'
 {"version":"v0.6.0","recordedAt":"2026-01-01T00:00:00Z","adminUsername":"upgrade-fixture-admin","viewerUsername":"upgrade-fixture-viewer","apiTokenName":"upgrade-fixture-token","entity":{"type":"host","key":"172.20.30.40","label":"upgrade-fixture-host"},"watchlist":{"name":"upgrade-fixture-watch","ports":[443]},"declaredRouter":{"id":"upgrade-fixture-router","sourceIp":"127.0.0.1"},"flag":{"type":"new_device","target":"aa:bb:cc:00:ff:10"},"coverage":{"key":"upgrade-fixture-boundary","reason":"upgrade-fixture-coverage-reason"},"hostMark":{"key":"ether1|172.20.30.40","kind":"intended","reason":"upgrade-fixture-host-reason"}}
 JSON
@@ -100,6 +109,10 @@ stub_docker_failing_session() {
 LOG="$log"
 { for a in "\$@"; do printf '%s\t' "\$a"; done; printf '\n'; } >> "\$LOG"
 case "\$1" in
+  logs)
+    echo "12:00:00 INFO  auth        │ 1 account(s) registered -- authentication is active"
+    exit 0
+    ;;
   run)
     cat >/dev/null
     exit 1
@@ -120,6 +133,7 @@ SCRATCH="$TMP/scratch"
 mkdir -p "$SCRATCH/scripts"
 cp "$HERE/record-upgrade-fixture.sh" "$SCRATCH/scripts/"
 cp "$HERE/upgrade-fixture-session.py" "$SCRATCH/scripts/"
+cp "$HERE/setup-code.sh" "$SCRATCH/scripts/"
 chmod +x "$SCRATCH/scripts/record-upgrade-fixture.sh"
 # --check reads this instead of taking a version argument (#1358 item 3).
 echo "0.6.1" > "$SCRATCH/VERSION"
@@ -185,6 +199,18 @@ check "$(grep -q 'tls yes' "$LOG" && echo true || echo false)" \
 
 check "$([ -s "$SCRATCH/testdata/upgrade/v0.6.0/manifest.json" ] && echo true || echo false)" \
   "wrote a manifest for the recorded version"
+
+# #1415: the setup code the container logged reaches the scripted
+# session through its environment -- `-e MV_SETUP_CODE` with no value
+# on the docker command line, so the code itself is in no argv.
+check "$([ "$(cat "$CAPTURE.setup-code" 2>/dev/null)" = "abcd-efgh-jkmn-pqrs" ] && echo true || echo false)" \
+  "the scripted session was handed the setup code from the container's log"
+check "$(awk -F'\t' '$1 == "run"' "$LOG" | grep -q "$(printf '\t')-e$(printf '\t')MV_SETUP_CODE$(printf '\t')" && echo true || echo false)" \
+  "the scripted session's docker run passes MV_SETUP_CODE by name"
+check "$(grep -q 'abcd-efgh-jkmn-pqrs' "$LOG" && echo false || echo true)" \
+  "the setup code appears in no docker command line"
+check "$(grep -rq 'abcd-efgh-jkmn-pqrs' "$SCRATCH/testdata" && echo false || echo true)" \
+  "the setup code is nowhere in the recorded manifest"
 
 # --- --check (#1358 item 3): runs against a local image reference
 # instead of pulling ghcr.io/tomlawesome/mikroview:<version>, derives its

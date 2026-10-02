@@ -35,6 +35,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import socket
 import ssl
 import struct
@@ -196,7 +197,18 @@ manifest = {"version": version, "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ"
 # 1. The permanent admin, created by the same bootstrap endpoint the
 # setup wizard's first screen calls -- this also opens the session
 # every later call in this script uses.
-api.post("/api/auth/register", {"username": FIXTURE_ADMIN, "password": FIXTURE_PASSWORD})
+#
+# From #1415 on, the first admin also needs the one-time setup code the
+# server printed in its log. This container cannot read that log, so
+# record-upgrade-fixture.sh reads it with `docker logs` and hands it
+# over as MV_SETUP_CODE -- an environment variable, never argv, and
+# never written to the manifest. Releases before #1415 print no code and
+# get none.
+register_body = {"username": FIXTURE_ADMIN, "password": FIXTURE_PASSWORD}
+setup_code = os.environ.get("MV_SETUP_CODE", "")
+if setup_code:
+    register_body["setupCode"] = setup_code
+api.post("/api/auth/register", register_body)
 manifest["adminUsername"] = FIXTURE_ADMIN
 
 # 1a. The admin just signed in above -- from v0.6.1 on, that account
