@@ -82,7 +82,7 @@ export function registerServiceWorker(
 }
 
 /** Just the part of ServiceWorkerContainer #1363's handover needs, so a test can pass a stub. */
-export type ControllerWatcher = Pick<ServiceWorkerContainer, 'addEventListener' | 'removeEventListener'>
+export type ControllerWatcher = Pick<ServiceWorkerContainer, 'addEventListener' | 'removeEventListener' | 'controller'>
 
 /**
  * activateWaitingWorker is the handover the design calls for before a
@@ -90,17 +90,28 @@ export type ControllerWatcher = Pick<ServiceWorkerContainer, 'addEventListener' 
  * registration has not polled for yet (the freshness check can fire long
  * before the browser's own 24-hour update cycle would) is actually found,
  * then ask whatever is waiting (or still installing) to take over, and
- * resolve once it actually has -- so the reload that follows is served
- * by the new worker rather than the one this tab loaded with.
+ * resolve once it has taken control *and* finished activating -- so the
+ * reload that follows is served by the new worker rather than the one
+ * this tab loaded with.
  *
- * Resolves anyway after `timeoutMs` if no worker ever takes control --
- * `update()` found nothing new, the worker never reaches `installed`,
- * or a browser that never fires `controllerchange` for a case this
- * hasn't seen -- so a real version mismatch still reloads rather than
- * hanging the one automatic attempt forever on a promise that will
- * never settle. `update()` rejecting (offline, a mid-flight navigation)
- * is swallowed the same way -- the handover is a best effort, not a
- * precondition for the reload that follows it.
+ * Not at `controllerchange` alone (#1421): that fires as soon as
+ * activation starts, while the worker is still `activating` and running
+ * its own activate step. Chromium holds a navigation started then until
+ * activation finishes; WebKit lets it through, and the reloaded page is
+ * left holding a copy of the worker that reads `activating` for good --
+ * no `statechange` ever reaches it, although the worker itself finished
+ * activating moments later. Waiting here for `activated` means the
+ * reload never starts mid-activation, in any engine.
+ *
+ * Resolves anyway after `timeoutMs` if no worker ever takes control or
+ * finishes activating -- `update()` found nothing new, the worker never
+ * reaches `installed` or `activated`, or a browser that never fires
+ * `controllerchange` for a case this hasn't seen -- so a real version
+ * mismatch still reloads rather than hanging the one automatic attempt
+ * forever on a promise that will never settle. `update()` rejecting
+ * (offline, a mid-flight navigation) is swallowed the same way -- the
+ * handover is a best effort, not a precondition for the reload that
+ * follows it.
  */
 export async function activateWaitingWorker(
   registration: ServiceWorkerRegistration | undefined,
@@ -120,14 +131,26 @@ export async function activateWaitingWorker(
 
   return new Promise((resolve) => {
     let settled = false
+    let controlling: ServiceWorker | null = null
     const finish = () => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       container.removeEventListener('controllerchange', onControllerChange)
+      controlling?.removeEventListener('statechange', onActivation)
       resolve()
     }
-    const onControllerChange = () => finish()
+    // `redundant` counts as done too: a worker that will never reach
+    // `activated` leaves nothing more worth waiting for.
+    const onActivation = () => {
+      if (controlling?.state === 'activated' || controlling?.state === 'redundant') finish()
+    }
+    const onControllerChange = () => {
+      if (controlling) return
+      controlling = container.controller ?? worker
+      controlling.addEventListener('statechange', onActivation)
+      onActivation()
+    }
     const timer = setTimeout(finish, timeoutMs)
     container.addEventListener('controllerchange', onControllerChange)
 
