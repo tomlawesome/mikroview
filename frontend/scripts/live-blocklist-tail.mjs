@@ -102,6 +102,8 @@ await wizard.locator('.body.wide h3', { hasText: `Block known-bad addresses on $
 await page.waitForFunction(() => /^Copy — 2 lists · 8 parts$/.test(document.querySelector('.wiz .foot button.primary')?.textContent?.trim() ?? ''), null, { timeout: 15000 })
 // safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'the stage is the builder in the wizard’s frame, its Copy counting the block')
+check(await wizard.locator('.foot button.primary').isEnabled(), 'the stage’s Copy is live, bound to the block as the page’s is')
+check(await wizard.locator('.rail .step-row', { hasText: 'Where setup stands' }).isEnabled(), 'Where setup stands stays clickable on the stage: it is where Back goes')
 
 const marked = page.waitForResponse((r) => r.url().endsWith('/api/setup/mark') && r.request().method() === 'POST')
 await wizard.locator('.foot button', { hasText: /^Not now$/ }).click()

@@ -516,6 +516,19 @@ describe('Wizard: the first-run tail', () => {
     expect(row('Block known-bad addresses').getAttribute('aria-current')).toBe('step')
     await waitFor(() => expect(document.querySelector('.foot button.primary')?.textContent?.trim()).toBe('Copy — 2 lists · 1 part'))
     expect(Array.from(document.querySelectorAll('.foot button')).map((b) => b.textContent?.trim())).toEqual(['Back', 'Not now', 'Copy — 2 lists · 1 part', 'Finish'])
+    expect((document.querySelector('.foot button.primary') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('keeps Where setup stands clickable on the stage, and it goes back', async () => {
+    await onTheLedger()
+    await fireEvent.click(screen.getByRole('button', { name: 'Set it up' }))
+    await waitFor(() => expect(wizardRun.stage).toBe('block'))
+    const stand = row('Where setup stands') as HTMLButtonElement
+    expect(stand.disabled).toBe(false)
+    expect(stand.classList.contains('locked')).toBe(false)
+    expect(stand.querySelector('.step-n')?.textContent).toBe('✓')
+    await fireEvent.click(stand)
+    expect(wizardRun.stage).toBe('done')
   })
 
   it('records Not now under record 8 and reads the row as set aside', async () => {

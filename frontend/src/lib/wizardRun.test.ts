@@ -387,7 +387,7 @@ describe('the refused-sender fix', () => {
 // that stays secondary, the builder as its own stage, and a proof once
 // the router's push holds a list.
 describe('the first-run tail', () => {
-  const offer = { state: 'offer' as const, lists: 0, rail: '', ledger: '', flaggedFrom: 'Spamhaus DROP and Emerging Threats compromised IPs' }
+  const offer = { state: 'offer' as const, lists: 0, rail: '', ledger: '', flaggedFrom: 'Spamhaus DROP and Emerging Threats' }
   const held = {
     state: 'done' as const,
     lists: 2,
@@ -417,7 +417,7 @@ describe('the first-run tail', () => {
     const rows = ledgerRows(done, ev({ tail: offer }))
     const last = rows[rows.length - 1]
     expect(last).toMatchObject({ done: false, offer: true, t: 'Known-bad addresses', u: '' })
-    expect(last.r).toBe('not blocked yet — rb5009 lets them in, and MikroView flags them from Spamhaus DROP and Emerging Threats compromised IPs · optional, and offered here on first run only')
+    expect(last.r).toBe('not blocked yet — rb5009 lets them in, and MikroView flags them from Spamhaus DROP and Emerging Threats · optional, and offered here on first run only')
   })
 
   it('puts Block known-bad addresses beside Finish, and Finish stays the primary', () => {
@@ -430,7 +430,7 @@ describe('the first-run tail', () => {
   })
 
   it('gives the stage Back · Not now · Copy · Finish', () => {
-    const f = footSpec(answered({ stage: 'block', copied: true }), ev({ tail: offer }), 'Copy — 2 lists · 8 parts')
+    const f = footSpec(answered({ stage: 'block', copied: true }), ev({ tail: offer }), 'Copy — 2 lists · 8 parts', true)
     expect([f.left?.label, ...(f.leftMore ?? []).map((b) => b.label), ...f.right.map((b) => b.label)]).toEqual([
       'Back',
       'Not now',
@@ -440,6 +440,14 @@ describe('the first-run tail', () => {
     expect(f.right[0]).toMatchObject({ action: 'block-copy', primary: true, disabled: false })
     expect(f.leftMore?.[0].action).toBe('block-not-now')
     expect(footSpec(answered({ stage: 'block' }), ev({ tail: offer })).right[0].disabled).toBe(true)
+    // Enabled from the block, as the page's own Copy is, not from its label.
+    expect(footSpec(answered({ stage: 'block' }), ev({ tail: offer }), 'Copy — no lists chosen', false).right[0]).toMatchObject({ label: 'Copy — no lists chosen', disabled: true })
+  })
+
+  it('keeps Where setup stands a live tick on the tail’s stage: where Back goes', () => {
+    const rows = railRows(answered({ stage: 'block', copied: true }), ev({ tail: offer }))
+    expect(rows[4]).toMatchObject({ id: 'stand', n: '✓', locked: false, can: true })
+    expect(rows[4].state.cls).toBe('done')
   })
 
   it('reads set aside after Not now', () => {
