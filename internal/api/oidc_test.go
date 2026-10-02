@@ -467,7 +467,7 @@ func TestOIDCLinkStartRefusesAnAlreadySSOOnlyAccount(t *testing.T) {
 	// alice is a local admin, so the forced-enrolment door (#1253) blocks
 	// every route but the enrolment ones -- including POST
 	// /api/auth/users below -- until she holds a confirmed factor.
-	totpEnrolAndConfirm(t, client, ts)
+	totpEnrolAndConfirm(t, client, ts, "password123")
 	// An ordinary user, because only a non-admin is left with no local
 	// password after a link (#1252): the admin keeps its own.
 	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()

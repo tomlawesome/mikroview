@@ -92,12 +92,15 @@ beforeEach(() => {
   vi.mocked(saveMyPreferences).mockResolvedValue(null)
 })
 
-// Choose the authenticator key and arrive on the prove-it stage.
+// Choose the authenticator key, confirm the password (#1418/#1422), and
+// arrive on the prove-it stage.
 async function enterTotpStage() {
   vi.mocked(enrolTOTP).mockResolvedValue({
     uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
   })
   await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+  await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+  await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
   await screen.findByLabelText('Code from the app')
 }
 
@@ -174,16 +177,35 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
   })
 
-  // Q4-F3 (round 61 door audit): chooseTOTP() mirrors AuthenticatorOverlay's
-  // startEnrol() -- a string result is shown inline and the caller stays
-  // on the choose stage, same as that overlay's own equivalent test.
-  it('shows the enrol error and stays on the choose screen when it fails', async () => {
+  // Q4-F3 (round 61 door audit): startTotpEnrol() mirrors
+  // AuthenticatorOverlay's own startEnrol() -- a string result is shown
+  // inline and the caller stays on the password stage, same as that
+  // overlay's own equivalent test.
+  it('shows the enrol error and stays on the password screen when it fails', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue('the server could not do that (500)')
 
     render(AuthEnrolFactor)
     await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
+    expect(screen.queryByTestId('totp-secret')).toBeNull()
+  })
+
+  // #1418/#1422: a wrong password is refused before enrolTOTP ever mints
+  // a secret -- shown on the password stage, never thrown (that's the
+  // "session is gone" case, a 401 ApiError, covered below).
+  it('shows the incorrect-password refusal and stays on the password screen', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue('incorrect password')
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    expect(enrolTOTP).toHaveBeenCalledWith('wrong')
+    expect(await screen.findByText('incorrect password')).toBeTruthy()
     expect(screen.queryByTestId('totp-secret')).toBeNull()
   })
 
@@ -207,6 +229,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     render(AuthEnrolFactor)
 
     await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByLabelText('Code from the app')
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '000000' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
@@ -227,6 +251,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
       render(AuthEnrolFactor)
 
       await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+      await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+      await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
       await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
     })
@@ -238,6 +264,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
       vi.mocked(confirmTOTP).mockRejectedValue(new ApiError('sign in first', 401))
       render(AuthEnrolFactor)
       await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+      await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+      await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
       await screen.findByLabelText('Code from the app')
       await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
 
@@ -252,6 +280,7 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
       await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
       await screen.findByLabelText('Name')
       await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+      await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
 
       await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
 
@@ -277,6 +306,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
 
     render(AuthEnrolFactor)
     await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByLabelText('Code from the app')
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
@@ -302,6 +333,7 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
     await screen.findByLabelText('Name')
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
 
     expect(screen.getByRole('button', { name: /use an authenticator app instead/i })).toHaveProperty('disabled', true)
@@ -338,10 +370,11 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
     await screen.findByLabelText('Name')
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
 
     await screen.findByTestId('recovery-codes')
-    expect(registerPasskey).toHaveBeenCalledWith('this laptop')
+    expect(registerPasskey).toHaveBeenCalledWith('this laptop', 'hunter2')
     expect(authState.passkeyCount).toBe(1)
     expect(screen.getByText('Keep the codes')).toBeTruthy()
   })
@@ -367,10 +400,40 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
     await screen.findByLabelText('Name')
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
 
     expect(await screen.findByText(/didn't complete/i)).toBeTruthy()
     expect(authState.passkeyCount).toBe(0)
+  })
+
+  // #1418: a wrong password is refused by beginPasskeyRegistration before
+  // the browser is ever asked for anything -- registerPasskey forwards it
+  // here unchanged, shown the same way as the ceremony's own refusal just
+  // above, and never the "session is gone" 401 case (covered in the
+  // describe block above).
+  it('shows the incorrect-password refusal and stays put to retry, with the name kept', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue('incorrect password')
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'meredith',
+      role: 'viewer',
+      mustEnrolSecondFactor: true,
+      ssoAvailable: false,
+    })
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
+    await screen.findByLabelText('Name')
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+
+    expect(registerPasskey).toHaveBeenCalledWith('this laptop', 'wrong')
+    expect(await screen.findByText('incorrect password')).toBeTruthy()
+    expect(authState.passkeyCount).toBe(0)
+    expect(screen.getByLabelText('Name')).toHaveProperty('value', 'this laptop')
   })
 
   it('each prove stage offers the other key as the quiet link, when that key is live', async () => {
@@ -381,6 +444,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     render(AuthEnrolFactor)
 
     await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByLabelText('Code from the app')
     expect(screen.getByRole('button', { name: /use a passkey instead/i })).toBeTruthy()
 
@@ -399,6 +464,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     render(AuthEnrolFactor)
 
     await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByLabelText('Code from the app')
     expect(screen.queryByRole('button', { name: /use a passkey instead/i })).toBeNull()
   })
@@ -420,6 +487,8 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     render(AuthEnrolFactor)
 
     await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await screen.findByLabelText('Code from the app')
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
@@ -486,6 +555,7 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
       await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
       await screen.findByLabelText('Name')
       await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+      await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
       await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
 
       expect(await screen.findByText(/your second step is on, but the recovery codes couldn.t be saved/i)).toBeTruthy()

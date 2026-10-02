@@ -153,7 +153,7 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 // #1335: a fresh account holds no second factor at all, so the forced-
 // enrolment door sits between the password step and #main-content.
-await enrolFactorAndSignIn(viewerPage)
+await enrolFactorAndSignIn(viewerPage, VIEWER_PASS)
 
 // The read-only viewer, declared once (#804, round 37): the chip is the
 // one place every screen already says who you are, so it is the one

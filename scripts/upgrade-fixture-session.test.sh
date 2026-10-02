@@ -144,6 +144,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/auth/totp/enrol":
             if mode == "old":
                 return self._reply(404, {})
+            # #1418/#1422: the real route now needs the caller's own
+            # password in the body -- logged the same way REGISTER's
+            # setupCode is, so the test below can assert session.py
+            # actually sent it.
+            body = self._body()
+            log("ENROL password " + ("present" if body.get("password") else "absent"))
             secret = b"upgrade-fixture-session-test-2fa"[:20]
             state["secret"] = secret
             return self._reply(200, {"uri": "otpauth://totp/x", "secret": base64.b32encode(secret).decode().rstrip("=")})
@@ -254,6 +260,7 @@ check "$(grep -q 'abcd-efgh-jkmn-pqrs' <<<"$OUT" && echo false || echo true)" "t
 enrolled="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['secondFactorEnrolled'])" "$OUT" 2>/dev/null || echo ERROR)"
 check "$([ "$enrolled" = "True" ] && echo true || echo false)" "manifest reports secondFactorEnrolled=true when the door was up"
 check "$(grep -q 'POST /api/auth/totp/enrol' "$LOG" && echo true || echo false)" "session.py asked to enrol a factor"
+check "$(grep -q 'ENROL password present' "$LOG" && echo true || echo false)" "session.py sent its own password with the enrol request (#1418, #1422)"
 check "$(grep -q 'POST /api/auth/totp/confirm' "$LOG" && echo true || echo false)" "session.py confirmed it with a code the fake server's own RFC 6238 check accepted"
 
 # --- pre-v0.6.1-shaped server: no totp routes exist, nothing gated --

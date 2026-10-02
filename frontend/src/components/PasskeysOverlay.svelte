@@ -6,7 +6,8 @@
   // password-gated removal beat, same shared recovery codes.
   //
   // Six states: list (every registered passkey, with rename/remove),
-  // adding (name it, then the browser's own prompt), codes (the ten
+  // adding (name it and confirm the password -- #1418/#1422 -- then the
+  // browser's own prompt), codes (the ten
   // recovery codes, shown once, the same as the authenticator app's),
   // added-done (a passkey added when a factor had already minted
   // recovery codes: a one-line note that the existing ones still stand
@@ -36,6 +37,11 @@
   let loadingList = $state(false)
 
   let newName = $state('')
+  // #1418: checked server-side by beginPasskeyRegistration before the
+  // browser is ever asked for anything -- collected in the same 'adding'
+  // step as the name, same fold as the 'removing' step's own warning +
+  // password below.
+  let addPassword = $state('')
   let addError = $state<string | null>(null)
   let addBusy = $state(false)
   let recoveryCodes = $state<string[]>([])
@@ -104,6 +110,7 @@
   function resetFields() {
     step = 'list'
     newName = ''
+    addPassword = ''
     addError = null
     addBusy = false
     recoveryCodes = []
@@ -143,6 +150,7 @@
   function startAdding() {
     addError = null
     newName = ''
+    addPassword = ''
     step = 'adding'
   }
 
@@ -156,12 +164,18 @@
     // lib/api.ts). Routed the same way here: this overlay's own header
     // X/Escape/backdrop would otherwise offer a way out that doesn't
     // actually work, since the session behind it is already gone.
+    //
+    // #1418: a wrong password (or a spent re-check budget) comes back as
+    // a plain string too, before the browser is ever asked for anything
+    // -- addError below shows it and the caller stays on this same
+    // step to retry.
     try {
-      const result = await registerPasskey(newName.trim())
+      const result = await registerPasskey(newName.trim(), addPassword)
       if (typeof result === 'string') {
         addError = result
         return
       }
+      addPassword = ''
       passkeys = [...passkeys, result.passkey]
       authState.passkeyCount += 1
       if (result.recoveryCodes) {
@@ -388,12 +402,19 @@
               Name
               <input type="text" placeholder="this laptop" bind:value={newName} />
             </label>
+            <!-- #1418: checked before the browser is ever asked for
+                 anything -- same label/autocomplete as the 'removing'
+                 step's own password field below. -->
+            <label>
+              Password
+              <input type="password" bind:value={addPassword} autocomplete="current-password" />
+            </label>
           {/if}
           {#if addError}<p class="error">{addError}</p>{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={() => (step = 'list')} disabled={addBusy}>Cancel</button>
-          <button type="button" class="confirm" disabled={addBusy} onclick={submitAdd}>
+          <button type="button" class="confirm" disabled={addBusy || !addPassword} onclick={submitAdd}>
             {addBusy ? 'Waiting…' : 'Continue'}
           </button>
         </div>

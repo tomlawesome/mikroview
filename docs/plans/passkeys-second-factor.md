@@ -117,15 +117,17 @@ and a rename route the issue's frontend list implies but its route list omits:
 
 - `GET /api/auth/passkeys` → `[{id (base64url), name, createdAt, lastUsedAt,
   transports, stale (bool), rpId}]` — feeds the overlay.
-- `POST /api/auth/passkeys/register/begin` `{}` → the library's
+- `POST /api/auth/passkeys/register/begin` `{password}` (#1418: password
+  re-check, 401/429; 409 for an SSO-only account) → the library's
   `protocol.CredentialCreation` JSON; the `webauthn.SessionData` sealed
   AEAD-style (the `pendingLoginCodec` pattern) into a 5-minute cookie
   `mikroview_passkey_register`, path `/api/auth/passkeys`. Refused with the
   availability reason when status is not `ready`. `excludeCredentials` lists
   the account's current-RPID passkeys so one authenticator cannot enrol twice.
 - `POST /api/auth/passkeys/register/finish` `{credential, name}` →
-  `FinishRegistration`, `AddPasskey`, clear the cookie (single-use: a replayed
-  finish is refused because the cookie is gone). If this is the account's
+  `FinishRegistration`, `AddPasskey`, clear the cookie (single-use: the challenge is
+  claimed before `AddPasskey`, so a replayed copy of the cookie is refused,
+  #1418). If this is the account's
   **first factor**: revoke all sessions and reissue this one (parity with TOTP
   confirm — a stolen session must not outlive the factor turning on), and
   mint recovery codes per the rules above. Response

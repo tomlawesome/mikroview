@@ -95,18 +95,20 @@ describe('passkeysUsableAt', () => {
 
 describe('registerPasskey', () => {
   it('refuses locally, with no round trip at all, when the browser cannot do passkeys', async () => {
-    const result = await registerPasskey('my key')
+    const result = await registerPasskey('my key', 'hunter2')
     expect(result).toContain("can't create a passkey")
     expect(beginPasskeyRegistration).not.toHaveBeenCalled()
   })
 
+  // #1418: the password is forwarded to beginPasskeyRegistration unchanged.
   it('surfaces the begin call\'s own refusal without touching the browser', async () => {
     stubPasskeySupport()
     vi.mocked(beginPasskeyRegistration).mockResolvedValue('passkeys unavailable (ip)')
     vi.stubGlobal('navigator', { credentials: { create: vi.fn() } })
 
-    const result = await registerPasskey('my key')
+    const result = await registerPasskey('my key', 'hunter2')
 
+    expect(beginPasskeyRegistration).toHaveBeenCalledWith('hunter2')
     expect(result).toBe('passkeys unavailable (ip)')
     expect(vi.mocked((navigator as unknown as { credentials: { create: ReturnType<typeof vi.fn> } }).credentials.create)).not
       .toHaveBeenCalled()
@@ -131,7 +133,7 @@ describe('registerPasskey', () => {
       recoveryCodes: ['a', 'b'],
     })
 
-    const result = await registerPasskey('my key')
+    const result = await registerPasskey('my key', 'hunter2')
 
     expect(create).toHaveBeenCalledWith({ publicKey })
     expect(finishPasskeyRegistration).toHaveBeenCalledWith({ id: 'cred-1', response: {} }, 'my key')
@@ -148,7 +150,7 @@ describe('registerPasskey', () => {
     })
     vi.stubGlobal('navigator', { credentials: { create } })
 
-    const result = await registerPasskey('my key')
+    const result = await registerPasskey('my key', 'hunter2')
 
     expect(result).toBe("That didn't complete -- try again, or use another way in.")
     expect(finishPasskeyRegistration).not.toHaveBeenCalled()
@@ -159,7 +161,7 @@ describe('registerPasskey', () => {
     vi.mocked(beginPasskeyRegistration).mockResolvedValue({ publicKey: {} })
     vi.stubGlobal('navigator', { credentials: { create: vi.fn(async () => null) } })
 
-    const result = await registerPasskey('my key')
+    const result = await registerPasskey('my key', 'hunter2')
 
     expect(typeof result).toBe('string')
     expect(finishPasskeyRegistration).not.toHaveBeenCalled()

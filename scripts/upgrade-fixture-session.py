@@ -179,8 +179,13 @@ def enrol_second_factor_if_required(api):
     from comparing version strings, which keeps this working
     unmodified against whatever a later release changes. Any other
     non-200 is a real failure and is raised.
+
+    Since #1418/#1422, a newer server also refuses this without the
+    caller's own current password (checked server-side, never read
+    back) -- sent unconditionally here, since an older server that
+    predates the gate simply ignores the extra field.
     """
-    status, body, _ = api._req("POST", "/api/auth/totp/enrol", {})
+    status, body, _ = api._req("POST", "/api/auth/totp/enrol", {"password": FIXTURE_PASSWORD})
     if status == 404:
         return False
     if status != 200:

@@ -68,9 +68,9 @@ func passkeyBilboID(t *testing.T, s *Server) string {
 
 // passkeyRegisterBegin posts register/begin and decodes the returned
 // creation options, failing the test on anything but 200.
-func passkeyRegisterBegin(t *testing.T, client *http.Client, ts *httptest.Server) *protocol.CredentialCreation {
+func passkeyRegisterBegin(t *testing.T, client *http.Client, ts *httptest.Server, password string) *protocol.CredentialCreation {
 	t.Helper()
-	resp := postJSON(t, client, ts.URL+"/api/auth/passkeys/register/begin", struct{}{})
+	resp := postJSON(t, client, ts.URL+"/api/auth/passkeys/register/begin", passkeyRegisterBeginRequest{Password: password})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -115,10 +115,10 @@ func passkeyRegisterFinishOK(t *testing.T, client *http.Client, ts *httptest.Ser
 // registerPasskey drives register/begin+finish end to end against a
 // fresh FakeAuthenticator built for rp, returning both so callers can go
 // on to drive a login (which needs the same fake) or a second ceremony.
-func registerPasskey(t *testing.T, client *http.Client, ts *httptest.Server, rp *RelyingParty, name string) (*FakeAuthenticator, passkeyRegisterFinishResponse) {
+func registerPasskey(t *testing.T, client *http.Client, ts *httptest.Server, rp *RelyingParty, password, name string) (*FakeAuthenticator, passkeyRegisterFinishResponse) {
 	t.Helper()
 	fake := NewFakeAuthenticator(rp.RPID, rp.Origin)
-	creation := passkeyRegisterBegin(t, client, ts)
+	creation := passkeyRegisterBegin(t, client, ts, password)
 	out := passkeyRegisterFinishOK(t, client, ts, fake, creation, name)
 	return fake, out
 }
@@ -207,7 +207,7 @@ func TestPasskeyRegisterLoginRoundTrip(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 
-	fake, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	fake, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "YubiKey")
 	if out.Passkey.Name != "YubiKey" {
 		t.Errorf("stored passkey name = %q, want %q", out.Passkey.Name, "YubiKey")
 	}
@@ -258,7 +258,7 @@ func TestPasskeyRegisterLoginRoundTrip(t *testing.T) {
 func TestPasswordOnlyLoginOnPasskeyOnlyAccountNeverCreatesSession(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	registerPasskey(t, bilbo, ts, s.RelyingParty, "key")
+	registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key")
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	resp := postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: passkeyBilboUsername, Password: passkeyBilboPassword})
@@ -307,7 +307,7 @@ func TestPasskeyRegisterFinishWrongOriginRefused(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 
-	creation := passkeyRegisterBegin(t, bilbo, ts)
+	creation := passkeyRegisterBegin(t, bilbo, ts, passkeyBilboPassword)
 	fake := NewFakeAuthenticator(s.RelyingParty.RPID, s.RelyingParty.Origin)
 	fake.Origin = "https://not-the-relying-party.example"
 	resp := passkeyRegisterFinishRaw(t, bilbo, ts, fake, creation, "wrong origin")
@@ -319,7 +319,7 @@ func TestPasskeyRegisterFinishWrongOriginRefused(t *testing.T) {
 	// Pairing: the identical shape of request, at the right origin,
 	// succeeds -- proving the refusal above is really about the origin
 	// and not some other malformation.
-	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "right origin")
+	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "right origin")
 	if out.Passkey.Name != "right origin" {
 		t.Errorf("the paired successful registration = %+v", out)
 	}
@@ -341,7 +341,7 @@ func TestPasskeyRegisterFinishWrongOriginRefused(t *testing.T) {
 func TestPasskeyLoginFactorWrongRPIDRefused(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "key")
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key")
 
 	fake.RPID = "not-the-relying-party.example"
 	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
@@ -384,7 +384,7 @@ func TestPasskeyLoginFactorWrongRPIDRefused(t *testing.T) {
 func TestPasskeyCloneWarningRefusesRegressedSignCount(t *testing.T) {
 	s, ts, admin := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	fake, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "yubikey")
+	fake, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "yubikey")
 	id := passkeyBilboID(t, s)
 
 	storedSignCount := func() uint32 {
@@ -454,7 +454,7 @@ func TestConcurrentPasskeyAssertionSubmissionsOnlyOneWins(t *testing.T) {
 func concurrentPasskeyAssertionSubmissions(t *testing.T, signCount uint32) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "security key")
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "security key")
 	fake.SignCount = signCount
 
 	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
@@ -512,7 +512,7 @@ func concurrentPasskeyAssertionSubmissions(t *testing.T, signCount uint32) {
 func TestPasskeyZeroReportingAuthenticatorSignsInFine(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "platform authenticator")
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "platform authenticator")
 
 	for i := 0; i < 2; i++ {
 		pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
@@ -541,7 +541,7 @@ func TestStalePasskeyExcludedFromLoginButListedAndRemovable(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 	originalRP := s.RelyingParty
-	_, out := registerPasskey(t, bilbo, ts, originalRP, "Old Phone")
+	_, out := registerPasskey(t, bilbo, ts, originalRP, passkeyBilboPassword, "Old Phone")
 
 	// publicUrl changes to a new host -- swapped onto the live server the
 	// same way a restart with a new setting would produce a differently
@@ -615,7 +615,7 @@ func TestStalePasskeyExcludedFromLoginButListedAndRemovable(t *testing.T) {
 func TestPasskeyRoutesRefusedWhenRelyingPartyNotReady(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	registerPasskey(t, bilbo, ts, s.RelyingParty, "key")
+	registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key")
 	s.RelyingParty = nil
 
 	t.Run("register/begin", func(t *testing.T) {
@@ -648,7 +648,7 @@ func TestPasskeyRegisterFinishReplayRefused(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 
-	creation := passkeyRegisterBegin(t, bilbo, ts)
+	creation := passkeyRegisterBegin(t, bilbo, ts, passkeyBilboPassword)
 	fake := NewFakeAuthenticator(s.RelyingParty.RPID, s.RelyingParty.Origin)
 	body, err := fake.RegisterResponse(creation)
 	if err != nil {
@@ -677,7 +677,7 @@ func TestPasskeyRegisterFinishReplayRefused(t *testing.T) {
 func TestPasskeyDeleteWrongPassword(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "key")
+	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key")
 	id := passkeyBilboID(t, s)
 
 	resp := deleteJSON(t, bilbo, ts.URL+"/api/auth/passkeys/"+out.Passkey.ID, passkeyDeleteRequest{Password: "not-the-password"})
@@ -704,7 +704,7 @@ func TestPasskeyDeleteWrongPassword(t *testing.T) {
 func TestPasskeyDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	deviceA := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	fake, out := registerPasskey(t, deviceA, ts, s.RelyingParty, "only key")
+	fake, out := registerPasskey(t, deviceA, ts, s.RelyingParty, passkeyBilboPassword, "only key")
 
 	// Not loggedInClient: bilbo's only factor is a passkey, which that
 	// helper cannot complete on its own (it only knows how to finish a
@@ -752,8 +752,8 @@ func TestPasskeyDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
 func TestPasskeyDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	client := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	_, first := registerPasskey(t, client, ts, s.RelyingParty, "first key")
-	registerPasskey(t, client, ts, s.RelyingParty, "second key")
+	_, first := registerPasskey(t, client, ts, s.RelyingParty, passkeyBilboPassword, "first key")
+	registerPasskey(t, client, ts, s.RelyingParty, passkeyBilboPassword, "second key")
 
 	resp := deleteJSON(t, client, ts.URL+"/api/auth/passkeys/"+first.Passkey.ID, passkeyDeleteRequest{Password: passkeyBilboPassword})
 	defer resp.Body.Close()
@@ -785,7 +785,7 @@ func TestPasskeyDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
 func TestPasskeyRenameIsCosmeticNoPassword(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "old name")
+	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "old name")
 
 	req, err := http.NewRequest(http.MethodPatch, ts.URL+"/api/auth/passkeys/"+out.Passkey.ID,
 		strings.NewReader(`{"name":"new name"}`))
@@ -826,10 +826,10 @@ func TestPasskeyCapAndNameBound(t *testing.T) {
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 
 	for i := 0; i < 10; i++ {
-		registerPasskey(t, bilbo, ts, s.RelyingParty, fmt.Sprintf("key-%d", i))
+		registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, fmt.Sprintf("key-%d", i))
 	}
 
-	creation := passkeyRegisterBegin(t, bilbo, ts)
+	creation := passkeyRegisterBegin(t, bilbo, ts, passkeyBilboPassword)
 	fake := NewFakeAuthenticator(s.RelyingParty.RPID, s.RelyingParty.Origin)
 	resp := passkeyRegisterFinishRaw(t, bilbo, ts, fake, creation, "eleventh")
 	defer resp.Body.Close()
@@ -842,7 +842,7 @@ func TestPasskeyNameIsTruncatedNotRefused(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 	long := strings.Repeat("x", 65)
-	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, long)
+	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, long)
 	if got := len([]rune(out.Passkey.Name)); got != 64 {
 		t.Errorf("a 65-rune name was stored as %d runes, want 64", got)
 	}
@@ -866,7 +866,7 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 	t.Run("passkey first, TOTP confirm reuses the same codes", func(t *testing.T) {
 		s, ts, _ := passkeyTestServer(t)
 		bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-		_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "first")
+		_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "first")
 		if len(out.RecoveryCodes) != 10 {
 			t.Fatalf("passkey-first registration should mint codes, got %d", len(out.RecoveryCodes))
 		}
@@ -876,7 +876,7 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 			t.Fatal("bilbo account vanished")
 		}
 
-		enrolled := totpEnrol(t, bilbo, ts)
+		enrolled := totpEnrol(t, bilbo, ts, passkeyBilboPassword)
 		secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
 		if err != nil {
 			t.Fatal(err)
@@ -908,7 +908,7 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 	t.Run("TOTP first, passkey registration reuses the same codes", func(t *testing.T) {
 		s, ts, _ := passkeyTestServer(t)
 		bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-		_, codes, _ := totpEnrolAndConfirm(t, bilbo, ts)
+		_, codes, _ := totpEnrolAndConfirm(t, bilbo, ts, passkeyBilboPassword)
 		if len(codes) != 10 {
 			t.Fatalf("TOTP-first confirm should mint codes, got %d", len(codes))
 		}
@@ -918,7 +918,7 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 			t.Fatal("bilbo account vanished")
 		}
 
-		_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "second")
+		_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "second")
 		if out.RecoveryCodes != nil {
 			t.Errorf("passkey registration after an existing TOTP factor minted new codes, want null: %v", out.RecoveryCodes)
 		}
@@ -943,7 +943,7 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 func TestPasskeyRegisterWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
 	s, ts, browser, otherDevice, budget := mintFailServer(t)
 	fake := NewFakeAuthenticator(s.RelyingParty.RPID, s.RelyingParty.Origin)
-	creation := passkeyRegisterBegin(t, browser, ts)
+	creation := passkeyRegisterBegin(t, browser, ts, mintFailPassword)
 
 	budget.left = 1 // AddPasskey's own save, then nothing
 	resp := passkeyRegisterFinishRaw(t, browser, ts, fake, creation, "YubiKey")
@@ -973,8 +973,8 @@ func TestPasskeyClearConditionalKeepsRecoveryCodes(t *testing.T) {
 	t.Run("clearing TOTP keeps codes while a passkey remains", func(t *testing.T) {
 		s, ts, _ := passkeyTestServer(t)
 		bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-		totpEnrolAndConfirm(t, bilbo, ts)
-		registerPasskey(t, bilbo, ts, s.RelyingParty, "backup key")
+		totpEnrolAndConfirm(t, bilbo, ts, passkeyBilboPassword)
+		registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "backup key")
 		id := passkeyBilboID(t, s)
 
 		del := deleteJSON(t, bilbo, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: passkeyBilboPassword})
@@ -995,7 +995,7 @@ func TestPasskeyClearConditionalKeepsRecoveryCodes(t *testing.T) {
 	t.Run("deleting the last passkey keeps codes while TOTP remains active", func(t *testing.T) {
 		s, ts, _ := passkeyTestServer(t)
 		bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-		_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "only key")
+		_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "only key")
 		id := passkeyBilboID(t, s)
 
 		// Not totpEnrolAndConfirm: that helper asserts 10 *fresh* recovery
@@ -1004,7 +1004,7 @@ func TestPasskeyClearConditionalKeepsRecoveryCodes(t *testing.T) {
 		// mint-if-absent branch's "already issued" case (recoveryCodes:
 		// null). Confirming the factor is still what this subtest needs,
 		// just not through a helper that assumes it's the first factor.
-		enrolled := totpEnrol(t, bilbo, ts)
+		enrolled := totpEnrol(t, bilbo, ts, passkeyBilboPassword)
 		secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
 		if err != nil {
 			t.Fatal(err)
@@ -1041,7 +1041,7 @@ func TestPasskeyClearConditionalKeepsRecoveryCodes(t *testing.T) {
 func TestPasskeyAdminClear(t *testing.T) {
 	s, ts, admin := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	registerPasskey(t, bilbo, ts, s.RelyingParty, "key")
+	registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key")
 	id := passkeyBilboID(t, s)
 
 	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id+"/passkeys", nil)
@@ -1103,8 +1103,8 @@ func TestPasskeySessionAndUserListSurfaces(t *testing.T) {
 		t.Errorf("session passkeys status/origin = %+v, want ready with a non-empty origin", before.Passkeys)
 	}
 
-	registerPasskey(t, bilbo, ts, s.RelyingParty, "key one")
-	registerPasskey(t, bilbo, ts, s.RelyingParty, "key two")
+	registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key one")
+	registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "key two")
 
 	after := sessionOf(t, bilbo, ts)
 	if after.Passkeys == nil || after.Passkeys.Count != 2 {
@@ -1148,7 +1148,7 @@ func listedPasskeyCount(t *testing.T, admin *http.Client, ts *httptest.Server, u
 func TestPasskeyLoginFactorBeginIsRateLimited(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "YubiKey")
 	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
 
 	const threshold = 3
@@ -1173,7 +1173,7 @@ func TestPasskeyLoginFactorBeginIsRateLimited(t *testing.T) {
 func TestPasskeyLoginGivesTheBeginReservationBack(t *testing.T) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
-	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, passkeyBilboPassword, "YubiKey")
 	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
 
 	const threshold = 2
