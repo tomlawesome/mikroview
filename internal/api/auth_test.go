@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // newAuthTestServer is newTestServer with a fresh, undecided (neither
@@ -28,11 +29,7 @@ import (
 func newAuthTestServer(t *testing.T) *Server {
 	t.Helper()
 	s, _ := newTestServer(t)
-	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Auth = authStore
+	s.Auth = openTestAuthStore(t, persist.NewFileBackend(filepath.Join(t.TempDir(), "users.json")))
 	return s
 }
 
@@ -114,7 +111,7 @@ func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
-	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123"))
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -245,7 +242,7 @@ func TestAuthSessionReportsSignedInSince(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
@@ -278,7 +275,7 @@ func TestRegisterCreatesAdminAndStartsASession(t *testing.T) {
 	defer ts.Close()
 	client := &http.Client{Jar: mustCookieJar(t)}
 
-	resp := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
+	resp := postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123"))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
@@ -307,7 +304,7 @@ func TestRegisterRefusesAnEmailShapedUsername(t *testing.T) {
 	defer ts.Close()
 	client := &http.Client{Jar: mustCookieJar(t)}
 
-	resp := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom@example.com", Password: "password123"})
+	resp := postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "tom@example.com", "password123"))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
@@ -327,9 +324,9 @@ func TestRegisterClosesAfterFirstUser(t *testing.T) {
 	defer ts.Close()
 	client := &http.Client{Jar: mustCookieJar(t)}
 
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
-	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "second", Password: "password456"})
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "second", "password456"))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("expected 409 for a second registration attempt, got %d", resp.StatusCode)
@@ -341,7 +338,7 @@ func TestAPIGatedOnceAUserExists(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	resp, err := http.Get(ts.URL + "/api/events")
 	if err != nil {
@@ -368,7 +365,7 @@ func TestLoginThenAccessProtectedRoute(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	loginResp := postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"})
@@ -393,7 +390,7 @@ func TestLoginRejectsWrongPassword(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "wrong"})
 	defer resp.Body.Close()
@@ -408,7 +405,7 @@ func TestLoginRateLimited(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	for i := 0; i < 2; i++ {
 		postJSON(t, &http.Client{}, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "wrong"}).Body.Close()
@@ -425,7 +422,7 @@ func TestLogoutRevokesSession(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
@@ -454,7 +451,7 @@ func TestLogoutAllRejectsAnonymousCaller(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/logout-all", map[string]any{})
 	defer resp.Body.Close()
@@ -481,7 +478,7 @@ func TestLogoutAllEndsEverySessionButTheCallers(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	deviceA := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, deviceA, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
@@ -676,7 +673,7 @@ func TestMutatingRequestWithoutCSRFHeaderIsRejectedOnceAuthActive(t *testing.T) 
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	// A plain POST with no X-Requested-With header -- what a cross-site
 	// <form> submission would look like.
@@ -948,7 +945,7 @@ func TestIngestTokenCannotReachReadOnlyRoutes(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", "password123")).Body.Close()
 
 	admin, ok := s.Auth.ByUsername("admin")
 	if !ok {

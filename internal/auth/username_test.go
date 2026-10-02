@@ -87,6 +87,7 @@ func TestRegisterAndCreateUserRejectAHostileUsername(t *testing.T) {
 func TestOIDCProvisioningFallsBackRatherThanFailingOnAHostileHint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
+	seedAdmin(t, s, "admin")
 
 	u, created, err := s.FindOrCreateOIDCUser(
 		"https://idp.example", "subject-1", "victim\x1b[2K\radmin", time.Now())
@@ -118,6 +119,7 @@ func TestOIDCProvisioningFallsBackRatherThanFailingOnAHostileHint(t *testing.T) 
 func TestOIDCProvisioningKeepsAUsableHint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
+	seedAdmin(t, s, "admin")
 
 	u, _, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "tom@example.com", time.Now())
 	if err != nil {

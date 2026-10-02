@@ -672,7 +672,7 @@ func TestHandleFlagsVerdictIsAuditLogged(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "tom", "password123")).Body.Close()
 	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 
 	resp := postJSON(t, client, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictExpected})
@@ -764,7 +764,7 @@ func TestHandleFlagNoteEditsAJudgedFlag(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "tom", "password123")).Body.Close()
 	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 	postJSON(t, client, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: "first go"}).Body.Close()
 
@@ -803,7 +803,7 @@ func TestHandleFlagNoteRefusals(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "tom", "password123")).Body.Close()
 	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 
 	unjudged := putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "no verdict yet"})
@@ -836,7 +836,7 @@ func TestFlagNoteAuditRecordsTheEventNeverTheText(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/register", setupRequest(t, s, "tom", "password123")).Body.Close()
 	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 
 	const secret = "the operator's own words"

@@ -3,6 +3,8 @@
 package auth
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -50,21 +52,34 @@ func TestHasLocalAdminFollowsTheAdminsPassword(t *testing.T) {
 }
 
 // An SSO-provisioned first account is an admin with no password, which
-// is exactly the state #1252 exists to keep a deployment out of -- and,
-// since linking no longer costs the admin its password, the only way
-// left to reach it. main.go says so at every start while it holds.
+// is exactly the state #1252 exists to keep a deployment out of. SSO no
+// longer provisions the first account at all (#1415), but a deployment
+// that let it before then still holds such an admin, so the document is
+// written the way that older release left it. main.go says so at every
+// start while it holds.
 func TestHasLocalAdminIsFalseForAnSSOProvisionedAdmin(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	path := filepath.Join(t.TempDir(), "users.json")
+	unmatchable, err := unmatchablePasswordHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := json.Marshal(storeFile{Users: []*User{{
+		ID: newID(), Username: "carol", PasswordHash: unmatchable, Role: RoleAdmin,
+		CreatedAt: time.Now(), OIDCIssuer: "https://idp.example", OIDCSubject: "subject-1",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	u, _, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "carol", time.Now())
-	if err != nil {
-		t.Fatalf("FindOrCreateOIDCUser: %v", err)
-	}
-	if u.Role != RoleAdmin {
-		t.Fatalf("Role = %q, want admin -- this test is not set up as it thinks", u.Role)
+	if u := s.Admin(); u == nil || u.Username != "carol" {
+		t.Fatalf("Admin() = %+v, want carol -- this test is not set up as it thinks", u)
 	}
 	if s.HasLocalAdmin() {
 		t.Error("an SSO-provisioned admin counts as a local way in")

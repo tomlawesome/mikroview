@@ -882,6 +882,10 @@ func main() {
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
+	case authStore.Persisted():
+		// The setup code itself is the Warn line OpenWithBackend just
+		// logged (#1415); this says what it is for.
+		authLog.Info("no account yet -- MikroView is showing the create-account screen, which asks for the setup code logged above (see docs/configuration.md)")
 	default:
 		authLog.Info("no account yet -- MikroView is showing the create-account screen (see docs/configuration.md)")
 	}
@@ -3040,7 +3044,10 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 		st.Close()
 		return nil, nil, fmt.Errorf("the accounts store has no working backend -- check auth.storePath and the Postgres configuration for %s", cmd)
 	}
-	store, err := auth.OpenWithBackend(backend)
+	// DiscardSetupCode: on an empty store this process would otherwise
+	// announce a setup code of its own, which the running server does
+	// not know and would refuse (#1415).
+	store, err := auth.OpenStore(backend, auth.Options{OnSetupCode: auth.DiscardSetupCode})
 	if err != nil {
 		st.Close()
 		return nil, nil, err

@@ -363,6 +363,31 @@ type Store struct {
 	// hold a lock the reload itself needs to take. See reloadIfStale.
 	reloadMu       sync.Mutex
 	reloadInFlight chan struct{}
+
+	// setupCodeHash is the SHA-256 of the one-time code that creates the
+	// first admin (setupcode.go, #1415), nil when none is outstanding.
+	// Issued under mu when the store is found empty -- at open, or on a
+	// reload that applies an emptied document -- and retired the moment
+	// an account exists, in this process (createLocked) or another
+	// (reloadIfStale). Memory only: never part of the document.
+	setupCodeHash []byte
+	onSetupCode   SetupCodeHandler
+}
+
+// Options configures OpenStore. The zero value is what Open and
+// OpenWithBackend use.
+type Options struct {
+	// OnSetupCode receives the one-time setup code that creates the
+	// first admin (CheckSetupCode), in its display form, whenever a
+	// persisted store finds itself with no accounts: once at open, and
+	// again if a reload applies a document with none. When nil the code
+	// goes to the server log instead, as one Warn line. A process that
+	// opens the store but is not the server people register through
+	// (the CLI commands, the config editor) passes DiscardSetupCode, so
+	// it does not announce a code that would not work. Called outside
+	// the store's lock, but before OpenStore returns, so it must not
+	// depend on the returned *Store.
+	OnSetupCode SetupCodeHandler
 }
 
 // reloadTimeout bounds one staleness check against the backend.
@@ -401,11 +426,20 @@ func Open(path string) (*Store, error) {
 // registration to whoever loads the page next. main.go refuses to
 // start on it. See persist.Open.
 func OpenWithBackend(b persist.Backend) (*Store, error) {
+	return OpenStore(b, Options{})
+}
+
+// OpenStore is OpenWithBackend with Options -- named, like Options
+// itself, after gauntlet's constructor so the move onto it (#1202) is a
+// swap. A persisted store that opens with no accounts issues the
+// one-time setup code (setupcode.go) and announces it before returning.
+func OpenStore(b persist.Backend, opts Options) (*Store, error) {
 	s := &Store{
-		backend:   b,
-		byID:      make(map[string]*User),
-		byName:    make(map[string]string),
-		oidcIndex: make(map[oidcKey]string),
+		backend:     b,
+		byID:        make(map[string]*User),
+		byName:      make(map[string]string),
+		oidcIndex:   make(map[oidcKey]string),
+		onSetupCode: opts.OnSetupCode,
 	}
 
 	version, existed, err := persist.Open(context.Background(), b, "the accounts store", func(data []byte) error {
@@ -426,6 +460,12 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 	if existed {
 		s.version = version
 	}
+	// No lock contention is possible yet; taken anyway so the issuing
+	// rule reads the same way here as on a reload.
+	s.mu.Lock()
+	code := s.issueSetupCodeLocked()
+	s.mu.Unlock()
+	s.announceSetupCode(code)
 	return s, nil
 }
 
@@ -571,11 +611,19 @@ func (s *Store) reloadIfStale() {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.version != beforeLoad {
+		s.mu.Unlock()
 		return
 	}
 	s.applyLoaded(file, snap.Version)
+	// The document just applied decides whether a setup code should be
+	// outstanding: accounts retire it, none issues a fresh one (never
+	// the old one back -- a reload after a bad restore means "setup
+	// required, new code"). Announced after the lock is released, so
+	// Options.OnSetupCode never runs under it.
+	code := s.issueSetupCodeLocked()
+	s.mu.Unlock()
+	s.announceSetupCode(code)
 }
 
 func (s *Store) Persisted() bool {
@@ -595,6 +643,13 @@ func (s *Store) Count() int {
 // parameter because there's no meaningful choice: the first person to
 // register is the super-admin by definition (see the local-auth design).
 // Fails with ErrRegistrationClosed once any account exists.
+//
+// This is the host-side primitive. A caller acting for someone who
+// reached the server over the network -- the register handler in
+// internal/api -- first checks the one-time setup code with
+// CheckSetupCode (#1415), so taking admin needs the server's log, not
+// just its address. Register itself does not take the code: the CLI and
+// tests that hold a *Store already have host access.
 //
 // The "is registration still open" test is passed down as a guard and
 // evaluated inside createLocked's critical section rather than checked
@@ -618,8 +673,9 @@ func (s *Store) Register(username, password string, now time.Time) (*User, error
 	s.reloadIfStale()
 
 	// Cheap rejection BEFORE hashing. HashPassword is Argon2id at 64
-	// MiB, and /api/auth/register is unauthenticated and rate-limit-free
-	// in every auth state -- so without this, a ~60-byte POST that is
+	// MiB, and /api/auth/register is unauthenticated in every auth state
+	// (rate-limited per address since #1415, but a limiter admits a
+	// burst from many addresses) -- so without this, a ~60-byte POST that is
 	// going to be refused anyway still costs 64 MiB and ~66ms, and a
 	// handful of concurrent ones OOM-kill the container. Measured at
 	// ~1 GiB peak heap for 16 concurrent requests, all of which
@@ -903,6 +959,12 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		delete(s.byName, key)
 		return nil, fmt.Errorf("saving accounts: %w", err)
 	}
+	// An account now exists, so the setup code has done its job (or was
+	// bypassed by a host-side caller). Retired here, in this process, as
+	// reloadIfStale retires it for a write from another: a lingering
+	// hash would otherwise come back to life if a later reload applied
+	// an emptied document and found one already "issued".
+	s.setupCodeHash = nil
 
 	cp := *u
 	return &cp, nil
@@ -946,13 +1008,13 @@ func (s *Store) ByOIDCIdentity(issuer, subject string) (*User, bool) {
 // creating a session) lands on the same account rather than racing
 // itself.
 //
-// The very first user -- local or OIDC, whichever happens first --
-// becomes RoleAdmin, the same rule Register already applies; every
-// later account (from either path) is RoleUser, decided under this
-// method's own write lock rather than a separate Count() pre-check, so
-// this doesn't add a second copy of the (pre-existing, unrelated to
-// this issue) narrow TOCTOU window Register's own pre-lock Count()
-// check already has.
+// Never the first account: while the store is empty this refuses with
+// ErrSetupRequired and provisions nothing, because the first admin is a
+// local account created with the setup code (#1415), not an identity an
+// outside provider vouches for. Every account this method creates is
+// RoleUser. Both facts are decided under this method's own write lock,
+// against the accounts it is about to save, not by a separate Count()
+// check.
 func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now time.Time) (user *User, created bool, err error) {
 	if !s.Persisted() {
 		return nil, false, ErrNotPersisted
@@ -976,25 +1038,28 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		}
 	}
 
+	// The first account is never an SSO one (ErrSetupRequired,
+	// setupcode.go). Checked before the hash: a refusal costs nothing.
+	if len(s.byID) == 0 {
+		return nil, false, ErrSetupRequired
+	}
+
 	unmatchable, err := unmatchablePasswordHash()
 	if err != nil {
 		return nil, false, err
-	}
-
-	role := RoleUser
-	if len(s.byID) == 0 {
-		role = RoleAdmin
 	}
 
 	u := &User{
 		ID:           newID(),
 		Username:     s.uniqueUsernameLocked(usernameHint, issuer, subject),
 		PasswordHash: unmatchable,
-		Role:         role,
-		CreatedAt:    now,
-		LastLogin:    now,
-		OIDCIssuer:   issuer,
-		OIDCSubject:  subject,
+		// Never the admin: the first admin is created locally with the
+		// setup code (#1415).
+		Role:        RoleUser,
+		CreatedAt:   now,
+		LastLogin:   now,
+		OIDCIssuer:  issuer,
+		OIDCSubject: subject,
 		// Explicitly false: the hash above is random and unmatchable, so
 		// there is no password here to reset. Recorded rather than
 		// inferred, because the hash itself is indistinguishable from a

@@ -258,6 +258,7 @@ func TestSetPasswordLeavesTheOldPasswordWorkingWhenPersistFails(t *testing.T) {
 func TestSetPasswordMarksTheAccountAsHavingALocalPassword(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
+	seedAdmin(t, s, "admin")
 
 	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "sso-user", time.Now())
 	if err != nil || !created {

@@ -187,7 +187,9 @@ func runSetupOnly(result config.Result, problems int) int {
 		log.Error(fmt.Sprintf("preparing the accounts store: %v", err))
 		return 1
 	}
-	authStore, err := auth.OpenWithBackend(authBackend)
+	// DiscardSetupCode: this editor refuses an empty store just below,
+	// so a setup code announced here could never be used (#1415).
+	authStore, err := auth.OpenStore(authBackend, auth.Options{OnSetupCode: auth.DiscardSetupCode})
 	if err != nil {
 		log.Error(err.Error())
 		return 1
