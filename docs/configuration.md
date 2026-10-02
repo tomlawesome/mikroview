@@ -1774,14 +1774,16 @@ rather than leaving the router with two schedulers and two rules:
 
 ```
 :if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" } else={ /system scheduler set [find name=mikroview-drop] interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" disabled=no }
-:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }
+:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" } else={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }
 ```
 
 The scheduler is what keeps the router current -- it re-runs the fetch
 and import every 5 minutes, so an entry you add or remove reaches the
 router on its own, with nothing to re-paste. The firewall rule is what
 actually drops the traffic; without it the address list fills but
-nothing is blocked. Two more commands are rendered alongside these, for
+nothing is blocked. It goes first in the raw table (`place-before=0`),
+except on a raw table with no rules yet, where RouterOS refuses that
+placement and the rule is simply added (#1413). Two more commands are rendered alongside these, for
 undoing either one without retyping: one disables the rule, the other
 empties the address list. The fetch uses `check-certificate=yes`, so it
 needs the same trust as the wizard's Trust the certificate step, and the
@@ -1808,6 +1810,90 @@ guarantee the read-only and ingest tokens carry (see [API
 tokens](#api-tokens-read-only)). Minting again **replaces** the existing
 key rather than adding a second one -- every router that fetches the drop
 list uses the same key, so there is only ever one to rotate.
+
+## Block known-bad addresses on the router (optional, #1360)
+
+The drop list above is ranges you choose. This is the other half: a
+page that builds one RouterOS block making the router fetch published
+known-bad lists **straight from their sources**, on its own schedule,
+and drop what is on them in raw prerouting, before anything else.
+MikroView prints the block and never runs it, never connects to the
+router, and never serves, copies or keeps a list: the router fetches
+each file itself. There is nothing to set in `config.yaml`.
+
+Open it from Settings ▸ drop list ▸ **Block known-bad addresses…**, or,
+on first run, from the wizard's **Where setup stands** (an optional
+sixth row, offered once). It is admin-only. Pick the lists and their
+choices, copy the block, and paste it once into the router's terminal
+(WinBox ▸ New Terminal, or ssh). Pasting it again is safe: every add
+is guarded, and a re-paste turns back on a rule or schedule that was
+switched off.
+
+The block, in order:
+
+1. **The push, re-set** with two more kinds -- `raw-rule` (the drop
+   rules and their counters) and `address-list-count` (how many entries
+   each list holds) -- and with the blocklists left out of the
+   entry-by-entry address-list page, which 15,000 entries would
+   overflow. The push script carries a token minted for the page; the
+   one it replaces stays valid until you revoke it under Settings ▸
+   keys. See [RouterOS setup, 4c-iii](routeros-setup.md#4c-iii-blocklist-rules-and-counts).
+2. **Per list**: a loader script and a scheduler entry named
+   `mv-bl-<list>`, each list at its own time in the small hours so no
+   two fetch together, and raw drop rules commented
+   `mikroview blocklist: <list> (from)` (and `(to)` for "both ways"),
+   logged with the prefix `D|bl-<list>|` -- a drop, labelled with the
+   list.
+3. **Run now**, so the lists load at once rather than at their first
+   scheduled time.
+
+The loader fetches the file, reads it in 32 KiB pieces, and builds
+`mv-bl-<list>-next` before swapping it in -- only when at least one
+entry loaded, so a failed fetch or an empty file leaves yesterday's
+list standing. It never runs anything a list contains as a command,
+and it refuses a line that is not an address or prefix, anything wider
+than /8 (IPv6 /16), and anything overlapping private, loopback,
+link-local, CGNAT or multicast space: dropped first in raw, such an
+entry would cut you off your own router. From RouterOS 7.19 it fetches
+with `check-certificate=yes` against the router's built-in root store.
+
+The lists, with what each source says about using it:
+
+| List | Default | Terms |
+|---|---|---|
+| Spamhaus DROP (and DROPv6) | on, from them, IPv6 too, daily | free, credit required -- each entry's comment keeps its SBL id and "© The Spamhaus Project"; never fetched more than once an hour |
+| Emerging Threats compromised IPs | on, both ways, weekdays (daily before 7.24) | BSD-3-Clause |
+| CINS Army | off; from them, every 6 h | free, "use in any way you see fit" |
+| blocklist.de strongips | off; from them, every 6 h | **no licence stated** |
+| GreenSnow | off; from them, daily | **no licence stated** |
+| DShield top 20 | off; from them, daily | **not for business use** (CC BY-NC-SA) |
+| Binary Defense banlist | off; from them, daily | **not for business use** |
+
+The two labels are facts on the cards, not warnings MikroView acts on:
+it cannot tell whether your router belongs to a business, or whether
+"no licence stated" is enough for you. Refresh choices never go below
+what a source asks: Spamhaus 6 h, daily or weekly; Emerging Threats
+daily, weekdays or weekly; CINS and blocklist.de hourly, 6 h or daily;
+the rest 6 h or daily or weekly as their cards offer. Ten more lists
+were considered and left out, each with its reason, under the cards.
+
+What the router holds comes back in its own push (every 20 minutes):
+"Where it stands" shows each list's count, when it last loaded, how
+often its rules fired today, and -- for the two lists MikroView itself
+flags from -- how many flags that list raised in the last 24 hours.
+
+**Undo.** Each held list has its own Undo: lines removing its rules,
+schedule, script, lists and any fetched file. **Undo everything** in the
+foot removes everything the block made, by the `mv-bl-` and
+`mikroview blocklist:` names; it never touches the push script or the
+drop list's own rule. To stop dropping without removing anything,
+disable the rules: `/ip firewall raw disable [find comment~"^mikroview blocklist"]`;
+pasting the block again turns them back on.
+
+**RouterOS 7.18 and later only.** Below it the page refuses and shows the
+upgrade instead -- the router cannot read a list file in pieces there.
+The page writes for the version the router's push reported, so the
+choices shown (and the block) follow that version.
 
 ## Preferences: settings live on the server, per user (#1283)
 

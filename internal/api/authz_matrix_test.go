@@ -250,6 +250,12 @@ var authzMatrix = []routeExpectation{
 			"task, not day-to-day product use"},
 	{http.MethodDelete, "/api/droplist/key", accessAdmin,
 		"revokes the droplist-pull key -- same tier as minting it"},
+	{http.MethodGet, "/api/blocklist/builder", accessAdmin,
+		"the blocklist builder's page (#1360): the catalogue, the router's version and what it holds of each " +
+			"list -- admin-only beside the drop list, since the page exists to write enforcement onto a router"},
+	{http.MethodPost, "/api/blocklist/builder/commands", accessAdmin,
+		"renders the blocklist block (#1360), which re-sets the router's push script with an ingest token and " +
+			"adds raw drop rules -- a setup task in the same tier as minting the drop list's key"},
 
 	{http.MethodPut, "/api/settings/store", accessAdmin,
 		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +

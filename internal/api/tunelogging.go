@@ -78,8 +78,8 @@ type tuneLoggingRule struct {
 	EveryPacket   bool   `json:"everyPacket"`
 	Log           bool   `json:"log"`
 	LogPrefix     string `json:"logPrefix"`
-	Packets       int    `json:"packets"`
-	Bytes         int    `json:"bytes"`
+	Packets       int64  `json:"packets"`
+	Bytes         int64  `json:"bytes"`
 	CountersKnown bool   `json:"countersKnown"`
 	Line          int    `json:"line"`
 }
@@ -314,10 +314,11 @@ func buildTuneLoggingRules(s *Server, device string, ex *export.Export, darkBoun
 			crosses = crossesDarkBoundary(rule.InInterface, rule.OutInterface, darkBoundaries)
 		}
 
-		packets, bytesCount, known := 0, 0, false
+		var packets, bytesCount int64
+		known := false
 		if havePushed {
 			if p, ok := pushedByOrdinal[rule.Index]; ok && p.Chain == rule.Chain && p.Action == rule.Action {
-				packets, bytesCount, known = int(p.Packets), int(p.Bytes), true
+				packets, bytesCount, known = int64(p.Packets), int64(p.Bytes), true
 			}
 		}
 

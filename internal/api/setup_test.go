@@ -112,8 +112,8 @@ func TestSetupMarkRecordsLedgerAndAudit(t *testing.T) {
 	}
 }
 
-// TestSetupMarkRejectsNonsense keeps the ledger to the seven steps the
-// wizard has (#1291 added the seventh) and the two outcomes it
+// TestSetupMarkRejectsNonsense keeps the ledger to the records the
+// wizard has (#1291 added the seventh, #1360 the eighth) and the two outcomes it
 // defines. A mark outside that is a client bug or a probe; either way
 // it has nothing to describe, and must not reach the audit log as
 // though it did.
@@ -130,10 +130,11 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 		req  setupMarkRequest
 	}{
 		{"step zero", setupMarkRequest{Step: 0, Outcome: "skipped"}},
-		// Eight, not seven: #1291's register step records as seven
-		// (setupsteps.ts's RECORD_NUMBERS), and this row pinned the old
-		// ceiling rather than "past the last".
-		{"step past the last", setupMarkRequest{Step: 8, Outcome: "skipped"}},
+		// Past the last record, whatever that is: #1291's register step
+		// records as seven and #1360's first-run tail as eight
+		// (setupsteps.ts's RECORD_NUMBERS), and a literal here pinned
+		// the old ceiling rather than "past the last".
+		{"step past the last", setupMarkRequest{Step: setup.MaxStep + 1, Outcome: "skipped"}},
 		{"unknown outcome", setupMarkRequest{Step: 1, Outcome: "finished"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

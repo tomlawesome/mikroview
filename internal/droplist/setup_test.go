@@ -22,7 +22,7 @@ func TestNewSetupRendersExactCommands(t *testing.T) {
 		t.Errorf("Scheduler =\n%s\nwant\n%s", got.Scheduler, wantScheduler)
 	}
 
-	wantRule := `:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }`
+	wantRule := `:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" } else={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }`
 	if got.Rule != wantRule {
 		t.Errorf("Rule = %q, want %q", got.Rule, wantRule)
 	}
@@ -108,12 +108,12 @@ func TestNewSetupCommandsAreSafeToPasteTwice(t *testing.T) {
 	// place-before is where a rule goes, not a property it carries, so
 	// it must not reach the else branch -- a rule already on the router
 	// keeps the position the operator gave it.
-	_, after, found := strings.Cut(got.Rule, "} else={")
-	if !found {
+	i := strings.LastIndex(got.Rule, "} else={")
+	if i < 0 {
 		t.Fatalf("Rule has no else branch: %s", got.Rule)
 	}
-	if strings.Contains(after, "place-before") {
-		t.Errorf("the else branch re-places an existing rule; it should only set its properties:\n%s", after)
+	if strings.Contains(got.Rule[i:], "place-before") {
+		t.Errorf("the else branch re-places an existing rule; it should only set its properties:\n%s", got.Rule[i:])
 	}
 }
 
@@ -146,5 +146,21 @@ func TestRePasteResumesDisabledEnforcement(t *testing.T) {
 			t.Errorf("%s's else branch does not re-enable the entry, so re-pasting after %s reports success and leaves enforcement off:\n%s",
 				c.what, c.off, elseBranch)
 		}
+	}
+}
+
+// #1413: on an empty raw table RouterOS refuses place-before=0 ("no such
+// item", 7.18.2 and 7.24.4), so an operator with no raw rules yet could
+// not paste the card. The add has a branch for that table that adds
+// plainly, the way the blocklist builder's rules do (rawRuleAdd), and
+// keeps place-before=0 -- first in the table -- everywhere else.
+func TestRuleAddsPlainlyOnAnEmptyRawTable(t *testing.T) {
+	rule := NewSetup("mv.example:8443", "<DROP-LIST-KEY>").Rule
+	const empty = `:if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" } else={ `
+	if !strings.Contains(rule, empty) {
+		t.Errorf("the add has no branch for an empty raw table, where place-before=0 is refused:\n%s", rule)
+	}
+	if !strings.Contains(rule, `comment="mikroview drop list" place-before=0 } }`) {
+		t.Errorf("a non-empty raw table no longer puts the rule first:\n%s", rule)
 	}
 }

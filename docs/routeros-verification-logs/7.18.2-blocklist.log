@@ -1,0 +1,431 @@
+# #1360 part 4: the blocklist builder's block on a real CHR 7.18.2, 2026-10-02.
+# Rendered by scripts/routeroscommands -step=blocklist (all seven lists on, catalogue
+# defaults, push re-set with a placeholder address and token) and pasted one console
+# command at a time by scripts/live-blocklist-chr.sh. The push itself fails at its
+# fetch (mikroview.invalid): that is the placeholder, not the block. Each list was
+# fetched once, from its source, by the router.
+
+== :put [/system resource get version]
+7.18.2 (stable)
+[admin@MikroTik] >
+== /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list"
+[admin@MikroTik] >
+== :put [/certificate settings print as-value]
+crl-download=false;crl-store=ram;crl-use=false
+[admin@MikroTik] >
+
+## 1. Paste the block, run every loader, read what the router holds
+
+== :if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=":local ruleRecs [:toarray \"\"]\n:foreach i,v in=[/ip/firewall/filter print as-value] do={\n  :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"a … [12792 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
+[admin@MikroTik] >
+== /system script run mv-push
+  status: connecting
+  status: failed
+failure: resolving error
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-spamhaus]] = 0) do={ /system script add name=mv-bl-spamhaus policy=read,write,test,ftp source="# mikroview blocklist: spamhaus -- Spamhaus DROP, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fe … [14509 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-spamhaus]] = 0) do={ /system scheduler add name=mv-bl-spamhaus interval=1d start-time=04:17:00 policy=read,write,test,ftp on-event="/system script run mv-bl-spamhaus" } else={ /system scheduler set [find name=mv-bl-spamhaus] interval=1d start-time=04:17:00 policy=read,write,test,ftp on-event="/system script run mv-bl-spamhaus" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: spamhaus (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus action=drop log=yes log-prefix="D|bl-spamhaus|" comment="mikroview blocklist: spamhaus (fro … [689 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/ipv6 firewall raw find comment="mikroview blocklist: spamhaus (from)"]] = 0) do={ :if ([:len [/ipv6 firewall raw find]] = 0) do={ /ipv6 firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus6 action=drop log=yes log-prefix="D|bl-spamhaus|" comment="mikroview blocklist: spamha … [702 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-et]] = 0) do={ /system script add name=mv-bl-et policy=read,write,test,ftp source="# mikroview blocklist: et -- Emerging Threats compromised IPs, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the f … [7635 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-et]] = 0) do={ /system scheduler add name=mv-bl-et interval=1d start-time=04:31:00 policy=read,write,test,ftp on-event="/system script run mv-bl-et" } else={ /system scheduler set [find name=mv-bl-et] interval=1d start-time=04:31:00 policy=read,write,test,ftp on-event="/system script run mv-bl-et" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: et (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop log=yes log-prefix="D|bl-et|" comment="mikroview blocklist: et (from)" } else={ /ip firewal … [629 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: et (to)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting dst-address-list=mv-bl-et action=drop log=yes log-prefix="D|bl-et|" comment="mikroview blocklist: et (to)" } else={ /ip firewall ra … [621 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-cins]] = 0) do={ /system script add name=mv-bl-cins policy=read,write,test,ftp source="# mikroview blocklist: cins -- CINS Army, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fetching.\n{\n:loc … [7577 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-cins]] = 0) do={ /system scheduler add name=mv-bl-cins interval=6h start-time=04:45:00 policy=read,write,test,ftp on-event="/system script run mv-bl-cins" } else={ /system scheduler set [find name=mv-bl-cins] interval=6h start-time=04:45:00 policy=read,write,test,ftp on-event="/system script run mv-bl-cins" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: cins (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-cins action=drop log=yes log-prefix="D|bl-cins|" comment="mikroview blocklist: cins (from)" } else={ /ip … [649 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-blde]] = 0) do={ /system script add name=mv-bl-blde policy=read,write,test,ftp source="# mikroview blocklist: blde -- blocklist.de strongips, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fetch … [7613 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-blde]] = 0) do={ /system scheduler add name=mv-bl-blde interval=6h start-time=04:59:00 policy=read,write,test,ftp on-event="/system script run mv-bl-blde" } else={ /system scheduler set [find name=mv-bl-blde] interval=6h start-time=04:59:00 policy=read,write,test,ftp on-event="/system script run mv-bl-blde" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: blde (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-blde action=drop log=yes log-prefix="D|bl-blde|" comment="mikroview blocklist: blde (from)" } else={ /ip … [649 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-greensnow]] = 0) do={ /system script add name=mv-bl-greensnow policy=read,write,test,ftp source="# mikroview blocklist: greensnow -- GreenSnow, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fet … [7668 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-greensnow]] = 0) do={ /system scheduler add name=mv-bl-greensnow interval=1d start-time=05:13:00 policy=read,write,test,ftp on-event="/system script run mv-bl-greensnow" } else={ /system scheduler set [find name=mv-bl-greensnow] interval=1d start-time=05:13:00 policy=read,write,test,ftp on-event="/system script run mv-bl-greensnow" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: greensnow (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-greensnow action=drop log=yes log-prefix="D|bl-greensnow|" comment="mikroview blocklist: greensnow  … [699 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-dshield]] = 0) do={ /system script add name=mv-bl-dshield policy=read,write,test,ftp source="# mikroview blocklist: dshield -- DShield top 20, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fetc … [7860 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-dshield]] = 0) do={ /system scheduler add name=mv-bl-dshield interval=1d start-time=05:27:00 policy=read,write,test,ftp on-event="/system script run mv-bl-dshield" } else={ /system scheduler set [find name=mv-bl-dshield] interval=1d start-time=05:27:00 policy=read,write,test,ftp on-event="/system script run mv-bl-dshield" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: dshield (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-dshield action=drop log=yes log-prefix="D|bl-dshield|" comment="mikroview blocklist: dshield (from)"  … [679 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-bindef]] = 0) do={ /system script add name=mv-bl-bindef policy=read,write,test,ftp source="# mikroview blocklist: bindef -- Binary Defense banlist, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the … [7629 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-bindef]] = 0) do={ /system scheduler add name=mv-bl-bindef interval=1d start-time=05:41:00 policy=read,write,test,ftp on-event="/system script run mv-bl-bindef" } else={ /system scheduler set [find name=mv-bl-bindef] interval=1d start-time=05:41:00 policy=read,write,test,ftp on-event="/system script run mv-bl-bindef" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: bindef (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-bindef action=drop log=yes log-prefix="D|bl-bindef|" comment="mikroview blocklist: bindef (from)" } el … [669 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== /system script run mv-bl-spamhaus; /system script run mv-bl-et; /system script run mv-bl-cins; /system script run mv-bl-blde; /system script run mv-bl-greensnow; /system script run mv-bl-dshield; /system script run mv-bl-bindef   (585s)
+  status: connecting
+  status: connecting
+  status: connecting
+  status: connecting
+  downloaded: 101KiB  
+    duration: 1s      
+  status: connecting
+  status: connecting
+  downloaded: 5KiB    
+    duration: 1s      
+  status: connecting
+  status: connecting
+  downloaded: 8KiB    
+    duration: 0s      
+  status: connecting
+  status: connecting
+  downloaded: 127KiB     
+       total: 208KiB     
+    duration: 0s         
+      status: finished
+  downloaded: 208KiB  
+       total: 208KiB  
+    duration: 0s      
+  status: connecting
+  status: connecting
+  downloaded: 5KiB    
+    duration: 0s      
+  status: connecting
+  status: connecting
+  downloaded: 80KiB   
+    duration: 1s      
+  status: connecting
+  status: connecting
+  downloaded: 2KiB    
+    duration: 1s      
+  status: connecting
+  status: connecting
+  downloaded: 9KiB    
+    duration: 0s      
+[admin@MikroTik] >
+== :put [:len [/ip firewall address-list find where list=mv-bl-spamhaus]]
+1692
+== :put [:len [/ip firewall address-list find where list=mv-bl-et]]
+622
+== :put [:len [/ip firewall address-list find where list=mv-bl-cins]]
+15000
+== :put [:len [/ip firewall address-list find where list=mv-bl-blde]]
+385
+== :put [:len [/ip firewall address-list find where list=mv-bl-greensnow]]
+5740
+== :put [:len [/ip firewall address-list find where list=mv-bl-dshield]]
+20
+== :put [:len [/ip firewall address-list find where list=mv-bl-bindef]]
+672
+== :put [:len [/ipv6 firewall address-list find where list=mv-bl-spamhaus6]]
+91
+== /log print without-paging where message~"^mikroview blocklist"
+ 2026-10-02 00:56:37 script,info mikroview blocklist: bindef: 672 loaded, 0 skipped
+
+[admin@MikroTik] >
+PASS  mv-bl-spamhaus holds 1692 (>= 1,000)
+PASS  mv-bl-et holds 622 (>= 100)
+PASS  mv-bl-cins holds 15000
+PASS  mv-bl-blde holds 385
+PASS  mv-bl-greensnow holds 5740
+PASS  mv-bl-dshield holds 20
+PASS  mv-bl-bindef holds 672
+PASS  mv-bl-spamhaus6 holds 91
+# waited 1s for any loader a scheduler started to end
+== /system script job print without-paging
+Columns: OWNER, TYPE, STARTED, TRACE
+#  OWNER  TYPE     STARTED              TRACE                     
+0  admin  login    2026-10-02 00:46:10  console:admin+ct200w@ttyS0
+1  admin  command  2026-10-02 00:57:38  console:admin+ct200w@ttyS0
+
+[admin@MikroTik] >
+== :put [:len [/ip firewall address-list find where list~"-next\$"]]
+0
+PASS  no staging list left behind
+== :put [:len [/file find where name~"^mv-bl-"]]
+0
+PASS  no fetched file left behind
+== /ip firewall raw print without-paging
+Flags: X - disabled, I - invalid; D - dynamic 
+ 0    ;;; mikroview blocklist: spamhaus (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-spamhaus|" src-address-list=mv-bl-spamhaus 
+
+ 1    ;;; mikroview blocklist: et (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-et|" src-address-list=mv-bl-et 
+
+ 2    ;;; mikroview blocklist: et (to)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-et|" dst-address-list=mv-bl-et 
+
+ 3    ;;; mikroview blocklist: cins (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-cins|" src-address-list=mv-bl-cins 
+
+ 4    ;;; mikroview blocklist: blde (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-blde|" src-address-list=mv-bl-blde 
+
+ 5    ;;; mikroview blocklist: greensnow (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-greensnow|" src-address-list=mv-bl-greensnow 
+
+ 6    ;;; mikroview blocklist: dshield (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-dshield|" src-address-list=mv-bl-dshield 
+
+ 7    ;;; mikroview blocklist: bindef (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-bindef|" src-address-list=mv-bl-bindef 
+
+ 8    ;;; mikroview drop list
+      chain=prerouting action=drop src-address-list=mikroview-drop 
+
+[admin@MikroTik] >
+== /ipv6 firewall raw print without-paging
+Flags: X - disabled, I - invalid; D - dynamic 
+ 0    ;;; mikroview blocklist: spamhaus (from)
+      chain=prerouting action=drop log=yes log-prefix="D|bl-spamhaus|" src-address-list=mv-bl-spamhaus6 
+
+[admin@MikroTik] >
+== :put [:len [/ip firewall raw find where comment~"^mikroview blocklist: "]]
+8
+== :put [:pick [/ip firewall raw find] [:len [/ip firewall raw find where comment~"^mikroview blocklist: "]]]
+*1
+== :put [/ip firewall raw find where comment="mikroview drop list"]
+*1
+PASS  the 8 blocklist rules sit ahead of the drop list's rule
+== :put [/ipv6 firewall raw get ([find]->0) comment]
+mikroview blocklist: spamhaus (from)
+PASS  the IPv6 rule went into an empty IPv6 raw table
+== /system scheduler print detail without-paging where name~"^mv-bl-"
+Flags: X - disabled 
+ 0   name="mv-bl-spamhaus" start-date=2026-10-02 start-time=04:17:00 interval=1d on-event=/system script run mv-bl-spamhaus owner="admin" policy=ftp,read,write,test run-count=0 
+     next-run=2026-10-02 04:17:00 
+
+ 1   name="mv-bl-et" start-date=2026-10-02 start-time=04:31:00 interval=1d on-event=/system script run mv-bl-et owner="admin" policy=ftp,read,write,test run-count=0 next-run=2026-10-02 04:31:00 
+
+ 2   name="mv-bl-cins" start-date=2026-10-02 start-time=04:45:00 interval=6h on-event=/system script run mv-bl-cins owner="admin" policy=ftp,read,write,test run-count=0 next-run=2026-10-02 04:45:00 
+
+ 3   name="mv-bl-blde" start-date=2026-10-02 start-time=04:59:00 interval=6h on-event=/system script run mv-bl-blde owner="admin" policy=ftp,read,write,test run-count=0 next-run=2026-10-02 04:59:00 
+
+ 4   name="mv-bl-greensnow" start-date=2026-10-02 start-time=05:13:00 interval=1d on-event=/system script run mv-bl-greensnow owner="admin" policy=ftp,read,write,test run-count=0 
+     next-run=2026-10-02 05:13:00 
+
+ 5   name="mv-bl-dshield" start-date=2026-10-02 start-time=05:27:00 interval=1d on-event=/system script run mv-bl-dshield owner="admin" policy=ftp,read,write,test run-count=0 
+     next-run=2026-10-02 05:27:00 
+
+ 6   name="mv-bl-bindef" start-date=2026-10-02 start-time=05:41:00 interval=1d on-event=/system script run mv-bl-bindef owner="admin" policy=ftp,read,write,test run-count=0 
+     next-run=2026-10-02 05:41:00 
+
+[admin@MikroTik] >
+== :put [:len [/system script find where name~"^mv-bl-"]]
+7
+== :put [:len [/system scheduler find where name~"^mv-bl-"]]
+7
+== :put [:len [/ip firewall raw find where comment~"^mikroview blocklist: "]]
+8
+== :put [:len [/ipv6 firewall raw find where comment~"^mikroview blocklist: "]]
+1
+PASS  7 scripts, 7 schedulers, 8 IPv4 rules and 1 IPv6 rule: {'scripts': 7, 'schedulers': 7, 'raw4': 8, 'raw6': 1}
+== :put [:len [/system scheduler find where name~"^mv-bl-" and comment~"not supported"]]
+0
+PASS  no scheduler carries a RouterOS warning
+
+## 2. Switch a rule and a scheduler off, paste the block again (not its run-now line)
+
+== /ip firewall raw disable [find comment="mikroview blocklist: et (from)"]
+[admin@MikroTik] >
+== /system scheduler disable [find name=mv-bl-et]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=":local ruleRecs [:toarray \"\"]\n:foreach i,v in=[/ip/firewall/filter print as-value] do={\n  :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"a … [12792 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
+[admin@MikroTik] >
+== /system script run mv-push
+  status: connecting
+  status: failed
+failure: resolving error
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-spamhaus]] = 0) do={ /system script add name=mv-bl-spamhaus policy=read,write,test,ftp source="# mikroview blocklist: spamhaus -- Spamhaus DROP, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fe … [14509 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-spamhaus]] = 0) do={ /system scheduler add name=mv-bl-spamhaus interval=1d start-time=04:17:00 policy=read,write,test,ftp on-event="/system script run mv-bl-spamhaus" } else={ /system scheduler set [find name=mv-bl-spamhaus] interval=1d start-time=04:17:00 policy=read,write,test,ftp on-event="/system script run mv-bl-spamhaus" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: spamhaus (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus action=drop log=yes log-prefix="D|bl-spamhaus|" comment="mikroview blocklist: spamhaus (fro … [689 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/ipv6 firewall raw find comment="mikroview blocklist: spamhaus (from)"]] = 0) do={ :if ([:len [/ipv6 firewall raw find]] = 0) do={ /ipv6 firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus6 action=drop log=yes log-prefix="D|bl-spamhaus|" comment="mikroview blocklist: spamha … [702 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-et]] = 0) do={ /system script add name=mv-bl-et policy=read,write,test,ftp source="# mikroview blocklist: et -- Emerging Threats compromised IPs, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the f … [7635 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-et]] = 0) do={ /system scheduler add name=mv-bl-et interval=1d start-time=04:31:00 policy=read,write,test,ftp on-event="/system script run mv-bl-et" } else={ /system scheduler set [find name=mv-bl-et] interval=1d start-time=04:31:00 policy=read,write,test,ftp on-event="/system script run mv-bl-et" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: et (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop log=yes log-prefix="D|bl-et|" comment="mikroview blocklist: et (from)" } else={ /ip firewal … [629 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: et (to)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting dst-address-list=mv-bl-et action=drop log=yes log-prefix="D|bl-et|" comment="mikroview blocklist: et (to)" } else={ /ip firewall ra … [621 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-cins]] = 0) do={ /system script add name=mv-bl-cins policy=read,write,test,ftp source="# mikroview blocklist: cins -- CINS Army, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fetching.\n{\n:loc … [7577 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-cins]] = 0) do={ /system scheduler add name=mv-bl-cins interval=6h start-time=04:45:00 policy=read,write,test,ftp on-event="/system script run mv-bl-cins" } else={ /system scheduler set [find name=mv-bl-cins] interval=6h start-time=04:45:00 policy=read,write,test,ftp on-event="/system script run mv-bl-cins" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: cins (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-cins action=drop log=yes log-prefix="D|bl-cins|" comment="mikroview blocklist: cins (from)" } else={ /ip … [649 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-blde]] = 0) do={ /system script add name=mv-bl-blde policy=read,write,test,ftp source="# mikroview blocklist: blde -- blocklist.de strongips, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fetch … [7613 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-blde]] = 0) do={ /system scheduler add name=mv-bl-blde interval=6h start-time=04:59:00 policy=read,write,test,ftp on-event="/system script run mv-bl-blde" } else={ /system scheduler set [find name=mv-bl-blde] interval=6h start-time=04:59:00 policy=read,write,test,ftp on-event="/system script run mv-bl-blde" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: blde (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-blde action=drop log=yes log-prefix="D|bl-blde|" comment="mikroview blocklist: blde (from)" } else={ /ip … [649 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-greensnow]] = 0) do={ /system script add name=mv-bl-greensnow policy=read,write,test,ftp source="# mikroview blocklist: greensnow -- GreenSnow, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fet … [7668 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-greensnow]] = 0) do={ /system scheduler add name=mv-bl-greensnow interval=1d start-time=05:13:00 policy=read,write,test,ftp on-event="/system script run mv-bl-greensnow" } else={ /system scheduler set [find name=mv-bl-greensnow] interval=1d start-time=05:13:00 policy=read,write,test,ftp on-event="/system script run mv-bl-greensnow" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: greensnow (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-greensnow action=drop log=yes log-prefix="D|bl-greensnow|" comment="mikroview blocklist: greensnow  … [699 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-dshield]] = 0) do={ /system script add name=mv-bl-dshield policy=read,write,test,ftp source="# mikroview blocklist: dshield -- DShield top 20, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the fetc … [7860 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-dshield]] = 0) do={ /system scheduler add name=mv-bl-dshield interval=1d start-time=05:27:00 policy=read,write,test,ftp on-event="/system script run mv-bl-dshield" } else={ /system scheduler set [find name=mv-bl-dshield] interval=1d start-time=05:27:00 policy=read,write,test,ftp on-event="/system script run mv-bl-dshield" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: dshield (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-dshield action=drop log=yes log-prefix="D|bl-dshield|" comment="mikroview blocklist: dshield (from)"  … [679 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system script find name=mv-bl-bindef]] = 0) do={ /system script add name=mv-bl-bindef policy=read,write,test,ftp source="# mikroview blocklist: bindef -- Binary Defense banlist, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the … [7629 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :if ([:len [/system scheduler find name=mv-bl-bindef]] = 0) do={ /system scheduler add name=mv-bl-bindef interval=1d start-time=05:41:00 policy=read,write,test,ftp on-event="/system script run mv-bl-bindef" } else={ /system scheduler set [find name=mv-bl-bindef] interval=1d start-time=05:41:00 policy=read,write,test,ftp on-event="/system script run mv-bl-bindef" disabled=no }
+[admin@MikroTik] >
+== :if ([:len [/ip firewall raw find comment="mikroview blocklist: bindef (from)"]] = 0) do={ :if ([:len [/ip firewall raw find]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-bindef action=drop log=yes log-prefix="D|bl-bindef|" comment="mikroview blocklist: bindef (from)" } el … [669 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== :put [:len [/system script find where name~"^mv-bl-"]]
+7
+== :put [:len [/system scheduler find where name~"^mv-bl-"]]
+7
+== :put [:len [/ip firewall raw find where comment~"^mikroview blocklist: "]]
+8
+== :put [:len [/ipv6 firewall raw find where comment~"^mikroview blocklist: "]]
+1
+PASS  pasting twice changed nothing: {'scripts': 7, 'schedulers': 7, 'raw4': 8, 'raw6': 1}
+== :put [/ip firewall raw get [find comment="mikroview blocklist: et (from)"] disabled]
+false
+PASS  the re-paste turned the rule back on
+== :put [/system scheduler get [find name=mv-bl-et] disabled]
+false
+PASS  the re-paste turned the scheduler back on
+
+## 3. One list's undo
+
+== /ip firewall raw remove [find comment="mikroview blocklist: et (from)"]
+[admin@MikroTik] >
+== /ip firewall raw remove [find comment="mikroview blocklist: et (to)"]
+[admin@MikroTik] >
+== /system scheduler remove [find name=mv-bl-et]
+[admin@MikroTik] >
+== /system script remove [find name=mv-bl-et]
+[admin@MikroTik] >
+== /ip firewall address-list remove [find list~"^mv-bl-et"]   (12s)
+[admin@MikroTik] >
+== /file remove [find name~"^mv-bl-et"]
+[admin@MikroTik] >
+== :put [:len [/ip firewall address-list find where list~"^mv-bl-et"]]
+0
+PASS  mv-bl-et is gone
+== :put [:len [/ip firewall raw find where comment~"^mikroview blocklist: et "]]
+0
+PASS  et's rules are gone
+== :put [:len [/system script find where name=mv-bl-et]]
+0
+== :put [:len [/system scheduler find where name=mv-bl-et]]
+0
+PASS  et's script and scheduler are gone
+== :put [:len [/ip firewall address-list find where list=mv-bl-spamhaus]]
+1692
+PASS  mv-bl-spamhaus is untouched
+
+## 4. Undo everything
+
+== /ip firewall raw remove [find comment~"^mikroview blocklist: "]
+[admin@MikroTik] >
+== /ipv6 firewall raw remove [find comment~"^mikroview blocklist: "]
+[admin@MikroTik] >
+== /system scheduler remove [find name~"^mv-bl-"]
+[admin@MikroTik] >
+== /system script remove [find name~"^mv-bl-"]
+[admin@MikroTik] >
+== /ip firewall address-list remove [find list~"^mv-bl-"]   (166s)
+[admin@MikroTik] >
+== /ipv6 firewall address-list remove [find list~"^mv-bl-"]
+[admin@MikroTik] >
+== /file remove [find name~"^mv-bl-"]
+[admin@MikroTik] >
+== :put [:len [/system script find where name~"^mv-bl-"]]
+0
+== :put [:len [/system scheduler find where name~"^mv-bl-"]]
+0
+== :put [:len [/ip firewall raw find where comment~"^mikroview blocklist: "]]
+0
+== :put [:len [/ipv6 firewall raw find where comment~"^mikroview blocklist: "]]
+0
+PASS  no mv-bl script, scheduler or rule is left
+== :put [:len [/ip firewall address-list find where list~"^mv-bl-"]]
+0
+== :put [:len [/ipv6 firewall address-list find where list~"^mv-bl-"]]
+0
+PASS  no mv-bl list is left
+== :put [:len [/file find where name~"^mv-bl-"]]
+0
+PASS  no mv-bl file is left
+== :put [:len [/ip firewall raw find where comment="mikroview drop list"]]
+1
+PASS  the drop list's rule is untouched
+== :put [:len [/system script find where name=mv-push]]
+1
+== :put [:len [/system scheduler find where name=mv-push]]
+1
+PASS  the push script and its scheduler are untouched
+
+## 5. A loader fed a hostile file
+
+# The ET loader as generated, its URL pointed at http://172.17.0.4/hostile.txt, served by a throwaway nginx container:
+#   # a list gone bad: only the four public documentation addresses below may load
+#   192.0.2.10
+#   198.51.100.0/24
+#   203.0.113.7/32
+#     8.8.4.4 trailing words after a blank
+#   192.168.88.0/24
+#   10.20.30.40
+#   172.0.0.0/8
+#   172.16.5.5
+#   100.64.1.1
+#   127.0.0.1
+#   169.254.10.10
+#   0.0.0.0/0
+#   8.0.0.0/7
+#   224.0.0.1
+#   evil.example
+#   1.2.3.4/33
+#   not an address
+#   ; a comment line
+#   198.51.100.0/24
+== :if ([:len [/system script find name=mv-bl-et]] = 0) do={ /system script add name=mv-bl-et policy=read,write,test,ftp source="# mikroview blocklist: et -- Emerging Threats compromised IPs, fetched by this router from its source.\n# MikroView wrote this script and never runs it; the router does the f … [7565 bytes; the whole command is routeroscommands -step=blocklist -version=7.18.2]
+[admin@MikroTik] >
+== /system script run mv-bl-et
+      status: finished
+  downloaded: 0KiB    
+       total: 0KiB    
+    duration: 0s      
+[admin@MikroTik] >
+== /ip firewall address-list print without-paging where list=mv-bl-et
+Columns: LIST, ADDRESS, CREATION-TIME
+# LIST      ADDRESS          CREATION-TIME      
+0 mv-bl-et  192.0.2.10       2026-10-02 01:02:38
+1 mv-bl-et  198.51.100.0/24  2026-10-02 01:02:38
+2 mv-bl-et  203.0.113.7      2026-10-02 01:02:38
+3 mv-bl-et  8.8.4.4          2026-10-02 01:02:38
+
+[admin@MikroTik] >
+== /log print without-paging where message~"^mikroview blocklist: et"
+ 2026-10-02 01:02:38 script,info mikroview blocklist: et: 4 loaded, 14 skipped
+
+[admin@MikroTik] >
+PASS  only the public addresses loaded: ['192.0.2.10', '198.51.100.0/24', '203.0.113.7', '8.8.4.4']
+
+RESULT: PASS

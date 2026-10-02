@@ -499,7 +499,7 @@ real RouterOS 7.23.3 router before writing this down:
 ```
 :local recs [:toarray ""]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
-  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); "disabled"=[/ip/firewall/filter get ($v->".id") disabled]; "packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$recs}]
@@ -534,9 +534,16 @@ the array RouterOS sends or as a comma-joined string, so
 `packets` and `bytes` were added for issue #435: RouterOS keeps a
 per-rule hit counter whether or not the rule logs, so the "Log every
 rule" helper can show a rule's real cost — "fired 41,000 times in the
-last day" — beside its tick-box before you switch logging on for it. Same
-shape as every other RouterOS integer here: `:serialize to=json` emits
-them as a float, which MikroView's decoder already expects.
+last day" — beside its tick-box before you switch logging on for it.
+
+`disabled`, `packets` and `bytes` are read with `get` by the rule's own
+`.id` rather than off `$v`, because `print as-value` does not carry
+them (issue #1409): on RouterOS 7.18.2 and 7.24.4 alike it leaves out
+both counters, so `($v->"packets")` sends nothing, and on 7.18.2 it
+leaves out `disabled` too, so a disabled rule arrives looking enabled.
+`get` answers all three on both
+(`docs/routeros-verification-logs/<version>-push-filter-counters.log`).
+A counter can pass 2^31 on a busy rule; MikroView takes it up to 2^53.
 
 `routerosVersion` on the payload (not on a record — it describes the
 router, not a rule) is the router telling MikroView which RouterOS it is
@@ -641,17 +648,19 @@ to cover more than filter rules and DHCP/ARP:
 
 | `kind` | Source command | Fields |
 |---|---|---|
-| `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `disabled`, `packets`, `bytes` |
+| `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, and `dynamic` read with `get` (7.18.2's `print as-value` leaves it out) |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, and `disabled`, `packets`, `bytes` read with `get` -- see the example above |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `logPrefix` ← `log-prefix`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
 | `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |
 | `ip-address` | `/ip/address print as-value` | `address`, `network`, `interface`, `comment` |
-| `ip-service` | `/ip/service print as-value` | `name`, `disabled`, `port`, `address` (the address restriction — send as-is; empty means no restriction, reachable from anywhere), `certificate` (the certificate *name* only, for `www-ssl`/`api-ssl`; `none` when unset, which MikroView reads as no certificate), `dynamic` |
+| `ip-service` | `/ip/service print as-value` | `name`, `disabled` (read with `get`: 7.18.2's `print as-value` leaves it out), `port`, `address` (the address restriction — send as-is; empty means no restriction, reachable from anywhere), `availableFrom` ← `available-from` (the same restriction under its 7.24 name: send both, a router fills only one), `certificate` (the certificate *name* only, for `www-ssl`/`api-ssl`; `none` when unset, which MikroView reads as no certificate), `dynamic` |
 | `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
 | `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address` (**send the array as-is**), `endpointAddress` ← `endpoint-address`, `comment`, `lastHandshake` ← `last-handshake` (absent if never handshaken), `currentEndpointAddress` ← `current-endpoint-address`, `rx`, `tx`, `disabled`, `interface` ← `interface` (which WireGuard interface this peer belongs to) |
 | `ppp-active` | `/ppp/active print as-value` | `name`, `service`, `address`, `callerId` ← `caller-id`, `uptime` -- covers L2TP, PPTP, SSTP and OVPN alike; a session's presence in the push is itself the up/down signal |
+| `raw-rule` | `/ip/firewall/raw print as-value`, then `/ipv6/firewall/raw print as-value`, into one list | `family` (`ip` or `ipv6`, written by the script), `ordinal` (loop index, per family), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `dstAddressList` ← `dst-address-list`, `logPrefix` ← `log-prefix`, `log`, and `disabled`, `packets`, `bytes` read with `get` -- see [4c-iii](#4c-iii-blocklist-rules-and-counts) |
+| `address-list-count` | `print count-only` on both address-list menus, per blocklist name | `list`, `family`, `count`, `loadedAt` -- see [4c-iii](#4c-iii-blocklist-rules-and-counts) |
 
 `ip-service` (#1329) is pushed by default, same as `address-list` and
 `ip-address` above -- it tells MikroView what the router's own
@@ -710,6 +719,72 @@ router's traffic simply shows unnamed hosts.
 No `read,write` or `sensitive` policy is needed for any of this —
 `read,test` (below) is enough, and WireGuard *private* keys never
 appear in a `read`-policy script's view at all, only public ones.
+
+### 4c-iii. Blocklist rules and counts
+
+MikroView's blocklist page writes address lists named `mv-bl-<list>`
+(`mv-bl-spamhaus6` for IPv6) and drop rules in raw prerouting. The push
+script the wizard renders today (version 6) does three things for them,
+verified against real RouterOS 7.18.2 and 7.24.4 routers
+(`docs/routeros-verification-logs/<version>-push-blocklist.log`):
+
+- **The `address-list` block leaves them out**, with
+  `print as-value where !(list~"^mv-bl-")`. A blocklist can hold 15,000
+  entries, far more than the roughly 64 KiB `/tool fetch` can POST, and
+  an address-list page that size would stop arriving at all.
+- **A `raw-rule` block** sends both raw tables in one page:
+
+```
+:local rawRecs [:toarray ""]
+:foreach i,v in=[/ip/firewall/raw print as-value] do={
+  :local rec {"family"="ip"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ip/firewall/raw get ($v->".id") disabled]; "packets"=[/ip/firewall/raw get ($v->".id") packets]; "bytes"=[/ip/firewall/raw get ($v->".id") bytes]}
+  :set rawRecs ($rawRecs, {$rec})
+}
+:foreach i,v in=[/ipv6/firewall/raw print as-value] do={
+  :local rec {"family"="ipv6"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ipv6/firewall/raw get ($v->".id") disabled]; "packets"=[/ipv6/firewall/raw get ($v->".id") packets]; "bytes"=[/ipv6/firewall/raw get ($v->".id") bytes]}
+  :set rawRecs ($rawRecs, {$rec})
+}
+:local rawPayload [:serialize to=json value={"kind"="raw-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$rawRecs}]
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$rawPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+```
+
+  `disabled`, `packets` and `bytes` are read with `get` by the rule's own
+  `.id` rather than off `$v`, because `print as-value` does not carry
+  them: on both releases it leaves out the counters, and on 7.18.2 it
+  leaves out `disabled` even for a disabled rule, so that rule would
+  arrive looking enabled. (`print stats as-value` has the counters but
+  drops `src-address-list`, `log` and `log-prefix`, so neither print
+  alone is enough.)
+- **An `address-list-count` block** sends how many entries each
+  blocklist holds instead of the entries. It counts every name the page
+  can write, on both families, whether or not the router holds that
+  list, so the block reads the same whichever lists are on:
+
+```
+:local blcRecs [:toarray ""]
+:foreach n in={"mv-bl-spamhaus";"mv-bl-spamhaus6";"mv-bl-et";"mv-bl-cins";"mv-bl-blde";"mv-bl-greensnow";"mv-bl-dshield";"mv-bl-bindef"} do={
+  :local c4 [/ip/firewall/address-list print count-only where list=$n]
+  :local t4 ""
+  :if ($c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=$n]->0) creation-time] }
+  :set blcRecs ($blcRecs, {{"list"=$n; "family"="ip"; "count"=$c4; "loadedAt"=$t4}})
+  :local c6 [/ipv6/firewall/address-list print count-only where list=$n]
+  :local t6 ""
+  :if ($c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=$n]->0) creation-time] }
+  :set blcRecs ($blcRecs, {{"list"=$n; "family"="ipv6"; "count"=$c6; "loadedAt"=$t6}})
+}
+:local blcPayload [:serialize to=json value={"kind"="address-list-count"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$blcRecs}]
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$blcPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+```
+
+  `loadedAt` is the first entry's `creation-time`, in the router's own
+  clock and format (`2026-10-01 04:17:02`), or empty for a list the
+  router does not hold. The blocklist loader fills a `-next` list and
+  then renames it with `set list=`, and that rename keeps each entry's
+  `creation-time`, so this is when the list was loaded. The two locals
+  per family carry their own names (`c4`/`c6`) because both sit in one
+  `do={}` scope.
+
+Both blocks need only the `read,test` policy the rest of the push uses.
 
 ### 4d. Pagination, for a large rule set
 
@@ -1016,24 +1091,17 @@ for this router, reuse it; nothing here needs a token of its own kind.
 ### 7c. The script
 
 ```
-:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="
-  /system backup save name=mv-backup dont-encrypt=yes
-  /export hide-sensitive file=mv-export
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
-  /file remove mv-backup.backup
-  /file remove mv-export.rsc
-" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="
-  /system backup save name=mv-backup dont-encrypt=yes
-  /export hide-sensitive file=mv-export
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
-  /file remove mv-backup.backup
-  /file remove mv-export.rsc
-" }
+:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup\n  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n" }
 :if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" disabled=no }
 /system script run mv-backup
 ```
+
+The script's source is one line, its line breaks written as `\n`, on
+purpose: before RouterOS 7.19 the terminal drops a line break pasted
+inside a quoted string, so a source spread over several lines saves on
+7.18 as one run-on line that does nothing (#1412). Paste it as it
+stands; the script RouterOS saves still has one command per line — the
+backup, the export, the two uploads and the two removals.
 
 `<device>` is both the SFTP username and the destination file stem —
 it must be the router's own device id, the same identity the token is
@@ -1218,6 +1286,20 @@ oldest may then be dropped as normal.
 Restoring is your own act on the replacement router
 (`/system backup load`) — MikroView never connects to a router to apply
 one; it only ever reads the header to confirm what arrived.
+
+## 8. Block known-bad addresses (optional)
+
+MikroView's blocklist page (Settings ▸ drop list ▸ **Block known-bad
+addresses…**, or the wizard's optional last row on first run) builds a
+block that makes this router fetch published known-bad lists from their
+own sources and drop what is on them in raw prerouting. Paste it like
+the blocks above; it re-sets the push from step 4 with the two kinds in
+[4c-iii](#4c-iii-blocklist-rules-and-counts), so the page can see what
+the router holds. The lists, their terms and the undo are in
+[configuration.md](configuration.md#block-known-bad-addresses-on-the-router-optional-1360).
+It needs RouterOS 7.18 or later; checked end to end on real 7.18.2,
+7.22.3 and 7.24.4 routers
+(`docs/routeros-verification-logs/<version>-blocklist.log`).
 
 ## Adding another router
 

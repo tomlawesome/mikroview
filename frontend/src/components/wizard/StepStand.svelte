@@ -27,7 +27,9 @@
   const ev = $derived(wizardRun.evidence)
   const rows = $derived(wizardRun.ledgerRows)
   const n = $derived(rows.filter((r) => r.done).length)
-  const k = $derived(rows.length - n)
+  // The first-run tail's offered row is neither a proof nor set aside
+  // (#1360), so it counts in neither.
+  const k = $derived(rows.filter((r) => !r.done && !r.offer).length)
 
   // The tagged-rules row's own Undo needs the actual pushed rule table
   // to address each rule the same way the tagging block did (matcherFor,
@@ -76,13 +78,15 @@
 <Track stations={wizardRun.trackStations} stage={wizardRun.stage} compact />
 <div class="ledger">
   {#each rows as r (r.t)}
-    <div class="row" class:skip={!r.done} style:--ink={r.done && r.ink ? `var(--ink-${r.ink})` : null}>
-      <span class="step-n" class:done={r.done} class:skip={!r.done}>{r.done ? '✓' : '–'}</span>
+    <div class="row" class:skip={!r.done && !r.offer} style:--ink={r.done && r.ink ? `var(--ink-${r.ink})` : null}>
+      <span class="step-n" class:done={r.done} class:skip={!r.done && !r.offer} class:offer={r.offer}>{r.done ? '✓' : r.offer ? '+' : '–'}</span>
       <span>
         {r.t}
-        <div class="r" class:done={r.done} class:skip={!r.done}>{r.r}</div>
+        <div class="r" class:done={r.done} class:skip={!r.done && !r.offer} class:offer={r.offer}>{r.r}</div>
       </span>
-      {#if r.u}
+      {#if r.offer}
+        <button type="button" class="linkish u" onclick={() => wizardRun.toBlock()}>Set it up</button>
+      {:else if r.u}
         <button type="button" class="linkish u" onclick={() => wizardRun.toggleUndo(r.u as LedgerRowId)}>
           {wizardRun.undoOpen === r.u ? 'Hide' : 'Undo'}
         </button>

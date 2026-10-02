@@ -887,6 +887,12 @@ func (s *Server) coreRoutes() []route {
 		{http.MethodDelete, "/api/droplist/key", s.handleDroplistKeyDelete},
 		{http.MethodDelete, "/api/droplist/{cidr...}", s.handleDroplistDelete},
 
+		// The blocklist builder (#1360): the page that builds the block a
+		// router pastes to fetch known-bad lists from their sources and
+		// drop what is on them. Admin-only, beside the drop list.
+		{http.MethodGet, "/api/blocklist/builder", s.handleBlocklistBuilder},
+		{http.MethodPost, "/api/blocklist/builder/commands", s.handleBlocklistCommands},
+
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},

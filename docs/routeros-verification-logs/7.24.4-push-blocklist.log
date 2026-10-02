@@ -1,0 +1,191 @@
+# #1360 part 2: the raw-rule and address-list-count push blocks (and the
+# address-list block's mv-bl-* exclusion) run on a real CHR 7.24.4, 2026-10-01.
+# Each block once at the console with its /tool fetch swapped for :put, then
+# all three saved as a script under the push policy (read,test) and run.
+# The fixture is probe data: documentation addresses plus the QEMU SLIRP
+# gateway (10.0.2.2), so a drop rule's counter moves. No token: "tok".
+
+== :put [/system resource get version]
+:put [/system resource get version]
+7.24.4 (stable)
+[admin@CHR] >
+== /ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop place-before=0 comment="probe: place-before=0 on an empty raw table"
+/ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop place-before=0 comment="probe: place-before=0 on an empty raw table"
+no such item
+[admin@CHR] >
+== /ip firewall address-list add list=mv-bl-et-next address=198.51.100.7 comment="probe"
+/ip firewall address-list add list=mv-bl-et-next address=198.51.100.7 comment="probe"
+[admin@CHR] >
+== /ip firewall address-list add list=mv-bl-et-next address=10.0.2.2 comment="probe: the SLIRP gateway, so the drop counter moves"
+/ip firewall address-list add list=mv-bl-et-next address=10.0.2.2 comment="probe: the SLIRP gateway, so the drop counter moves"
+[admin@CHR] >
+== /ip firewall address-list add list=mgmt address=192.0.2.1 comment="operator list"
+/ip firewall address-list add list=mgmt address=192.0.2.1 comment="operator list"
+[admin@CHR] >
+== :delay 2s
+:delay 2s
+[admin@CHR] >
+== /ip firewall address-list print detail
+/ip firewall address-list print detail
+0  ;;; probe
+   list=mv-bl-et-next address=198.51.100.7 creation-time=2026-10-01 17:37:51 dynamic=no
+ 
+1  ;;; probe: the SLIRP gateway, so the drop counter moves
+   list=mv-bl-et-next address=10.0.2.2 creation-time=2026-10-01 17:37:53 dynamic=no
+ 
+2  ;;; operator list
+   list=mgmt address=192.0.2.1 creation-time=2026-10-01 17:37:54 dynamic=no
+[admin@CHR] >
+== /ip firewall address-list set [find list=mv-bl-et-next] list=mv-bl-et
+/ip firewall address-list set [find list=mv-bl-et-next] list=mv-bl-et
+[admin@CHR] >
+== /ip firewall address-list print detail
+/ip firewall address-list print detail
+0  ;;; probe
+   list=mv-bl-et address=198.51.100.7 creation-time=2026-10-01 17:37:51 dynamic=no
+ 
+1  ;;; probe: the SLIRP gateway, so the drop counter moves
+   list=mv-bl-et address=10.0.2.2 creation-time=2026-10-01 17:37:53 dynamic=no
+ 
+2  ;;; operator list
+   list=mgmt address=192.0.2.1 creation-time=2026-10-01 17:37:54 dynamic=no
+[admin@CHR] >
+== /ipv6 firewall address-list add list=mv-bl-spamhaus6 address=2001:db8::/32 comment="probe"
+/ipv6 firewall address-list add list=mv-bl-spamhaus6 address=2001:db8::/32 comment="probe"
+[admin@CHR] >
+== /ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop log=yes log-prefix="D|probe|" comment="mikroview blocklist: et (from)"
+/ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop log=yes log-prefix="D|probe|" comment="mikroview blocklist: et (from)"
+[admin@CHR] >
+== /ip firewall raw add chain=prerouting dst-address-list=mv-bl-et action=drop log=yes log-prefix="D|probe|" comment="mikroview blocklist: et (to)"
+/ip firewall raw add chain=prerouting dst-address-list=mv-bl-et action=drop log=yes log-prefix="D|probe|" comment="mikroview blocklist: et (to)"
+[admin@CHR] >
+== /ip firewall raw add chain=prerouting src-address-list=mgmt action=accept disabled=yes comment="an operator rule, disabled"
+/ip firewall raw add chain=prerouting src-address-list=mgmt action=accept disabled=yes comment="an operator rule, disabled"
+[admin@CHR] >
+== /ipv6 firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus6 action=drop comment="mikroview blocklist: spamhaus (from)"
+/ipv6 firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus6 action=drop comment="mikroview blocklist: spamhaus (from)"
+[admin@CHR] >
+== /ping 10.0.2.2 count=4
+/ping 10.0.2.2 count=4
+  SEQ HOST                                     SIZE TTL TIME       STATUS                                                                                                                              
+    0 10.0.2.2                                                     timeout                                                                                                                             
+    1 10.0.2.2                                                     timeout                                                                                                                             
+    2 10.0.2.2                                                     timeout                                                                                                                             
+    3 10.0.2.2                                                     timeout                                                                                                                             
+    sent=4 received=0 packet-loss=100% 
+
+[admin@CHR] >
+== /ip firewall raw print stats
+/ip firewall raw print stats
+Flags: X - DISABLED
+Columns: CHAIN, ACTION, BYTES, PACKETS
+#   CHAIN       ACTION  BYTES  PACKETS
+;;; mikroview blocklist: et (from)
+0   prerouting  drop      224        4
+;;; mikroview blocklist: et (to)
+1   prerouting  drop        0        0
+;;; an operator rule, disabled
+2 X prerouting  accept      0        0
+[admin@CHR] >
+== :put [/ip/firewall/raw print as-value]
+:put [/ip/firewall/raw print as-value]
+.id=*1;action=drop;chain=prerouting;comment=mikroview blocklist: et (from);dynamic=false;invalid=false;log=true;log-prefix=D|probe|;src-address-list=mv-bl-et;.id=*2;action=drop;chain=prerouting;comment=mikroview blocklist: et (to);dst-address-list=mv-bl-et;dynamic=false;invalid=false;log=true;log-prefix=D|probe|;.id=*3;action=accept;chain=prerouting;comment=an operator rule, disabled;disabled=true;dynamic=false;invalid=false;src-address-list=mgmt
+[admin@CHR] >
+== :put [/ip/firewall/raw print stats as-value]
+:put [/ip/firewall/raw print stats as-value]
+.id=*1;action=drop;bytes=224;chain=prerouting;comment=mikroview blocklist: et (from);dynamic=false;invalid=false;packets=4;.id=*2;action=drop;bytes=0;chain=prerouting;comment=mikroview blocklist: et (to);dynamic=false;invalid=false;packets=0;.id=*3;action=accept;bytes=0;chain=prerouting;comment=an operator rule, disabled;disabled=true;dynamic=false;invalid=false;packets=0
+[admin@CHR] >
+== :local rawRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/raw print as-value] do={ :local rec {"family"="ip"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ip/firewall/raw get ($v->".id") disabled]; "packets"=[/ip/firewall/raw get ($v->".id") packets]; "bytes"=[/ip/firewall/raw get ($v->".id") bytes]}; :set rawRecs ($rawRecs, {$rec}) }; :foreach i,v in=[/ipv6/firewall/raw print as-value] do={ :local rec {"family"="ipv6"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ipv6/firewall/raw get ($v->".id") disabled]; "packets"=[/ipv6/firewall/raw get ($v->".id") packets]; "bytes"=[/ipv6/firewall/raw get ($v->".id") bytes]}; :set rawRecs ($rawRecs, {$rec}) }; :local rawPayload [:serialize to=json value={"kind"="raw-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$rawRecs}]; :put $rawPayload
+:local rawRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/raw print as-value] do={ :local rec {"family"="ip"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=(
+$v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ip/firewall/raw get ($v->".id") dis
+abled]; "packets"=[/ip/firewall/raw get ($v->".id") packets]; "bytes"=[/ip/firewall/raw get ($v->".id") bytes]}; :set rawRecs ($rawRecs, {$rec}) }; :foreach i,v in=[/ipv6/firewall/raw print as-value] 
+do={ :local rec {"family"="ipv6"; "ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address
+-list"); "logPrefix"=($v->"log-prefix"); "log"=($v->"log"); "disabled"=[/ipv6/firewall/raw get ($v->".id") disabled]; "packets"=[/ipv6/firewall/raw get ($v->".id") packets]; "bytes"=[/ipv6/firewall/ra
+w get ($v->".id") bytes]}; :set rawRecs ($rawRecs, {$rec}) }; :local rawPayload [:serialize to=json value={"kind"="raw-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wi
+zardVersion"=6; "records"=$rawRecs}]; :put $rawPayload
+{"kind":"raw-rule","page":1,"pages":1,"records":[{"action":"drop","bytes":224,"chain":"prerouting","comment":"mikroview blocklist: et (from)","disabled":false,"dstAddressList":null,"family":"ip","log":true,"logPrefix":"D|probe|","ordinal":0,"packets":4,"srcAddressList":"mv-bl-et"},{"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: et (to)","disabled":false,"dstAddressList":"mv-bl-et","family":"ip","log":true,"logPrefix":"D|probe|","ordinal":1,"packets":0,"srcAddressList":null},{"action":"accept","bytes":0,"chain":"prerouting","comment":"an operator rule, disabled","disabled":true,"dstAddressList":null,"family":"ip","log":null,"logPrefix":null,"ordinal":2,"packets":0,"srcAddressList":"mgmt"},{"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: spamhaus (from)","disabled":false,"dstAddressList":null,"family":"ipv6","log":null,"logPrefix":null,"ordinal":0,"packets":0,"srcAddressList":"mv-bl-spamhaus6"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+== :local blcRecs [:toarray ""]; :foreach n in={"mv-bl-spamhaus";"mv-bl-spamhaus6";"mv-bl-et";"mv-bl-cins";"mv-bl-blde";"mv-bl-greensnow";"mv-bl-dshield";"mv-bl-bindef"} do={ :local c4 [/ip/firewall/address-list print count-only where list=$n]; :local t4 ""; :if ($c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=$n]->0) creation-time] }; :set blcRecs ($blcRecs, {{"list"=$n; "family"="ip"; "count"=$c4; "loadedAt"=$t4}}); :local c6 [/ipv6/firewall/address-list print count-only where list=$n]; :local t6 ""; :if ($c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=$n]->0) creation-time] }; :set blcRecs ($blcRecs, {{"list"=$n; "family"="ipv6"; "count"=$c6; "loadedAt"=$t6}}) }; :local blcPayload [:serialize to=json value={"kind"="address-list-count"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$blcRecs}]; :put $blcPayload
+:local blcRecs [:toarray ""]; :foreach n in={"mv-bl-spamhaus";"mv-bl-spamhaus6";"mv-bl-et";"mv-bl-cins";"mv-bl-blde";"mv-bl-greensnow";"mv-bl-dshield";"mv-bl-bindef"} do={ :local c4 [/ip
+/firewall/address-list print count-only where list=$n]; :local t4 ""; :if ($c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=$n]->0) creation-time] }; :set blcRecs ($blcRecs, {{"l
+ist"=$n; "family"="ip"; "count"=$c4; "loadedAt"=$t4}}); :local c6 [/ipv6/firewall/address-list print count-only where list=$n]; :local t6 ""; :if ($c6 > 0) do={ :set t6 [/ipv6/firewall/address-list ge
+t ([find where list=$n]->0) creation-time] }; :set blcRecs ($blcRecs, {{"list"=$n; "family"="ipv6"; "count"=$c6; "loadedAt"=$t6}}) }; :local blcPayload [:serialize to=json value={"kind"="address-list-
+count"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$blcRecs}]; :put $blcPayload
+0
+0
+0
+1
+2
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+{"kind":"address-list-count","page":1,"pages":1,"records":[{"count":0,"family":"ip","list":"mv-bl-spamhaus","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-spamhaus","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-spamhaus6","loadedAt":""},{"count":1,"family":"ipv6","list":"mv-bl-spamhaus6","loadedAt":"2026-10-01 17:38:02"},{"count":2,"family":"ip","list":"mv-bl-et","loadedAt":"2026-10-01 17:37:51"},{"count":0,"family":"ipv6","list":"mv-bl-et","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-cins","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-cins","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-blde","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-blde","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-greensnow","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-greensnow","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-dshield","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-dshield","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-bindef","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-bindef","loadedAt":""}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+== :local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$alRecs}]; :put $alPayload
+:local alRecs [:toarray ""]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~"^mv-bl-")] do={ :local rec {"list"=($v->"list"); "address"=($v->"address"); "comment"
+=($v->"comment"); "dynamic"=($v->"dynamic")}; :set alRecs ($alRecs, {$rec}) }; :local alPayload [:serialize to=json value={"kind"="address-list"; "page"=1; "pages"=1; "routerosVersion"=[/system/resour
+ce get version]; "wizardVersion"=6; "records"=$alRecs}]; :put $alPayload
+{"kind":"address-list","page":1,"pages":1,"records":[{"address":"192.0.2.1","comment":"operator list","dynamic":false,"list":"mgmt"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+== :if ([:len [/system script find name=mv-push-probe]] = 0) do={ /system script add name=mv-push-probe policy=read,test source=":local rawRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/raw print as-value] do={ :local rec {\"family\"=\"ip\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(\$v->\"dst-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ip/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ip/firewall/raw get (\$v->\".id\") packets]; \"bytes\"=[/ip/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :foreach i,v in=[/ipv6/firewall/raw print as-value] do={ :local rec {\"family\"=\"ipv6\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(\$v->\"dst-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ipv6/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ipv6/firewall/raw get (\$v->\".id\") packets]; \"bytes\"=[/ipv6/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :local rawPayload [:serialize to=json value={\"kind\"=\"raw-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$rawRecs}]; :put \$rawPayload; :local blcRecs [:toarray \"\"]; :foreach n in={\"mv-bl-spamhaus\";\"mv-bl-spamhaus6\";\"mv-bl-et\";\"mv-bl-cins\";\"mv-bl-blde\";\"mv-bl-greensnow\";\"mv-bl-dshield\";\"mv-bl-bindef\"} do={ :local c4 [/ip/firewall/address-list print count-only where list=\$n]; :local t4 \"\"; :if (\$c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ip\"; \"count\"=\$c4; \"loadedAt\"=\$t4}}); :local c6 [/ipv6/firewall/address-list print count-only where list=\$n]; :local t6 \"\"; :if (\$c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ipv6\"; \"count\"=\$c6; \"loadedAt\"=\$t6}}) }; :local blcPayload [:serialize to=json value={\"kind\"=\"address-list-count\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$blcRecs}]; :put \$blcPayload; :local alRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~\"^mv-bl-\")] do={ :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=(\$v->\"dynamic\")}; :set alRecs (\$alRecs, {\$rec}) }; :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$alRecs}]; :put \$alPayload" } else={ /system script set [find name=mv-push-probe] policy=read,test source=":local rawRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/raw print as-value] do={ :local rec {\"family\"=\"ip\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(\$v->\"dst-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ip/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ip/firewall/raw get (\$v->\".id\") packets]; \"bytes\"=[/ip/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :foreach i,v in=[/ipv6/firewall/raw print as-value] do={ :local rec {\"family\"=\"ipv6\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(\$v->\"dst-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ipv6/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ipv6/firewall/raw get (\$v->\".id\") packets]; \"bytes\"=[/ipv6/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :local rawPayload [:serialize to=json value={\"kind\"=\"raw-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$rawRecs}]; :put \$rawPayload; :local blcRecs [:toarray \"\"]; :foreach n in={\"mv-bl-spamhaus\";\"mv-bl-spamhaus6\";\"mv-bl-et\";\"mv-bl-cins\";\"mv-bl-blde\";\"mv-bl-greensnow\";\"mv-bl-dshield\";\"mv-bl-bindef\"} do={ :local c4 [/ip/firewall/address-list print count-only where list=\$n]; :local t4 \"\"; :if (\$c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ip\"; \"count\"=\$c4; \"loadedAt\"=\$t4}}); :local c6 [/ipv6/firewall/address-list print count-only where list=\$n]; :local t6 \"\"; :if (\$c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ipv6\"; \"count\"=\$c6; \"loadedAt\"=\$t6}}) }; :local blcPayload [:serialize to=json value={\"kind\"=\"address-list-count\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$blcRecs}]; :put \$blcPayload; :local alRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~\"^mv-bl-\")] do={ :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=(\$v->\"dynamic\")}; :set alRecs (\$alRecs, {\$rec}) }; :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$alRecs}]; :put \$alPayload" }
+:if ([:len [/system script find name=mv-push-probe]] = 0) do={ /system script add name=mv-push-probe policy=read,test source=":local rawRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewal
+l/raw print as-value] do={ :local rec {\"family\"=\"ip\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-addr
+ess-list\"); \"dstAddressList\"=(\$v->\"dst-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ip/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ip/
+firewall/raw get (\$v->\".id\") packets]; \"bytes\"=[/ip/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :foreach i,v in=[/ipv6/firewall/raw print as-value] do={ :local r
+ec {\"family\"=\"ipv6\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(
+\$v->\"dst-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ipv6/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ipv6/firewall/raw get (\$v->\".id\
+") packets]; \"bytes\"=[/ipv6/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :local rawPayload [:serialize to=json value={\"kind\"=\"raw-rule\"; \"page\"=1; \"pages\"=1;
+ \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$rawRecs}]; :put \$rawPayload; :local blcRecs [:toarray \"\"]; :foreach n in={\"mv-bl-spamhaus\";\"mv-bl-spamhaus
+6\";\"mv-bl-et\";\"mv-bl-cins\";\"mv-bl-blde\";\"mv-bl-greensnow\";\"mv-bl-dshield\";\"mv-bl-bindef\"} do={ :local c4 [/ip/firewall/address-list print count-only where list=\$n]; :local t4 \"\"; :if (
+\$c4 > 0) do={ :set t4 [/ip/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ip\"; \"count\"=\$c4; \"loadedAt\"=\$t4}}); :lo
+cal c6 [/ipv6/firewall/address-list print count-only where list=\$n]; :local t6 \"\"; :if (\$c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blc
+Recs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ipv6\"; \"count\"=\$c6; \"loadedAt\"=\$t6}}) }; :local blcPayload [:serialize to=json value={\"kind\"=\"address-list-count\"; \"page\"=1; \"pages\"=1; \"r
+outerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$blcRecs}]; :put \$blcPayload; :local alRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/address-list print as-val
+ue where !(list~\"^mv-bl-\")] do={ :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=(\$v->\"dynamic\")}; :set alRecs (\$alRecs, {\$rec}
+) }; :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$alRecs}]; :p
+ut \$alPayload" } else={ /system script set [find name=mv-push-probe] policy=read,test source=":local rawRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/raw print as-value] do={ :local rec {\"fami
+ly\"=\"ip\"; \"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(\$v->\"dst-a
+ddress-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ip/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ip/firewall/raw get (\$v->\".id\") packets]; \"b
+ytes\"=[/ip/firewall/raw get (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :foreach i,v in=[/ipv6/firewall/raw print as-value] do={ :local rec {\"family\"=\"ipv6\"; \"ordinal\"=\$i; \"c
+omment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"dstAddressList\"=(\$v->\"dst-address-list\"); \"logPrefix\"=(\$
+v->\"log-prefix\"); \"log\"=(\$v->\"log\"); \"disabled\"=[/ipv6/firewall/raw get (\$v->\".id\") disabled]; \"packets\"=[/ipv6/firewall/raw get (\$v->\".id\") packets]; \"bytes\"=[/ipv6/firewall/raw ge
+t (\$v->\".id\") bytes]}; :set rawRecs (\$rawRecs, {\$rec}) }; :local rawPayload [:serialize to=json value={\"kind\"=\"raw-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get ve
+rsion]; \"wizardVersion\"=6; \"records\"=\$rawRecs}]; :put \$rawPayload; :local blcRecs [:toarray \"\"]; :foreach n in={\"mv-bl-spamhaus\";\"mv-bl-spamhaus6\";\"mv-bl-et\";\"mv-bl-cins\";\"mv-bl-blde\
+";\"mv-bl-greensnow\";\"mv-bl-dshield\";\"mv-bl-bindef\"} do={ :local c4 [/ip/firewall/address-list print count-only where list=\$n]; :local t4 \"\"; :if (\$c4 > 0) do={ :set t4 [/ip/firewall/address-
+list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\"ip\"; \"count\"=\$c4; \"loadedAt\"=\$t4}}); :local c6 [/ipv6/firewall/address-list print cou
+nt-only where list=\$n]; :local t6 \"\"; :if (\$c6 > 0) do={ :set t6 [/ipv6/firewall/address-list get ([find where list=\$n]->0) creation-time] }; :set blcRecs (\$blcRecs, {{\"list\"=\$n; \"family\"=\
+"ipv6\"; \"count\"=\$c6; \"loadedAt\"=\$t6}}) }; :local blcPayload [:serialize to=json value={\"kind\"=\"address-list-count\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get versio
+n]; \"wizardVersion\"=6; \"records\"=\$blcRecs}]; :put \$blcPayload; :local alRecs [:toarray \"\"]; :foreach i,v in=[/ip/firewall/address-list print as-value where !(list~\"^mv-bl-\")] do={ :local rec
+ {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=(\$v->\"dynamic\")}; :set alRecs (\$alRecs, {\$rec}) }; :local alPayload [:serialize to=json val
+ue={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$alRecs}]; :put \$alPayload" }
+[admin@CHR] >
+== /system script run mv-push-probe
+/system script run mv-push-probe
+{"kind":"raw-rule","page":1,"pages":1,"records":[{"action":"drop","bytes":224,"chain":"prerouting","comment":"mikroview blocklist: et (from)","disabled":false,"dstAddressList":null,"family":"ip","log":true,"logPrefix":"D|probe|","ordinal":0,"packets":4,"srcAddressList":"mv-bl-et"},{"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: et (to)","disabled":false,"dstAddressList":"mv-bl-et","family":"ip","log":true,"logPrefix":"D|probe|","ordinal":1,"packets":0,"srcAddressList":null},{"action":"accept","bytes":0,"chain":"prerouting","comment":"an operator rule, disabled","disabled":true,"dstAddressList":null,"family":"ip","log":null,"logPrefix":null,"ordinal":2,"packets":0,"srcAddressList":"mgmt"},{"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: spamhaus (from)","disabled":false,"dstAddressList":null,"family":"ipv6","log":null,"logPrefix":null,"ordinal":0,"packets":0,"srcAddressList":"mv-bl-spamhaus6"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+0
+0
+0
+1
+2
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+{"kind":"address-list-count","page":1,"pages":1,"records":[{"count":0,"family":"ip","list":"mv-bl-spamhaus","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-spamhaus","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-spamhaus6","loadedAt":""},{"count":1,"family":"ipv6","list":"mv-bl-spamhaus6","loadedAt":"2026-10-01 17:38:02"},{"count":2,"family":"ip","list":"mv-bl-et","loadedAt":"2026-10-01 17:37:51"},{"count":0,"family":"ipv6","list":"mv-bl-et","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-cins","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-cins","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-blde","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-blde","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-greensnow","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-greensnow","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-dshield","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-dshield","loadedAt":""},{"count":0,"family":"ip","list":"mv-bl-bindef","loadedAt":""},{"count":0,"family":"ipv6","list":"mv-bl-bindef","loadedAt":""}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+{"kind":"address-list","page":1,"pages":1,"records":[{"address":"192.0.2.1","comment":"operator list","dynamic":false,"list":"mgmt"}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >

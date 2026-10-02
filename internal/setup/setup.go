@@ -418,12 +418,24 @@ const (
 // This number has now lagged the wizard twice (#1267, then #1257's
 // audit): the wizard gains a step, the ledger silently refuses every
 // decision about it, and the walk advances anyway so nobody sees the
-// refusal. If an eighth is ever added, this is the second edit.
+// refusal.
+//
+// Eight since #1360: record 8 is the first-run tail's "Block known-bad
+// addresses" (StepBlocklist), which is recorded under a number of its
+// own without joining the wizard's walk -- RECORD_NUMBERS carries it as
+// block: 8 beside the seven steps.
 //
 // Exported (#1304) so api.handleSetupMark's refusal message can be built
-// from this same number instead of carrying its own copy of "7" that
+// from this same number instead of carrying its own copy of "8" that
 // could lag behind it a third time.
-const MaxStep = 7
+const MaxStep = 8
+
+// StepBlocklist is record 8 (#1360): the first-run tail that offers the
+// blocklist builder after the wizard's steps. The operator's "Not now"
+// marks it skipped through POST /api/setup/mark; the server witnesses it
+// the first time a push reports a blocklist list holding entries
+// (internal/api's ingest handler). Either one retires the tail.
+const StepBlocklist = 8
 
 // Mark is one recorded decision about one step.
 type Mark struct {

@@ -34,6 +34,14 @@
   outside the usual ten-generation retention until released back into
   it. See
   [docs/configuration.md](configuration.md#router-backups-over-sftp-issue-394).
+- **Known-bad lists on the router**: an admin page that builds one
+  RouterOS block making the router fetch published known-bad lists
+  (Spamhaus DROP and Emerging Threats on by default, five more offered,
+  each with its terms on its card) straight from their sources and drop
+  what is on them in raw prerouting. MikroView prints the block and
+  never runs it or serves a list; what the router holds, and how often
+  each list's rule fired, comes back in its own push. See
+  [docs/configuration.md](configuration.md#block-known-bad-addresses-on-the-router-optional-1360).
 - **Behavioral flags**: watches for port scans, per-source activity
   spikes, repeated attempts against critical ports (SSH, RDP, Winbox,
   ...) from external IPs, and network-wide volume spikes — each raises a
@@ -63,10 +71,9 @@
   [docs/configuration.md](configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~230KB of JavaScript over the wire (~781KB before compression). CI
-  gates the bundle at 265KB gzipped — the measured reading plus ~15%,
-  re-derived after #1249 added the `qrcode` package for TOTP
-  enrolment's QR code (see
+  ~266KB of JavaScript over the wire (~898KB before compression). CI
+  gates the bundle at 300KB gzipped, a round figure the owner set when
+  the blocklist builder (#1360) outgrew the old 265KB gate (see
   [docs/decisions/ui-framework.md](decisions/ui-framework.md) for the
   gate's own history).
 - **Logging**: leveled (debug/info/warn/error) and colorized server

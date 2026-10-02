@@ -736,3 +736,188 @@ func TestHostNameSourceNamesThePushedTable(t *testing.T) {
 // /ip/address table contributes its masked network, an unparseable or
 // non-IPv4 entry is skipped rather than failing the call, and a device
 // that has never pushed the ip-address kind contributes nothing.
+
+// rawPage is a raw-rule page through the real decoder, one record per
+// (family, ordinal, comment, packets).
+func rawPage(t *testing.T, rules ...[4]string) ingest.Payload {
+	t.Helper()
+	var recs []string
+	for _, r := range rules {
+		recs = append(recs, `{"family":"`+r[0]+`","ordinal":`+r[1]+`,"comment":"`+r[2]+`","chain":"prerouting","action":"drop","packets":`+r[3]+`,"bytes":0}`)
+	}
+	return decode(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[`+strings.Join(recs, ",")+`]}`)
+}
+
+// #1360: one list for both families, IPv4's table then IPv6's, each in
+// RouterOS's own order -- the same display order FilterRules keeps.
+func TestRawRulesSortedByFamilyThenOrdinal(t *testing.T) {
+	s := New()
+	if err := s.Apply("router-1", rawPage(t,
+		[4]string{"ipv6", "0", "v6 first", "0"},
+		[4]string{"ip", "1", "v4 second", "0"},
+		[4]string{"ip", "0", "v4 first", "0"},
+	), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rules, updatedAt, ok := s.RawRules("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("RawRules reported no data after an applied page")
+	}
+	var got []string
+	for _, r := range rules {
+		got = append(got, r.Comment)
+	}
+	if strings.Join(got, "|") != "v4 first|v4 second|v6 first" {
+		t.Errorf("RawRules order = %v, want IPv4 by ordinal, then IPv6", got)
+	}
+	if _, _, ok := s.RawRules("router-2"); ok {
+		t.Error("RawRules reported data for a device that never pushed")
+	}
+}
+
+func TestAddressListCountsSortedByListThenFamily(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"address-list-count","page":1,"pages":1,"records":[`+
+		`{"list":"mv-bl-spamhaus","family":"ipv6","count":0,"loadedAt":""},`+
+		`{"list":"mv-bl-et","family":"ip","count":633,"loadedAt":"2026-10-01 04:31:07"},`+
+		`{"list":"mv-bl-spamhaus","family":"ip","count":1692,"loadedAt":"2026-10-01 04:17:02"}]}`)
+	counts, updatedAt, ok := s.AddressListCounts("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("AddressListCounts reported no data after an applied page")
+	}
+	var got []string
+	for _, c := range counts {
+		got = append(got, c.List+"/"+c.Family)
+	}
+	if strings.Join(got, " ") != "mv-bl-et/ip mv-bl-spamhaus/ip mv-bl-spamhaus/ipv6" {
+		t.Errorf("AddressListCounts order = %v", got)
+	}
+	if counts[1].Count != 1692 || counts[1].LoadedAt != "2026-10-01 04:17:02" {
+		t.Errorf("mv-bl-spamhaus/ip = %+v", counts[1])
+	}
+}
+
+// The two new kinds are per device like every other table: a router's
+// rules, counts and samples are its own.
+func TestBlocklistKindsAreIsolatedPerDevice(t *testing.T) {
+	s := New()
+	now := time.Now()
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "mikroview blocklist: et (from)", "10"}), now); err != nil {
+		t.Fatal(err)
+	}
+	apply(t, s, "router-2", `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":5,"loadedAt":""}]}`)
+
+	if _, _, ok := s.RawRules("router-2"); ok {
+		t.Error("router-1's raw rules are visible on router-2")
+	}
+	if _, _, ok := s.AddressListCounts("router-1"); ok {
+		t.Error("router-2's counts are visible on router-1")
+	}
+	if got := s.RawRuleSamples("router-2", "mikroview blocklist: et (from)"); got != nil {
+		t.Errorf("router-1's samples are visible on router-2: %+v", got)
+	}
+	if got := s.RawRuleSamples("router-1", "mikroview blocklist: et (from)"); len(got) != 1 || got[0].Packets != 10 {
+		t.Errorf("router-1's own samples = %+v, want one at 10", got)
+	}
+}
+
+// #1360 part 2's sample ring: one (at, packets) per push for each
+// commented raw rule, rules sharing a comment summed, uncommented ones
+// left alone, and nothing older than 36 h kept.
+func TestRawRuleSamplesKeepThirtySixHours(t *testing.T) {
+	s := New()
+	const from = "mikroview blocklist: spamhaus (from)"
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	push := func(at time.Time, v4, v6 string) {
+		t.Helper()
+		if err := s.Apply("router-1", rawPage(t,
+			[4]string{"ip", "0", from, v4},
+			[4]string{"ipv6", "0", from, v6},
+			[4]string{"ip", "1", "", "999"},
+		), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	push(t0, "10", "1")
+	push(t0.Add(20*time.Minute), "30", "2")
+	got := s.RawRuleSamples("router-1", from)
+	if len(got) != 2 || got[0] != (RawRuleSample{At: t0, Packets: 11}) || got[1].Packets != 32 {
+		t.Fatalf("samples = %+v, want 11 then 32 (IPv4 and IPv6 summed)", got)
+	}
+	if s.RawRuleSamples("router-1", "") != nil {
+		t.Error("an uncommented rule was sampled")
+	}
+
+	// 36 h after the first push it is still in the window; a minute
+	// later it has gone, and the second has not.
+	push(t0.Add(rawSampleWindow), "40", "2")
+	if got := s.RawRuleSamples("router-1", from); len(got) != 3 {
+		t.Fatalf("at exactly 36 h: %d samples, want 3 -- the first is still inside the window", len(got))
+	}
+	push(t0.Add(rawSampleWindow+time.Minute), "41", "2")
+	got = s.RawRuleSamples("router-1", from)
+	if len(got) != 3 || !got[0].At.Equal(t0.Add(20*time.Minute)) {
+		t.Errorf("after 36 h: %+v, want the first sample dropped and the rest kept", got)
+	}
+
+	// The caller's copy is its own.
+	got[0].Packets = -1
+	if s.RawRuleSamples("router-1", from)[0].Packets == -1 {
+		t.Error("RawRuleSamples handed out the store's own slice")
+	}
+}
+
+// A comment that stops arriving -- the rule was undone -- ages out with
+// the window rather than being held for ever.
+func TestRawRuleSamplesForgetAnUndoneRule(t *testing.T) {
+	s := New()
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "gone", "5"}), t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "kept", "5"}), t0.Add(rawSampleWindow+time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.RawRuleSamples("router-1", "gone"); got != nil {
+		t.Errorf("an undone rule's samples outlived the window: %+v", got)
+	}
+}
+
+// Both bounds hold: a ring past its length drops its oldest, and a
+// device past its comment budget samples no new comment.
+func TestRawRuleSamplesAreBounded(t *testing.T) {
+	defer func(n, c int) { maxRawSamplesPerComment, maxRawSampleComments = n, c }(maxRawSamplesPerComment, maxRawSampleComments)
+	maxRawSamplesPerComment, maxRawSampleComments = 3, 2
+
+	s := New()
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if err := s.Apply("router-1", rawPage(t,
+			[4]string{"ip", "0", "a", itoa(i)},
+			[4]string{"ip", "1", "b", itoa(i)},
+			[4]string{"ip", "2", "c", itoa(i)},
+		), t0.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := s.RawRuleSamples("router-1", "a")
+	if len(got) != 3 || got[0].Packets != 2 || got[2].Packets != 4 {
+		t.Errorf("ring a = %+v, want the newest three (2, 3, 4)", got)
+	}
+	if s.RawRuleSamples("router-1", "c") != nil {
+		t.Error("a third comment was sampled past a budget of two")
+	}
+}
+
+// Reset is the test-only clean slate (#1064): samples go with the
+// tables they came from.
+func TestResetDropsRawRuleSamples(t *testing.T) {
+	s := New()
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "a", "1"}), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Reset()
+	if s.RawRuleSamples("router-1", "a") != nil {
+		t.Error("Reset left raw-rule samples behind")
+	}
+}
