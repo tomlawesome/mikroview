@@ -165,6 +165,23 @@ check(true, 'and switching back works too')
 // The roll rail itself is still fully rendered, not degraded.
 check((await page.$$('.roll-rail .rail-name')).length > 0, 'the roll rail is still fully rendered')
 
+// #1423: the rail is taller than the deck it is centred on, so its last
+// name runs a few px past #app's bottom edge -- further with the banner
+// up. Tabbing onto it made the browser scroll #app (overflow: hidden is
+// still scrollable from focus) to show it; WebKit then kept that offset
+// after the banner cleared, leaving every scene 12 px too high. #app is
+// the shell, not a scroller: focus must not move it.
+await page.focus('.roll-rail .rail-name:nth-last-child(2)')
+await page.keyboard.press('Tab')
+const railFocus = await page.evaluate(() => ({
+  name: document.activeElement?.textContent?.trim(),
+  appScrollTop: document.querySelector('#app').scrollTop,
+}))
+check(
+  railFocus.name === 'Log every rule' && railFocus.appScrollTop === 0,
+  `tabbing onto the last rail name does not scroll the shell -- focused "${railFocus.name}", #app.scrollTop ${railFocus.appScrollTop}`,
+)
+
 // --- Recovery ----------------------------------------------------------------
 restoreConnection()
 await page.waitForSelector('.banner-closed', { state: 'detached', timeout: 15000 })

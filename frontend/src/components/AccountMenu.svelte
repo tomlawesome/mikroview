@@ -221,7 +221,7 @@
     z-index: 40;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     /* #1144: the menu hangs below the scene bar inside #app, which is
-       `height: 100vh; overflow: hidden` -- so on a short window a menu
+       `height: 100vh; overflow: clip` -- so on a short window a menu
        taller than the space left under the bar was simply cut off, with
        no way to reach its last rows. Cap it at what the viewport leaves
        (bar plus the 6px gap, and a margin at the foot) and scroll

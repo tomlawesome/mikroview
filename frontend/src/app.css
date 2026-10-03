@@ -264,7 +264,11 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* clip, not hidden (#1423): a hidden box is still a scroll container,
+     and the roll rail runs a few px past this one's bottom edge, so
+     focusing its last name scrolled the whole shell to show it -- and
+     WebKit kept that offset once the connection banner cleared. */
+  overflow: clip;
 }
 
 button {

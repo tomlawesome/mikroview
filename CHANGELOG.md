@@ -158,6 +158,12 @@ rewritten.
 
 ### Fixed
 
+- **Safari: the page no longer ends up 12 px too high after a lost
+  connection** (#1423). With the connection banner showing, tabbing to
+  the last name on the side rail scrolled the whole app up to show it,
+  and Safari kept that offset after the banner went away, cutting
+  off the top 12 px of every scene. The app's outer frame can no
+  longer scroll.
 - **The wizard's saved scripts paste whole on RouterOS 7.18** (#1360).
   Before 7.19 the RouterOS console drops a line break typed inside a
   quoted argument, so the push and backup scripts the wizard hands over
