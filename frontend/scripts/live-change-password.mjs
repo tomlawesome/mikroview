@@ -79,54 +79,70 @@ check(
 )
 
 // --- The real change -----------------------------------------------------
+//
+// Everything from here down runs inside a try/finally: once the password
+// is actually changed, every later scenario in the shard signs in with
+// MV_PASS, so a throw partway through -- a stale selector, a dialog that
+// never opens -- must not skip the restore at the bottom and leave the
+// shared instance on NEW_PASS. The restore itself can still fail; that is
+// a failing check (via `check`, which records without throwing), not a
+// reason to give up on reporting the error that actually broke the run.
+let primaryError
+try {
+  const changed = await api(page.request, 'POST', '/api/auth/password', {
+    currentPassword: PASS,
+    newPassword: NEW_PASS,
+  })
+  check(changed.status === 200, `the password is changed (${changed.status})`)
 
-const changed = await api(page.request, 'POST', '/api/auth/password', {
-  currentPassword: PASS,
-  newPassword: NEW_PASS,
-})
-check(changed.status === 200, `the password is changed (${changed.status})`)
+  check(
+    (await api(page.request, 'GET', '/api/definitions')).status === 200,
+    'the browser that made the change is still signed in -- being signed out by your own action is what stops people doing it',
+  )
+  check(
+    (await api(other.request, 'GET', '/api/definitions')).status !== 200,
+    'the other browser is signed out -- this is the "sign out everywhere" a suspected theft needs',
+  )
 
-check(
-  (await api(page.request, 'GET', '/api/definitions')).status === 200,
-  'the browser that made the change is still signed in -- being signed out by your own action is what stops people doing it',
-)
-check(
-  (await api(other.request, 'GET', '/api/definitions')).status !== 200,
-  'the other browser is signed out -- this is the "sign out everywhere" a suspected theft needs',
-)
+  // The new password is the one that works now.
+  const reLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: PASS })
+  check(reLogin.status === 401, 'the old password no longer signs in')
+  const newLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: NEW_PASS })
+  check(newLogin.status === 200, `the new password signs in (${newLogin.status})`)
 
-// The new password is the one that works now.
-const reLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: PASS })
-check(reLogin.status === 401, 'the old password no longer signs in')
-const newLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: NEW_PASS })
-check(newLogin.status === 200, `the new password signs in (${newLogin.status})`)
+  // --- The menu entry an operator actually uses ---------------------------
+  // The account actions live on the scene bar's account chip since #616's
+  // deck retired the rail, the toolbar and the atlas overlay.
 
-// --- The menu entry an operator actually uses ---------------------------
-// The account actions live on the scene bar's account chip since #616's
-// deck retired the rail, the toolbar and the atlas overlay.
+  // No reload: the change already left this browser's own session and app
+  // state intact (checked above), so the account menu is reachable as is.
+  await openAccountMenu(page)
+  check(
+    await page.isVisible('.account .menu button.row:has-text("Change password")'),
+    'the account menu offers Change password',
+  )
+  await page.click('.account .menu button.row:has-text("Change password")')
+  check(await page.isVisible('[aria-label="Change password"]'), 'the dialog opens')
+  check(
+    await page.isVisible('text=signed out'),
+    'the dialog says other sessions will be signed out before you do it, not after',
+  )
+  await page.keyboard.press('Escape')
+} catch (e) {
+  primaryError = e
+} finally {
+  // --- Put it back ---------------------------------------------------------
 
-// No reload: the change already left this browser's own session and app
-// state intact (checked above), so the account menu is reachable as is.
-await openAccountMenu(page)
-check(
-  await page.isVisible('.account .menu button.row:has-text("Change password")'),
-  'the account menu offers Change password',
-)
-await page.click('.account .menu button.row:has-text("Change password")')
-check(await page.isVisible('[aria-label="Change password"]'), 'the dialog opens')
-check(
-  await page.isVisible('text=signed out'),
-  'the dialog says other sessions will be signed out before you do it, not after',
-)
-await page.keyboard.press('Escape')
+  const restored = await api(page.request, 'POST', '/api/auth/password', {
+    currentPassword: NEW_PASS,
+    newPassword: PASS,
+  }).catch((e) => ({ status: 0, body: String(e) }))
+  check(restored.status === 200, `the password is restored for the rest of the run (${restored.status})`)
+}
 
-// --- Put it back ---------------------------------------------------------
-
-const restored = await api(page.request, 'POST', '/api/auth/password', {
-  currentPassword: NEW_PASS,
-  newPassword: PASS,
-})
-check(restored.status === 200, `the password is restored for the rest of the run (${restored.status})`)
+// The restore above already ran; re-raise so this scenario still reports
+// the original failure instead of the finally block's success masking it.
+if (primaryError) throw primaryError
 
 await browser.close()
 done()
