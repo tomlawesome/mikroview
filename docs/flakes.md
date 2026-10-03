@@ -17,6 +17,7 @@ testing-and-ci skill (owner, 2026-09-08).
 ## live-nat-popup: the popover's chips never appear (15 s) under WebKit
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 3/4 · `locator('.popover .chip').waitFor` timed out in `openPopover` (`live-nat-popup.mjs:155`). The first WebKit run of the same commit passed it.
+- 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 3/4 · a different symptom: `FAIL no console errors (WebSocket connection to 'ws://127.0.0.1:18483/api/ws' failed: WebSocket is closed before the connection is established.)`, every other check passed. A rerun of shard 3/4 alone under WebKit passed it. Second sighting.
 
 ## live-topography-tunnel: the Topography rail entry is never found (30 s) under WebKit
 
@@ -138,6 +139,7 @@ own rather than swelling that entry's count.
 ## live-settings-doors: goTo("Settings") times out (10 s) on the runner
 
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 3/4, job 8449 · `goTo("Settings") timed out waiting for card "engineroom"`, `offsetFromDeckTop: 1440` (card mounted, roll never reached it — #1011's shape, the opposite sign to live-memory-slider's), at `live-browser.mjs:385` from `live-settings-doors.mjs:27`; 776's 3/4 (job 8474) passed on the same commit.
+- 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shard 3/4`, rerun of the shard · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-settings-doors.mjs:22`), before any check ran, so no verdict was printed. The full four-shard WebKit run on the same commit just before had passed it. Same WebKit reload signature as the `live-decommission`, `live-city-reach` and `live-blocklist-tail` entries. Second sighting.
 
 ## Scenarios exit 1 without a result when two gate stages overlap on the runner
 
@@ -156,10 +158,11 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
 
-## live-viewer-surfaces: goTo("Flags") times out waiting for the docket card
+## live-viewer-surfaces: goTo("Flags") times out waiting for the docket card (#1427)
 
 - 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox · `goTo("Flags") timed out waiting for card "docket"` at `live-browser.mjs:514`, from `visibleSurfaces` before any surface was read, so the scenario threw and printed no verdict. The diagnostic says the deck and the card were both present with `offsetFromDeckTop: 2880`, so the card had mounted and the roll never settled on it -- the same family as the `live-decommission`, `live-rule-regex`, `live-settings-doors` and `live-log-every-rule` entries. The preceding Firefox run of the same shard on the same commit passed this scenario, as did two Chromium runs. First sighting.
 - 2026-09-24 · 8216621a (dev, v0.6.1 audit head) · remote gate `MV_BROWSER=firefox make live-check-remote`, 4 shards · same `goTo("Flags") timed out waiting for card "docket"` at `live-browser.mjs:534`, from `visibleSurfaces` at `live-viewer-surfaces.mjs:62`, with the deck and card both present at `offsetFromDeckTop: 2880` — the roll never settled. Every launch in the run logged `engine: firefox 155.0`. The other 110 Firefox scenarios passed. Second sighting, both under Firefox.
+- 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 4/4 · the same `goTo("Flags") timed out waiting for card "docket"` with the card mounted (`offsetFromDeckTop: 2880`), at `live-browser.mjs:560` from `visibleSurfaces` (`live-viewer-surfaces.mjs:62`), before any surface was read. Shards 1–3 passed, and a rerun of shard 4/4 alone under Firefox passed it. Third sighting: #1427.
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
@@ -220,6 +223,7 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 4/4 · the same `FAIL no console errors`, on `apple-touch-icon.png`. Third sighting; filed as #1424.
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 4/4 · the same `FAIL no console errors` (`Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.`, from `workbox-2fbc6a65.js`). A rerun of shard 4/4 under Firefox on the same commit passed 27/27. Second sighting.
 - 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.
+- 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser firefox --shard 4/4`, rerun of the shard · the icon this time was `apple-touch-icon.png` (`Failed to load ... A ServiceWorker intercepted the request and encountered an unexpected error`); the full four-shard Firefox run on the same commit had passed it. #1424.
 
 ## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
 
@@ -265,3 +269,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-topography-card-placement: the Topography rail button is not clickable within 30 s
 
 - 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4 · `page.click: Timeout 30000ms exceeded` on `.rail-name >> text=Topography` at `live-topography-card-placement.mjs:315`, after its first three checks passed. A rerun of shard 4/4 alone under WebKit passed 27/27. First sighting.
+
+## live-blocklist-tail: page.reload throws a WebKit internal error
+
+- 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 1/4 · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-blocklist-tail.mjs:50`), before any check ran, so no verdict was printed. A rerun of shard 1/4 alone under WebKit passed 28/28. Same signature as the `live-decommission`, `live-city-reach` and `live-settings-doors` entries. First sighting.
