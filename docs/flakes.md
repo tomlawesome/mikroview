@@ -214,8 +214,10 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.
 - 2026-10-01 · ac7de401 (dev, after merging !1127) · pipeline 1927, `gate:scenarios 1/4` (job 28727) · same check, same empty chip list. !1127 changes the upgrade-reload path and sign-out handling, nothing the city's chips read; !1127's own pipeline 1919 passed this scenario on 38fb2389. Second sighting.
 
-## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
+## live-sw-navigation: Firefox reports the service worker failed on favicon.svg (#1424)
 
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser firefox --shard 4/4`, rerun of the sighting below · the same `FAIL no console errors`, this time on `favicon.svg`. The first rerun that failed too. Diagnosed on #1424: the scenario navigates away while Firefox is still fetching the page's icons, so the cancelled fetch is reported as a worker error (3 of 15 runs alone; 0 of 8 with a wait for loading to finish). Test-side, so moved to v0.8.0. Fourth sighting.
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 4/4 · the same `FAIL no console errors`, on `apple-touch-icon.png`. Third sighting; filed as #1424.
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 4/4 · the same `FAIL no console errors` (`Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.`, from `workbox-2fbc6a65.js`). A rerun of shard 4/4 under Firefox on the same commit passed 27/27. Second sighting.
 - 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.
 
@@ -247,3 +249,19 @@ each, recorded together because the cause is shared (#831's contention):
 ## frontend: City.svelte.test.ts and perf-compare.test.mjs time out together under full-suite load
 
 - 2026-10-01 · e46f7cf5 base, local lockfile-only change (chore/deps-2026-10-01, local `npm test -- --coverage`, jsdom bumped to 30.1.1 in frontend/package-lock.json, no source change) · three failures in one run: `scripts/perf-compare.test.mjs`'s shared `@testing-library/svelte` `beforeEach` hook hit its 10s timeout, and two `City: brightness by baseline` tests (`throbs the arrived-at building's own outline...`, `writes \`expected\` through the register...`) hit the 20s test timeout. `npx vitest run src/components/City.svelte.test.ts scripts/perf-compare.test.mjs` alone passed all 115 immediately after, and a full second `npm test -- --coverage` run passed all 3558 tests clean. The commit touches only frontend/package-lock.json and THIRD-PARTY-NOTICES.md, neither of which City.svelte, perf-compare.ts or testing-library's setup read. First sighting.
+
+## live-city-declared: the zones stop does not redraw the declared lane
+
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 1/4 · `FAIL the zones stop still draws a card for the declared lane (null)` and `declared quiet, the zones card is no longer drawn dark (null)`; every other check passed. A rerun of shard 1/4 alone under Firefox on the same commit passed this scenario. First sighting.
+
+## live-before-router-lookup: the popover does not open within 5 s
+
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser firefox --shard 1/4` (the rerun above) · `page.waitForSelector: Timeout 5000ms exceeded` waiting for `.popover` at `live-before-router-lookup.mjs:69`, after its first two checks passed. The same scenario passed in the four-shard Firefox run just before. First sighting.
+
+## live-history-control: goTo("Stream") times out with the card off-screen
+
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `goTo("Stream") timed out waiting for card "live"` from `remount()` at `live-history-control.mjs:133`: the card existed but sat at `offsetFromDeckTop: -2880`, so the deck never rolled it into place. Every check before it passed. A rerun of shard 2/4 alone under WebKit passed 26/26. First sighting with this symptom (the 2026-09-08 sighting under "two gate stages overlap" printed no detail).
+
+## live-topography-card-placement: the Topography rail button is not clickable within 30 s
+
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4 · `page.click: Timeout 30000ms exceeded` on `.rail-name >> text=Topography` at `live-topography-card-placement.mjs:315`, after its first three checks passed. A rerun of shard 4/4 alone under WebKit passed 27/27. First sighting.
