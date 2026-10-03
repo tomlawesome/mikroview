@@ -20,6 +20,10 @@ if ((process.env.MV_BROWSER || 'chromium') !== 'chromium') {
   console.log(
     `live-passkeys: skipping -- a virtual authenticator needs CDP's WebAuthn domain, which only Chromium exposes (MV_BROWSER=${process.env.MV_BROWSER})`,
   )
+  // Without a verdict line of its own, this scenario counts as started
+  // (`== `) but never reported, which the gate summary (#661) reads as a
+  // silent death -- on every Firefox/WebKit run, not just a real one.
+  console.log(`RESULT: SKIP (needs Chromium's CDP WebAuthn domain, MV_BROWSER=${process.env.MV_BROWSER})`)
   process.exit(0)
 }
 

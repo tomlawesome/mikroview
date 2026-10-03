@@ -6,6 +6,30 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-change-password: the account menu does not open (5 s) under WebKit
+
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 1/4 · `openAccountMenu` timed out waiting for `.account .menu` (`live-change-password.mjs:110`), after every password check had passed. Because the scenario restores the admin password only at its end, the next 16 scenarios in the shard could not sign in: that cascade is #1420, a defect, not a flake. A third WebKit run of shard 1/4 on the same commit passed 28/28. Host load ~8.
+
+## live-history: session() waits 15 s for #main-content under WebKit
+
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 2/4 · `page.waitForSelector('#main-content')` timed out in `session()` (`live-browser.mjs:1060`) before any check ran. The first WebKit run of the same commit passed it.
+
+## live-nat-popup: the popover's chips never appear (15 s) under WebKit
+
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 3/4 · `locator('.popover .chip').waitFor` timed out in `openPopover` (`live-nat-popup.mjs:155`). The first WebKit run of the same commit passed it.
+
+## live-topography-tunnel: the Topography rail entry is never found (30 s) under WebKit
+
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 4/4 · `page.click` timed out waiting for `.rail-name` `text=Topography` (`live-topography-tunnel.mjs:231`), after the tunnel checks had passed, so the scenario exited without a verdict. The second WebKit run passed shard 4/4 27/27.
+
+## live-preferences-roam: a 401 reaches the console under WebKit
+
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 3/4 · `FAIL no console errors -- got ["Failed to load resource: the server responded with a status of 401 (Unauthorized)"]`; the rest of the scenario passed. The second WebKit run of the same commit passed it.
+
+## live-decommission: WebKit reports an internal error on page.reload
+
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 1/4 · `page.reload: WebKit encountered an internal error` while waiting for `networkidle`, from `session()` (`live-browser.mjs:1059`), before any check ran. A different symptom from the `goTo("Stream")` heading below. A third WebKit run of shard 1/4 on the same commit passed it.
+
 ## live-journey: Next at Paste is replaced before reachFinish can click it
 
 - 2026-10-02 · 4e365d14 (feature/1360-blocklist-builder, !1130) · pipeline 1948, `gate:scenarios 3/4` (job 29290) · `reachFinish` timed out clicking a disabled Next that was then detached. Likely a race already on dev: Run setup… places the walk on the sign-in ledger (Next shown), then Wizard.svelte re-places it on a fresh read (#1404) straight onto Finish, after the scenario has already chosen the Next route. Shard 3/4 passed 27/27 on 0a189b34 locally (`scripts/gate-local.sh --shard 3/4`).
@@ -165,6 +189,7 @@ each, recorded together because the cause is shared (#831's contention):
 
 ## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
 
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser firefox --shards 4`, shard 4/4 · the same `FAIL no console errors` (`Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.`, from `workbox-2fbc6a65.js`). A rerun of shard 4/4 under Firefox on the same commit passed 27/27. Second sighting.
 - 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.
 
 ## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
@@ -173,6 +198,7 @@ each, recorded together because the cause is shared (#831's contention):
 
 ## live-connection-states: content does not return to its pre-loss position after the banner clears
 
+- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 1/4 · `got -12, expected ~0`, the opposite sign from the first sighting. A third WebKit run of shard 1/4 on the same commit passed 28/28. Second sighting.
 - 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.
 
 ## frontend state.svelte.test.ts: "costs about the same to append" (#1304 E2) timing test

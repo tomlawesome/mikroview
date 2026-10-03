@@ -145,41 +145,59 @@ describe('registerServiceWorker (#1314)', () => {
   })
 })
 
-/** A worker whose `state` can be driven, remembering the one message
- * handler activateWaitingWorker cares about. */
+/** A worker whose `state` can be driven, firing `statechange` to
+ * whichever listeners activateWaitingWorker has attached. */
 function fakeWorker(initialState: ServiceWorkerState): ServiceWorker & { setState: (s: ServiceWorkerState) => void } {
   let state = initialState
-  let onStateChange: (() => void) | null = null
+  const listeners = new Set<EventListenerOrEventListenerObject>()
   return {
     get state() {
       return state
     },
     postMessage: vi.fn(),
     addEventListener: ((type: string, listener: EventListenerOrEventListenerObject) => {
-      if (type === 'statechange') onStateChange = listener as () => void
+      if (type === 'statechange') listeners.add(listener)
     }) as ServiceWorker['addEventListener'],
-    removeEventListener: vi.fn(),
+    removeEventListener: ((_type: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.delete(listener)
+    }) as ServiceWorker['removeEventListener'],
     setState(s: ServiceWorkerState) {
       state = s
-      onStateChange?.()
+      for (const l of [...listeners]) (l as () => void)()
     },
   } as unknown as ServiceWorker & { setState: (s: ServiceWorkerState) => void }
 }
 
-/** A container that remembers the `controllerchange` listener and can fire it. */
-function fakeContainer(): ControllerWatcher & { fireControllerChange: () => void } {
+/** A container that remembers the `controllerchange` listener and can
+ * fire it, handing control to `controller` first -- as the browser does,
+ * with that worker still `activating`. */
+function fakeContainer(): ControllerWatcher & { fireControllerChange: (controller: ServiceWorker) => void } {
   const listeners = new Set<EventListenerOrEventListenerObject>()
+  let controller: ServiceWorker | null = null
   return {
+    get controller() {
+      return controller
+    },
     addEventListener: ((_type: string, listener: EventListenerOrEventListenerObject) => {
       listeners.add(listener)
     }) as ControllerWatcher['addEventListener'],
     removeEventListener: ((_type: string, listener: EventListenerOrEventListenerObject) => {
       listeners.delete(listener)
     }) as ControllerWatcher['removeEventListener'],
-    fireControllerChange: () => {
-      for (const l of listeners) (l as () => void)()
+    fireControllerChange: (next: ServiceWorker) => {
+      controller = next
+      for (const l of [...listeners]) (l as () => void)()
     },
   }
+}
+
+/** Hands control to `worker` the way a real activation does:
+ * `activating` with `controllerchange`, then `activated` once its
+ * activate step has finished. */
+function takeOver(container: ReturnType<typeof fakeContainer>, worker: ReturnType<typeof fakeWorker>) {
+  worker.setState('activating')
+  container.fireControllerChange(worker)
+  worker.setState('activated')
 }
 
 describe('activateWaitingWorker (#1363)', () => {
@@ -224,7 +242,7 @@ describe('activateWaitingWorker (#1363)', () => {
     await Promise.resolve()
     expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
 
-    container.fireControllerChange()
+    takeOver(container, worker)
     await settled
   })
 
@@ -239,7 +257,7 @@ describe('activateWaitingWorker (#1363)', () => {
     await expect(activateWaitingWorker(registration, container)).resolves.toBeUndefined()
   })
 
-  it('asks an already-installed waiting worker to skip waiting, and resolves once it takes control', async () => {
+  it('asks an already-installed waiting worker to skip waiting, and resolves once it has taken control and finished activating', async () => {
     const worker = fakeWorker('installed')
     const container = fakeContainer()
     const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
@@ -252,9 +270,79 @@ describe('activateWaitingWorker (#1363)', () => {
     expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
     expect(resolved).toBe(false)
 
-    container.fireControllerChange()
+    takeOver(container, worker)
     await settled
     expect(resolved).toBe(true)
+  })
+
+  // #1421: controllerchange fires as activation starts. A reload then
+  // lands mid-activation, and WebKit leaves the reloaded page reading
+  // `activating` for good.
+  it('does not resolve at controllerchange while the new controller is still activating', async () => {
+    const worker = fakeWorker('installed')
+    const container = fakeContainer()
+    const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    let resolved = false
+    void settled.then(() => (resolved = true))
+    await Promise.resolve()
+
+    worker.setState('activating')
+    container.fireControllerChange(worker)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(resolved, 'resolved while the controller was still activating').toBe(false)
+
+    worker.setState('activated')
+    await settled
+    expect(resolved).toBe(true)
+  })
+
+  it('resolves at controllerchange when the new controller has already finished activating', async () => {
+    const worker = fakeWorker('installed')
+    const container = fakeContainer()
+    const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    await Promise.resolve()
+
+    worker.setState('activated')
+    container.fireControllerChange(worker)
+    await settled
+  })
+
+  it('waits on whichever worker is now the controller, not only the one it asked to skip waiting', async () => {
+    const worker = fakeWorker('installed')
+    const newer = fakeWorker('activating')
+    const container = fakeContainer()
+    const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    let resolved = false
+    void settled.then(() => (resolved = true))
+    await Promise.resolve()
+
+    container.fireControllerChange(newer)
+    worker.setState('activated')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(resolved, 'resolved on a worker that is not the controller').toBe(false)
+
+    newer.setState('activated')
+    await settled
+  })
+
+  it('resolves if the new controller turns redundant instead -- there is nothing left to wait for', async () => {
+    const worker = fakeWorker('installed')
+    const container = fakeContainer()
+    const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    await Promise.resolve()
+
+    worker.setState('activating')
+    container.fireControllerChange(worker)
+    worker.setState('redundant')
+    await settled
   })
 
   it('waits for an installing worker to reach installed before asking it to skip waiting', async () => {
@@ -269,7 +357,7 @@ describe('activateWaitingWorker (#1363)', () => {
     worker.setState('installed')
     expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
 
-    container.fireControllerChange()
+    takeOver(container, worker)
     await settled
   })
 
@@ -284,6 +372,29 @@ describe('activateWaitingWorker (#1363)', () => {
       let resolved = false
       void settled.then(() => (resolved = true))
 
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(resolved).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(resolved).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resolves anyway if the new controller never finishes activating, rather than hanging the reload', async () => {
+    vi.useFakeTimers()
+    try {
+      const worker = fakeWorker('installed')
+      const container = fakeContainer()
+      const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+      const settled = activateWaitingWorker(registration, container, 3000)
+      let resolved = false
+      void settled.then(() => (resolved = true))
+      await vi.advanceTimersByTimeAsync(0)
+
+      worker.setState('activating')
+      container.fireControllerChange(worker)
       await vi.advanceTimersByTimeAsync(2999)
       expect(resolved).toBe(false)
       await vi.advanceTimersByTimeAsync(1)
