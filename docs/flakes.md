@@ -66,6 +66,32 @@ testing-and-ci skill (owner, 2026-09-08).
   The runner host was also running the CHR exercise (pipeline 1451) and two
   other pipelines around that time. First sighting.
 
+## live-city-stops: session() times out waiting for #main-content
+
+- 2026-09-24 · 8216621a (dev) · remote gate on mikroview-runner, 4 shards ·
+  `TimeoutError: locator('#main-content')` at `live-browser.mjs:1028` from
+  `live-city-stops.mjs:20`, before any check ran or printed. Reproduced alone
+  under WebKit 3/3 clean (sign-in and first render in 21-32s each) and under
+  Chromium 2/2 clean. Not reproduced in isolation. The same gate run also hit
+  a WebKit-only `page.reload: WebKit encountered an internal error` on
+  `live-city-reach.mjs` (see the heading below), the same class of fault
+  gate-local.sh's own header already documents for four concurrent WebKit
+  shards. First sighting.
+
+## live-city-reach: page.reload throws a WebKit internal error
+
+- 2026-09-24 · 8216621a (triage/webkit-8216621a worktree) · local
+  `scripts/gate-local.sh --browser webkit --shard 1/4`, on a host busy with
+  several unrelated worktrees' own containers (load average ~3.6-4.3 at the
+  time) · `Error: page.reload: WebKit encountered an internal error` waiting
+  for `networkidle`, at `live-browser.mjs:1027` from `live-city-reach.mjs:15`,
+  before any check ran. Distinct from this scenario's existing
+  "Escape does not restore the exact pan position" heading above (different
+  symptom: an engine-level reload failure, not a settle-timing assertion).
+  Matches the WebKit/`page.reload` internal error `gate-local.sh` already
+  notes from a four-parallel-shard run on 2026-09-22 (its `--shard` comment).
+  First sighting under this heading.
+
 ## live-watchers-editor: the cloned shipped watcher's row has no open drawer
 
 - 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox, first deliberate Firefox run of this shard · `FAIL the copy is already expanded, ready to be edited` at `live-watchers-editor.mjs:344` -- the sibling check 66 lines below the 2026-09-21 sighting's, same clone, same drawer-not-open shape. Every check before it passed. The immediately following Firefox run of the same shard on the same commit passed this scenario, and two Chromium runs of it passed, so the engine is not the cause. Second sighting.
@@ -133,6 +159,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-viewer-surfaces: goTo("Flags") times out waiting for the docket card
 
 - 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox · `goTo("Flags") timed out waiting for card "docket"` at `live-browser.mjs:514`, from `visibleSurfaces` before any surface was read, so the scenario threw and printed no verdict. The diagnostic says the deck and the card were both present with `offsetFromDeckTop: 2880`, so the card had mounted and the roll never settled on it -- the same family as the `live-decommission`, `live-rule-regex`, `live-settings-doors` and `live-log-every-rule` entries. The preceding Firefox run of the same shard on the same commit passed this scenario, as did two Chromium runs. First sighting.
+- 2026-09-24 · 8216621a (dev, v0.6.1 audit head) · remote gate `MV_BROWSER=firefox make live-check-remote`, 4 shards · same `goTo("Flags") timed out waiting for card "docket"` at `live-browser.mjs:534`, from `visibleSurfaces` at `live-viewer-surfaces.mjs:62`, with the deck and card both present at `offsetFromDeckTop: 2880` — the roll never settled. Every launch in the run logged `engine: firefox 155.0`. The other 110 Firefox scenarios passed. Second sighting, both under Firefox.
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
@@ -196,10 +223,17 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
 
-## live-connection-states: content does not return to its pre-loss position after the banner clears
+## live-connection-states: content does not return to its pre-loss position after the banner clears (#1423)
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 1/4 · `got -12, expected ~0`, the opposite sign from the first sighting. A third WebKit run of shard 1/4 on the same commit passed 28/28. Second sighting.
 - 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.
+- 2026-09-24 · 8216621a (dev) · remote gate on mikroview-runner, 4 shards ·
+  `FAIL content returns to its pre-loss position once the banner clears --
+  got -12, expected ~0`; every other check in the scenario passed. Reproduced
+  alone under WebKit 3/3 clean (each printing `got 0, expected ~0`) and under
+  Chromium 2/2 clean. Not reproduced in isolation -- consistent with the
+  scroll-settle assertion racing the four-shard host contention this scenario
+  family is prone to (AGENTS.md's "the CPU is not [safe]").
 
 ## frontend state.svelte.test.ts: "costs about the same to append" (#1304 E2) timing test
 
