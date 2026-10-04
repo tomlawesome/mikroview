@@ -308,7 +308,7 @@ footer strong{color:var(--fg-muted);font-weight:600}
     <div>
       <p class="k">secure by default</p>
       <h3>Sign-in always. HTTPS out of the box.</h3>
-      <p>Local accounts or OIDC/SSO. Events live in memory unless you opt in to encrypted per-day history files; an optional SFTP drop box keeps your router's own nightly backups for the day the router is gone.</p>
+      <p>Local accounts or OIDC/SSO. Event history is kept on disk in encrypted per-day files; an optional SFTP drop box keeps your router's own nightly backups for the day the router is gone.</p>
     </div>
     <div>
       <p class="k">one container</p>
@@ -323,7 +323,7 @@ footer strong{color:var(--fg-muted);font-weight:600}
     <p class="step">step 1 of 2 · start it</p>
     <h3 id="h-qs" style="margin:0 0 16px;font-size:26px;font-weight:600">Quickstart</h3>
     <pre class="term" tabindex="0"><span class="pr">$</span> curl -fsSL <span class="va">https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh</span> | sh</pre>
-    <p class="note">It pulls the image. It starts one container with two named volumes and two ports. It prints the address to open. Short enough to read before you run it: <a href="https://github.com/tomlawesome/mikroview/blob/main/install.sh">install.sh</a> on GitHub.</p>
+    <p class="note">It pulls the image. It starts one container with two named volumes and three ports (syslog, HTTPS and the router-backup drop box). It prints the address to open. Short enough to read before you run it: <a href="https://github.com/tomlawesome/mikroview/blob/main/install.sh">install.sh</a> on GitHub.</p>
     <p class="step">step 2 of 2 · point the router at it</p>
     <p class="note">Sign in, and the built-in wizard writes every RouterOS command with your values already filled in — syslog over TLS (RouterOS 7.18+). Paste it once; the picture builds itself. <code>latest</code> is the most recent release; each release is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one. Reference: <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a> and <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.</p>
   </div>
