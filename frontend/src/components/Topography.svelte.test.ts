@@ -1831,6 +1831,132 @@ describe('#723: a lane\'s port list gets a visible tie to its own card ("ports f
   })
 })
 
+// #1430: the v0.7.0 release capture put a "never exercised" plate over
+// the Servers lane's own port list (":445 :53 :5001"), and the internet
+// card's red flag count over its "Doors from the internet · 8" row.
+describe('labels on the map keep off each other (#1430)', () => {
+  // The lane card's top edge is y=490 and the services row sits just
+  // above it (text baseline 472, #723). Box metrics follow the
+  // component's own: a plate hangs from its anchor (y-10, 14 tall); the
+  // 10.5px mono services text runs about 6.3 units a character.
+  function svcBoxes(container: HTMLElement) {
+    return [...container.querySelectorAll('.svc .svc-t')].map((t) => {
+      const text = t.textContent ?? ''
+      const w = text.length * 6.3
+      const x = Number(t.getAttribute('x'))
+      const y = Number(t.getAttribute('y'))
+      return { text, x: x - w / 2, y: y - 9, w, h: 12 }
+    })
+  }
+  function plateBoxes(container: HTMLElement) {
+    return [...container.querySelectorAll('.edge-plate')].map((p) => ({
+      text: p.parentElement?.textContent?.trim() ?? '',
+      x: Number(p.getAttribute('x')),
+      y: Number(p.getAttribute('y')),
+      w: Number(p.getAttribute('width')),
+      h: Number(p.getAttribute('height')),
+    }))
+  }
+
+  it("never lets an edge plate cover a lane's services row -- it lifts instead, since below it is the card", () => {
+    // Five lanes with the release capture's shape: one busy lane
+    // (bridge2, the Servers lane) fed from the others, and policy
+    // edges into it and its neighbour that nothing ever exercised.
+    // The crowding around bridge2's lane is what pushed a plate down
+    // onto its port list.
+    zonesState.pushed = Array.from({ length: 5 }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      ...Array.from({ length: 56 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 75 }, () => event({ inInterface: 'bridge3', outInterface: 'bridge2', srcIp: '10.0.3.20', dstPort: 53, action: 'accept' })),
+      ...Array.from({ length: 25 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.21', dstPort: 445, action: 'accept' })),
+      ...Array.from({ length: 4 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.22', dstPort: 5001, action: 'accept' })),
+      ...Array.from({ length: 42 }, () => event({ inInterface: 'bridge3', outInterface: 'ether1', srcIp: '10.0.3.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 57 }, () => event({ inInterface: 'bridge4', outInterface: 'ether1', srcIp: '10.0.4.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 7 }, () => event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })),
+    ]
+    policyState.anyPushed = true
+    const intent = (from: string, to: string) => ({
+      key: `${from}|${to}`,
+      from,
+      to,
+      accepted: true,
+      refused: false,
+      acceptPorts: [],
+      refusePorts: [],
+      comment: '',
+      ruleCount: 1,
+      logged: true,
+    })
+    policyState.edges = [
+      intent('bridge1', 'bridge2'),
+      intent('bridge3', 'bridge2'),
+      intent('bridge4', 'bridge2'),
+      intent('bridge5', 'bridge2'),
+      intent('bridge2', 'bridge1'),
+      intent('ether1', 'bridge2'),
+      intent('ether1', 'bridge1'),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const svc = svcBoxes(container)
+    const plates = plateBoxes(container)
+    expect(svc.length).toBeGreaterThan(0)
+    expect(plates.some((p) => p.text === 'never exercised')).toBe(true)
+    for (const p of plates) {
+      for (const s of svc) {
+        const overlaps = p.x < s.x + s.w && s.x < p.x + p.w && p.y < s.y + s.h && s.y < p.y + p.h
+        expect(overlaps, `"${p.text}" plate (${p.x},${p.y}) covers the "${s.text}" services row (${s.x},${s.y})`).toBe(false)
+      }
+    }
+    // And lifting a plate off the row never puts it on another plate.
+    for (let a = 0; a < plates.length; a++) {
+      for (let b = a + 1; b < plates.length; b++) {
+        const p1 = plates[a]
+        const p2 = plates[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps, `"${p1.text}" and "${p2.text}" plates overlap`).toBe(false)
+      }
+    }
+  })
+
+  it('drops the "Doors from the internet" row beneath the flag bar when the internet card draws one', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' })]
+    flagsState.list = [flag('port_scan', '203.0.113.9')]
+    const { container } = render(Topography)
+    flushSync()
+
+    // The bar is rendered 16 tall at y=34 under the internet card (the
+    // aggregateBar call on the card), so it ends at y=50 in the card's
+    // own frame. A 9.5px row hanging from its baseline needs that
+    // baseline below 50 + its own ascent.
+    const bar = container.querySelector('.isl-card .hb.hb-f')
+    expect(bar, 'the internet card should draw its flag bar').toBeTruthy()
+    const barY = Number(/translate\(0 ([\d.]+)\)/.exec(bar!.getAttribute('transform') ?? '')?.[1])
+    const doors = container.querySelector('.isl-card .doors-anchor-t')
+    expect(doors).toBeTruthy()
+    const baseline = Number(doors!.getAttribute('y'))
+    expect(baseline - 8).toBeGreaterThanOrEqual(barY + 16)
+  })
+
+  it('keeps the "Doors from the internet" row in its own place when there is no bar to clear', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.isl-card .hb')).toBeNull()
+    expect(container.querySelector('.isl-card .doors-anchor-t')?.getAttribute('y')).toBe('52')
+  })
+})
+
 describe('#723: the dials sit just under the top bar rather than well below it', () => {
   it('keeps the dials\' own offset small enough to read as "just under", not a floating pair', () => {
     const m = componentSource.match(/\.dials\s*{[^}]*top:\s*([\d.]+)px/)
