@@ -10210,10 +10210,20 @@
      it is about. Round 53's own device for that is the mockup's
      `.flat text`: the glyphs are painted over a stroke of the page
      colour, so whatever runs under them passes behind rather than
-     through. Same numbers as the mockup. */
+     through. Same numbers as the mockup.
+
+     Two more take it for the opposite reason (#1430): a lane's port
+     list above its card and the internet card's doors row are crossed
+     by edge curves that are not about them -- the lines are already
+     painted beneath (#723), and the curves run wherever the lanes put
+     them. Neither is a label *of* a line, so #699's plate (.edge-plate
+     above) is not theirs; the halo lets a passing line pass visibly
+     behind the text instead of through it. */
   .trace-note,
   .door-t,
-  .note-t {
+  .note-t,
+  .svc-t,
+  .doors-anchor-t {
     paint-order: stroke;
     stroke: var(--bg);
     stroke-width: 3.4px;

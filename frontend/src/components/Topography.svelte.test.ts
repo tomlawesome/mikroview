@@ -1957,6 +1957,63 @@ describe('labels on the map keep off each other (#1430)', () => {
   })
 })
 
+// #1430, part 2: on the same capture the green edge curves ran straight
+// through the lanes' port lists (":5001 :80 :53" above LAN) and the red
+// internet edges through "Doors from the internet · 8". Neither label is
+// *about* a line, so #699's plate is not theirs; they take the map's
+// own halo instead -- the mockup's `.flat text` device, a stroke of the
+// page colour painted under the glyphs, so a line passes visibly behind
+// the text rather than through it.
+describe('edge lines pass behind the bare labels they cross (#1430)', () => {
+  /** Every selector of every style rule that paints the page-colour halo. */
+  function haloedSelectors(): string[] {
+    const out: string[] = []
+    const rule = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = rule.exec(componentSource))) {
+      if (/paint-order:\s*stroke/.test(m[2]) && /stroke:\s*var\(--bg\)/.test(m[2])) {
+        out.push(...m[1].split(',').map((s) => s.trim()))
+      }
+    }
+    return out
+  }
+
+  it("haloes a lane's port list and the internet card's doors row with the page colour", () => {
+    const haloed = haloedSelectors()
+    expect(haloed.length, 'the component should already carry the halo rule for its other bare labels').toBeGreaterThan(0)
+    expect(haloed.some((s) => /(^|\s)\.svc-t$/.test(s)), 'the services row (.svc-t) should be haloed').toBe(true)
+    expect(haloed.some((s) => /(^|\s)\.doors-anchor-t$/.test(s)), 'the doors row (.doors-anchor-t) should be haloed').toBe(true)
+  })
+
+  it('paints both labels after every edge line, so the halo has a line beneath it to knock out', () => {
+    // A halo only hides what is painted *under* the text. This held
+    // already (#723 ordered lines before labels); it is asserted here
+    // so a future reordering cannot quietly undo the fix above.
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstPort: 80, action: 'accept' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const lines = [...container.querySelectorAll('.redge, .gedge')]
+    const labels = [...container.querySelectorAll('.svc .svc-t, .isl-card .doors-anchor-t')]
+    expect(lines.length).toBeGreaterThan(0)
+    expect(container.querySelector('.svc .svc-t'), 'a lane should draw its port list').not.toBeNull()
+    expect(container.querySelector('.isl-card .doors-anchor-t'), 'the internet card should draw its doors row').not.toBeNull()
+    for (const line of lines) {
+      for (const label of labels) {
+        // DOCUMENT_POSITION_FOLLOWING (4): the label comes after the line.
+        expect(line.compareDocumentPosition(label) & 4, `"${label.textContent}" should be painted after the line`).toBeTruthy()
+      }
+    }
+  })
+})
+
 describe('#723: the dials sit just under the top bar rather than well below it', () => {
   it('keeps the dials\' own offset small enough to read as "just under", not a floating pair', () => {
     const m = componentSource.match(/\.dials\s*{[^}]*top:\s*([\d.]+)px/)
