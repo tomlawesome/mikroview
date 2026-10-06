@@ -7938,6 +7938,21 @@
     opacity: 0.55;
   }
 
+  /* The tunnel's ghost line to where its traffic goes (#877): round 30's
+     `.rib-ghost` as drawn, a faint dashed hairline in --ink-3, which is
+     this app's --fg-dim (the same #55628a). Without a rule of its own
+     the path took the SVG defaults -- black fill, no stroke -- and the
+     S-curve filled as a solid black band (#1433). The camera's own
+     `.camera.cam-zones .rib-ghost` opacity of 0 still wins over the
+     0.45 here, being the more specific selector. */
+  .rib-ghost {
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 6;
+    opacity: 0.45;
+  }
+
   /* --- the ghost lane (#460, round 55) ----------------------------------- */
 
   /* The rib to a ghost: still there, no longer carried. Dashed and in

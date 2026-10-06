@@ -3017,6 +3017,29 @@ describe('the tunnel node (#877)', () => {
     expect(ghost?.getAttribute('d')).toBe('M 1100 186 C 945 300, 795 385, 700 476')
   })
 
+  // #1433: the ghost line drew as a solid black band. The path had no
+  // style rule of its own, so the SVG defaults applied -- black fill, no
+  // stroke -- and the S-curve filled as black wedges. The mockup
+  // (round-30/the-whole.html:122) draws it as a faint dashed hairline.
+  it('draws the ghost line as the mockup does: a faint dashed stroke with no fill', () => {
+    const rules: string[] = []
+    const rule = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = rule.exec(componentSource))) {
+      // The selector capture carries any comment written above the
+      // rule; drop it so the rule's own selector is what is compared.
+      const selectors = m[1].replace(/\/\*[\s\S]*?\*\//g, '').split(',')
+      if (selectors.some((s) => s.trim() === '.rib-ghost')) rules.push(m[2])
+    }
+    expect(rules.length, 'the component should carry a style rule of its own for .rib-ghost').toBeGreaterThan(0)
+    const body = rules.join('\n')
+    expect(body).toMatch(/fill:\s*none/)
+    expect(body).toMatch(/stroke:\s*var\(--fg-dim\)/)
+    expect(body).toMatch(/stroke-width:\s*1\.2\b/)
+    expect(body).toMatch(/stroke-dasharray:\s*3 6/)
+    expect(body).toMatch(/opacity:\s*0\.45/)
+  })
+
   it('gives the node a watch bar only when a pushed range can correlate one', () => {
     tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
     watchlistState.entries = [watchEntry({ source: { ip: '10.99.0.2' } })]
