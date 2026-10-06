@@ -35,6 +35,30 @@ const OUT = path.join(REPO, 'THIRD-PARTY-NOTICES.md')
 
 const LICENCE_FILE = /^(LICEN[CS]E|COPYING|NOTICE)(\.(md|txt))?$/i
 
+// Run with cwd frontend/, so `vite` resolves to the frontend's own copy and
+// vite.config.ts is picked up exactly as `vite build` would; the inline
+// `build` options are the old command line's --sourcemap --outDir
+// --emptyOutDir. The recorder plugin returns null from load(), so it only
+// observes: every module still loads through the normal plugin chain.
+const VITE_BUILD_WITH_INVENTORY = `
+import { writeFileSync } from 'node:fs'
+import { build } from 'vite'
+const loaded = new Set()
+await build({
+  logLevel: 'error',
+  build: { sourcemap: true, outDir: process.env.MV_LICENCE_OUT_DIR, emptyOutDir: true },
+  plugins: [{
+    name: 'mikroview-licence-inventory',
+    enforce: 'pre',
+    load(id) {
+      if (id.includes('/node_modules/')) loaded.add(id)
+      return null
+    },
+  }],
+})
+writeFileSync(process.env.MV_LICENCE_IDS_FILE, JSON.stringify([...loaded]))
+`
+
 export function goModules() {
   // -deps against the main package, not `go list -m all`: the latter
   // includes modules that are only needed to build tests or that got
@@ -80,34 +104,69 @@ export function goModules() {
  */
 export function npmPackages() {
   const outDir = path.join(tmpdir(), 'mikroview-licence-build')
+  const idsFile = path.join(tmpdir(), 'mikroview-licence-build-ids.json')
   rmSync(outDir, { recursive: true, force: true })
-  execFileSync('npx', ['vite', 'build', '--sourcemap', '--outDir', outDir, '--emptyOutDir'], {
+  rmSync(idsFile, { force: true })
+  // Vite's own build, run through its JS API rather than `vite build` so
+  // one extra plugin can ride along: it records every node_modules file
+  // the build loads. The sourcemaps below only ever name JavaScript, so a
+  // package that ships nothing but a stylesheet, font or image -- a
+  // fontsource-style package imported for its CSS -- would otherwise be
+  // missing from this inventory altogether, and with it from the notices
+  // and from the bundled-asset review licence-policy.mjs runs (#1432).
+  execFileSync(process.execPath, ['--input-type=module', '-e', VITE_BUILD_WITH_INVENTORY], {
     cwd: path.join(REPO, 'frontend'),
     encoding: 'utf8',
     stdio: 'pipe',
+    env: { ...process.env, MV_LICENCE_OUT_DIR: outDir, MV_LICENCE_IDS_FILE: idsFile },
   })
 
   // Every .map in the output, not just assets/ -- the service worker and
   // its workbox chunk are emitted at the output root, and an
   // assets/-only scan silently misses them.
-  const names = new Set()
+  //
+  // Per package, the shipped source files are kept too, with the text the
+  // map carries for them (sourcesContent): licence-policy.mjs reads them
+  // for other projects' licence banners, and the map's copy is the text
+  // that was actually bundled. Workbox's maps are written relative to
+  // wherever workbox-build ran, so the path *after* node_modules/ is what
+  // identifies a file, never the path as written.
+  const packages = new Map()
+  const entryFor = (name) => {
+    if (!packages.has(name)) packages.set(name, { files: new Map(), assets: new Set() })
+    return packages.get(name)
+  }
+  const splitNodeModulesPath = (src) => {
+    const i = src.lastIndexOf('node_modules/')
+    if (i < 0) return null
+    const rest = src.slice(i + 'node_modules/'.length).split('?')[0].split('/')
+    const nameParts = rest[0].startsWith('@') ? 2 : 1
+    return { name: rest.slice(0, nameParts).join('/'), rel: rest.slice(nameParts).join('/') }
+  }
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name)
       if (e.isDirectory()) walk(p)
       else if (e.name.endsWith('.map')) {
         const map = JSON.parse(readFileSync(p, 'utf8'))
-        for (const src of map.sources ?? []) {
-          const i = src.lastIndexOf('node_modules/')
-          if (i < 0) continue
-          const rest = src.slice(i + 'node_modules/'.length).split('/')
-          names.add(rest[0].startsWith('@') ? `${rest[0]}/${rest[1]}` : rest[0])
-        }
+        ;(map.sources ?? []).forEach((src, i) => {
+          const where = splitNodeModulesPath(src)
+          if (!where) return
+          const entry = entryFor(where.name)
+          if (where.rel && !entry.files.has(where.rel)) entry.files.set(where.rel, map.sourcesContent?.[i] ?? undefined)
+        })
       }
     }
   }
   walk(outDir)
   rmSync(outDir, { recursive: true, force: true })
+  for (const id of JSON.parse(readFileSync(idsFile, 'utf8'))) {
+    const where = splitNodeModulesPath(id)
+    if (!where || !where.rel || /\.[cm]?[jt]sx?$/.test(where.rel)) continue
+    entryFor(where.name).assets.add(where.rel)
+  }
+  rmSync(idsFile, { force: true })
+  const names = new Set(packages.keys())
 
   const out = []
   for (const name of [...names].sort()) {
@@ -153,7 +212,15 @@ export function npmPackages() {
       )
     }
     const meta = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'))
-    out.push({ name, version: meta.version, dir, declared: meta.license ?? meta.licenses })
+    const shipped = packages.get(name)
+    out.push({
+      name,
+      version: meta.version,
+      dir,
+      declared: meta.license ?? meta.licenses,
+      shippedFiles: [...shipped.files].sort(([a], [b]) => a.localeCompare(b)).map(([file, content]) => ({ path: file, content })),
+      shippedAssets: [...shipped.assets].sort(),
+    })
   }
   return out
 }

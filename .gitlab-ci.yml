@@ -1689,6 +1689,12 @@ security:npm-audit:
 # so the two checks cannot drift apart into disagreeing about what is
 # allowed.
 #
+# licence-policy.mjs also looks inside what ships (#1432): npm
+# bundleDependencies by the same licence rules, and a recorded
+# bundled-assets review for every asset, //go:embed file, licence-less
+# vendored Go directory and inlined other-project source the shipped
+# packages carry. That is why the job's last step needs Go on PATH too.
+#
 # mikroview itself is AGPL-3.0-only (LICENSE) -- go-licenses' --ignore flag
 # below excludes mikroview's own module, so this never flags the project
 # shipping under its own licence. That is not the same as allowing AGPL: it
