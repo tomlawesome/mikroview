@@ -799,6 +799,18 @@ test:postgres:
     # header), and this run, with MIKROVIEW_TEST_POSTGRES set above, is a
     # strict superset of what test:go covers for them.
     - go test -race -count=1 -coverprofile=coverage-postgres.out ./internal/persist/... ./internal/matchlog/...
+    # internal/authe2e's Postgres tests (#1202): the real binary against
+    # this job's database. They skip without MIKROVIEW_TEST_POSTGRES, so
+    # until now they ran nowhere in CI. Only those tests, by -run, not the
+    # whole package: test:go already runs the rest, and the whole package
+    # took about 4.6 minutes here without -race against about 2 with it
+    # for these alone. 'Postgres|TokensRow' matches every test in the
+    # package that opens the database (newPG); a new one has to carry
+    # one of those words to run here. Its own line, so -run does not
+    # filter the two packages above, and no coverage profile: these test
+    # the binary from outside, and the profile above stays those two
+    # packages' alone.
+    - go test -race -count=1 -run 'Postgres|TokensRow' ./internal/authe2e/...
     # The ratchet against postgres-floors: in supply-chain/coverage-floors.yml
     # -- the same mechanism test:go's coverage-floor.py call uses, scoped to
     # just the two packages this job measures.
