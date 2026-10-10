@@ -106,9 +106,13 @@ export class ApiError extends Error {
 // auth.go) -- never on the prose body, which stays free to reword and
 // stays indistinguishable from a genuine "you're not allowed to do that"
 // 403 (a viewer on an admin route) otherwise.
-export type ForcedAuthGate = 'must-change-password' | 'must-enrol-factor'
+export type ForcedAuthGate = 'must-change-password' | 'must-enrol-factor' | 'must-enrol-passkey'
 
-const FORCED_AUTH_GATE_HEADER = 'X-Mikroview-Auth-Gate'
+// #1202: gauntlet names the door header X-Auth-Gate; the old backend
+// says X-Mikroview-Auth-Gate. Both are read until the swap's cleanup
+// step drops the old one.
+const FORCED_AUTH_GATE_HEADER = 'X-Auth-Gate'
+const LEGACY_FORCED_AUTH_GATE_HEADER = 'X-Mikroview-Auth-Gate'
 
 // Registered once by auth.svelte.ts, which is the only thing that knows
 // what to do with a fresh session -- api.ts deliberately never imports
@@ -166,8 +170,8 @@ async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
   // needed it -- optional chaining here rather than assuming every
   // caller's stub carries a real Headers.
   if (res.status === 403) {
-    const gate = res.headers?.get?.(FORCED_AUTH_GATE_HEADER)
-    if (gate === 'must-change-password' || gate === 'must-enrol-factor') {
+    const gate = res.headers?.get?.(FORCED_AUTH_GATE_HEADER) ?? res.headers?.get?.(LEGACY_FORCED_AUTH_GATE_HEADER)
+    if (gate === 'must-change-password' || gate === 'must-enrol-factor' || gate === 'must-enrol-passkey') {
       triggerForcedAuthGateRecheck(gate)
     }
   }
@@ -181,6 +185,46 @@ async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
     freshnessSignalHandler?.()
   }
   return res
+}
+
+// #1202: gauntlet answers errors as RFC 9457 Problem Details
+// (application/problem+json: type, title, status, detail), while
+// mikroview's own routes (and the old backend) answer one plain line.
+// readError reads either: `detail` is what to show, and `kind` is the
+// anchor of the problem `type` ("invalid-credentials", "step-expired")
+// -- gauntlet's errors.md says to branch on that, never on the words.
+// `kind` is empty for a plain-text body, so callers that still meet the
+// old backend's exact strings can fall back to them only then.
+interface ReadError {
+  detail: string
+  kind: string
+}
+
+async function readError(res: Response): Promise<ReadError> {
+  let text = ''
+  try {
+    text = await res.text()
+  } catch {
+    // the body was already consumed, or the connection dropped
+  }
+  const contentType = res.headers?.get?.('Content-Type') ?? ''
+  if (contentType.includes('problem+json')) {
+    try {
+      const p = JSON.parse(text) as { type?: unknown; detail?: unknown }
+      const type = typeof p.type === 'string' ? p.type : ''
+      const hash = type.lastIndexOf('#')
+      return { detail: typeof p.detail === 'string' ? p.detail : '', kind: hash >= 0 ? type.slice(hash + 1) : '' }
+    } catch {
+      // not JSON after all: shown as text below
+    }
+  }
+  return { detail: text, kind: '' }
+}
+
+// What the operator reads for a failed response: a problem's detail, or
+// the plain text body as it always was.
+async function errorText(res: Response): Promise<string> {
+  return (await readError(res)).detail
 }
 
 // #1162: what the operator reads when a request fails.
@@ -209,13 +253,8 @@ function wordsForStatus(status: number): string {
 }
 
 async function serverSaid(res: Response): Promise<string> {
-  let body = ''
-  try {
-    body = (await res.text()).trim()
-  } catch {
-    // the body was already consumed, or the connection dropped
-    // mid-read: the status still has words of its own below
-  }
+  // A body that could not be read leaves the status's own words below.
+  const body = (await errorText(res)).trim()
   if (body && body.length <= 200 && !body.startsWith('<')) return body
   return wordsForStatus(res.status)
 }
@@ -473,7 +512,7 @@ export async function fetchDevices(): Promise<Device[]> {
 export async function createDevice(name: string): Promise<Device | string> {
   const res = await postJSON('/api/devices', { name })
   if (res.ok) return res.json()
-  return (await res.text()) || `createDevice: ${res.status}`
+  return (await errorText(res)) || `createDevice: ${res.status}`
 }
 
 // mintEnrolment mints the short-lived token the Send logs step writes
@@ -490,7 +529,7 @@ export async function mintEnrolment(
     expectedAddress,
   })
   if (res.ok) return res.json()
-  return (await res.text()) || `mintEnrolment: ${res.status}`
+  return (await errorText(res)) || `mintEnrolment: ${res.status}`
 }
 
 // registerDevice records the operator's confirmation of a router --
@@ -501,7 +540,7 @@ export async function mintEnrolment(
 export async function registerDevice(device: string, name: string): Promise<Device | string> {
   const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/registration`, { name })
   if (res.ok) return res.json()
-  return (await res.text()) || `registerDevice: ${res.status}`
+  return (await errorText(res)) || `registerDevice: ${res.status}`
 }
 
 // rebindEnrolment points a pending enrolment window at a different
@@ -515,7 +554,7 @@ export async function rebindEnrolment(device: string, address: string): Promise<
     address,
   })
   if (res.ok) return null
-  return (await res.text()) || `rebindEnrolment: ${res.status}`
+  return (await errorText(res)) || `rebindEnrolment: ${res.status}`
 }
 
 // burnEnrolment retires a minted token without using it. No surface
@@ -527,7 +566,7 @@ export async function rebindEnrolment(device: string, address: string): Promise<
 export async function burnEnrolment(device: string): Promise<string | null> {
   const res = await deleteJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`)
   if (res.ok) return null
-  return (await res.text()) || `burnEnrolment: ${res.status}`
+  return (await errorText(res)) || `burnEnrolment: ${res.status}`
 }
 
 // deleteDevice removes a router this registry itself created -- Create
@@ -539,7 +578,7 @@ export async function burnEnrolment(device: string): Promise<string | null> {
 export async function deleteDevice(device: string): Promise<string | null> {
   const res = await deleteJSON(`/api/devices/${encodeURIComponent(device)}`)
   if (res.ok) return null
-  return (await res.text()) || `deleteDevice: ${res.status}`
+  return (await errorText(res)) || `deleteDevice: ${res.status}`
 }
 
 // fetchRefusedSenders reads the addresses whose lines were dropped for
@@ -931,7 +970,7 @@ export async function fetchExpectations(): Promise<Exclusion[]> {
 export async function forgetExpectation(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/flags/expectations/${encodeURIComponent(id)}`)
   if (res.ok) return null
-  return (await res.text()) || `forgetExpectation: ${res.status}`
+  return (await errorText(res)) || `forgetExpectation: ${res.status}`
 }
 
 export async function fetchAuthSession(): Promise<AuthSession> {
@@ -950,7 +989,7 @@ export async function fetchAuthSession(): Promise<AuthSession> {
 export async function register(username: string, password: string, setupCode: string): Promise<string | null> {
   const res = await postJSON('/api/auth/register', { username, password, setupCode })
   if (res.ok) return null
-  return (await res.text()) || `register: ${res.status}`
+  return (await errorText(res)) || `register: ${res.status}`
 }
 
 // A correct password on an account holding an active second factor
@@ -971,7 +1010,7 @@ export interface LoginPendingFactor {
 
 export async function login(username: string, password: string): Promise<LoginPendingFactor | string | null> {
   const res = await postJSON('/api/auth/login', { username, password })
-  if (!res.ok) return (await res.text()) || `login: ${res.status}`
+  if (!res.ok) return (await errorText(res)) || `login: ${res.status}`
   // Ordinary success carries no body -- res.json() would throw on the
   // empty string, which the catch below reads as "nothing pending",
   // same as an older server that predates this field entirely.
@@ -996,7 +1035,7 @@ export async function login(username: string, password: string): Promise<LoginPe
 export async function submitLoginFactor(code: string): Promise<string | null> {
   const res = await postJSON('/api/auth/login/factor', { code })
   if (res.ok) return null
-  return (await res.text()) || `submitLoginFactor: ${res.status}`
+  return loginStepRefusal(res, 'submitLoginFactor')
 }
 
 // The literal refusal text handleAuthLoginFactor and its passkey-begin
@@ -1008,6 +1047,16 @@ export async function submitLoginFactor(code: string): Promise<string | null> {
 // form instead of leaving the code box up with no session left to
 // complete.
 export const PENDING_LOGIN_EXPIRED = 'sign in again'
+
+// #1202: gauntlet marks the same refusal with a problem type ending
+// #step-expired, whatever its detail says; the old backend only has the
+// words above. A typed problem is decided by its type alone, so a plain
+// wrong-code refusal is never mistaken for an expired step.
+async function loginStepRefusal(res: Response, name: string): Promise<string> {
+  const { detail, kind } = await readError(res)
+  if (kind === 'step-expired') return PENDING_LOGIN_EXPIRED
+  return detail || `${name}: ${res.status}`
+}
 
 // beginPasskeyLogin/submitPasskeyLoginAssertion are the passkey half of
 // the same second step (#1250), carried by the same pending cookie as
@@ -1023,7 +1072,7 @@ export interface PasskeyCeremonyBegin {
 export async function beginPasskeyLogin(): Promise<PasskeyCeremonyBegin | string> {
   const res = await postJSON('/api/auth/login/factor/begin')
   if (res.ok) return res.json()
-  return (await res.text()) || `beginPasskeyLogin: ${res.status}`
+  return loginStepRefusal(res, 'beginPasskeyLogin')
 }
 
 // assertion is credential.toJSON() from navigator.credentials.get() --
@@ -1031,7 +1080,7 @@ export async function beginPasskeyLogin(): Promise<PasskeyCeremonyBegin | string
 export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<string | null> {
   const res = await postJSON('/api/auth/login/factor', { assertion })
   if (res.ok) return null
-  return (await res.text()) || `submitPasskeyLoginAssertion: ${res.status}`
+  return loginStepRefusal(res, 'submitPasskeyLoginAssertion')
 }
 
 // The literal refusal body handleTOTPEnrol and handleAuthPasskeysRegisterBegin
@@ -1041,6 +1090,15 @@ export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<s
 // as, the same way PENDING_LOGIN_EXPIRED lets submitLoginFactor tell its
 // own two 401s apart.
 export const INCORRECT_PASSWORD = 'incorrect password'
+
+// #1202: gauntlet marks a wrong password at a re-check with a problem
+// type ending #invalid-credentials, whatever its detail says; the old
+// backend answers the exact text above. When the body is a typed
+// problem its type decides alone, so another 401 class whose detail
+// happens to read "incorrect password" is still the session being gone.
+function isIncorrectPassword({ detail, kind }: ReadError): boolean {
+  return kind ? kind === 'invalid-credentials' : detail.trim() === INCORRECT_PASSWORD
+}
 
 // enrolTOTP mints a pending secret and returns the otpauth:// URI to draw
 // (#1249). Not active until confirmTOTP below verifies a code against
@@ -1068,11 +1126,11 @@ export async function enrolTOTP(password: string): Promise<TotpEnrollment | stri
   const res = await postJSON('/api/auth/totp/enrol', { password })
   if (res.ok) return res.json()
   if (res.status === 401) {
-    const body = (await res.text()).trim()
-    if (body === INCORRECT_PASSWORD) return body
-    throw new ApiError(body || `enrolTOTP: ${res.status}`, res.status)
+    const err = await readError(res)
+    if (isIncorrectPassword(err)) return INCORRECT_PASSWORD
+    throw new ApiError(err.detail.trim() || `enrolTOTP: ${res.status}`, res.status)
   }
-  return (await res.text()) || `enrolTOTP: ${res.status}`
+  return (await errorText(res)) || `enrolTOTP: ${res.status}`
 }
 
 // #1250: recovery codes are minted once, by whichever factor -- TOTP
@@ -1084,6 +1142,10 @@ export async function enrolTOTP(password: string): Promise<TotpEnrollment | stri
 export interface TotpConfirmResult {
   recoveryCodes: string[] | null
   alreadyIssued: boolean
+  // #1202: gauntlet holds the account's first second factor, with its
+  // codes, until confirmRecoveryCodes below says the person saved them.
+  // Absent on the old backend, which activates at once.
+  pendingConfirmation?: boolean
 }
 
 // confirmTOTP activates the pending secret (#1249). Also ends every
@@ -1094,12 +1156,17 @@ export async function confirmTOTP(code: string): Promise<TotpConfirmResult | str
   const res = await postJSON('/api/auth/totp/confirm', { code })
   if (res.ok) {
     const body = await res.json()
-    return { recoveryCodes: body.recoveryCodes ?? null, alreadyIssued: body.alreadyIssued ?? false }
+    const result: TotpConfirmResult = {
+      recoveryCodes: body.recoveryCodes ?? null,
+      alreadyIssued: body.alreadyIssued ?? false,
+    }
+    if (body.pendingConfirmation === true) result.pendingConfirmation = true
+    return result
   }
   // See enrolTOTP's own comment: a wrong code answers 400, never 401, so
   // a 401 here always means the session died, not a bad code.
-  if (res.status === 401) throw new ApiError((await res.text()) || `confirmTOTP: ${res.status}`, res.status)
-  return (await res.text()) || `confirmTOTP: ${res.status}`
+  if (res.status === 401) throw new ApiError((await errorText(res)) || `confirmTOTP: ${res.status}`, res.status)
+  return (await errorText(res)) || `confirmTOTP: ${res.status}`
 }
 
 // #1253's ruling: an account may remove its own last second factor --
@@ -1122,7 +1189,7 @@ export interface DisableFactorResult {
 // the password"); a lost phone goes through the CLI recovery path instead.
 export async function disableTOTP(password: string): Promise<DisableFactorResult | string> {
   const res = await deleteJSON('/api/auth/totp', { password })
-  if (!res.ok) return (await res.text()) || `disableTOTP: ${res.status}`
+  if (!res.ok) return (await errorText(res)) || `disableTOTP: ${res.status}`
   const body = await res.json().catch(() => null)
   return { signedOut: body?.signedOut === true }
 }
@@ -1140,7 +1207,21 @@ export async function regenerateRecoveryCodes(password: string): Promise<string[
     const body = await res.json()
     return body.recoveryCodes ?? []
   }
-  return (await res.text()) || `regenerateRecoveryCodes: ${res.status}`
+  const err = await readError(res)
+  if (res.status === 401 && isIncorrectPassword(err)) return INCORRECT_PASSWORD
+  return err.detail || `regenerateRecoveryCodes: ${res.status}`
+}
+
+// confirmRecoveryCodes (#1202) tells gauntlet the person saved the codes
+// a held first factor came with: POST /api/auth/recovery-codes/confirm
+// with an empty body. Only then does the factor go live. Called only when
+// confirmTOTP or finishPasskeyRegistration answered pendingConfirmation;
+// the old backend never asks for it. null on success, the refusal's
+// words otherwise, like the other mutating calls.
+export async function confirmRecoveryCodes(): Promise<string | null> {
+  const res = await postJSON('/api/auth/recovery-codes/confirm', {})
+  if (res.ok) return null
+  return (await errorText(res)) || `confirmRecoveryCodes: ${res.status}`
 }
 
 // clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
@@ -1151,7 +1232,7 @@ export async function regenerateRecoveryCodes(password: string): Promise<string[
 export async function clearUserTOTP(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/totp`)
   if (res.ok) return null
-  return (await res.text()) || `clearUserTOTP: ${res.status}`
+  return (await errorText(res)) || `clearUserTOTP: ${res.status}`
 }
 
 // fetchPasskeys feeds PasskeysOverlay's list step (#1250). Q5-F2: this
@@ -1186,11 +1267,11 @@ export async function beginPasskeyRegistration(password: string): Promise<Passke
   // forced-enrolment routes, all of which need an existing session, so any
   // other 401 here means that session is gone, not a ceremony refusal.
   if (res.status === 401) {
-    const body = (await res.text()).trim()
-    if (body === INCORRECT_PASSWORD) return body
-    throw new ApiError(body || `beginPasskeyRegistration: ${res.status}`, res.status)
+    const err = await readError(res)
+    if (isIncorrectPassword(err)) return INCORRECT_PASSWORD
+    throw new ApiError(err.detail.trim() || `beginPasskeyRegistration: ${res.status}`, res.status)
   }
-  return (await res.text()) || `beginPasskeyRegistration: ${res.status}`
+  return (await errorText(res)) || `beginPasskeyRegistration: ${res.status}`
 }
 
 // #1250, mirroring TotpConfirmResult above: recoveryCodes is null when
@@ -1198,6 +1279,8 @@ export async function beginPasskeyRegistration(password: string): Promise<Passke
 export interface PasskeyRegistrationFinish {
   passkey: PasskeySummary
   recoveryCodes: string[] | null
+  // #1202: as TotpConfirmResult.pendingConfirmation.
+  pendingConfirmation?: boolean
 }
 
 // credential is credential.toJSON() from navigator.credentials.create()
@@ -1210,15 +1293,15 @@ export async function finishPasskeyRegistration(
   if (res.ok) return res.json()
   // Same reasoning as beginPasskeyRegistration's own comment.
   if (res.status === 401) {
-    throw new ApiError((await res.text()) || `finishPasskeyRegistration: ${res.status}`, res.status)
+    throw new ApiError((await errorText(res)) || `finishPasskeyRegistration: ${res.status}`, res.status)
   }
-  return (await res.text()) || `finishPasskeyRegistration: ${res.status}`
+  return (await errorText(res)) || `finishPasskeyRegistration: ${res.status}`
 }
 
 export async function renamePasskey(id: string, name: string): Promise<string | null> {
   const res = await patchJSON(`/api/auth/passkeys/${encodeURIComponent(id)}`, { name })
   if (res.ok) return null
-  return (await res.text()) || `renamePasskey: ${res.status}`
+  return (await errorText(res)) || `renamePasskey: ${res.status}`
 }
 
 // disablePasskey is the user's own way to remove one passkey,
@@ -1229,7 +1312,7 @@ export async function renamePasskey(id: string, name: string): Promise<string | 
 // immediately too.
 export async function disablePasskey(id: string, password: string): Promise<DisableFactorResult | string> {
   const res = await deleteJSON(`/api/auth/passkeys/${encodeURIComponent(id)}`, { password })
-  if (!res.ok) return (await res.text()) || `disablePasskey: ${res.status}`
+  if (!res.ok) return (await errorText(res)) || `disablePasskey: ${res.status}`
   const body = await res.json().catch(() => null)
   return { signedOut: body?.signedOut === true }
 }
@@ -1242,7 +1325,7 @@ export async function disablePasskey(id: string, password: string): Promise<Disa
 export async function clearUserPasskeys(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/passkeys`)
   if (res.ok) return null
-  return (await res.text()) || `clearUserPasskeys: ${res.status}`
+  return (await errorText(res)) || `clearUserPasskeys: ${res.status}`
 }
 
 // Change the signed-in account's own password (#294 item 4). Returns
@@ -1253,7 +1336,7 @@ export async function clearUserPasskeys(id: string): Promise<string | null> {
 export async function changePassword(currentPassword: string, newPassword: string): Promise<string | null> {
   const res = await postJSON('/api/auth/password', { currentPassword, newPassword })
   if (res.ok) return null
-  return (await res.text()) || `changePassword: ${res.status}`
+  return (await errorText(res)) || `changePassword: ${res.status}`
 }
 
 // Returns error text on failure, like every other mutating wrapper
@@ -1264,7 +1347,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 export async function logout(): Promise<string | null> {
   const res = await postJSON('/api/auth/logout')
   if (res.ok) return null
-  return (await res.text()) || `logout: ${res.status}`
+  return (await errorText(res)) || `logout: ${res.status}`
 }
 
 // signOutEverywhere is #677's sessions row -- ends every session the
@@ -1274,7 +1357,7 @@ export async function logout(): Promise<string | null> {
 export async function signOutEverywhere(): Promise<string | null> {
   const res = await postJSON('/api/auth/logout-all')
   if (res.ok) return null
-  return (await res.text()) || `signOutEverywhere: ${res.status}`
+  return (await errorText(res)) || `signOutEverywhere: ${res.status}`
 }
 
 // #1283: the signed-in user's own preferences record. No record yet
@@ -1309,7 +1392,7 @@ export async function createUser(
 ): Promise<string | null> {
   const res = await postJSON('/api/auth/users', { username, password, role })
   if (res.ok) return null
-  return (await res.text()) || `createUser: ${res.status}`
+  return (await errorText(res)) || `createUser: ${res.status}`
 }
 
 export async function fetchUsers(): Promise<UserSummary[]> {
@@ -1321,7 +1404,7 @@ export async function fetchUsers(): Promise<UserSummary[]> {
 export async function deleteUser(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`)
   if (res.ok) return null
-  return (await res.text()) || `deleteUser: ${res.status}`
+  return (await errorText(res)) || `deleteUser: ${res.status}`
 }
 
 // resetUserPassword is the admin's way back in for somebody who has lost
@@ -1333,7 +1416,7 @@ export async function deleteUser(id: string): Promise<string | null> {
 export async function resetUserPassword(id: string): Promise<PasswordResetCode | string> {
   const res = await postJSON(`/api/auth/users/${encodeURIComponent(id)}/reset-password`)
   if (res.ok) return res.json()
-  return (await res.text()) || `resetUserPassword: ${res.status}`
+  return (await errorText(res)) || `resetUserPassword: ${res.status}`
 }
 
 // setNewPasswordAfterReset is the far end of that flow, for a session
@@ -1346,7 +1429,7 @@ export async function resetUserPassword(id: string): Promise<PasswordResetCode |
 export async function setNewPasswordAfterReset(newPassword: string): Promise<string | null> {
   const res = await postJSON('/api/auth/password', { newPassword })
   if (res.ok) return null
-  return (await res.text()) || `setNewPasswordAfterReset: ${res.status}`
+  return (await errorText(res)) || `setNewPasswordAfterReset: ${res.status}`
 }
 
 // The one definitions surface (issue #407), replacing /api/detectors and
@@ -1402,7 +1485,7 @@ export interface DefinitionStructureUpdate {
 export async function updateDefinition(id: string, req: DefinitionUpdate): Promise<Definition | string> {
   const res = await putJSON(`/api/definitions/${encodeURIComponent(id)}`, req)
   if (res.ok) return await res.json()
-  return (await res.text()) || `updateDefinition: ${res.status}`
+  return (await errorText(res)) || `updateDefinition: ${res.status}`
 }
 
 // resetDefinition discards every param override in one call, putting a
@@ -1412,7 +1495,7 @@ export async function updateDefinition(id: string, req: DefinitionUpdate): Promi
 export async function resetDefinition(id: string): Promise<Definition | string> {
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/reset`)
   if (res.ok) return await res.json()
-  return (await res.text()) || `resetDefinition: ${res.status}`
+  return (await errorText(res)) || `resetDefinition: ${res.status}`
 }
 
 // cloneDefinition copies an expectation definition into a new one with
@@ -1422,7 +1505,7 @@ export async function resetDefinition(id: string): Promise<Definition | string> 
 export async function cloneDefinition(id: string, name?: string): Promise<Definition | string> {
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/clone`, { name: name ?? '' })
   if (res.ok) return await res.json()
-  return (await res.text()) || `cloneDefinition: ${res.status}`
+  return (await errorText(res)) || `cloneDefinition: ${res.status}`
 }
 
 // fetchNameProvenance asks where the name shown for one token comes
@@ -1461,13 +1544,13 @@ export async function fetchEntities(): Promise<Entity[]> {
 export async function upsertEntity(entity: Entity): Promise<string | null> {
   const res = await postJSON('/api/entities', entity)
   if (res.ok) return null
-  return (await res.text()) || `upsertEntity: ${res.status}`
+  return (await errorText(res)) || `upsertEntity: ${res.status}`
 }
 
 export async function deleteEntity(type: string, key: string): Promise<string | null> {
   const res = await deleteJSON('/api/entities', { type, key })
   if (res.ok) return null
-  return (await res.text()) || `deleteEntity: ${res.status}`
+  return (await errorText(res)) || `deleteEntity: ${res.status}`
 }
 
 // Admin-only CRUD over internal/watchlist's persisted entry set (#243) --
@@ -1550,7 +1633,7 @@ export async function createWatchlistEntry(req: WatchlistEntryRequest): Promise<
     expectation: expectationBlock(req),
   })
   if (res.ok) return definitionEntry(await res.json())
-  return (await res.text()) || `createWatchlistEntry: ${res.status}`
+  return (await errorText(res)) || `createWatchlistEntry: ${res.status}`
 }
 
 export async function updateWatchlistEntry(id: string, req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
@@ -1562,7 +1645,7 @@ export async function updateWatchlistEntry(id: string, req: WatchlistEntryReques
 export async function deleteWatchlistEntry(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/definitions/${encodeURIComponent(id)}`)
   if (res.ok) return null
-  return (await res.text()) || `deleteWatchlistEntry: ${res.status}`
+  return (await errorText(res)) || `deleteWatchlistEntry: ${res.status}`
 }
 
 // createCustomDetection creates an operator-authored detector from what
@@ -1583,7 +1666,7 @@ export async function createCustomDetection(req: {
     detection: req.detection,
   })
   if (res.ok) return await res.json()
-  return (await res.text()) || `createCustomDetection: ${res.status}`
+  return (await errorText(res)) || `createCustomDetection: ${res.status}`
 }
 
 // deleteDefinition removes an operator-authored detector. Shipped
@@ -1593,7 +1676,7 @@ export async function createCustomDetection(req: {
 export async function deleteDefinition(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/definitions/${encodeURIComponent(id)}`)
   if (res.ok) return null
-  return (await res.text()) || `deleteDefinition: ${res.status}`
+  return (await errorText(res)) || `deleteDefinition: ${res.status}`
 }
 
 // definitionEntry pulls the operator-facing entry out of a definition
@@ -1615,7 +1698,7 @@ export async function promoteWatchlistDestinations(
 ): Promise<WatchlistEntry | string> {
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/promote`, { destinations })
   if (res.ok) return definitionEntry(await res.json())
-  return (await res.text()) || `promoteWatchlistDestinations: ${res.status}`
+  return (await errorText(res)) || `promoteWatchlistDestinations: ${res.status}`
 }
 
 // setWatchlistObserving flips whether an inverted expectation is in
@@ -1624,7 +1707,7 @@ export async function promoteWatchlistDestinations(
 export async function setWatchlistObserving(id: string, observing: boolean): Promise<WatchlistEntry | string> {
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/observing`, { observing })
   if (res.ok) return definitionEntry(await res.json())
-  return (await res.text()) || `setWatchlistObserving: ${res.status}`
+  return (await errorText(res)) || `setWatchlistObserving: ${res.status}`
 }
 
 // setWatchlistEnabled pauses or resumes a watchlist entry (#676's
@@ -1722,19 +1805,19 @@ export async function acceptSuggestion(
 ): Promise<{ candidate: Suggestion; entry: WatchlistEntry } | string> {
   const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/accept`)
   if (res.ok) return await res.json()
-  return (await res.text()) || `acceptSuggestion: ${res.status}`
+  return (await errorText(res)) || `acceptSuggestion: ${res.status}`
 }
 
 export async function hideSuggestion(id: string): Promise<Suggestion | string> {
   const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/hide`)
   if (res.ok) return await res.json()
-  return (await res.text()) || `hideSuggestion: ${res.status}`
+  return (await errorText(res)) || `hideSuggestion: ${res.status}`
 }
 
 export async function unhideSuggestion(id: string): Promise<Suggestion | string> {
   const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/unhide`)
   if (res.ok) return await res.json()
-  return (await res.text()) || `unhideSuggestion: ${res.status}`
+  return (await errorText(res)) || `unhideSuggestion: ${res.status}`
 }
 
 // resetSuggestions is #243 slice 5's "nuke" action: permanently deletes
@@ -1747,7 +1830,7 @@ export async function resetSuggestions(): Promise<Suggestion[] | string> {
     const body = await res.json()
     return body.candidates ?? []
   }
-  return (await res.text()) || `resetSuggestions: ${res.status}`
+  return (await errorText(res)) || `resetSuggestions: ${res.status}`
 }
 
 // Admin-only read-only API token management (issue #101) -- see
@@ -1763,21 +1846,30 @@ export async function fetchTokens(): Promise<ApiToken[]> {
 export async function createToken(
   name: string,
   kind: 'api' | 'ingest',
-  device?: string,
+  device: string | undefined,
+  password: string,
 ): Promise<ApiToken | string> {
   // Omitting kind means read-only server-side; sending it explicitly
   // keeps what the operator chose in the dialog and what goes on the
   // wire identical. device is required for ingest and rejected
   // otherwise -- the server enforces it, the dialog mirrors it.
-  const res = await postJSON('/api/tokens', device ? { name, kind, device } : { name, kind })
+  //
+  // #1202: the admin's own password goes with every token (a token
+  // outlives the session that minted it; the old backend ignores the
+  // field). A router's ingest token must not stop reporting on an
+  // anniversary, so it asks never to expire; an API token sends no
+  // expiresAt and gets the server's one-year default.
+  const body: Record<string, string> = device ? { name, kind, device, password } : { name, kind, password }
+  if (kind === 'ingest') body.expiresAt = 'never'
+  const res = await postJSON('/api/tokens', body)
   if (res.ok) return res.json()
-  return (await res.text()) || `createToken: ${res.status}`
+  return (await errorText(res)) || `createToken: ${res.status}`
 }
 
 export async function revokeToken(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/tokens/${encodeURIComponent(id)}`)
   if (res.ok) return null
-  return (await res.text()) || `revokeToken: ${res.status}`
+  return (await errorText(res)) || `revokeToken: ${res.status}`
 }
 
 // fetchAuditLog serves a windowed slice of the admin-action audit log
@@ -1806,7 +1898,7 @@ export async function fetchAuditLog(): Promise<AuditResult> {
 // admin.
 export async function startSSOLink(): Promise<{ url: string } | string> {
   const res = await postJSON('/api/auth/oidc/link')
-  if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`
+  if (!res.ok) return (await errorText(res)) || `startSSOLink: ${res.status}`
   return res.json()
 }
 
@@ -1842,7 +1934,7 @@ export async function fetchSetupCommands(
 ): Promise<SetupCommandsResponse | string> {
   const res = await postJSON('/api/setup/commands', req)
   if (res.ok) return res.json()
-  return (await res.text()) || `fetchSetupCommands: ${res.status}`
+  return (await errorText(res)) || `fetchSetupCommands: ${res.status}`
 }
 
 // markSetupStep records that a setup step was skipped or forced past
@@ -1861,7 +1953,7 @@ export async function markSetupStep(
 ): Promise<SetupMark | string> {
   const res = await postJSON('/api/setup/mark', { step, outcome, note })
   if (res.ok) return res.json()
-  return (await res.text()) || `markSetupStep: ${res.status}`
+  return (await errorText(res)) || `markSetupStep: ${res.status}`
 }
 
 // saveSetupAddress records the wizard header field's answer (#1213):
@@ -1872,7 +1964,7 @@ export async function markSetupStep(
 export async function saveSetupAddress(address: string): Promise<string | null> {
   const res = await postJSON('/api/setup/address', { address })
   if (res.ok) return null
-  return (await res.text()) || `saveSetupAddress: ${res.status}`
+  return (await errorText(res)) || `saveSetupAddress: ${res.status}`
 }
 
 // saveSetupBackupTransport records how step 6's script delivers its
@@ -1885,7 +1977,7 @@ export async function saveSetupAddress(address: string): Promise<string | null> 
 export async function saveSetupBackupTransport(transport: BackupTransport): Promise<string | null> {
   const res = await putJSON('/api/setup/backup-transport', { transport })
   if (res.ok) return null
-  return (await res.text()) || `saveSetupBackupTransport: ${res.status}`
+  return (await errorText(res)) || `saveSetupBackupTransport: ${res.status}`
 }
 
 // fetchConfigUpgrade is #1218's "N new settings are available" notice --
@@ -1929,13 +2021,13 @@ export async function putCoverageDeclaration(
 ): Promise<CoverageDeclaration | string> {
   const res = await putJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`, { reason })
   if (res.ok) return res.json()
-  return (await res.text()) || `putCoverageDeclaration: ${res.status}`
+  return (await errorText(res)) || `putCoverageDeclaration: ${res.status}`
 }
 
 export async function deleteCoverageDeclaration(key: string): Promise<string | null> {
   const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
   if (res.ok) return null
-  return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
+  return (await errorText(res)) || `deleteCoverageDeclaration: ${res.status}`
 }
 
 // HostMarkKind: what an operator said about a quiet host (#1016).
@@ -2024,13 +2116,13 @@ export async function putHostMark(
 ): Promise<Host | string> {
   const res = await putJSON(`/api/hosts/${encodeURIComponent(key)}/mark`, { kind, reason })
   if (res.ok) return res.json()
-  return (await res.text()) || `putHostMark: ${res.status}`
+  return (await errorText(res)) || `putHostMark: ${res.status}`
 }
 
 export async function deleteHostMark(key: string): Promise<string | null> {
   const res = await deleteJSON(`/api/hosts/${encodeURIComponent(key)}/mark`)
   if (res.ok) return null
-  return (await res.text()) || `deleteHostMark: ${res.status}`
+  return (await errorText(res)) || `deleteHostMark: ${res.status}`
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2057,7 +2149,7 @@ export async function deleteHostMark(key: string): Promise<string | null> {
 export async function setStoreMaxMemory(bytes: number): Promise<StoreMemory | string> {
   const res = await putJSON('/api/settings/store', { maxMemory: bytes })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `setStoreMaxMemory: ${res.status}`
+  return (await errorText(res)).trim() || `setStoreMaxMemory: ${res.status}`
 }
 
 // fetchHistorySettings reads the on-disk history's switch, window and
@@ -2086,7 +2178,7 @@ export async function setHistorySettings(body: {
 }): Promise<HistorySettings | string> {
   const res = await putJSON('/api/settings/history', body)
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `setHistorySettings: ${res.status}`
+  return (await errorText(res)).trim() || `setHistorySettings: ${res.status}`
 }
 
 // --- Country and network owner (#1352) -------------------------------------
@@ -2106,7 +2198,7 @@ export async function fetchGeoSettings(): Promise<GeoSettings> {
 // body as text -- the same "the server's own words" rule
 // setHistorySettings keeps.
 async function geoRefusal(res: Response, name: string): Promise<string> {
-  const body = (await res.text()).trim()
+  const body = (await errorText(res)).trim()
   try {
     const parsed = JSON.parse(body) as { error?: unknown }
     if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim()
@@ -2190,7 +2282,7 @@ export function clearGeoLookupCache(): void {
 export async function deleteHistoryFiles(password: string): Promise<HistorySettings | string> {
   const res = await deleteJSON('/api/settings/history/files', { password })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `deleteHistoryFiles: ${res.status}`
+  return (await errorText(res)).trim() || `deleteHistoryFiles: ${res.status}`
 }
 
 // fetchRouterBackups reads Settings' "router backups" group (#394,
@@ -2215,7 +2307,7 @@ export async function fetchRouterBackups(): Promise<RouterBackupsResponse> {
 export async function setRouterBackupSwitch(open: boolean, password?: string): Promise<RouterBackupSwitchState | string> {
   const res = await putJSON('/api/settings/router-backups', open ? { open, password } : { open })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `setRouterBackupSwitch: ${res.status}`
+  return (await errorText(res)).trim() || `setRouterBackupSwitch: ${res.status}`
 }
 
 // routerBackupDownloadUrl is the admin download link for one half of a
@@ -2242,7 +2334,7 @@ export async function fetchRouterBackupText(
     `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/text`,
   )
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `fetchRouterBackupText: ${res.status}`
+  return (await errorText(res)).trim() || `fetchRouterBackupText: ${res.status}`
 }
 
 export async function fetchRouterBackupDiff(
@@ -2253,7 +2345,7 @@ export async function fetchRouterBackupDiff(
   const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
   const res = await fetch(`/api/router-backups/${encodeURIComponent(device)}/diff?${q}`)
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `fetchRouterBackupDiff: ${res.status}`
+  return (await errorText(res)).trim() || `fetchRouterBackupDiff: ${res.status}`
 }
 
 // The vault passphrase's four controls (#1115, #956): unlock, lock, set
@@ -2266,25 +2358,25 @@ export async function fetchRouterBackupDiff(
 export async function unlockRouterBackupVault(passphrase: string): Promise<VaultLock | string> {
   const res = await postJSON('/api/router-backups/unlock', { passphrase })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `unlockRouterBackupVault: ${res.status}`
+  return (await errorText(res)).trim() || `unlockRouterBackupVault: ${res.status}`
 }
 
 export async function lockRouterBackupVault(): Promise<VaultLock | string> {
   const res = await postJSON('/api/router-backups/lock', {})
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `lockRouterBackupVault: ${res.status}`
+  return (await errorText(res)).trim() || `lockRouterBackupVault: ${res.status}`
 }
 
 export async function setRouterBackupPassphrase(passphrase: string): Promise<VaultLock | string> {
   const res = await postJSON('/api/router-backups/passphrase', { passphrase })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `setRouterBackupPassphrase: ${res.status}`
+  return (await errorText(res)).trim() || `setRouterBackupPassphrase: ${res.status}`
 }
 
 export async function removeRouterBackupPassphrase(passphrase: string): Promise<VaultLock | string> {
   const res = await deleteJSON('/api/router-backups/passphrase', { passphrase })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `removeRouterBackupPassphrase: ${res.status}`
+  return (await errorText(res)).trim() || `removeRouterBackupPassphrase: ${res.status}`
 }
 
 // changeRouterBackupPassphrase re-wraps the vault's key under a new
@@ -2294,7 +2386,7 @@ export async function removeRouterBackupPassphrase(passphrase: string): Promise<
 export async function changeRouterBackupPassphrase(current: string, passphrase: string): Promise<VaultLock | string> {
   const res = await putJSON('/api/router-backups/passphrase', { current, passphrase })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `changeRouterBackupPassphrase: ${res.status}`
+  return (await errorText(res)).trim() || `changeRouterBackupPassphrase: ${res.status}`
 }
 
 // The keep controls (#1126): mark one stored backup as one to hold on
@@ -2315,13 +2407,13 @@ export async function keepRouterBackup(
 ): Promise<RouterBackupRouter | string> {
   const res = await postJSON(keepUrl(device, generation), { comment })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `keepRouterBackup: ${res.status}`
+  return (await errorText(res)).trim() || `keepRouterBackup: ${res.status}`
 }
 
 export async function releaseRouterBackup(device: string, generation: string): Promise<RouterBackupRouter | string> {
   const res = await deleteJSON(keepUrl(device, generation))
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `releaseRouterBackup: ${res.status}`
+  return (await errorText(res)).trim() || `releaseRouterBackup: ${res.status}`
 }
 
 export async function setRouterBackupComment(
@@ -2331,7 +2423,7 @@ export async function setRouterBackupComment(
 ): Promise<RouterBackupRouter | string> {
   const res = await patchJSON(keepUrl(device, generation), { comment })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `setRouterBackupComment: ${res.status}`
+  return (await errorText(res)).trim() || `setRouterBackupComment: ${res.status}`
 }
 
 // fetchDroplist reads Settings' "drop list" group (#1225, #461): the
@@ -2357,13 +2449,13 @@ export async function createDroplistEntry(req: {
 }): Promise<(DroplistEntry & { warning?: string }) | string> {
   const res = await postJSON('/api/droplist', req)
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `createDroplistEntry: ${res.status}`
+  return (await errorText(res)).trim() || `createDroplistEntry: ${res.status}`
 }
 
 export async function deleteDroplistEntry(cidr: string): Promise<string | null> {
   const res = await deleteJSON(`/api/droplist/${encodeURIComponent(cidr)}`)
   if (res.ok) return null
-  return (await res.text()).trim() || `deleteDroplistEntry: ${res.status}`
+  return (await errorText(res)).trim() || `deleteDroplistEntry: ${res.status}`
 }
 
 // mintDroplistKey replaces any previous pull key with a fresh one --
@@ -2376,13 +2468,13 @@ export async function mintDroplistKey(
 ): Promise<{ key: string; createdAt: string; scheduler: string } | string> {
   const res = await postJSON('/api/droplist/key', { address })
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `mintDroplistKey: ${res.status}`
+  return (await errorText(res)).trim() || `mintDroplistKey: ${res.status}`
 }
 
 export async function revokeDroplistKey(): Promise<string | null> {
   const res = await deleteJSON('/api/droplist/key')
   if (res.ok) return null
-  return (await res.text()).trim() || `revokeDroplistKey: ${res.status}`
+  return (await errorText(res)).trim() || `revokeDroplistKey: ${res.status}`
 }
 
 // ===========================================================================
@@ -2455,7 +2547,7 @@ export async function replayDefinition(
 ): Promise<ReplayResult | string> {
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/replay`, { params })
   if (res.ok) return await res.json()
-  return (await res.text()) || `replayDefinition: ${res.status}`
+  return (await errorText(res)) || `replayDefinition: ${res.status}`
 }
 
 // ===========================================================================
@@ -2479,7 +2571,7 @@ export async function fetchTuneLoggingAnalyse(
 ): Promise<TuneLoggingAnalyseResponse | string> {
   const res = await postJSON('/api/tune-logging/analyse', req)
   if (res.ok) return res.json()
-  return (await res.text()) || `fetchTuneLoggingAnalyse: ${res.status}`
+  return (await errorText(res)) || `fetchTuneLoggingAnalyse: ${res.status}`
 }
 
 // fetchTuneLoggingRender asks for the same diff twice over: the
@@ -2494,7 +2586,7 @@ export async function fetchTuneLoggingRender(
 ): Promise<TuneLoggingRenderResponse | string> {
   const res = await postJSON('/api/tune-logging/render', req)
   if (res.ok) return res.json()
-  return (await res.text()) || `fetchTuneLoggingRender: ${res.status}`
+  return (await errorText(res)) || `fetchTuneLoggingRender: ${res.status}`
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2570,7 +2662,7 @@ export async function putBaselineExpected(
 ): Promise<BaselineLineRecord | string> {
   const res = await putJSON(`/api/baseline/${encodeURIComponent(key)}/expected`, { reason })
   if (res.ok) return res.json()
-  return (await res.text()) || `putBaselineExpected: ${res.status}`
+  return (await errorText(res)) || `putBaselineExpected: ${res.status}`
 }
 
 // deleteBaselineExpected withdraws that statement, putting the line back
@@ -2579,7 +2671,7 @@ export async function putBaselineExpected(
 export async function deleteBaselineExpected(key: string): Promise<string | null> {
   const res = await deleteJSON(`/api/baseline/${encodeURIComponent(key)}/expected`)
   if (res.ok) return null
-  return (await res.text()) || `deleteBaselineExpected: ${res.status}`
+  return (await errorText(res)) || `deleteBaselineExpected: ${res.status}`
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2839,14 +2931,14 @@ export async function createDecommissionWatch(
 ): Promise<DecommissionWatch | string> {
   const res = await postJSON('/api/decommission/watches', { device, cidr, cleanWindow })
   if (res.ok) return res.json()
-  return (await res.text()) || `createDecommissionWatch: ${res.status}`
+  return (await errorText(res)) || `createDecommissionWatch: ${res.status}`
 }
 
 // The "no" answer: the zone leaves at once and no watch is created.
 export async function dismissDecommissionOffer(device: string, cidr: string): Promise<string | null> {
   const res = await postJSON('/api/decommission/dismiss', { device, cidr })
   if (res.ok) return null
-  return (await res.text()) || `dismissDecommissionOffer: ${res.status}`
+  return (await errorText(res)) || `dismissDecommissionOffer: ${res.status}`
 }
 
 // Force-remove: the ghost leaves the map now, the watch goes on in the
@@ -2859,7 +2951,7 @@ export async function forceRemoveDecommissionGhost(
 ): Promise<DecommissionWatch | string> {
   const res = await postJSON(`/api/decommission/watches/${encodeURIComponent(id)}/force`, { reason })
   if (res.ok) return res.json()
-  return (await res.text()) || `forceRemoveDecommissionGhost: ${res.status}`
+  return (await errorText(res)) || `forceRemoveDecommissionGhost: ${res.status}`
 }
 
 // Round 55's undo: for the hour after a watch retires by itself, the
@@ -2867,7 +2959,7 @@ export async function forceRemoveDecommissionGhost(
 export async function undoDecommissionRetirement(id: string): Promise<DecommissionWatch | string> {
   const res = await postJSON(`/api/decommission/watches/${encodeURIComponent(id)}/undo`)
   if (res.ok) return res.json()
-  return (await res.text()) || `undoDecommissionRetirement: ${res.status}`
+  return (await errorText(res)) || `undoDecommissionRetirement: ${res.status}`
 }
 
 // Abandoning a watch outright -- distinct from retirement, which is the
@@ -2880,7 +2972,7 @@ export async function undoDecommissionRetirement(id: string): Promise<Decommissi
 export async function deleteDecommissionWatch(id: string, reason?: string): Promise<string | null> {
   const res = await deleteJSON(`/api/decommission/watches/${encodeURIComponent(id)}`, reason ? { reason } : undefined)
   if (res.ok) return null
-  return (await res.text()) || `deleteDecommissionWatch: ${res.status}`
+  return (await errorText(res)) || `deleteDecommissionWatch: ${res.status}`
 }
 
 // --- The config editor (#1347) -------------------------------------------
@@ -3123,5 +3215,5 @@ export async function fetchBlocklistCommands(req: {
 }): Promise<BlocklistCommands | string> {
   const res = await postJSON('/api/blocklist/builder/commands', req)
   if (res.ok) return res.json()
-  return (await res.text()).trim() || `fetchBlocklistCommands: ${res.status}`
+  return (await errorText(res)).trim() || `fetchBlocklistCommands: ${res.status}`
 }

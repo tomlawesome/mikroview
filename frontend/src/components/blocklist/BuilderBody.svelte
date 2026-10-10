@@ -63,6 +63,16 @@
     if (blocklistState.showUndoAll && undoAllEl) undoAllEl.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
   })
 
+  // #1202: the password for minting this router's ingest key (the push
+  // part carries it). Typed here, spent on the one call, never kept.
+  let keyPassword = $state('')
+  async function mintKey() {
+    const password = keyPassword
+    if (!password) return
+    keyPassword = ''
+    await blocklistState.mintToken(password)
+  }
+
   function partHeadInk(p: BlocklistPart): string | null {
     return p.ink ? inkFor(p.ink) : null
   }
@@ -191,6 +201,24 @@
       <pre class="script" aria-label="RouterOS block to paste">{#each parts as p, i (p.ordinal)}{#if i > 0}{'\n'}{/if}<span class="sec" style:--ink={partHeadInk(p)}># {p.ordinal} · {#if p.title}<b>{p.title}</b> — {/if}{@render spans(p.note)}</span>{#each p.shown as line, j (j)}{'\n'}{@render spans(line)}{/each}{#if p.fold?.length}{'\n'}<span class="fold">{@render spans(p.fold)}</span>{/if}{/each}{#if block && onCount === 0}<span class="fold"># nothing to paste — every list is Not now</span>{/if}</pre>
       {#if blocklistState.blockError}
         <p class="note" aria-live="polite">{blocklistState.blockError}</p>
+      {/if}
+      {#if data.standing === 'ok' && !blocklistState.token}
+        <div class="keyask">
+          <b>The push needs a key.</b> Minting one asks for your password, because a key outlives this sign-in.
+          <input
+            type="password"
+            class="keypass"
+            placeholder="password"
+            aria-label="Your password"
+            autocomplete="current-password"
+            bind:value={keyPassword}
+            disabled={blocklistState.minting}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') mintKey()
+            }}
+          />
+          {#if blocklistState.tokenError}<span class="note" aria-live="polite">{blocklistState.tokenError}</span>{/if}
+        </div>
       {/if}
       <div class="copyrow">
         <button type="button" class="primary" disabled={!block?.copyText || onCount === 0} onclick={() => blocklistState.copy()}>{partsSummary(onCount, parts.length)}</button>

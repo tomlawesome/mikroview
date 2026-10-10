@@ -20,7 +20,7 @@
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+  import { ApiError, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { trapFocus } from '../lib/focusTrap'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
@@ -48,6 +48,10 @@
   let error = $state<string | null>(null)
   let busy = $state(false)
   let codesCopied = $state(false)
+  // #1202: gauntlet holds a first factor, with its codes, until
+  // confirmRecoveryCodes says they were saved. False on the old backend,
+  // where "I have saved these" only closes.
+  let pendingConfirmation = $state(false)
 
   // #1253: turning the authenticator app off leaves this account with no
   // second factor at all iff it has no passkeys either -- the only other
@@ -78,6 +82,7 @@
     error = null
     busy = false
     codesCopied = false
+    pendingConfirmation = false
   }
 
   // Reachable from the header X, Escape and the backdrop -- everywhere
@@ -152,7 +157,10 @@
         error = result
         return
       }
-      authState.hasTOTP = true
+      // A held factor is not on yet: finish() below turns it on by
+      // confirming, then re-reads the session.
+      pendingConfirmation = result.pendingConfirmation === true
+      if (!pendingConfirmation) authState.hasTOTP = true
       // #1250: recovery codes are shared with passkeys and minted once, by
       // whichever factor activates first. A passkey already on this
       // account means confirmTOTP just turned the factor on with nothing
@@ -179,9 +187,26 @@
     codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
   }
 
-  function finish() {
-    // The codes have been shown once and acknowledged -- nothing left to
-    // do here but the same field reset every other close path takes.
+  async function finish() {
+    // The codes have been shown once and acknowledged. A held factor
+    // (#1202) goes live only when the server is told so: that call comes
+    // first, a refusal stays on this screen, and the session is read
+    // again so the menu shows the factor on. Otherwise nothing is left
+    // to do but the same field reset every other close path takes.
+    if (pendingConfirmation) {
+      error = null
+      busy = true
+      try {
+        const err = await confirmRecoveryCodes()
+        if (err) {
+          error = err
+          return
+        }
+        await authState.check()
+      } finally {
+        busy = false
+      }
+    }
     close()
   }
 
@@ -346,9 +371,10 @@
                are shared, so whichever second factor is added later
                reuses these rather than minting its own. -->
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
+          {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finish}>I have saved these</button>
+          <button type="button" class="confirm" onclick={finish} disabled={busy}>I have saved these</button>
         </div>
       {/if}
 

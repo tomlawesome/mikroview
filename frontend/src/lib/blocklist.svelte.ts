@@ -15,6 +15,11 @@
 // (wizard.svelte.ts's `token`, same reasoning). Inside the wizard's
 // first-run tail the wizard's own token is reused when it is for the
 // same router.
+//
+// #1202: minting a token asks for the admin's own password (a token
+// outlives the session that minted it), so nothing is minted on open:
+// the block renders without its push part until the page has been given
+// the password (mintToken), then renders again with it.
 
 import {
   createToken,
@@ -47,7 +52,11 @@ class BlocklistState {
   showUndoAll = $state(false)
   copied = $state(false)
 
-  private tokens = new Map<string, string>()
+  // Reactive, so the page's password prompt goes away once a token is held.
+  private tokens = $state<Record<string, string>>({})
+  // Set while mintToken is in flight, and to its refusal's words after.
+  minting = $state(false)
+  tokenError = $state<string | null>(null)
   private seq = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   // inWizard: the body is on the wizard's tail stage, so the wizard's
@@ -87,7 +96,6 @@ class BlocklistState {
       this.error = e instanceof Error ? e.message : String(e)
       return
     }
-    await this.ensureToken()
     await this.render()
   }
 
@@ -152,7 +160,7 @@ class BlocklistState {
 
   get token(): string {
     if (this.inWizard && wizardState.token && wizardState.tokenDevice === this.device) return wizardState.token
-    return this.tokens.get(this.device) ?? ''
+    return this.tokens[this.device] ?? ''
   }
 
   // address is where part 1's push posts to: the wizard's own answer
@@ -162,18 +170,30 @@ class BlocklistState {
     return wizardState.address || (typeof window !== 'undefined' ? window.location.host : '')
   }
 
-  // ensureToken mints this page session's token for the router, once.
-  private async ensureToken(): Promise<void> {
-    if (this.token || this.data?.standing !== 'ok') return
+  // mintToken mints this page session's token for the router, once, with
+  // the admin's password, and renders the block again with it. Without a
+  // token the block comes back without its push part, and says so
+  // (blocked: no-token).
+  async mintToken(password: string): Promise<void> {
+    if (!password || this.minting || this.token || this.data?.standing !== 'ok') return
     const device = this.device
+    this.minting = true
+    this.tokenError = null
     try {
-      const result = await createToken(`blocklist-${device}`, 'ingest', device)
-      if (typeof result === 'string' || !result.value) return
-      this.tokens.set(device, result.value)
+      const result = await createToken(`blocklist-${device}`, 'ingest', device, password)
+      if (typeof result === 'string') {
+        this.tokenError = result
+        return
+      }
+      if (!result.value) return
+      this.tokens[device] = result.value
     } catch {
-      // Without a token the block comes back without its push part,
-      // and says so (blocked: no-token).
+      this.tokenError = 'Could not mint the key — try again.'
+      return
+    } finally {
+      this.minting = false
     }
+    await this.render()
   }
 
   // render asks the server for the block the current clicks describe.
@@ -228,7 +248,9 @@ class BlocklistState {
     this.undoOpen = ''
     this.showUndoAll = false
     this.copied = false
-    this.tokens.clear()
+    this.tokens = {}
+    this.minting = false
+    this.tokenError = null
     this.seq = 0
     if (this.timer) clearTimeout(this.timer)
     this.timer = null

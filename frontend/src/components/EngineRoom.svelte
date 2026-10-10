@@ -645,6 +645,9 @@
   let newKeyName = $state('')
   let newKeyKind = $state<'api' | 'ingest'>('api')
   let newKeyDevice = $state('')
+  // #1202: a token outlives the session that minted it, so every mint
+  // re-asks for the admin's own password.
+  let newKeyPassword = $state('')
   let keyError = $state<string | null>(null)
   let minting = $state(false)
   let keyCopied = $state(false)
@@ -666,6 +669,7 @@
     newKeyName = ''
     newKeyKind = 'api'
     newKeyDevice = ''
+    newKeyPassword = ''
     keyError = null
   }
 
@@ -675,6 +679,10 @@
       keyError = 'An ingest key needs a device -- pick the router it speaks for.'
       return
     }
+    if (!newKeyPassword) {
+      keyError = 'Type your password to mint a key.'
+      return
+    }
     minting = true
     keyCopied = false
     routerCopied = false
@@ -682,9 +690,11 @@
       newKeyName.trim(),
       newKeyKind,
       newKeyKind === 'ingest' ? newKeyDevice : undefined,
+      newKeyPassword,
     )
     minting = false
     if (err) {
+      newKeyPassword = ''
       keyError = err
       return
     }
@@ -1298,6 +1308,14 @@
                 >
                 ·
                 {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
+                <!-- #1202: gauntlet gives a read-only key a one-year life;
+                     an ingest key never expires, so it carries no date. -->
+                {#if tok.expiresAt}
+                  ·
+                  <span title={new Date(tok.expiresAt).toLocaleString()}
+                    >expires {new Date(tok.expiresAt).toLocaleDateString()}</span
+                  >
+                {/if}
               </span>
               <button
                 type="button"
@@ -1347,6 +1365,13 @@
                   <span class="lab">no devices known yet — one appears here once it sends syslog</span>
                 {/if}
               {/if}
+              <input
+                type="password"
+                placeholder="your password"
+                aria-label="your password"
+                autocomplete="current-password"
+                bind:value={newKeyPassword}
+              />
               <span class="acts dwr-acts">
                 <button type="button" class="quiet" onclick={cancelMintKey}>cancel</button>
                 <button type="button" disabled={minting} onclick={submitMintKey}>
@@ -1741,6 +1766,9 @@
                    only when nonzero, and never for an SSO account (the
                    server never lets one register a passkey either). -->
               {#if user.passkeyCount}<span class="pr">passkeys · {user.passkeyCount}</span>{/if}
+              <!-- #1202: an admin held at the passkey door (the admin
+                   passkey rule), same shown-only-when-true convention. -->
+              {#if user.heldForPasskey}<span class="pr">needs a passkey</span>{/if}
               <span class="pf">
                 {user.username === authState.username ? 'this is you · ' : ''}{user.lastLogin
                   ? `signed in ${formatRelative(user.lastLogin, appState.now)}`

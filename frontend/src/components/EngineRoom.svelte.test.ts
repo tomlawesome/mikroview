@@ -462,10 +462,11 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
     await settle()
     await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
-    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
+    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined, 'hunter2')
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
     expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // A read-only key gets no RouterOS lines.
@@ -512,10 +513,11 @@ describe('The settings shelf (#633)', () => {
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
-    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009')
+    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009', 'hunter2')
     expect(screen.getByText('mv1_ingestsecret')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
   })
@@ -558,6 +560,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 

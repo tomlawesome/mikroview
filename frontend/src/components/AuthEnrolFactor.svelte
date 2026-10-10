@@ -22,7 +22,7 @@
   // menu (#1332 is that menu's own open defect; nothing here reaches
   // into it).
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, enrolTOTP, confirmTOTP } from '../lib/api'
+  import { ApiError, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { copyToClipboard } from '../lib/clipboard'
@@ -63,6 +63,17 @@
   // would need a fresh secret), so the door offers Enter instead of the
   // form's ordinary submit.
   let codesLost = $state(false)
+  // #1202: gauntlet holds a first factor, with its codes, until the person
+  // says they saved them (confirmRecoveryCodes). Set from the result of
+  // confirmTOTP / registerPasskey; false on the old backend, which
+  // activates at once, so "I have saved these" then only re-reads the session.
+  let pendingConfirmation = $state(false)
+
+  // #1202: an admin held at gauntlet's passkey door sees the same walk
+  // with passkeys only -- no authenticator-app key, no way across to one.
+  const passkeyOnly = $derived(authState.state === 'must-enrol-passkey')
+  // Either door still holding means the factor did not commit (FR2-F1).
+  const stillHeld = () => authState.mustEnrolSecondFactor || authState.mustEnrolPasskey
 
   // The design's rule (PasskeysOverlay's own, restated by round 61):
   // passkeys unusable is a named state, never a hidden row -- the key
@@ -168,7 +179,7 @@
         // the codes aren't" by re-reading the session -- see codesLost's
         // own comment above.
         await authState.check()
-        if (!authState.mustEnrolSecondFactor) {
+        if (!stillHeld()) {
           codesLost = true
         } else {
           error = result
@@ -186,6 +197,7 @@
         return
       }
       recoveryCodes = result.recoveryCodes ?? []
+      pendingConfirmation = result.pendingConfirmation === true
       stage = 'codes'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -215,7 +227,7 @@
       if (typeof result === 'string') {
         // FR2-F1: same reasoning as confirm() above.
         await authState.check()
-        if (!authState.mustEnrolSecondFactor) {
+        if (!stillHeld()) {
           codesLost = true
         } else {
           error = result
@@ -226,6 +238,7 @@
       authState.passkeyCount += 1
       if (result.recoveryCodes) {
         recoveryCodes = result.recoveryCodes
+        pendingConfirmation = result.pendingConfirmation === true
         stage = 'codes'
         return
       }
@@ -246,8 +259,24 @@
     codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
   }
 
-  function finish() {
-    void enter()
+  // "I have saved these". A held first factor (#1202) goes live only once
+  // the server is told, so that call comes first and the session is read
+  // again only if it succeeds; a refusal stays on this screen.
+  async function finish() {
+    if (pendingConfirmation) {
+      error = null
+      busy = true
+      try {
+        const err = await confirmRecoveryCodes()
+        if (err) {
+          error = err
+          return
+        }
+      } finally {
+        busy = false
+      }
+    }
+    await enter()
   }
 
   // X4-F1: the ten codes exist in clear nowhere else, and a reload before
@@ -285,23 +314,37 @@
       {#if stage === 'choose'}
         <section
           class="state"
-          aria-label={passkeyUsable
-            ? 'Add a second step: choose a kind'
-            : 'Add a second step: passkeys unavailable at this address'}
+          aria-label={passkeyOnly
+            ? passkeyUsable
+              ? 'Add a passkey'
+              : 'Add a passkey: passkeys unavailable at this address'
+            : passkeyUsable
+              ? 'Add a second step: choose a kind'
+              : 'Add a second step: passkeys unavailable at this address'}
         >
-          <h1>Add a second step</h1>
-          <p class="subtitle">Your password was right. Signing in here needs a second
-            step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
-            key, prove it works, and you&rsquo;re in.</p>
+          {#if passkeyOnly}
+            <!-- #1202: the admin passkey rule -- one key, no app option. -->
+            <h1>Add a passkey</h1>
+            <p class="subtitle">Your password was right. An admin account here needs
+              a passkey, and this one doesn&rsquo;t have one yet &mdash; set one
+              up, prove it works, and you&rsquo;re in.</p>
+          {:else}
+            <h1>Add a second step</h1>
+            <p class="subtitle">Your password was right. Signing in here needs a second
+              step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
+              key, prove it works, and you&rsquo;re in.</p>
+          {/if}
           <div class="keys">
-            <button type="button" class="key" onclick={chooseTOTPPassword} disabled={busy}>
-              <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
-              <span class="cname">Authenticator app</span>
-              <span class="cdesc">a code from an app on your phone &mdash; Google
-                Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
-                IP addresses included.</span>
-              <span class="go">set it up &#9656;</span>
-            </button>
+            {#if !passkeyOnly}
+              <button type="button" class="key" onclick={chooseTOTPPassword} disabled={busy}>
+                <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
+                <span class="cname">Authenticator app</span>
+                <span class="cdesc">a code from an app on your phone &mdash; Google
+                  Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
+                  IP addresses included.</span>
+                <span class="go">set it up &#9656;</span>
+              </button>
+            {/if}
             {#if passkeyUsable}
               <button type="button" class="key" onclick={choosePasskey} disabled={busy}>
                 <span class="glyph" aria-hidden="true">
@@ -327,14 +370,20 @@
                 </span>
                 <span class="cname">Passkey</span>
                 <span class="cdesc">passkeys need a web address, and you&rsquo;re viewing
-                  MikroView at {location.host} &mdash; your authenticator app works
-                  everywhere.</span>
+                  MikroView at {location.host}{passkeyOnly ? '.' : ' — your authenticator app works everywhere.'}</span>
               </span>
             {/if}
           </div>
           {#if error}<p class="error">{error}</p>{/if}
-          <p class="noexit">no skipping this one &mdash; every account here needs a
-            second step before the door opens.</p>
+          <p class="noexit">
+            {#if passkeyOnly}
+              no skipping this one &mdash; every admin account here needs a
+              passkey before the door opens.
+            {:else}
+              no skipping this one &mdash; every account here needs a
+              second step before the door opens.
+            {/if}
+          </p>
         </section>
       {:else if stage === 'totp-password'}
         <section class="state" aria-label="Authenticator app: confirm your password">
@@ -467,9 +516,11 @@
                Continue awaits startTotpEnrol(), so a second click before
                that settles must not be possible -- disabled matches the
                same busy flag. -->
-          <button class="link-btn" type="button" onclick={chooseTOTPPassword} disabled={busy}>
-            Use an authenticator app instead
-          </button>
+          {#if !passkeyOnly}
+            <button class="link-btn" type="button" onclick={chooseTOTPPassword} disabled={busy}>
+              Use an authenticator app instead
+            </button>
+          {/if}
         </section>
       {:else}
         <section class="state" aria-label="Recovery codes, shown once">
@@ -483,9 +534,12 @@
             {/each}
           </div>
           <button class="copy" type="button" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
-          <p class="aside">Your ten recovery codes cover your authenticator app and
-            your passkeys alike.</p>
-          <button class="enter" type="button" onclick={finish}>I have saved these</button>
+          {#if !passkeyOnly}
+            <p class="aside">Your ten recovery codes cover your authenticator app and
+              your passkeys alike.</p>
+          {/if}
+          {#if error}<p class="error">{error}</p>{/if}
+          <button class="enter" type="button" onclick={finish} disabled={busy}>I have saved these</button>
         </section>
       {/if}
     </div>

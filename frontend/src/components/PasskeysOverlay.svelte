@@ -22,7 +22,7 @@
   import { copyToClipboard } from '../lib/clipboard'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
-  import { ApiError, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
+  import { ApiError, confirmRecoveryCodes, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
   import { appState } from '../lib/state.svelte'
   import { formatDayMonth, formatRelative } from '../lib/format'
   import type { PasskeySummary } from '../lib/types'
@@ -46,6 +46,12 @@
   let addBusy = $state(false)
   let recoveryCodes = $state<string[]>([])
   let codesCopied = $state(false)
+  // #1202: a first passkey is held, with its codes, until
+  // confirmRecoveryCodes says they were saved -- not listed or counted
+  // until then. Null on the old backend, where "I have saved these" only
+  // closes.
+  let heldPasskey = $state<PasskeySummary | null>(null)
+  let codesError = $state<string | null>(null)
 
   let renamingId = $state<string | null>(null)
   let renameValue = $state('')
@@ -115,6 +121,8 @@
     addBusy = false
     recoveryCodes = []
     codesCopied = false
+    heldPasskey = null
+    codesError = null
     renamingId = null
     renameValue = ''
     renameError = null
@@ -176,8 +184,12 @@
         return
       }
       addPassword = ''
-      passkeys = [...passkeys, result.passkey]
-      authState.passkeyCount += 1
+      if (result.pendingConfirmation) {
+        heldPasskey = result.passkey
+      } else {
+        passkeys = [...passkeys, result.passkey]
+        authState.passkeyCount += 1
+      }
       if (result.recoveryCodes) {
         recoveryCodes = result.recoveryCodes
         step = 'codes'
@@ -199,7 +211,25 @@
     codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
   }
 
-  function finishCodes() {
+  async function finishCodes() {
+    // A held passkey (#1202) goes live only when the server is told the
+    // codes were saved: that call comes first, a refusal stays on this
+    // screen, and the session is read again so the count is the
+    // server's.
+    if (heldPasskey) {
+      codesError = null
+      addBusy = true
+      try {
+        const err = await confirmRecoveryCodes()
+        if (err) {
+          codesError = err
+          return
+        }
+        await authState.check()
+      } finally {
+        addBusy = false
+      }
+    }
     close()
   }
 
@@ -437,9 +467,10 @@
             Every other session this account was signed in on has been ended.
           </p>
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
+          {#if codesError}<p class="error">{codesError}</p>{/if}
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finishCodes}>I have saved these</button>
+          <button type="button" class="confirm" onclick={finishCodes} disabled={addBusy}>I have saved these</button>
         </div>
       {:else if step === 'added-done'}
         <div class="body">
