@@ -18,6 +18,12 @@ rewritten.
 
 ### Breaking changes
 
+- **Admins need a passkey on an https domain** (#1202, owner ruling 1).
+  With `auth.adminPasskey` unset and `publicUrl` an https domain name,
+  an admin who has no passkey is held at a passkey enrolment screen on
+  their next request after the upgrade, and can do nothing else until
+  they register one. Set `auth.adminPasskey: optional` to keep the old
+  behaviour. Details under Changed.
 - **MikroView will not start without a key** (#1202, owner ruling
   2026-10-10). From this version it seals its accounts, API tokens,
   recovery-key digests and sign-in history under `history.keyFile`, on

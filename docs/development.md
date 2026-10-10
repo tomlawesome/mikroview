@@ -57,8 +57,9 @@ see `../.claude/skills/live-check/SKILL.md`.
 - New behavior needs a test that would fail without it.
 - A bug fix should include a regression test reproducing the bug where
   practical.
-- Anything touching `internal/auth` or `internal/api/auth.go` should be
-  run with `-race` locally — the CI security job does this too, but
+- Anything touching the authentication wiring (`gauntlet_wiring.go`,
+  `internal/api/gauntlet.go`, `storage.go`) should be run with `-race`
+  locally — the CI security job does this too, but
   catching it locally is faster.
 - Go coverage is gated per package by a ratchet — see
   [docs/testing.md](testing.md).
