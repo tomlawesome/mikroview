@@ -46,6 +46,11 @@ type gauntletCase struct {
 
 	admin, viewer string
 	apiTokenName  string
+	// apiTokenKindless: the recorded token predates token kinds (v0.1.0
+	// recorded none). #1202 review R12: it is listed, carries no kind, and
+	// authenticates as nothing -- as before #1202 and in gauntlet. Spec
+	// step C.5 ("kinds default to api") was wrong for v0.1.0.
+	apiTokenKindless bool
 	// totp: the manifest says an authenticator app was enrolled.
 	totp bool
 	// plaintext: the stored documents were plaintext before this open,
@@ -191,12 +196,22 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 	}
 	found := false
 	for _, tok := range ts.List() {
-		if tok.Name == c.apiTokenName && tok.Kind == gauntlet.TokenKindAPI {
+		if tok.Name != c.apiTokenName {
+			continue
+		}
+		if c.apiTokenKindless {
+			// #1202 review R12: listed, with no kind, so no kind's
+			// route accepts it.
+			if tok.Kind != "" {
+				t.Errorf("the recorded token %q carries kind %q; a token recorded with no kind must keep none and authenticate as nothing", tok.Name, tok.Kind)
+			}
+			found = true
+		} else if tok.Kind == gauntlet.TokenKindAPI {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("no api token named %q in the opened tokens store: %+v", c.apiTokenName, ts.List())
+		t.Errorf("no api token named %q (kindless: %v) in the opened tokens store: %+v", c.apiTokenName, c.apiTokenKindless, ts.List())
 	}
 	if _, ok := ts.Authenticate(randomHex(t, 16), gauntlet.TokenKindAPI, now); ok {
 		t.Error("a random string authenticated as an api token")

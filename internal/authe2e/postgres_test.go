@@ -158,6 +158,13 @@ func TestPostgresPlaintextAuthRowsAreSealedOnFirstStart(t *testing.T) {
 		}
 	}
 
+	// #1202 review R0 (ruling 14): sealing in place applies only on the
+	// first start of v0.7.0. The first start above stamped schema 4, so
+	// put the database back at 3, as the earlier release left it.
+	if _, err := p.conn.Exec(context.Background(), `DELETE FROM schema_version WHERE version = 4`); err != nil {
+		t.Fatalf("putting the stored schema back to 3: %v", err)
+	}
+
 	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
 	if setupCodeRe.MatchString(a.log()) {
 		t.Errorf("an install with accounts announced a setup code:\n%s", a.log())

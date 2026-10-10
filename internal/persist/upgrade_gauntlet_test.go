@@ -111,15 +111,16 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 					filepath.Join(dataDir, name), config.DefaultDataDir+"/"+name, key).WithSealInPlace()
 			}
 			runGauntletChecks(t, gauntletCase{
-				accounts:     func() gpersist.Backend { return backend("users.json") },
-				tokens:       func() gpersist.Backend { return backend("tokens.json") },
-				rawAccounts:  func() []byte { return readFile(t, filepath.Join(dataDir, "users.json")) },
-				rawTokens:    func() []byte { return readFile(t, filepath.Join(dataDir, "tokens.json")) },
-				admin:        m.AdminUsername,
-				viewer:       m.ViewerUsername,
-				apiTokenName: m.APITokenName,
-				totp:         m.SecondFactorEnrolled,
-				plaintext:    !m.HistoryKeyEncrypted,
+				accounts:         func() gpersist.Backend { return backend("users.json") },
+				tokens:           func() gpersist.Backend { return backend("tokens.json") },
+				rawAccounts:      func() []byte { return readFile(t, filepath.Join(dataDir, "users.json")) },
+				rawTokens:        func() []byte { return readFile(t, filepath.Join(dataDir, "tokens.json")) },
+				admin:            m.AdminUsername,
+				viewer:           m.ViewerUsername,
+				apiTokenName:     m.APITokenName,
+				apiTokenKindless: version == "v0.1.0", // #1202 review R12
+				totp:             m.SecondFactorEnrolled,
+				plaintext:        !m.HistoryKeyEncrypted,
 			})
 		})
 	}

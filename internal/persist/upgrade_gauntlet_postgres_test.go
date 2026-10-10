@@ -85,16 +85,17 @@ func TestUpgradeFixturesPostgresOpenOnGauntlet(t *testing.T) {
 				}
 			}
 			runGauntletChecks(t, gauntletCase{
-				accounts:     func() gpersist.Backend { return sealed("auth") },
-				tokens:       func() gpersist.Backend { return sealed("tokens") },
-				rawAccounts:  raw("auth"),
-				rawTokens:    raw("tokens"),
-				admin:        m.AdminUsername,
-				viewer:       m.ViewerUsername,
-				apiTokenName: m.APITokenName,
-				totp:         m.SecondFactorEnrolled,
-				plaintext:    true, // whatever the file recording says, the dumps hold plaintext rows
-				postgres:     true,
+				accounts:         func() gpersist.Backend { return sealed("auth") },
+				tokens:           func() gpersist.Backend { return sealed("tokens") },
+				rawAccounts:      raw("auth"),
+				rawTokens:        raw("tokens"),
+				admin:            m.AdminUsername,
+				viewer:           m.ViewerUsername,
+				apiTokenName:     m.APITokenName,
+				apiTokenKindless: version == "v0.1.0", // #1202 review R12
+				totp:             m.SecondFactorEnrolled,
+				plaintext:        true, // whatever the file recording says, the dumps hold plaintext rows
+				postgres:         true,
 			})
 		})
 	}
