@@ -648,3 +648,14 @@ decision the design above states.
   does, reversing the earlier choice in `verifyApplied` to skip such
   rows. Found while checking this record's "Downgrade" claim, which
   was false for Postgres.
+- **Ruling 19, no sealing in place (2026-10-10; supersedes rulings 11
+  and 14):** there is no plaintext-to-sealed migration at all. A plaintext
+  auth document or drop list, on files or Postgres, is always refused
+  at start-up with a message saying it was written without a key before
+  v0.7.0, and to restore a sealed copy or move it aside and start fresh.
+  An install must already run with a key before it upgrades. Owner: no
+  one but the owner runs MikroView yet, so the upgrade cost falls on
+  them alone, and it removes the hole ruling 14 left (a rolled-back
+  schema stamp letting a planted plaintext accounts file be sealed and
+  accepted). Where the sections above describe sealing in place, this
+  ruling replaces them.
