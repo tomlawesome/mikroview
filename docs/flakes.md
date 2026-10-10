@@ -265,7 +265,3 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-topography-card-placement: the Topography rail button is not clickable within 30 s
 
 - 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4 · `page.click: Timeout 30000ms exceeded` on `.rail-name >> text=Topography` at `live-topography-card-placement.mjs:315`, after its first three checks passed. A rerun of shard 4/4 alone under WebKit passed 27/27. First sighting.
-
-## authe2e TestWrongRecheckPasswordIsAuditedAndTheLimitLogsAWarn: no re-check Warn in the log
-
-- 2026-10-10 · fix/1202-review-go working tree on cf2d2964 (#1202 review fixes) · local `go test ./internal/authe2e/` with a throwaway Postgres · `hitting the re-check limit logged no Warn mentioning the re-check` (`review1202_test.go:569`). The server writes the Warn before it answers 429, but the test reads the child's log straight after the answer, with no wait. Alone it passed, and two further full-package runs passed. First sighting.

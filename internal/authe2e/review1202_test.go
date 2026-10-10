@@ -559,11 +559,21 @@ func TestWrongRecheckPasswordIsAuditedAndTheLimitLogsAWarn(t *testing.T) {
 
 	w.hitRecheckLimit(t)
 	rx := regexp.MustCompile(`(?i)re-?check`)
-	var warns []string
-	for _, l := range w.a.logWarns()[warnsBefore:] {
-		if rx.MatchString(l) {
-			warns = append(warns, l)
+	// The child process's log is read by another goroutine, so a line the
+	// server wrote before answering 429 may not have reached it yet: poll
+	// for the line rather than read once.
+	recheckWarns := func() (warns []string) {
+		for _, l := range w.a.logWarns()[warnsBefore:] {
+			if rx.MatchString(l) {
+				warns = append(warns, l)
+			}
 		}
+		return warns
+	}
+	warns := recheckWarns()
+	for deadline := time.Now().Add(10 * time.Second); len(warns) == 0 && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		warns = recheckWarns()
 	}
 	if len(warns) == 0 {
 		t.Errorf("hitting the re-check limit logged no Warn mentioning the re-check:\n%s", strings.Join(w.a.logWarns()[warnsBefore:], "\n"))
