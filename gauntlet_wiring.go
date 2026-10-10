@@ -303,10 +303,20 @@ func cliRequireKey(log *slog.Logger, cmd string) bool {
 // may be the first thing v0.7 runs on the database, and once it has put
 // a sealed accounts row there a v0.6.x build must not be able to start
 // on it.
+//
+// The accounts store is opened and checked first, as the server opens it
+// before the tokens store: a command refused over the accounts -- a
+// plaintext row an earlier keyless release left, a damaged one, one
+// sealed under another key -- writes no tokens row, which would stop the
+// release the data came from opening it (ruling 20).
 func openStorageForCLI(cfg config.Config) (*storage, error) {
 	ctx := context.Background()
 	st, err := openStorage(ctx, cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkAccountsBeforeTokensRow(ctx, st); err != nil {
+		st.Close()
 		return nil, err
 	}
 	if err := st.sealTokensRow(ctx); err != nil {
@@ -314,4 +324,22 @@ func openStorageForCLI(cfg config.Config) (*storage, error) {
 		return nil, err
 	}
 	return st, nil
+}
+
+// checkAccountsBeforeTokensRow opens the accounts store as the command
+// will, through the same sealed backend, and discards it: an error is the
+// refusal the command would give, reached before sealTokensRow writes
+// anything. Only where sealTokensRow would write, on Postgres with a key;
+// elsewhere the command's own open makes the same check. Quiet options:
+// opening an empty store must not announce a setup code (#1415).
+func checkAccountsBeforeTokensRow(ctx context.Context, st *storage) error {
+	if st.pool == nil || st.key == nil {
+		return nil
+	}
+	b, err := st.authBackendFor(ctx, authStoreAccounts, st.cfg.Auth.StorePath)
+	if err != nil {
+		return err
+	}
+	_, err = gauntlet.OpenStore(b, quietStoreOptions())
+	return err
 }

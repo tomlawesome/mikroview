@@ -911,6 +911,19 @@ func main() {
 		authLog.Warn("auth.storePath is empty, so accounts are not kept and no account can be created -- nobody can sign in until auth.storePath names a file (see docs/configuration.md)")
 	}
 
+	// Tokens (issues #101, #186, #1224): API, ingest and droplist-pull
+	// bearer tokens, gauntlet's token store sealed like the accounts. A
+	// document that exists and cannot be loaded refuses start-up; see
+	// mustOpenStore. Opened straight after the accounts store and before
+	// anything else that can refuse the start (#1202, ruling 20): on
+	// Postgres this writes the sealed tokens row, which must be there
+	// once the accounts row is sealed -- it is what stops a v0.6.x build
+	// reading those accounts as none -- and must not be written by a
+	// start refused over the accounts themselves.
+	tokensLog := logging.New("tokens")
+	tokenStore, err := openTokens(bootCtx, persistence, cfg, tokensLog)
+	mustOpenStore(tokensLog, err)
+
 	// The sign-in history (#1202, ruling 8): every sign-in attempt, for
 	// an admin to page through (the page is #1442). Sealed like the
 	// accounts; closed at shutdown, which saves its last rows.
@@ -1014,14 +1027,6 @@ func main() {
 	})
 	mustOpenStore(baselineLog, err)
 
-	// Tokens (issues #101, #186, #1224): API, ingest and droplist-pull
-	// bearer tokens, gauntlet's token store sealed like the accounts. A
-	// document that exists and cannot be loaded refuses start-up; see
-	// mustOpenStore.
-	tokensLog := logging.New("tokens")
-	tokenStore, err := openTokens(bootCtx, persistence, cfg, tokensLog)
-	mustOpenStore(tokensLog, err)
-
 	// Router-backup vault (#394): the SFTP drop box (started further
 	// below, once the listen address is finalised) writes into this,
 	// and the admin API reads it back. Needs tokenStore above (a
@@ -1074,11 +1079,15 @@ func main() {
 	// is optional, same contract as Audit.StorePath above; SetOwnRanges
 	// is wired once routerState exists below, and SetAuditor now, since
 	// auditStore already does.
+	//
+	// Unlike the stores above, a drop-list file that cannot be moved
+	// onto Postgres -- plaintext, sealed under another key, damaged --
+	// refuses the start, in the words the file backend refuses the same
+	// file with (#1202, rulings 19 and 21), rather than carrying on with
+	// an empty, memory-only drop list.
 	droplistLog := logging.New("droplist")
 	droplistBackend, err := persistence.backendFor(bootCtx, "droplist", cfg.Droplist.StorePath)
-	if err != nil {
-		droplistLog.Warn(err.Error())
-	}
+	mustOpenStore(droplistLog, err)
 	droplistStore, err := droplist.OpenWithBackend(droplistBackend)
 	mustOpenStore(droplistLog, err)
 	droplistStore.SetAuditor(auditStore)
@@ -1089,16 +1098,6 @@ func main() {
 	// plaintext file an earlier keyless release left is refused, never
 	// sealed in place (#1202, ruling 19).
 	mustOpenStore(logging.New("recovery-keys"), openRecoveryKeysSealed(bootCtx, persistence, cfg))
-
-	// Every auth store and the drop list have now opened sealed, so the
-	// schema can move to 4, the downgrade guard. Not before -- a start
-	// refused above leaves the schema where it was, so the release the
-	// data came from can still open it. A stamp that cannot be written
-	// refuses start-up (#1202 review R20).
-	if err := persistence.finishSchemaUpgrade(bootCtx, cfg); err != nil {
-		logging.New("schema").Error(err.Error())
-		os.Exit(1)
-	}
 
 	// The per-user preferences store (issue #1283): one versioned JSON
 	// record per account, read on sign-in and written on change,
@@ -1552,6 +1551,17 @@ func main() {
 	}
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
+
+	// Every store has now opened -- the auth stores and the drop list
+	// sealed -- so the schema can move to 4, the downgrade guard. Not
+	// before: a start refused above leaves the schema where it was, so
+	// the release the data came from can still open it. Nor on a start
+	// where a store failed to move onto Postgres (finishSchemaUpgrade).
+	// A stamp that cannot be written refuses start-up (#1202 review R20).
+	if err := persistence.finishSchemaUpgrade(bootCtx, cfg); err != nil {
+		logging.New("schema").Error(err.Error())
+		os.Exit(1)
+	}
 
 	// The last store has opened, so a first move onto Postgres is done
 	// -- unless one of them failed to move, in which case the marker is

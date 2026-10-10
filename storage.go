@@ -468,9 +468,9 @@ func (s *storage) Close() {
 // changed.
 //
 // It stops below persist.SchemaAuthSealed: that number is stamped by
-// finishSchemaUpgrade, once every auth store and the drop list have
-// opened sealed, so a start refused before then leaves the schema where
-// it was.
+// finishSchemaUpgrade, once every store has opened (the auth stores and
+// the drop list sealed), so a start refused before then leaves the
+// schema where it was.
 func upgradeDataDirSchema(cfg config.Config) error {
 	return migrateDataDirSchema(cfg, persist.SchemaAuthSealed-1)
 }
@@ -491,10 +491,16 @@ func migrateDataDirSchema(cfg config.Config, to int64) error {
 
 // finishSchemaUpgrade stamps persist.SchemaAuthSealed, and anything this
 // build knows above it, on the database and the data directory. The
-// server calls it once every auth store and the drop list have opened
-// sealed, and never before: a start refused part way -- a plaintext or
-// damaged document -- leaves the schema below it, so the release the
-// data came from can still open it.
+// server calls it once every store has opened -- the auth stores and the
+// drop list sealed -- and never before: a start refused part way -- a
+// plaintext or damaged document -- leaves the schema below it, so the
+// release the data came from can still open it.
+//
+// Nor on a start where moving a file onto Postgres failed (adoptFailed,
+// #1202 review round 3): the start goes on, as R22 lets it, but stamps
+// nothing, in the database or the data directory. The file that did not
+// move is still the release-it-came-from's to read, and the next start,
+// which tries the move again, stamps the schema once it succeeds.
 //
 // Unlike upgradeDataDirSchema, a stamp that cannot be written refuses
 // start-up (#1202 review R20): schema 4 is the downgrade guard that
@@ -504,6 +510,11 @@ func migrateDataDirSchema(cfg config.Config, to int64) error {
 // Setup-only mode and the command-line tools never call it; only a
 // normal start moves the schema.
 func (s *storage) finishSchemaUpgrade(ctx context.Context, cfg config.Config) error {
+	if s.adoptFailed {
+		logging.New("schema").Warn(fmt.Sprintf("not recording schema %d on this start, because a file did not move onto "+
+			"Postgres -- it is recorded at the first start that finishes the move", persist.CurrentSchema()))
+		return nil
+	}
 	if s.pool != nil {
 		if _, err := s.pool.MigrateTo(ctx, persist.CurrentSchema()); err != nil {
 			return fmt.Errorf("postgres: applying schema: %w", err)
