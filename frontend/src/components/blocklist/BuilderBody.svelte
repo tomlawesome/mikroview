@@ -66,12 +66,27 @@
   // #1202: the password for minting this router's ingest key (the push
   // part carries it). Typed here, spent on the one call, never kept.
   let keyPassword = $state('')
+  let keyInput = $state<HTMLInputElement | null>(null)
   async function mintKey() {
     const password = keyPassword
-    if (!password) return
+    if (!password) {
+      keyInput?.focus()
+      return
+    }
     keyPassword = ''
     await blocklistState.mintToken(password)
   }
+  // After a failure the person is put back in the field to try again (it
+  // was disabled while the request ran, which drops focus). An effect,
+  // not code after the await, so the focus lands in the same update that
+  // shows the message and the field is enabled again by then.
+  let wasMinting = false
+  $effect(() => {
+    const minting = blocklistState.minting
+    const failed = !!blocklistState.tokenError
+    if (wasMinting && !minting && failed) keyInput?.focus()
+    wasMinting = minting
+  })
 
   function partHeadInk(p: BlocklistPart): string | null {
     return p.ink ? inkFor(p.ink) : null
@@ -205,19 +220,25 @@
       {#if data.standing === 'ok' && !blocklistState.token}
         <div class="keyask">
           <b>The push needs a key.</b> Minting one asks for your password, because a key outlives this sign-in.
+          <label class="keylabel" for="bl-key-password">Your password</label>
           <input
+            id="bl-key-password"
             type="password"
             class="keypass"
-            placeholder="password"
-            aria-label="Your password"
             autocomplete="current-password"
+            bind:this={keyInput}
             bind:value={keyPassword}
             disabled={blocklistState.minting}
             onkeydown={(e) => {
               if (e.key === 'Enter') mintKey()
             }}
           />
-          {#if blocklistState.tokenError}<span class="note" aria-live="polite">{blocklistState.tokenError}</span>{/if}
+          <button type="button" class="keymint" disabled={blocklistState.minting} onclick={mintKey}>
+            {blocklistState.minting ? 'Minting…' : 'Mint key'}
+          </button>
+          <!-- Present before any error so a screen reader announces the
+               message when it arrives. -->
+          <span class="note" role="status" aria-live="polite">{blocklistState.tokenError ?? ''}</span>
         </div>
       {/if}
       <div class="copyrow">

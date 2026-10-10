@@ -82,6 +82,7 @@ class BlocklistState {
       this.data = null
       this.block = null
       this.choices = {}
+      this.clearErrors()
     }
     this.device = device
     this.copied = false
@@ -106,6 +107,7 @@ class BlocklistState {
   async peek(device: string): Promise<void> {
     if (!device) return
     if (device !== this.device || !this.data) {
+      if (device !== this.device) this.clearErrors()
       this.device = device
       this.block = null
       try {
@@ -185,7 +187,13 @@ class BlocklistState {
         this.tokenError = result
         return
       }
-      if (!result.value) return
+      if (!result.value) {
+        // The server answered the mint but left the value out: nothing to
+        // build the push with, and the person must hear it, not see the
+        // prompt quietly empty.
+        this.tokenError = 'The server did not send the key’s value — try again.'
+        return
+      }
       this.tokens[device] = result.value
     } catch {
       this.tokenError = 'Could not mint the key — try again.'
@@ -194,6 +202,14 @@ class BlocklistState {
       this.minting = false
     }
     await this.render()
+  }
+
+  // The last failure belongs to the router it happened on: opening
+  // another router must not show it there.
+  private clearErrors() {
+    this.error = null
+    this.blockError = null
+    this.tokenError = null
   }
 
   // render asks the server for the block the current clicks describe.

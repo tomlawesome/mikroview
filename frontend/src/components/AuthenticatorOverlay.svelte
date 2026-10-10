@@ -20,7 +20,7 @@
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { trapFocus } from '../lib/focusTrap'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
@@ -98,6 +98,22 @@
     resetFields()
   }
 
+  // #1202: a setup that gauntlet no longer holds (the secret or the held
+  // factor ran out, or nothing is waiting to be confirmed) leaves nothing
+  // to finish. Back to the status screen, which carries the way to begin
+  // again, with the words saying so -- never a screen with no exit.
+  function startAgain(message: string) {
+    resetFields()
+    error = message
+  }
+
+  // A 409 carries gauntlet's own words (nothing is waiting to be
+  // confirmed); the step-expired answer is already a full sentence.
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && step !== 'codes' && !busy) close()
   }
@@ -153,6 +169,11 @@
     // Same reasoning as startEnrol above.
     try {
       const result = await confirmTOTP(code)
+      if (result === STEP_EXPIRED) {
+        // #1202: the scanned secret ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         error = result
         return
@@ -190,19 +211,29 @@
   async function finish() {
     // The codes have been shown once and acknowledged. A held factor
     // (#1202) goes live only when the server is told so: that call comes
-    // first, a refusal stays on this screen, and the session is read
-    // again so the menu shows the factor on. Otherwise nothing is left
-    // to do but the same field reset every other close path takes.
+    // first, and the session is read again so the menu shows the factor
+    // on. If the hold is gone the person goes back to the status screen
+    // with "start again"; if the session is gone they are signed out; any
+    // other failure stays on this screen with the button usable, so
+    // pressing it again is the retry. Otherwise nothing is left to do but
+    // the same field reset every other close path takes.
     if (pendingConfirmation) {
       error = null
       busy = true
       try {
-        const err = await confirmRecoveryCodes()
-        if (err) {
-          error = err
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
           return
         }
         await authState.check()
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        return
       } finally {
         busy = false
       }
@@ -336,8 +367,8 @@
           </label>
 
           <p class="muted">
-            Confirming turns this on and signs out everywhere else this account is currently
-            signed in. You'll stay signed in here.
+            When the setup is finished, this account is signed out everywhere else. You'll stay
+            signed in here.
           </p>
 
           {#if error}<p class="error">{error}</p>{/if}
@@ -364,9 +395,17 @@
           <div class="copyrow">
             <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
           </div>
-          <p class="muted">
-            Every other session this account was signed in on has been ended.
-          </p>
+          <!-- #1202: sessions end when the factor is confirmed, not before. -->
+          {#if pendingConfirmation}
+            <p class="muted">
+              Nothing is switched on until you press the button below. Then this account is
+              signed out everywhere else.
+            </p>
+          {:else}
+            <p class="muted">
+              Every other session this account was signed in on has been ended.
+            </p>
+          {/if}
           <!-- #1250: the two overlays' one cross-reference line -- codes
                are shared, so whichever second factor is added later
                reuses these rather than minting its own. -->

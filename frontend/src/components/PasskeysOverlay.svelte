@@ -22,7 +22,7 @@
   import { copyToClipboard } from '../lib/clipboard'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
-  import { ApiError, confirmRecoveryCodes, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
   import { appState } from '../lib/state.svelte'
   import { formatDayMonth, formatRelative } from '../lib/format'
   import type { PasskeySummary } from '../lib/types'
@@ -179,6 +179,8 @@
     // step to retry.
     try {
       const result = await registerPasskey(newName.trim(), addPassword)
+      // #1202: STEP_EXPIRED is the ceremony running out, not a dead
+      // session -- its words say to start again, and this step is where.
       if (typeof result === 'string') {
         addError = result
         return
@@ -211,21 +213,46 @@
     codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
   }
 
+  // #1202: a held passkey that gauntlet no longer holds (the ten minutes
+  // ran out, or nothing is waiting to be confirmed) leaves nothing to
+  // finish. Back to the list, which carries the way to add one again, with
+  // the words saying so -- never a screen with no exit.
+  function startAgain(message: string) {
+    resetFields()
+    addError = message
+  }
+
+  // A 409 carries gauntlet's own words (nothing is waiting to be
+  // confirmed); the step-expired answer is already a full sentence.
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
+  }
+
   async function finishCodes() {
     // A held passkey (#1202) goes live only when the server is told the
-    // codes were saved: that call comes first, a refusal stays on this
-    // screen, and the session is read again so the count is the
-    // server's.
+    // codes were saved: that call comes first, and the session is read
+    // again so the count is the server's. If the hold is gone the person
+    // goes back to the list with "start again"; if the session is gone
+    // they are signed out; any other failure stays on this screen with the
+    // button usable, so pressing it again is the retry.
     if (heldPasskey) {
       codesError = null
       addBusy = true
       try {
-        const err = await confirmRecoveryCodes()
-        if (err) {
-          codesError = err
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
           return
         }
         await authState.check()
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        codesError = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        return
       } finally {
         addBusy = false
       }
@@ -463,9 +490,17 @@
           <div class="copyrow">
             <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
           </div>
-          <p class="muted">
-            Every other session this account was signed in on has been ended.
-          </p>
+          <!-- #1202: sessions end when the passkey is confirmed, not before. -->
+          {#if heldPasskey}
+            <p class="muted">
+              Nothing is switched on until you press the button below. Then this account is
+              signed out everywhere else.
+            </p>
+          {:else}
+            <p class="muted">
+              Every other session this account was signed in on has been ended.
+            </p>
+          {/if}
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
           {#if codesError}<p class="error">{codesError}</p>{/if}
         </div>

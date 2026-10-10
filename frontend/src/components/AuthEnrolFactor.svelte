@@ -10,10 +10,12 @@
   // is two keys side by side; proving is a two-column stage, QR left,
   // code right; the ten recovery codes close only on the explicit
   // "I have saved these" (the overlays' own no-escape rule). There is
-  // deliberately no way out -- no cancel, no skip, no sign-out, no SSO
-  // -- and the mono caption says so: the server 403s everything but the
-  // four enrolment routes while this state holds (internal/api/auth.go's
-  // secondFactorEnrolPaths), so a way out here would be a lie.
+  // deliberately no way to skip -- no cancel, no SSO -- and the mono
+  // caption says so: the server 403s everything but the enrolment routes
+  // while this state holds, so a skip here would be a lie. The one
+  // exception (#1202): a passkey-only door at an address that cannot make
+  // a passkey offers a sign-out, and a link to the address that can --
+  // otherwise the person is stuck with no way forward at all.
   //
   // Enrolment logic and copy are AuthenticatorOverlay's and
   // PasskeysOverlay's own, reached through the same lib calls
@@ -22,7 +24,7 @@
   // menu (#1332 is that menu's own open defect; nothing here reaches
   // into it).
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { copyToClipboard } from '../lib/clipboard'
@@ -83,6 +85,51 @@
   const passkeyUsable = $derived(
     authState.passkeyStatus === 'ready' && location.origin === authState.passkeyOrigin,
   )
+
+  // #1202: where a passkey can be made, when it is not here -- only an
+  // http(s) origin that differs from this one, so a bad or identical
+  // value never becomes a link that goes nowhere.
+  const passkeyHome = $derived.by((): { href: string; host: string } | null => {
+    const origin = authState.passkeyOrigin
+    if (!origin || origin === location.origin) return null
+    try {
+      const u = new URL(origin)
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+      return { href: u.origin, host: u.host }
+    } catch {
+      return null
+    }
+  })
+  let signOutError = $state<string | null>(null)
+  async function signOut() {
+    signOutError = await authState.logout()
+  }
+
+  // #1202: a held first factor that gauntlet no longer holds (the ten
+  // minutes ran out, or nothing is waiting) leaves nothing to confirm.
+  // Back to choosing a factor, with the words saying so -- never a
+  // screen with no way forward.
+  function startAgain(message: string) {
+    recoveryCodes = []
+    pendingConfirmation = false
+    codesCopied = false
+    codesLost = false
+    code = ''
+    name = ''
+    password = ''
+    uri = ''
+    secret = ''
+    busy = false
+    error = message
+    stage = 'choose'
+  }
+
+  // Shown when the held setup is gone but gauntlet's own words are what
+  // say why (a 409: nothing is waiting to be confirmed).
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
+  }
 
   // AuthenticatorOverlay's own extraction, repeated rather than exported
   // from that component's instance scope: the secret lives in the URI's
@@ -174,6 +221,11 @@
     // Same reasoning as startTotpEnrol above -- confirmTOTP throws on a 401.
     try {
       const result = await confirmTOTP(code)
+      if (result === STEP_EXPIRED) {
+        // #1202: the scanned secret ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         // FR2-F1: tell a ceremony refusal apart from "the factor is on,
         // the codes aren't" by re-reading the session -- see codesLost's
@@ -186,7 +238,8 @@
         }
         return
       }
-      authState.hasTOTP = true
+      // A held factor is not on yet: finish() below turns it on.
+      if (result.pendingConfirmation !== true) authState.hasTOTP = true
       // Codes are minted once, by whichever factor activates first
       // (#1250). On this door that is almost always now -- but an account
       // whose factor was cleared after its codes were issued gets
@@ -224,6 +277,11 @@
     // still true) and the caller stays on this same stage to retry.
     try {
       const result = await registerPasskey(name.trim(), password)
+      if (result === STEP_EXPIRED) {
+        // #1202: the ceremony ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         // FR2-F1: same reasoning as confirm() above.
         await authState.check()
@@ -235,7 +293,8 @@
         return
       }
       password = ''
-      authState.passkeyCount += 1
+      // A held passkey is not counted until finish() confirms it.
+      if (result.pendingConfirmation !== true) authState.passkeyCount += 1
       if (result.recoveryCodes) {
         recoveryCodes = result.recoveryCodes
         pendingConfirmation = result.pendingConfirmation === true
@@ -261,17 +320,27 @@
 
   // "I have saved these". A held first factor (#1202) goes live only once
   // the server is told, so that call comes first and the session is read
-  // again only if it succeeds; a refusal stays on this screen.
+  // again only if it succeeds. If the hold is gone (ran out, or nothing is
+  // waiting) the person goes back to choosing a factor; if the session is
+  // gone they are signed out; any other failure stays on this screen with
+  // the button usable, so pressing it again is the retry.
   async function finish() {
     if (pendingConfirmation) {
       error = null
       busy = true
       try {
-        const err = await confirmRecoveryCodes()
-        if (err) {
-          error = err
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
           return
         }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        return
       } finally {
         busy = false
       }
@@ -374,6 +443,18 @@
               </span>
             {/if}
           </div>
+          {#if passkeyOnly && !passkeyUsable}
+            <!-- #1202: passkey-only door at an address that cannot make a
+                 passkey: the way forward is the address that can, and the
+                 way out is signing out. -->
+            {#if passkeyHome}
+              <p class="aside">A passkey can be made at
+                <a class="home-link" href={passkeyHome.href}>{passkeyHome.host}</a>.
+                Open MikroView there and sign in to carry on.</p>
+            {/if}
+            <button class="link-btn" type="button" onclick={signOut}>Sign out</button>
+            {#if signOutError}<p class="error">{signOutError}</p>{/if}
+          {/if}
           {#if error}<p class="error">{error}</p>{/if}
           <p class="noexit">
             {#if passkeyOnly}
@@ -442,9 +523,8 @@
                 placeholder="123456"
                 bind:value={code}
               />
-              <p class="aside">Confirming turns this on and signs out everywhere
-                else this account is currently signed in. You&rsquo;ll stay signed
-                in here.</p>
+              <p class="aside">When the setup is finished, this account is signed out
+                everywhere else. You&rsquo;ll stay signed in here.</p>
               {#if codesLost}
                 <!-- FR2-F1: the factor is already on -- confirmTOTP can't
                      be retried (it would need a fresh secret), so the
@@ -490,8 +570,8 @@
               autocomplete="current-password"
               bind:value={password}
             />
-            <p class="aside">Adding it turns this on and signs out everywhere else
-              this account is currently signed in. You&rsquo;ll stay signed in here.</p>
+            <p class="aside">When the setup is finished, this account is signed out
+              everywhere else. You&rsquo;ll stay signed in here.</p>
             {#if codesLost}
               <!-- FR2-F1: the factor is already on -- registerPasskey
                    can't be retried (begin's excludeCredentials already
@@ -881,6 +961,12 @@
   .link-btn:focus-visible {
     color: var(--fg-muted);
     outline: none;
+  }
+
+  .home-link {
+    color: var(--fg);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .codesblock {

@@ -1058,6 +1058,15 @@ async function loginStepRefusal(res: Response, name: string): Promise<string> {
   return detail || `${name}: ${res.status}`
 }
 
+// #1202: what the enrolment calls answer (as text, not thrown) when
+// gauntlet says a step of the setup ran out: problem type #step-expired
+// -- the scanned secret older than ten minutes, the passkey ceremony
+// gone, or the held first factor deleted after ten minutes unconfirmed.
+// Nothing was saved; the way on is to begin the setup again. Compared by
+// identity (===) the way PENDING_LOGIN_EXPIRED is, so callers can tell it
+// from an ordinary refusal's words.
+export const STEP_EXPIRED = 'That setup ran out of time, so nothing was saved. Please start again.'
+
 // beginPasskeyLogin/submitPasskeyLoginAssertion are the passkey half of
 // the same second step (#1250), carried by the same pending cookie as
 // submitLoginFactor above -- the two are alternatives, not a sequence.
@@ -1164,8 +1173,14 @@ export async function confirmTOTP(code: string): Promise<TotpConfirmResult | str
     return result
   }
   // See enrolTOTP's own comment: a wrong code answers 400, never 401, so
-  // a 401 here always means the session died, not a bad code.
-  if (res.status === 401) throw new ApiError((await errorText(res)) || `confirmTOTP: ${res.status}`, res.status)
+  // a 401 here is the session dying -- except gauntlet's typed
+  // #step-expired (the secret was set more than ten minutes ago), which
+  // is the setup running out, not the session: start again (#1202).
+  if (res.status === 401) {
+    const err = await readError(res)
+    if (err.kind === 'step-expired') return STEP_EXPIRED
+    throw new ApiError(err.detail || `confirmTOTP: ${res.status}`, res.status)
+  }
   return (await errorText(res)) || `confirmTOTP: ${res.status}`
 }
 
@@ -1216,12 +1231,21 @@ export async function regenerateRecoveryCodes(password: string): Promise<string[
 // a held first factor came with: POST /api/auth/recovery-codes/confirm
 // with an empty body. Only then does the factor go live. Called only when
 // confirmTOTP or finishPasskeyRegistration answered pendingConfirmation;
-// the old backend never asks for it. null on success, the refusal's
-// words otherwise, like the other mutating calls.
+// the old backend never asks for it. Answers:
+//   null           the factor is live.
+//   STEP_EXPIRED   401 #step-expired: the hold ran out and was deleted.
+//   other text     409: nothing is on hold (confirmed already, or gone).
+// Both texts mean the same to the caller: the held setup is over, begin
+// again. Everything else is thrown as an ApiError -- a 401
+// #sign-in-required (or untyped 401) is the session being gone, and a
+// 403, 429 or 5xx is a failure the person can retry from the same screen.
 export async function confirmRecoveryCodes(): Promise<string | null> {
   const res = await postJSON('/api/auth/recovery-codes/confirm', {})
   if (res.ok) return null
-  return (await errorText(res)) || `confirmRecoveryCodes: ${res.status}`
+  const err = await readError(res)
+  if (res.status === 401 && err.kind === 'step-expired') return STEP_EXPIRED
+  if (res.status === 409) return err.detail || `confirmRecoveryCodes: ${res.status}`
+  throw new ApiError(err.detail.trim() || wordsForStatus(res.status), res.status)
 }
 
 // clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
@@ -1291,9 +1315,13 @@ export async function finishPasskeyRegistration(
 ): Promise<PasskeyRegistrationFinish | string> {
   const res = await postJSON('/api/auth/passkeys/register/finish', { credential, name })
   if (res.ok) return res.json()
-  // Same reasoning as beginPasskeyRegistration's own comment.
+  // Same reasoning as beginPasskeyRegistration's own comment -- and as
+  // confirmTOTP's: a typed #step-expired (the ceremony ran out) is "start
+  // again", not a dead session (#1202).
   if (res.status === 401) {
-    throw new ApiError((await errorText(res)) || `finishPasskeyRegistration: ${res.status}`, res.status)
+    const err = await readError(res)
+    if (err.kind === 'step-expired') return STEP_EXPIRED
+    throw new ApiError(err.detail || `finishPasskeyRegistration: ${res.status}`, res.status)
   }
   return (await errorText(res)) || `finishPasskeyRegistration: ${res.status}`
 }
