@@ -184,6 +184,9 @@ def enrol_second_factor_if_required(api):
     caller's own current password (checked server-side, never read
     back) -- sent unconditionally here, since an older server that
     predates the gate simply ignores the extra field.
+
+    Since #1202 the first factor is also held until the recovery codes
+    are confirmed; see the call after totp/confirm below.
     """
     status, body, _ = api._req("POST", "/api/auth/totp/enrol", {"password": FIXTURE_PASSWORD})
     if status == 404:
@@ -191,7 +194,14 @@ def enrol_second_factor_if_required(api):
     if status != 200:
         raise RuntimeError(f"POST /api/auth/totp/enrol: {status} {body[:300]!r}")
     secret = json.loads(body)["secret"]
-    api.post("/api/auth/totp/confirm", {"code": totp_code_now(secret)})
+    confirmed = api.post("/api/auth/totp/confirm", {"code": totp_code_now(secret)})
+    # A server on gauntlet (#1202) holds the first second factor until the
+    # person says they saved the recovery codes, and tells them so with
+    # pendingConfirmation: true; until then the account is still held at
+    # the door and the factor is not live. Older images never return the
+    # field, and have nothing to confirm, so nothing is called for them.
+    if isinstance(confirmed, dict) and confirmed.get("pendingConfirmation") is True:
+        api.post("/api/auth/recovery-codes/confirm", {})
     return True
 
 

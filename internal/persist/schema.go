@@ -104,6 +104,19 @@ var schemaMigrations = []SchemaMigration{
 		Description: "record provisional match-log rows (postgres only)",
 		Postgres:    "0003_match_log_provisional.sql",
 	},
+	{
+		Number: 4,
+		// A stamp on both backends, with no data change (#1202): the
+		// accounts and tokens documents are the same documents, rewritten
+		// by the gauntlet-backed stores when they next save. The number
+		// is the downgrade refusal -- a v0.6.x build would read some of
+		// gauntlet's output wrongly rather than not at all
+		// (docs/decisions/gauntlet-adoption.md, decision 2). The file
+		// half is the stamp itself, as for schema 1; the database's half
+		// is a comment-only file.
+		Description: "accounts and tokens on gauntlet",
+		Postgres:    "0004_auth_on_gauntlet.sql",
+	},
 }
 
 // CurrentSchema is the highest schema version this build knows how to
