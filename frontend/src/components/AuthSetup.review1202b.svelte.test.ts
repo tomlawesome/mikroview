@@ -92,6 +92,6 @@ describe('the first-run hand-off to SSO sends the password just chosen (#1202 re
     expect(await screen.findByText(/admin account created/i)).toBeTruthy()
     expect(screen.getByText(/too many attempts/i)).toBeTruthy()
     expect(location.href).toBe('')
-    expect(document.body.innerHTML).not.toContain('sw0rdfish-secret')
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
   })
 })

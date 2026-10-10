@@ -327,9 +327,9 @@ describe('sign out everywhere asks the account for its own password (#1202 revie
 
     await clickButton('sign out everywhere')
     await typeAndConfirm('sw0rdfish-secret')
-    expect(document.body.innerHTML).not.toContain('sw0rdfish-secret')
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
     await typeAndConfirm('sw0rdfish-secret')
-    expect(document.body.innerHTML).not.toContain('sw0rdfish-secret')
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
   })
 
   // #1202 review U9: an SSO-only account has no password to give, so it is not asked.

@@ -139,7 +139,7 @@ describe.each([
     await typeAndConfirm(confirm, 'sw0rdfish-secret')
 
     expect(await screen.findByText(/failed to fetch/i)).toBeTruthy()
-    expect(document.body.innerHTML).not.toContain('sw0rdfish-secret')
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
   })
 
   // #1202 review U10
@@ -150,7 +150,7 @@ describe.each([
     await typeAndConfirm(confirm, 'sw0rdfish-secret')
     await screen.findByText(/incorrect password/i)
 
-    expect(document.body.innerHTML).not.toContain('sw0rdfish-secret')
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
   })
 })
 
