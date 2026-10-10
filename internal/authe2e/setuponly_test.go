@@ -14,7 +14,11 @@ import (
 	"testing"
 )
 
-const brokenConfig = "listen: [this is not: valid yaml\n  : : :\n"
+// invalidConfig parses, but config validation refuses it (CFG-0002: the
+// backup drop box address is not host:port), so mikroview starts setup-only
+// mode. Since #1347 setup-only mode refuses a wholly unreadable file, because
+// ui.allow cannot then be honoured, so the file must be readable.
+const invalidConfig = "backup:\n  listen: not-a-listen-address\n"
 
 func copyFile(t *testing.T, from, to string) {
 	t.Helper()
@@ -45,7 +49,7 @@ func setupOnlyAdminCanSignIn(t *testing.T, a *app, f *legacyInstall) {
 	wantStatus(t, "an ordinary route in setup-only mode", c.get("/api/events"), 503)
 }
 
-// #1202 B9.43: setup-only mode (a config file that does not parse) with no
+// #1202 B9.43: setup-only mode (a config file that parses but fails validation) with no
 // key is refused with the same CFG code and message as B1.3. Paired with
 // the key supplied each of the two ways.
 func TestSetupOnlyModeRefusesWithNoKeyAndStartsWithOne(t *testing.T) {
@@ -59,11 +63,19 @@ func TestSetupOnlyModeRefusesWithNoKeyAndStartsWithOne(t *testing.T) {
 	t.Run("no key", func(t *testing.T) {
 		t.Parallel()
 		f := newLegacyInstallSealed(t)
-		code, out, a := refused(t, Opts{Root: f.root, RawConfig: brokenConfig, NoKey: true})
+		code, out, a := refused(t, Opts{Root: f.root, RawConfig: invalidConfig, NoKey: true})
 		if code == 0 {
 			t.Errorf("exit status 0\n%s", out)
 		}
-		if got := cfgCodeRe.FindString(out); got != wantCode {
+		// The invalid config is itself reported first (CFG-0002), as it is
+		// at a normal start; the no-key refusal is the one setup-only mode
+		// adds after it, so that is the one whose code is compared.
+		const marker = "refusing to start the config editor"
+		i := strings.Index(out, marker)
+		if i < 0 {
+			t.Fatalf("setup-only mode never reached its no-key refusal (%q missing):\n%s", marker, out)
+		}
+		if got := cfgCodeRe.FindString(out[i:]); got != wantCode {
 			t.Errorf("CFG code = %q, want the normal start-up refusal's %s:\n%s", got, wantCode, out)
 		}
 		for _, want := range []string{"history.keyFile", "history.key"} {
@@ -80,7 +92,7 @@ func TestSetupOnlyModeRefusesWithNoKeyAndStartsWithOne(t *testing.T) {
 	t.Run("key named by MIKROVIEW_HISTORY_KEY_FILE", func(t *testing.T) {
 		t.Parallel()
 		f := newLegacyInstallSealed(t)
-		a := mustStart(t, Opts{Root: f.root, RawConfig: brokenConfig, KeyFromEnv: true, KeyFile: f.keyPath})
+		a := mustStart(t, Opts{Root: f.root, RawConfig: invalidConfig, KeyFromEnv: true, KeyFile: f.keyPath})
 		setupOnlyAdminCanSignIn(t, a, f)
 	})
 
@@ -89,7 +101,7 @@ func TestSetupOnlyModeRefusesWithNoKeyAndStartsWithOne(t *testing.T) {
 		f := newLegacyInstallSealed(t)
 		folderKey := filepath.Join(f.root, "appfolder", "keys", "history.key")
 		copyFile(t, f.keyPath, folderKey)
-		a := mustStart(t, Opts{Root: f.root, AppFolder: true, RawConfig: brokenConfig})
+		a := mustStart(t, Opts{Root: f.root, AppFolder: true, RawConfig: invalidConfig})
 		setupOnlyAdminCanSignIn(t, a, f)
 	})
 }

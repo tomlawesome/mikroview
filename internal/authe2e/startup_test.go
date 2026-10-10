@@ -185,9 +185,16 @@ func TestSessionLimitsAreClampedSilentlyAndLowerValuesKept(t *testing.T) {
 			t.Parallel()
 			w := bootstrap(t, Opts{SessionTTL: tc.ttl, SessionMax: tc.max})
 			if tc.silentWarn {
+				// Only a warning about the session LIMITS is forbidden. A
+				// warning that merely mentions the session (the documented
+				// "session cookie" one for secureCookie: false) is not one.
 				for _, l := range w.a.logWarns() {
-					if strings.Contains(strings.ToLower(l), "session") {
-						t.Errorf("a warning about the session settings was logged: %s", l)
+					low := strings.ToLower(l)
+					for _, word := range []string{"sessionttl", "sessionmaxlifetime", "idle", "lifetime", "limit", "clamp"} {
+						if strings.Contains(low, word) {
+							t.Errorf("a warning about the session limits was logged (mentions %q): %s", word, l)
+							break
+						}
 					}
 				}
 			}
@@ -519,7 +526,8 @@ func TestBareTokenListOpensAndAllThreeKindsAuthenticateOnTheirRoutes(t *testing.
 	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
 	c := a.client()
 
-	for _, p := range []string{"/api/events", "/api/flags", "/api/stats", "/api/devices", "/api/matches"} {
+	// /api/matches answers 400 by design without a mac, so it gets one.
+	for _, p := range []string{"/api/events", "/api/flags", "/api/stats", "/api/devices", "/api/matches?mac=aa:bb:cc:dd:ee:ff"} {
 		wantStatus(t, "api token on GET "+p, c.bearer(f.tokens["api"], "GET", p), 200)
 	}
 	if r := c.bearer(f.tokens["droplist-pull"], "GET", "/api/droplist.rsc"); r.Status == 401 || r.Status == 403 || r.Status == 404 {

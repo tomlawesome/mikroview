@@ -31,17 +31,23 @@ func newPG(t *testing.T) *pgEnv {
 		t.Skip("MIKROVIEW_TEST_POSTGRES not set -- skipping Postgres integration tests")
 	}
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, base)
+	// setup creates and drops the schema; it stays on the default
+	// search_path. The connection the test reads and writes rows through
+	// is a second one, opened with the schema baked into its DSN -- the
+	// same search_path the binary under test gets -- so store_blob is the
+	// binary's table and not one in the public schema (as internal/persist's
+	// newTestPool does for its pool).
+	setup, err := pgx.Connect(ctx, base)
 	if err != nil {
 		t.Fatalf("connecting to the test database: %v", err)
 	}
 	schema := "authe2e_" + strings.ToLower(randHex(t, 6))
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+	if _, err := setup.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatalf("creating the schema: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = conn.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
-		_ = conn.Close(context.Background())
+		_, _ = setup.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		_ = setup.Close(context.Background())
 	})
 	u, err := url.Parse(base)
 	if err != nil {
@@ -50,6 +56,11 @@ func newPG(t *testing.T) *pgEnv {
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
+	conn, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connecting with the test schema's search_path: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return &pgEnv{dsn: u.String(), conn: conn}
 }
 
