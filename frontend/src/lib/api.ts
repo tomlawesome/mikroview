@@ -1042,6 +1042,12 @@ export async function submitLoginFactor(code: string): Promise<string | null> {
 // complete.
 export const PENDING_LOGIN_EXPIRED = 'sign in again'
 
+// #1202 U11: on login/factor a #step-expired answering a PASSKEY assertion
+// means only the passkey ceremony lapsed -- the pending login still holds,
+// so the caller starts the passkey step again (login/factor/begin). A
+// begin answering #step-expired is PENDING_LOGIN_EXPIRED: the login is gone.
+export const PASSKEY_STEP_EXPIRED = 'That passkey prompt ran out of time. Trying your passkey again.'
+
 // #1202: gauntlet marks the same refusal with a problem type ending
 // #step-expired, whatever its detail says; PENDING_LOGIN_EXPIRED is the
 // sentinel handed on to the caller. Decided by the type alone, so a plain
@@ -1083,7 +1089,8 @@ export async function beginPasskeyLogin(): Promise<PasskeyCeremonyBegin | string
 export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<string | null> {
   const res = await postJSON('/api/auth/login/factor', { assertion })
   if (res.ok) return null
-  return loginStepRefusal(res, 'submitPasskeyLoginAssertion')
+  const refusal = await loginStepRefusal(res, 'submitPasskeyLoginAssertion')
+  return refusal === PENDING_LOGIN_EXPIRED ? PASSKEY_STEP_EXPIRED : refusal
 }
 
 // The sentinel enrolTOTP and beginPasskeyRegistration return for a wrong
@@ -1393,10 +1400,18 @@ export async function logout(): Promise<string | null> {
 // caller holds, on every device, and the server immediately issues this
 // tab a fresh one (see internal/api.handleAuthLogoutAll), so unlike
 // logout() above this does not leave the caller signed out.
-export async function signOutEverywhere(): Promise<string | null> {
-  const res = await postJSON('/api/auth/logout-all')
+//
+// #1202 U9: an account with a local password sends its own password in
+// the body (a rate-limited re-check); an SSO-only account has none and
+// sends no body at all. Refusals read as adminRecheckRefusal says: a 401
+// #invalid-credentials is INCORRECT_PASSWORD, a 429 its detail, and any
+// other 401 is the session being gone (thrown).
+export async function signOutEverywhere(password?: string): Promise<string | null> {
+  const res = password === undefined
+    ? await postJSON('/api/auth/logout-all')
+    : await postJSON('/api/auth/logout-all', { password })
   if (res.ok) return null
-  return (await errorText(res)) || `signOutEverywhere: ${res.status}`
+  return adminRecheckRefusal(res, 'signOutEverywhere')
 }
 
 // #1283: the signed-in user's own preferences record. No record yet
@@ -1442,9 +1457,20 @@ export async function fetchUsers(): Promise<UserSummary[]> {
 
 // deleteUser takes the calling admin's own password (#1202 U8), sent in
 // the body and nowhere else; see adminRecheckRefusal for the refusals.
+//
+// #1202 U12: a 500 #partially-completed means the account WAS deleted but
+// its tokens could not be revoked; USER_DELETED_TOKENS_REMAIN is the
+// message for the admin, and the caller must refresh its list.
+export const USER_DELETED_TOKENS_REMAIN =
+  "That account was deleted, but its tokens could not be revoked. Please revoke that account's tokens by hand."
+
 export async function deleteUser(id: string, password: string): Promise<string | null> {
   const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`, { password })
   if (res.ok) return null
+  if (res.status === 500) {
+    const err = await readError(res)
+    return err.kind === 'partially-completed' ? USER_DELETED_TOKENS_REMAIN : err.detail || `deleteUser: ${res.status}`
+  }
   return adminRecheckRefusal(res, 'deleteUser')
 }
 
@@ -1933,13 +1959,15 @@ export async function fetchAuditLog(): Promise<AuditResult> {
 // internal/api/oidc.go's handleOIDCLinkStart). Returns the provider URL
 // for the caller to navigate to, or an error message.
 //
-// No arguments: the account is the session's, never the body's. Both
-// callers are here -- SSOLinkOverlay.svelte for an account already in
-// the app, and AuthSetup.svelte immediately after first-run creates the
-// admin.
-export async function startSSOLink(): Promise<{ url: string } | string> {
-  const res = await postJSON('/api/auth/oidc/link')
-  if (!res.ok) return (await errorText(res)) || `startSSOLink: ${res.status}`
+// The account is the session's, never the body's; the body carries only
+// the caller's own password (#1202 U10, a rate-limited re-check), in the
+// body and nowhere else. Both callers are here -- SSOLinkOverlay.svelte
+// for an account already in the app, and AuthSetup.svelte immediately
+// after first-run creates the admin. A 401 #invalid-credentials is
+// INCORRECT_PASSWORD, a 429 and the two 409s their detail.
+export async function startSSOLink(password: string): Promise<{ url: string } | string> {
+  const res = await postJSON('/api/auth/oidc/link', { password })
+  if (!res.ok) return adminRecheckRefusal(res, 'startSSOLink')
   return res.json()
 }
 

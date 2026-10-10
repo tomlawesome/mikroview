@@ -219,7 +219,7 @@
       {/if}
       {#if data.standing === 'ok' && !blocklistState.token}
         <div class="keyask">
-          <b>The push needs a key.</b> Minting one asks for your password, because a key outlives this sign-in.
+          <b>The push needs a key.</b> Making one asks for your password, because a key outlives this sign-in.
           <label class="keylabel" for="bl-key-password">Your password</label>
           <input
             id="bl-key-password"

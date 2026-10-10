@@ -18,6 +18,7 @@ vi.mock('../lib/api', () => ({
   submitLoginFactor: vi.fn(),
   // The one non-function export this module reaches for.
   PENDING_LOGIN_EXPIRED: 'sign in again',
+  PASSKEY_STEP_EXPIRED: 'the passkey step ran out, try your passkey again',
   // #1250: authState.loginWithPasskey() runs the real
   // lib/passkeys.svelte.ts ceremony (its own test file covers that code
   // in isolation) -- only the network boundary underneath it is faked

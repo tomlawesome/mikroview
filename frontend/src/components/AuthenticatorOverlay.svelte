@@ -19,6 +19,7 @@
   // Structure and styling deliberately mirror ChangePasswordOverlay,
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
@@ -47,6 +48,17 @@
   let password = $state('')
   let error = $state<string | null>(null)
   let busy = $state(false)
+  // #1202 U13: after the codes screen's call fails or sends the person
+  // back to the status screen, focus is put inside the dialog again (a
+  // disabled or removed button drops it to the page body).
+  let modalEl = $state<HTMLElement | undefined>(undefined)
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstControl = () =>
+    modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
   let codesCopied = $state(false)
   // #1202: gauntlet holds a first factor, with its codes, until
   // confirmRecoveryCodes says they were saved. False when the app went live at once,
@@ -224,6 +236,7 @@
         const gone = await confirmRecoveryCodes()
         if (gone) {
           startAgain(startAgainText(gone))
+          void focusWhenReady(firstControl)
           return
         }
         await authState.check()
@@ -233,6 +246,7 @@
           return
         }
         error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        void focusWhenReady(() => saveButton)
         return
       } finally {
         busy = false
@@ -285,13 +299,18 @@
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" use:trapFocus>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" bind:this={modalEl} use:trapFocus>
       <div class="modal-header">
         <span class="title">Authenticator app</span>
         {#if step !== 'codes'}
           <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
+
+      <!-- #1202 U13: one live region for the status and codes screens,
+           outside the step blocks so it is in the page before any message
+           and survives the move from the codes screen back to status. -->
+      <p class="error live" role="status" aria-live="polite">{step === 'status' || step === 'codes' ? (error ?? '') : ''}</p>
 
       {#if step === 'status'}
         <div class="body">
@@ -306,7 +325,6 @@
               or similar) as a second step at sign-in, alongside your password.
             </p>
           {/if}
-          {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={close} disabled={busy}>Close</button>
@@ -410,10 +428,9 @@
                are shared, so whichever second factor is added later
                reuses these rather than minting its own. -->
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
-          {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finish} disabled={busy}>I have saved these</button>
+          <button type="button" class="confirm" bind:this={saveButton} onclick={finish} disabled={busy}>I have saved these</button>
         </div>
       {/if}
 
@@ -548,6 +565,15 @@
   .error {
     color: var(--reject);
     font-size: 12px;
+  }
+
+  .error.live {
+    margin: 0;
+    padding: 10px 16px 0;
+  }
+
+  .error.live:empty {
+    display: none;
   }
 
   .warning {

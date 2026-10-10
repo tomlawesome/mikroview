@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserSummary } from './types'
 
 vi.mock('./api', () => ({
+  USER_DELETED_TOKENS_REMAIN: 'deleted, tokens remain',
   clearUserPasskeys: vi.fn(),
   clearUserTOTP: vi.fn(),
   createUser: vi.fn(),

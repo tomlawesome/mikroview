@@ -16,6 +16,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
+  USER_DELETED_TOKENS_REMAIN: 'deleted, tokens remain',
   INCORRECT_PASSWORD: 'incorrect password',
   fetchSetupStatus: vi.fn(async () => ({
     instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true },

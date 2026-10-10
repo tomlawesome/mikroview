@@ -36,7 +36,7 @@
   // on the closer, backend-consistent reading (both groups admin-only,
   // like people already is) and flagged in the PR rather than guessed
   // past.
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
@@ -390,14 +390,75 @@
   let soError = $state<string | null>(null)
   let soDone = $state(false)
 
-  async function doSignOutEverywhere() {
-    soSaving = true
+  // #1202 U9: gauntlet re-checks the caller's own password (a rate
+  // limited re-check) when the account has a local one. The row opens a
+  // prompt for it, the same shape as the People ones below; an SSO-only
+  // account has none to give and is not asked. The password is held only
+  // while the prompt is open: emptied the moment it is read for the call,
+  // and on every close.
+  let soAsking = $state(false)
+  let soPassword = $state('')
+  let soField = $state<HTMLInputElement | undefined>(undefined)
+
+  function openSignOutPrompt() {
+    if (soSaving) return
+    if (!authState.hasLocalPassword) {
+      void doSignOutEverywhere()
+      return
+    }
+    // One password prompt at a time: this replaces a People one.
+    closeAdminPrompt()
+    soAsking = true
+    soPassword = ''
     soError = null
     soDone = false
-    const err = await authState.signOutEverywhere()
+  }
+
+  function closeSignOutPrompt() {
+    soAsking = false
+    soPassword = ''
+    soError = null
+  }
+
+  async function doSignOutEverywhere() {
+    soError = null
+    soDone = false
+    let password: string | undefined
+    if (authState.hasLocalPassword) {
+      if (!soPassword) {
+        soError = 'Type your password to go on.'
+        soField?.focus()
+        return
+      }
+      // Read once and emptied at once: nothing below keeps it.
+      password = soPassword
+      soPassword = ''
+    }
+    soSaving = true
+    let err: string | null
+    try {
+      err = await authState.signOutEverywhere(password)
+    } catch (e) {
+      // A thrown 401 is the session being gone (read as a shape, not
+      // instanceof: ApiError is api.ts's, and the screen's tests stub that
+      // module without it); anything else is a failure to show.
+      const thrown = e as { status?: unknown; message?: unknown }
+      err = typeof thrown?.message === 'string' && thrown.message ? thrown.message : 'could not sign out everywhere'
+      if (thrown?.status === 401) authState.handleUnauthorized()
+    }
     soSaving = false
-    if (err) soError = err
-    else soDone = true
+    if (err) {
+      soError = err
+      if (soAsking) {
+        // The field was disabled while the call ran, which drops focus;
+        // put the person back in it once it is enabled again.
+        await tick()
+        soField?.focus()
+      }
+      return
+    }
+    soAsking = false
+    soDone = true
   }
 
   // --- your deck -----------------------------------------------------------
@@ -830,10 +891,19 @@
     // One verb at a time, as in the mockup: this disarms an armed revoke
     // and replaces any other prompt, which forgets its password.
     disarmAll()
+    closeSignOutPrompt()
     adminAction = { kind, id }
     adminPassword = ''
     adminError = null
   }
+
+  // #1202 U15: opening the prompt puts the cursor in its field. An effect,
+  // not code after the click, because the field exists only once the
+  // prompt has rendered; it runs again only when the prompt moves to
+  // another row (a new field).
+  $effect(() => {
+    if (adminAction && adminField) adminField.focus()
+  })
 
   function closeAdminPrompt() {
     adminAction = null
@@ -894,6 +964,15 @@
       adminBusy = false
     }
     if (refusal) {
+      // #1202 U12: a delete the server did carry out (usersState.remove
+      // refreshed the list, so the row is gone) but whose tokens could not
+      // be revoked. The prompt lived under that row, so the words go where
+      // the page says what happened to people, and the prompt closes.
+      if (action.kind === 'remove' && !usersState.list.some((u) => u.id === action.id)) {
+        personError = refusal
+        closeAdminPrompt()
+        return
+      }
       adminError = refusal
       adminField?.focus()
       return
@@ -1704,12 +1783,41 @@
           <span>sessions</span>
           <span class="ov">
             this device{authState.signedInSince ? `, signed in ${formatDaysSince(authState.signedInSince)}` : ''} ·
-            <button class="olink" disabled={soSaving} onclick={doSignOutEverywhere}>
+            <button class="olink" disabled={soSaving} onclick={openSignOutPrompt}>
               {soSaving ? 'signing out…' : 'sign out everywhere'}
             </button>
           </span>
         </div>
-        {#if soError}
+        <!-- #1202 U9: the caller's own password, asked for under the row.
+             The error slot is always present while the prompt is, so a
+             screen reader hears it when text arrives; focus goes back to
+             the field after a refusal. -->
+        {#if soAsking}
+          <div class="pform wf">
+            <input
+              type="password"
+              placeholder="your password"
+              aria-label="your password"
+              autocomplete="current-password"
+              bind:this={soField}
+              bind:value={soPassword}
+              disabled={soSaving}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  doSignOutEverywhere()
+                }
+              }}
+            />
+            <span class="acts dwr-acts">
+              <button type="button" class="quiet" disabled={soSaving} onclick={closeSignOutPrompt}>cancel</button>
+              <button type="button" disabled={soSaving} onclick={doSignOutEverywhere}>
+                {soSaving ? 'working…' : 'confirm — ends every other session'}
+              </button>
+            </span>
+            <p class="oghint err" role="status" aria-live="polite">{soError ?? ''}</p>
+          </div>
+        {:else if soError}
           <p class="oghint err">{soError}</p>
         {/if}
         {#if soDone}

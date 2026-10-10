@@ -57,6 +57,7 @@ describe('SSOLinkOverlay', () => {
     vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
     render(SSOLinkOverlay)
 
+    await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }))
     expect(startSSOLink).toHaveBeenCalledOnce()
   })
@@ -70,6 +71,7 @@ describe('SSOLinkOverlay', () => {
     vi.mocked(startSSOLink).mockRejectedValue(new Error('Failed to fetch'))
     render(SSOLinkOverlay)
 
+    await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }))
 
     expect(await screen.findByText(/failed to fetch/i)).toBeTruthy()
@@ -82,6 +84,7 @@ describe('SSOLinkOverlay', () => {
     vi.mocked(startSSOLink).mockResolvedValue('this account already signs in through your identity provider')
     render(SSOLinkOverlay)
 
+    await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }))
     expect(await screen.findByText(/already signs in through your identity provider/i)).toBeTruthy()
     // Still open, so the person can read what happened.
@@ -133,13 +136,14 @@ describe('SSOLinkOverlay', () => {
       expect(screen.queryByText(/your MikroView password and second step stay/i)).toBeNull()
     })
 
-    it('asks the server for the link with nothing but the session', async () => {
+    it('asks the server for the link with the password typed and nothing else', async () => {
       vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
       authState.role = 'admin'
       render(SSOLinkOverlay)
 
+      await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
       await fireEvent.click(screen.getByRole('button', { name: /connect sso and keep my password/i }))
-      expect(startSSOLink).toHaveBeenCalledWith()
+      expect(startSSOLink).toHaveBeenCalledWith('hunter2')
     })
   })
 

@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { clearUserPasskeys, clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
+import {
+  clearUserPasskeys,
+  clearUserTOTP,
+  createUser,
+  deleteUser,
+  fetchUsers,
+  resetUserPassword,
+  USER_DELETED_TOKENS_REMAIN,
+} from './api'
 import type { PasswordResetCode, UserSummary } from './types'
 
 // Admin-only account management (issue #133) -- its own small state
@@ -72,6 +80,12 @@ class UsersState {
 
   async remove(id: string, password: string): Promise<string | null> {
     const err = await deleteUser(id, password)
+    // #1202 U12: the account WAS deleted but its tokens were not revoked.
+    // Refreshed so the row goes, and the message handed back for the admin.
+    if (err === USER_DELETED_TOKENS_REMAIN) {
+      await this.refresh()
+      return err
+    }
     if (err) return err
     // Dropped locally rather than re-fetching: the server has already
     // confirmed, and nothing else in this list can have changed as a

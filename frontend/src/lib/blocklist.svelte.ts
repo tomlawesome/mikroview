@@ -55,8 +55,17 @@ class BlocklistState {
   // Reactive, so the page's password prompt goes away once a token is held.
   private tokens = $state<Record<string, string>>({})
   // Set while mintToken is in flight, and to its refusal's words after.
-  minting = $state(false)
-  tokenError = $state<string | null>(null)
+  // #1202 U14: kept per router -- a mint still running for router A must
+  // not hold router B's prompt, and A's answer (error or token) belongs to
+  // A alone. minting and tokenError read the router on screen.
+  private mintingFor = $state<Record<string, boolean>>({})
+  private tokenErrors = $state<Record<string, string | null>>({})
+  get minting(): boolean {
+    return this.mintingFor[this.device] === true
+  }
+  get tokenError(): string | null {
+    return this.tokenErrors[this.device] ?? null
+  }
   private seq = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   // inWizard: the body is on the wizard's tail stage, so the wizard's
@@ -82,7 +91,7 @@ class BlocklistState {
       this.data = null
       this.block = null
       this.choices = {}
-      this.clearErrors()
+      this.clearErrors(device)
     }
     this.device = device
     this.copied = false
@@ -107,7 +116,7 @@ class BlocklistState {
   async peek(device: string): Promise<void> {
     if (!device) return
     if (device !== this.device || !this.data) {
-      if (device !== this.device) this.clearErrors()
+      if (device !== this.device) this.clearErrors(device)
       this.device = device
       this.block = null
       try {
@@ -179,37 +188,39 @@ class BlocklistState {
   async mintToken(password: string): Promise<void> {
     if (!password || this.minting || this.token || this.data?.standing !== 'ok') return
     const device = this.device
-    this.minting = true
-    this.tokenError = null
+    this.mintingFor[device] = true
+    this.tokenErrors[device] = null
     try {
       const result = await createToken(`blocklist-${device}`, 'ingest', device, password)
       if (typeof result === 'string') {
-        this.tokenError = result
+        this.tokenErrors[device] = result
         return
       }
       if (!result.value) {
         // The server answered the mint but left the value out: nothing to
         // build the push with, and the person must hear it, not see the
         // prompt quietly empty.
-        this.tokenError = 'The server did not send the key’s value — try again.'
+        this.tokenErrors[device] = 'The server did not send the key’s value — try again.'
         return
       }
       this.tokens[device] = result.value
     } catch {
-      this.tokenError = 'Could not mint the key — try again.'
+      this.tokenErrors[device] = 'Could not mint the key — try again.'
       return
     } finally {
-      this.minting = false
+      this.mintingFor[device] = false
     }
-    await this.render()
+    // Only the router on screen is drawn again: A's token is held for A,
+    // and A's answer arriving while B is open changes nothing on B.
+    if (this.device === device) await this.render()
   }
 
   // The last failure belongs to the router it happened on: opening
   // another router must not show it there.
-  private clearErrors() {
+  private clearErrors(device = this.device) {
     this.error = null
     this.blockError = null
-    this.tokenError = null
+    this.tokenErrors[device] = null
   }
 
   // render asks the server for the block the current clicks describe.
@@ -265,8 +276,8 @@ class BlocklistState {
     this.showUndoAll = false
     this.copied = false
     this.tokens = {}
-    this.minting = false
-    this.tokenError = null
+    this.mintingFor = {}
+    this.tokenErrors = {}
     this.seq = 0
     if (this.timer) clearTimeout(this.timer)
     this.timer = null

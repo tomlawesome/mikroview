@@ -566,8 +566,11 @@ class AuthState {
   // a fresh session in the same response (see handleAuthLogoutAll) --
   // so this just re-reads the session to pick up the new
   // signedInSince, rather than dropping to 'unauthenticated'.
-  async signOutEverywhere(): Promise<string | null> {
-    const err = await signOutEverywhere();
+  //
+  // #1202 U9: the caller's own password (absent for an SSO-only account)
+  // goes straight to api.ts and is not kept here.
+  async signOutEverywhere(password?: string): Promise<string | null> {
+    const err = await signOutEverywhere(password);
     if (!err) await this.check();
     return err;
   }

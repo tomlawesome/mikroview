@@ -17,6 +17,7 @@
   // offer a passkey right now, or this browser is not at the address
   // they were made for. The row that opens this overlay is never
   // hidden (AccountMenu.svelte); this is where it says why.
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'
@@ -43,6 +44,17 @@
   // password below.
   let addPassword = $state('')
   let addError = $state<string | null>(null)
+  // #1202 U13: after the codes screen's call fails or sends the person
+  // back to the list, focus is put inside the dialog again (a disabled or
+  // removed button drops it to the page body).
+  let modalEl = $state<HTMLElement | undefined>(undefined)
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstControl = () =>
+    modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
   let addBusy = $state(false)
   let recoveryCodes = $state<string[]>([])
   let codesCopied = $state(false)
@@ -243,6 +255,7 @@
         const gone = await confirmRecoveryCodes()
         if (gone) {
           startAgain(startAgainText(gone))
+          void focusWhenReady(firstControl)
           return
         }
         await authState.check()
@@ -252,6 +265,7 @@
           return
         }
         codesError = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        void focusWhenReady(() => saveButton)
         return
       } finally {
         addBusy = false
@@ -346,13 +360,18 @@
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Passkeys" tabindex="-1" use:trapFocus>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Passkeys" tabindex="-1" bind:this={modalEl} use:trapFocus>
       <div class="modal-header">
         <span class="title">Passkeys</span>
         {#if step !== 'codes'}
           <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
+
+      <!-- #1202 U13: one live region for the list and codes screens,
+           outside the step blocks so it is in the page before any message
+           and survives the move from the codes screen back to the list. -->
+      <p class="error live" role="status" aria-live="polite">{step === 'list' ? (addError ?? '') : step === 'codes' ? (codesError ?? '') : ''}</p>
 
       {#if unavailableReason}
         <div class="body">
@@ -443,7 +462,6 @@
               {/each}
             </div>
           {/if}
-          {#if addError}<p class="error">{addError}</p>{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={close}>Close</button>
@@ -502,10 +520,9 @@
             </p>
           {/if}
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
-          {#if codesError}<p class="error">{codesError}</p>{/if}
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finishCodes} disabled={addBusy}>I have saved these</button>
+          <button type="button" class="confirm" bind:this={saveButton} onclick={finishCodes} disabled={addBusy}>I have saved these</button>
         </div>
       {:else if step === 'added-done'}
         <div class="body">
@@ -631,6 +648,15 @@
   .error {
     color: var(--reject);
     font-size: 12px;
+  }
+
+  .error.live {
+    margin: 0;
+    padding: 10px 16px 0;
+  }
+
+  .error.live:empty {
+    display: none;
   }
 
   .warning {

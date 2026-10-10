@@ -23,6 +23,7 @@
   // the overlays themselves are untouched and keep serving the account
   // menu (#1332 is that menu's own open defect; nothing here reaches
   // into it).
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { ApiError, STEP_EXPIRED, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
@@ -56,6 +57,17 @@
   let codesCopied = $state(false)
   let error = $state<string | null>(null)
   let busy = $state(false)
+  // #1202 U13: where focus goes after the codes screen's call fails or
+  // sends the person back to choosing. A disabled button drops focus, so
+  // it is put back once the screen has rendered, never left on the body.
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  let choiceSection = $state<HTMLElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstChoice = () =>
+    choiceSection?.querySelector<HTMLElement>('button:not(:disabled)') ?? choiceSection
   // FR2-F1: a non-401 failure from confirm()/addPasskey() is ambiguous by
   // status alone (a passkey ceremony failure is also a plain error), so
   // the session is the signal -- re-checked after the failure, and
@@ -331,6 +343,7 @@
         const gone = await confirmRecoveryCodes()
         if (gone) {
           startAgain(startAgainText(gone))
+          void focusWhenReady(firstChoice)
           return
         }
       } catch (err) {
@@ -339,6 +352,7 @@
           return
         }
         error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        void focusWhenReady(() => saveButton)
         return
       } finally {
         busy = false
@@ -382,6 +396,8 @@
       {#if stage === 'choose'}
         <section
           class="state"
+          bind:this={choiceSection}
+          tabindex="-1"
           aria-label={passkeyOnly
             ? passkeyUsable
               ? 'Add a passkey'
@@ -454,7 +470,6 @@
             <button class="link-btn" type="button" onclick={signOut}>Sign out</button>
             {#if signOutError}<p class="error">{signOutError}</p>{/if}
           {/if}
-          {#if error}<p class="error">{error}</p>{/if}
           <p class="noexit">
             {#if passkeyOnly}
               no skipping this one &mdash; every admin account here needs a
@@ -617,10 +632,14 @@
             <p class="aside">Your ten recovery codes cover your authenticator app and
               your passkeys alike.</p>
           {/if}
-          {#if error}<p class="error">{error}</p>{/if}
-          <button class="enter" type="button" onclick={finish} disabled={busy}>I have saved these</button>
+          <button class="enter" type="button" bind:this={saveButton} onclick={finish} disabled={busy}>I have saved these</button>
         </section>
       {/if}
+      <!-- #1202 U13: one live region, outside the stage chain so it is in
+           the page before any message and survives the move from the
+           codes screen back to choosing. It carries the choose and codes
+           screens' messages; the forms above keep their own. -->
+      <p class="error" role="status" aria-live="polite">{stage === 'choose' || stage === 'codes' ? (error ?? '') : ''}</p>
     </div>
   </div>
 </main>

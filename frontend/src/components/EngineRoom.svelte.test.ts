@@ -1211,8 +1211,11 @@ describe('The settings shelf (#633)', () => {
     const { signOutEverywhere } = await import('../lib/api')
     await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm/ }))
+    await settle()
 
-    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(signOutEverywhere).toHaveBeenCalledWith('hunter2')
     expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 

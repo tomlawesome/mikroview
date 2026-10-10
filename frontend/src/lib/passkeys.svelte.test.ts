@@ -13,6 +13,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./api', () => ({
+  PASSKEY_STEP_EXPIRED: 'the passkey step ran out, try your passkey again',
   beginPasskeyRegistration: vi.fn(),
   finishPasskeyRegistration: vi.fn(),
   beginPasskeyLogin: vi.fn(),
