@@ -144,11 +144,21 @@ fi
 
 # The real question: does a server come up on the destination, and is the
 # account still there? Anything less is checking that files were copied.
-cfg "$DST" > "$DST/cfg.yaml"
-if start "$DST"; then
+#
+# The destination becomes the deployment's normal data mount, at the path
+# the config has always named (docs/configuration.md, "Moving the data
+# directory"). That matters since #1202: a file-backed store is sealed
+# bound to its own path, so a copy opened under a config naming some
+# other path would be refused as altered -- not what an operator does. So
+# the source is moved aside and the destination put where it was, which
+# is what repointing the mount does.
+mv "$SRC" "$DIR/src-old"
+mv "$DST" "$SRC"
+cfg "$SRC" > "$SRC/cfg.yaml"
+if start "$SRC"; then
   ok "a fresh server started against the migrated directory"
 else
-  fail "the migrated instance never became healthy -- see $DST/server.log"
+  fail "the migrated instance never became healthy -- see $SRC/server.log"
 fi
 
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/login" \
@@ -161,7 +171,7 @@ check "$([ "$code" = "200" ] && echo 0 || echo 1)" "the account created before t
 # the top of the first. 409 is auth.ErrRegistrationClosed, answered
 # before any setup code is looked at -- and the destination, holding an
 # account, logs none.
-check "$(grep -q 'create the first admin with setup code' "$DST/server.log" && echo 1 || echo 0)" \
+check "$(grep -q 'create the first admin with setup code' "$SRC/server.log" && echo 1 || echo 0)" \
   "the migrated instance logged no setup code, so it knows the migrated account exists"
 second="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \

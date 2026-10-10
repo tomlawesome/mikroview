@@ -92,4 +92,7 @@ mv_history_key_block() {
 # port so a live run makes no outbound request and leaves no downloaded
 # list in the data directory. It is honoured only with MV_TEST_HOOKS=1
 # (gauntlet_wiring.go), which live-env.sh and live-migrate-data.sh set.
-MV_PASSWORDLIST_OFFLINE_URL="http://127.0.0.1:9/password-list-offline"
+# It must be https: gauntlet's blocklist refuses any other scheme, and the
+# server then exits at start-up, logging no setup code. Nothing listens on
+# port 9, so the fetch is refused at once.
+MV_PASSWORDLIST_OFFLINE_URL="https://127.0.0.1:9/password-list-offline"
