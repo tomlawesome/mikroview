@@ -424,16 +424,28 @@ func verifyApplied(applied map[int64]string, migrations []migration, describe st
 		known[m.version] = m
 	}
 
-	for version, recorded := range applied {
-		m, ok := known[version]
-		if !ok {
-			// The database has run a migration this binary does not
-			// contain -- an older image started against a database a
-			// newer one upgraded. Already covered by the operator
-			// guidance in docs/configuration.md; not this check's job,
-			// and refusing here would duplicate it badly.
-			continue
+	// Ruling 18 (#1202 R19): a version this binary does not contain means
+	// a newer release has migrated the database. Refused before any
+	// checksum comparison and before Migrate applies or writes anything,
+	// exactly as the file backend refuses a newer schema.json. Skipping
+	// such rows let an older build run on a schema it had never seen.
+	var stored, highestKnown int64
+	for version := range applied {
+		if _, ok := known[version]; !ok && version > stored {
+			stored = version
 		}
+	}
+	if stored != 0 {
+		for _, m := range migrations {
+			if m.version > highestKnown {
+				highestKnown = m.version
+			}
+		}
+		return &SchemaTooNewError{Database: describe, Stored: stored, Known: highestKnown}
+	}
+
+	for version, recorded := range applied {
+		m := known[version]
 		if recorded == "" {
 			continue // applied before checksums were recorded
 		}

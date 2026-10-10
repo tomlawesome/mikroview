@@ -187,8 +187,13 @@ type fileSchemaDocument struct {
 // There is no way back from that, so there is no downgrade; see
 // docs/upgrades.md, "Going back".
 type SchemaTooNewError struct {
-	// DataDir is the directory whose schema document was read.
+	// DataDir is the directory whose schema document was read. Empty
+	// for the Postgres backend.
 	DataDir string
+	// Database describes the Postgres database whose schema_version
+	// table was read (never its credentials). Empty for the file
+	// backend.
+	Database string
 	// Stored is the schema version found on disk.
 	Stored int64
 	// Known is the highest this build can produce (CurrentSchema).
@@ -199,6 +204,17 @@ type SchemaTooNewError struct {
 }
 
 func (e *SchemaTooNewError) Error() string {
+	if e.Database != "" {
+		// Postgres: schema_version holds a migration this build lacks.
+		// A newer release migrated the database; the way out is that
+		// release, or the copy taken before the upgrade.
+		return fmt.Sprintf(
+			"the database %s is at schema version %d, but this build of MikroView only knows schema version %d -- "+
+				"a newer release of MikroView has migrated it, so run that release or a newer one, or restore the "+
+				"pre-upgrade copy of the database. Refusing to start rather than writing: an older build would "+
+				"overwrite newer data in shapes it does not understand, and there is no way back from that",
+			e.Database, e.Stored, e.Known)
+	}
 	// The build version is what the operator acts on, so the sentence is
 	// built around whether the data names one rather than dropping an
 	// empty string into a fixed phrase.
