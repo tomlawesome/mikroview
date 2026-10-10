@@ -314,9 +314,10 @@ func (s *Server) requestSessionID(r *http.Request) string {
 // rules -- live, its account still there, and issued after that
 // account's sessions were last ended (a password change, an admin reset,
 // an SSO link: gauntlet.User.SessionCutoff). For the few places that ask
-// again after gate let a request through: the WebSocket's per-ping
-// re-check (#375) and the handlers that must act on the session's own
-// account. A session that fails the cutoff is revoked here, as gate
+// again after gate let a request through: the handlers that must act on
+// the session's own account. (The WebSocket's per-ping re-check, #375,
+// asks Gate.StillSignedIn instead, which leaves the session's expiry
+// alone: #1448.) A session that fails the cutoff is revoked here, as gate
 // revokes it.
 func (s *Server) sessionUser(r *http.Request, now time.Time) (*gauntlet.User, bool) {
 	id := s.requestSessionID(r)

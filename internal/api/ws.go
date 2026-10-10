@@ -125,10 +125,15 @@ func closeRevoked(conn *websocket.Conn) {
 //
 // The fix piggybacks on the ping/pong keepalive that already exists for a
 // different reason (detecting a dead TCP peer): every pingTicker.C tick,
-// before sending the ping, re-run r through sessionUser -- the same
-// cookie-lookup/Validate/session-cutoff check the gate makes on every
-// ordinary request (gauntlet.go). A closed-over *http.Request stays valid for this the
-// whole time; nothing about it changes across the connection's life. If
+// before sending the ping, ask the gate whether it would still admit r
+// (Gate.StillSignedIn): Protect's own decision -- the session, its
+// account, the session cutoff, the role and the doors -- made without
+// touching anything. The re-check is traffic the server generates for
+// itself, not the person, so it must not slide the session's idle
+// expiry: an open tab with nobody at it idles out at the idle limit
+// like any other (#1448, NIST SP 800-63B section 7.2). A closed-over
+// *http.Request stays valid for this the whole time; nothing about it
+// changes across the connection's life. If
 // the session no longer checks out, the socket sends a real close frame
 // (so the browser's onclose fires and its reconnect logic runs, landing
 // back on the login screen once the next reconnect attempt 401s) and
@@ -141,7 +146,7 @@ func closeRevoked(conn *websocket.Conn) {
 // could drift from the request-time one; it needs no new state anywhere
 // (no connection registry keyed by session, no wiring from the account
 // stores back out to internal/hub or internal/api); and it costs
-// one map lookup plus one Auth.Get every 30s per open socket. The
+// one session lookup plus one account lookup every 30s per open socket. The
 // trade-off is bounded latency instead of instant revocation -- worst
 // case one wsPingInterval plus however long the write takes, not the
 // wsPongTimeout window (that only bounds a *dead* peer going unnoticed,
@@ -243,7 +248,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// already answers, and there's no reason to spend a write on
 			// a socket that's about to be closed anyway. See the doc
 			// comment above for why this is the revalidation point.
-			if _, ok := s.sessionUser(r, s.now()); !ok {
+			if s.Gate.StillSignedIn(r) != nil {
 				closeRevoked(conn)
 				// The reader goroutine returns when the peer's answering
 				// close frame (or anything else fatal) arrives, so waiting

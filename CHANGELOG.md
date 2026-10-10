@@ -218,6 +218,16 @@ rewritten.
 
 ### Fixed
 
+- **An open tab no longer keeps you signed in** (#1448). The live
+  view's connection checked the session every 30 seconds, and each check
+  counted as activity, so a tab left open stayed signed in until the
+  session's maximum lifetime (`auth.sessionMaxLifetime`, at most 24
+  hours), however long nobody touched it. The check now
+  changes nothing, so the session ends at the idle limit
+  (`auth.sessionTTL`, at most an hour) after your last real request, and
+  the connection closes with it. A session that is signed out, revoked or
+  ended by a password change still closes its connection at the next
+  check, as before (#375).
 - **Safari: the page no longer ends up 12 px too high after a lost
   connection** (#1423). With the connection banner showing, tabbing to
   the last name on the side rail scrolled the whole app up to show it,
