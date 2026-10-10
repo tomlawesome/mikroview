@@ -204,7 +204,7 @@ func (s *Store) Merge(userID string, patch json.RawMessage) error {
 }
 
 // Delete removes userID's record entirely, if one exists. Called when
-// the account itself is deleted (handleAuthDeleteUser, #1283's own
+// the account itself is deleted (internal/api's follow-up to gauntlet's delete, #1283's own
 // "cleared when the user is deleted" ruling) -- deleting an id with no
 // record is not an error, since the end state either way is "nothing
 // stored for this id".

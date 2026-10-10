@@ -8,9 +8,16 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/droplist"
 )
+
+// TokenKindDroplistPull is the third kind of bearer token (#1224): the
+// key a router's own scheduled /tool fetch presents for the drop-list
+// feed. API and ingest tokens are gauntlet's own kinds; this one is
+// mikroview's, and the token store is opened knowing it (TokenKinds).
+const TokenKindDroplistPull gauntlet.TokenKind = "droplist-pull"
 
 // droplistEntryResponse is what one entry looks like over the wire --
 // the CIDR rendered as its canonical string, never the netip.Prefix
@@ -50,7 +57,7 @@ type droplistKeyStatus struct {
 // via TokenStore.ByKind -- never the raw value, which this store never
 // retains past the moment it was minted.
 func (s *Server) droplistKeyStatus() droplistKeyStatus {
-	toks := s.Tokens.ByKind(auth.TokenKindDroplistPull)
+	toks := s.Tokens.ByKind(TokenKindDroplistPull)
 	if len(toks) == 0 {
 		return droplistKeyStatus{}
 	}
@@ -304,8 +311,8 @@ type droplistKeyCreateRequest struct {
 
 type droplistKeyCreateResponse struct {
 	// Key is the raw bearer value -- shown exactly once, the same
-	// one-time contract every other token kind follows (see
-	// auth.TokenStore.Create).
+	// one-time contract every other token kind follows (see gauntlet's
+	// TokenStore.Create).
 	Key       string    `json:"key"`
 	CreatedAt time.Time `json:"createdAt"`
 	// Scheduler is the setup scheduler command (droplist.NewSetup) with
@@ -319,7 +326,7 @@ type droplistKeyCreateResponse struct {
 // than accumulating: at most one is ever meant to exist, since every
 // router fetches the same feed with the same credential, so minting
 // again revokes whatever was there first in the same call. Admin-only,
-// like every other token-issuing endpoint (see handleTokensCreate).
+// like every other token-issuing endpoint (gauntlet's POST /api/tokens).
 func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -346,10 +353,14 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 	defer s.droplistKeyMintMu.Unlock()
 
 	now := time.Now()
-	raw, tok, err := s.Tokens.Create("droplist-pull", auth.TokenKindDroplistPull, "", userFromContext(r), now)
+	// No expiry, as before #1202: a router's scheduled fetch must not
+	// stop on the key's anniversary and push an empty feed -- the same
+	// reasoning gauntlet gives for an ingest token. The daily sweep still
+	// removes one no router has fetched with for a year.
+	raw, tok, err := s.Tokens.CreateWithExpiry("droplist-pull", TokenKindDroplistPull, "", userFromContext(r), now, time.Time{})
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, auth.ErrTokenNotPersisted) {
+		if errors.Is(err, gauntlet.ErrTokenNotPersisted) {
 			status = http.StatusServiceUnavailable
 		}
 		authLog.Warn(err.Error())
@@ -357,7 +368,7 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	replaced := false
-	for _, t := range s.Tokens.ByKind(auth.TokenKindDroplistPull) {
+	for _, t := range s.Tokens.ByKind(TokenKindDroplistPull) {
 		if t.ID == tok.ID {
 			continue
 		}
@@ -390,7 +401,7 @@ func (s *Server) handleDroplistKeyDelete(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	toks := s.Tokens.ByKind(auth.TokenKindDroplistPull)
+	toks := s.Tokens.ByKind(TokenKindDroplistPull)
 	if len(toks) == 0 {
 		http.Error(w, "no droplist pull key exists", http.StatusNotFound)
 		return
@@ -407,12 +418,12 @@ func (s *Server) handleDroplistKeyDelete(w http.ResponseWriter, r *http.Request)
 
 // handleDroplistPull serves the generated .rsc feed (issue #1224) --
 // reachable only through droplistPullRoutes, the bearer mux a
-// droplist-pull token dispatches to (see requireAuth in auth.go). No
+// droplist-pull token dispatches to (see Routes in gauntlet.go). No
 // audit entry is recorded per pull: this is hit on the router's own
 // fetch schedule and would flood the admin trail the same way an
 // unqualified per-push ingest audit once did (see noteIngest's doc
 // comment in ingest.go) -- the token's own LastUsedAt is the record of
-// "is this still being fetched", already updated by requireAuth's
+// "is this still being fetched", already updated by the gate's
 // Authenticate call before this handler ever runs (security review: the
 // separate TokenStore.Touch this used to call here was redundant with
 // that and has been removed).
@@ -421,8 +432,8 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 	if tok == nil {
 		// Unreachable in practice, same reasoning as
 		// handleIngestRouterOS's identical guard: droplistPullRoutes is
-		// only ever dispatched to from requireAuth's droplist-pull-token
-		// branch, which always sets this first.
+		// only ever dispatched to by the gate for a droplist-pull token,
+		// and withToken always sets this first.
 		writeUnauthorized(w, "unauthorized")
 		return
 	}

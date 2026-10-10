@@ -35,6 +35,7 @@ auth:
   recoveryKeysPath: $dir/recovery.json
   recoveryPepperPath: $dir/pepper
   tokensStorePath: $dir/tokens.json
+  signInsStorePath: $dir/signins.json
   secureCookie: $secure_cookie
 flags:
   storePath: $dir/flags.json

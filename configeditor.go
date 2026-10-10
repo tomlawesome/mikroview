@@ -19,9 +19,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+	"github.com/tomlawesome/gauntlet/gate"
+	goidc "github.com/tomlawesome/gauntlet/oidc"
+
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/configsnap"
 	"github.com/tomlawesome/mikroview/internal/logging"
@@ -129,6 +132,15 @@ func runSetupOnly(result config.Result, problems int) int {
 	salvage := config.SetupOnlyConfig(readRawConfigYAML(result.ConfigPath), os.Args[1:])
 	cfg := salvage.Config
 
+	// The same refusal as a normal start (#1202, ruling 12), and first:
+	// the accounts this mode signs the admin in with are sealed under
+	// the key, found here as at a normal start -- history.keyFile if the
+	// file's history block survived, MIKROVIEW_HISTORY_KEY_FILE, or the
+	// app folder's keys/history.key.
+	if !requireKey(log, cfg, "start the config editor") {
+		return 1
+	}
+
 	// ui.allow limits who may reach the UI at all. If the refusal is in
 	// that list, the operator's restriction cannot be honoured, and
 	// serving the editor to everyone instead would widen exactly what
@@ -182,45 +194,63 @@ func runSetupOnly(result config.Result, problems int) int {
 	}
 	defer st.Close()
 
-	authBackend, err := st.backendFor(ctx, "auth", cfg.Auth.StorePath)
+	authBackend, err := st.authBackendFor(ctx, authStoreAccounts, cfg.Auth.StorePath)
 	if err != nil {
 		log.Error(fmt.Sprintf("preparing the accounts store: %v", err))
 		return 1
 	}
-	// DiscardSetupCode: this editor refuses an empty store just below,
+	// quietStoreOptions: this editor refuses an empty store just below,
 	// so a setup code announced here could never be used (#1415).
-	authStore, err := auth.OpenStore(authBackend, auth.Options{OnSetupCode: auth.DiscardSetupCode})
+	storeOpts := quietStoreOptions()
+	storeOpts.Log = logging.New("auth")
+	authStore, err := gauntlet.OpenStore(authBackend, storeOpts)
 	if err != nil {
 		log.Error(err.Error())
 		return 1
 	}
-	// No account means nobody to sign in and fix the file -- and
-	// requireAuth's first-run screen would hand the admin account to
-	// whoever reached this port first, on an instance that is not
-	// otherwise running. Refuse, as a refused config always did.
+	// No account means nobody to sign in and fix the file -- and the
+	// first-run screen would hand the admin account to whoever reached
+	// this port first, on an instance that is not otherwise running.
+	// Refuse, as a refused config always did.
 	if authStore.Count() == 0 {
 		log.Error(fmt.Sprintf("no account in %s to sign in with -- the config editor needs an admin, so not starting it", authBackend.Describe()))
 		return 1
 	}
-	tokens, err := auth.OpenTokenStore("")
+	// No token reaches anything in this mode (SetupOnlyRoutes registers
+	// no bearer mux), so the token store is an empty one, never the
+	// deployment's own.
+	tokens, err := gauntlet.OpenTokenStore(nil, gauntlet.TokenOptions{Kinds: api.TokenKinds})
 	if err != nil {
 		log.Error(err.Error())
 		return 1
 	}
+	// Sign-ins here are recorded like any other (ruling 8): this mode is
+	// the only process running, so it owns the history.
+	signIns, err := openSignIns(ctx, st, cfg, logging.New("signins"))
+	if err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+	defer signIns.Close()
 	auditStore := openOptionalStore(ctx, log, st, "audit", cfg.Audit.StorePath, audit.OpenWithBackend)
 	prefsStore := openOptionalStore(ctx, log, st, "prefs", cfg.Prefs.StorePath, prefs.OpenWithBackend)
 	if auditStore == nil || prefsStore == nil {
 		return 1
 	}
+	loginLimiter, err := gauntlet.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow)
+	if err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+	idle, ceiling := sessionLimits(cfg.Auth)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	srv := &api.Server{
 		Auth:           authStore,
-		Sessions:       auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
-		LoginLimiter:   auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:   cfg.Auth.SecureCookie,
+		Sessions:       gauntlet.NewSessionStore(idle, ceiling),
+		LoginLimiter:   loginLimiter,
 		Tokens:         tokens,
 		Audit:          auditStore,
 		Prefs:          prefsStore,
@@ -231,14 +261,49 @@ func runSetupOnly(result config.Result, problems int) int {
 		Version:        version,
 		ConfigEditor:   newConfigEditor(log, st, cfg, result.ConfigPath),
 	}
+	var oidcClient *goidc.Client
+	var oidcState *goidc.StateCodec
+	var oidcPolicy goidc.Policy
 	if salvage.OIDCUsable {
-		srv.OIDC, srv.OIDCState, srv.OIDCPolicy = startOIDC(sigCtx, cfg, authStore)
+		oidcClient, oidcState, oidcPolicy = startOIDC(sigCtx, cfg, authStore)
 	} else if cfg.OIDC.IssuerURL != "" {
 		log.Warn("single sign-on is off: the refusal is inside the oidc block -- sign in with a local account")
 	}
-	if rp, err := api.NewRelyingParty(cfg.PublicURL); err == nil {
-		srv.RelyingParty = rp
+	// The relying party and the admin passkey rule are decided exactly as
+	// a normal start decides them. A relying party the WebAuthn library
+	// refused is a bug, and stops this mode as it stops a normal start:
+	// carrying on would decide the passkey rule without it.
+	rp, err := newRelyingParty(cfg)
+	if err != nil {
+		log.Error(fmt.Sprintf("building the WebAuthn relying party from publicUrl: %v", err))
+		return 1
 	}
+	passkeys := passkeysFor(rp)
+	rule := adminPasskeyRule(cfg, rp)
+	// An admin held to a passkey that cannot be made here would be held
+	// at that door with no way through it, editor and all. The rule is
+	// not loosened to let them in: what the operator asked for stands,
+	// and the file is fixed on disk instead, as a refused config always
+	// was.
+	if rule == gate.AdminPasskeyRequired && passkeys == nil {
+		log.Error("auth.adminPasskey is required, but passkeys cannot be offered at the configured publicUrl -- not starting the config editor; fix the file on disk and check it with -validate-config")
+		return 1
+	}
+	g, err := srv.NewGate(api.GateOptions{
+		SecureCookie: cfg.Auth.SecureCookie,
+		AdminPasskey: rule,
+		Passkeys:     passkeys,
+		OIDC:         oidcClient,
+		OIDCState:    oidcState,
+		OIDCPolicy:   oidcPolicy,
+		SignIns:      signIns,
+		Log:          logging.New("gate"),
+	})
+	if err != nil {
+		log.Error(fmt.Sprintf("building the sign-in layer: %v", err))
+		return 1
+	}
+	srv.Gate = g
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.SetupOnlyRoutes())

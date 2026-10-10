@@ -1116,6 +1116,29 @@ auth:
   secureCookie: false
 ```
 
+#### CFG-0022
+
+`auth.adminPasskey` is set to something other than `required` or
+`optional`. Leave it unset to let `publicUrl` decide.
+
+```yaml
+auth:
+  adminPasskey: required   # or optional
+```
+
+#### CFG-0023
+
+`auth.adminPasskey` is `required`, but `publicUrl` is not an https
+address on a domain name, so no browser could make the passkey every
+admin would be held to — the rule would lock the admin out rather than
+protect the account. Set `publicUrl`, or make the rule optional.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"
+auth:
+  adminPasskey: required   # or optional, while MikroView has no such address
+```
+
 #### CFG-0030
 
 A `devices[].sourceIp` is not an IP address. It should be the address the
@@ -1346,6 +1369,30 @@ applied instead.
 ```yaml
 history:
   maxBytes: 1073741824   # 1 GiB
+```
+
+#### CFG-0083
+
+No key is mounted (or the one `history.keyFile` names could not be
+read). From v0.7.0 MikroView keeps its accounts, API tokens, recovery
+keys and sign-in history sealed under this key and has no unencrypted
+mode for them, so it does not start — not the server, not setup-only
+mode, and not `-recover-admin-account`, `-transfer-admin`,
+`-clear-second-factor` or `-generate-recovery-keys`. Nothing is written
+before it stops. Make a key once and keep a copy somewhere safe:
+
+```sh
+head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
+```
+
+MikroView finds it there (the app folder's `keys/history.key`, read from
+`/etc/mikroview` in the container), or point `history.keyFile` — or
+`MIKROVIEW_HISTORY_KEY_FILE` — at a key file kept outside the data
+directory:
+
+```yaml
+history:
+  keyFile: /etc/mikroview/keys/history.key   # outside the data directory
 ```
 
 #### CFG-0090
@@ -3672,6 +3719,16 @@ auth:
   bearer values). Defaults to `/var/lib/mikroview/tokens.json`. Unlike
   `storePath`, this really is optional: a deployment that never creates
   a token doesn't need it.
+- **`signInsStorePath`** — the sign-in history: every sign-in attempt,
+  sealed under `history.keyFile` like the accounts. Defaults to
+  `/var/lib/mikroview/signins.json`. The env var is
+  `MIKROVIEW_AUTH_SIGN_INS_STORE_PATH`.
+- **`adminPasskey`** — `required` holds every admin account at a
+  passkey enrolment screen until it has a passkey; `optional` lets an
+  admin use any second factor. Unset, it is `required` when `publicUrl`
+  is https on a domain name and `optional` otherwise; `required` without
+  such a `publicUrl` stops MikroView starting ([CFG-0023](#cfg-0023)).
+  The env var is `MIKROVIEW_AUTH_ADMIN_PASSKEY`.
 
 ### The setup code
 
@@ -4865,6 +4922,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION` | `watchlist.matchLogRetention` |
 | `MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH` | `watchlist.suggestionsStorePath` (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
+| `MIKROVIEW_AUTH_SIGN_INS_STORE_PATH` | `auth.signInsStorePath` |
+| `MIKROVIEW_AUTH_ADMIN_PASSKEY` | `auth.adminPasskey` (`required` or `optional`) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |

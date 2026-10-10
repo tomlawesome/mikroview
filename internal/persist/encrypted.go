@@ -4,6 +4,8 @@ package persist
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/tomlawesome/mikroview/internal/retention"
@@ -34,6 +36,33 @@ type EncryptedFileBackend struct {
 	// fails to open there instead of silently decrypting as something
 	// else.
 	aad []byte
+	// sealInPlace is WithSealInPlace's switch: see that method.
+	sealInPlace bool
+}
+
+// WithSealInPlace makes Load seal a plaintext document it finds instead
+// of refusing it, and returns b (#1202, ruling 11). It is for the auth
+// stores alone -- accounts, tokens, recovery keys and the sign-in
+// history -- which an install that ran without a key kept in the clear
+// (#853 rule 6, now ended): from v0.7.0 a key is required, and those
+// files have to come across without a manual step.
+//
+// Only a file that does not carry the sealed envelope's header and
+// parses as JSON is treated as plaintext. It is read as it is, sealed
+// under the key with this backend's path bound exactly as Save always
+// binds it, and written back atomically under the version it was read
+// at, so a concurrent writer is never overwritten. Anything else that
+// will not open -- a damaged or truncated file, one sealed under another
+// key or for another path, an empty file -- fails exactly as it does
+// without the option: it is never sealed, never rewritten, and never
+// read as an empty store. A file already sealed opens as it always did,
+// and its bytes do not change until the store's own next save.
+//
+// Every other store keeps the refusal: there is no plaintext history to
+// carry over for them, because without a key they were never written.
+func (b *EncryptedFileBackend) WithSealInPlace() *EncryptedFileBackend {
+	b.sealInPlace = true
+	return b
 }
 
 // NewEncryptedFileBackend wraps the file at path so every read decrypts
@@ -81,9 +110,30 @@ func (b *EncryptedFileBackend) ProtectedAtRest() bool { return true }
 // funnels through, for what happens with that error (issue #378: refuse
 // to start rather than build a store around it).
 func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
+	// A few tries, for the seal-in-place race only: another process
+	// sealing (or saving) the same file between this read and the
+	// write-back makes that write lose its compare-and-swap, and the
+	// file is then sealed already, so reading it again opens it.
+	for attempt := 0; ; attempt++ {
+		snap, err := b.load(ctx)
+		if errors.Is(err, ErrConflict) && attempt < 2 {
+			continue
+		}
+		return snap, err
+	}
+}
+
+func (b *EncryptedFileBackend) load(ctx context.Context) (Snapshot, error) {
 	snap, err := b.inner.Load(ctx)
 	if err != nil || !snap.Exists {
 		return snap, err
+	}
+	// Both tests, not just the JSON one: a sealed envelope begins with
+	// its magic, which no JSON document can, so either alone would do
+	// today -- but which rule decides is the security property here, and
+	// it is written out rather than left to that coincidence.
+	if b.sealInPlace && !retention.HasSealMagic(snap.Payload) && json.Valid(snap.Payload) {
+		return b.sealPlaintext(ctx, snap)
 	}
 	plain, err := b.key.Open(retention.StateStoreKeyInfo, b.aad, snap.Payload)
 	if err != nil {
@@ -91,6 +141,21 @@ func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 	}
 	snap.Payload = plain
 	return snap, nil
+}
+
+// sealPlaintext is WithSealInPlace's write-back: the plaintext document
+// snap holds is saved sealed, under the version it was read at, and
+// handed back as the store asked for it -- the plaintext, with the
+// version the sealed file now has, so the store's next save is accepted.
+// A failed write leaves the file as it was and fails the open: a store
+// must not start on a document it believes is sealed while the disk
+// still holds it in the clear.
+func (b *EncryptedFileBackend) sealPlaintext(ctx context.Context, snap Snapshot) (Snapshot, error) {
+	version, err := b.Save(ctx, snap.Payload, snap.Version)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("persist: %s holds a plaintext document, and sealing it in place failed: %w", b.inner.path, err)
+	}
+	return Snapshot{Payload: snap.Payload, Version: version, Exists: true}, nil
 }
 
 // Save encrypts payload and writes it through the wrapped FileBackend,

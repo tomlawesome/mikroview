@@ -30,10 +30,10 @@ func TestSetupStatusOpenToViewer(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/setup/status below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/setup/status")
@@ -383,14 +383,14 @@ func TestSetupAddressAdminOnly(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	// Enrolled so the 403 below actually proves the admin-only gate,
 	// rather than being masked by #1253's door refusing a still-factor-
 	// less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts, "password456")
+	totpEnrolAndConfirm(t, viewerClient, ts, fixtureUserPassword)
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
 	defer resp.Body.Close()
@@ -508,14 +508,14 @@ func TestSetupBackupTransportAdminOnly(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	// Enrolled so the 403 below actually proves the admin-only gate,
 	// rather than being masked by #1253's door refusing a still-factor-
 	// less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts, "password456")
+	totpEnrolAndConfirm(t, viewerClient, ts, fixtureUserPassword)
 
 	resp := putJSON(t, viewerClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
 	defer resp.Body.Close()

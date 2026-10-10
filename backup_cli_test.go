@@ -12,10 +12,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
+
+// openAccountsAt opens an accounts file the way the server opens it
+// (#1202): sealed under a key, with a plaintext JSON document sealed in
+// place on this first open, and anything else refused. The key is a
+// fixed test one, so a file this helper sealed opens again under it.
+func openAccountsAt(t *testing.T, path string) (*gauntlet.Store, error) {
+	t.Helper()
+	key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, key).WithSealInPlace(), quietStoreOptions())
+}
 
 // TestRestoreOverwritesACorruptStoreDocument is issue #378's other
 // Done-when: fail-closed on an unreadable-but-present document must not
@@ -23,12 +38,12 @@ import (
 // -restore is dispatched (main.go's os.Args[1] == "-restore" branch)
 // before openStorage or any store's OpenWithBackend ever runs, and
 // writes each store's file directly (os.WriteFile + os.Rename) rather
-// than going through auth.OpenWithBackend/persist.Open -- so a document
+// than going through a store's open -- so a document
 // that would make mustOpenStore refuse a normal boot must still be a
 // document -restore can replace.
 //
 // This pins that behaviour end to end: an accounts file already
-// corrupted on disk (auth.Open on it fails, exactly as mustOpenStore
+// corrupted on disk (opening it fails, exactly as mustOpenStore
 // would refuse to boot on it) is successfully overwritten by
 // `mikroview -restore <file> --force`, and the result is a store that
 // opens cleanly afterwards.
@@ -42,8 +57,8 @@ func TestRestoreOverwritesACorruptStoreDocument(t *testing.T) {
 	}
 	// Confirms the premise: this file really is the "refuses to boot"
 	// case the rest of #378 is about.
-	if _, err := auth.Open(authPath); err == nil {
-		t.Fatal("test setup: expected the corrupt accounts file to fail auth.Open")
+	if _, err := openAccountsAt(t, authPath); err == nil {
+		t.Fatal("test setup: expected the corrupt accounts file to fail to open")
 	}
 
 	t.Setenv("MIKROVIEW_CONFIG", "")
@@ -84,10 +99,11 @@ func TestRestoreOverwritesACorruptStoreDocument(t *testing.T) {
 		t.Errorf("accounts file after restore has %d users, want %d", len(gotFile.Users), len(wantFile.Users))
 	}
 
-	// The whole point of the remedy: the store opens cleanly now.
-	s, err := auth.Open(authPath)
+	// The whole point of the remedy: the store opens cleanly now --
+	// sealed in place on this first open, as the server would.
+	s, err := openAccountsAt(t, authPath)
 	if err != nil {
-		t.Fatalf("auth.Open after restore: %v", err)
+		t.Fatalf("opening the accounts after restore: %v", err)
 	}
 	if s.Count() != 0 {
 		t.Errorf("expected the restored (empty) accounts store, got %d accounts", s.Count())

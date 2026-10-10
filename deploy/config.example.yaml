@@ -635,14 +635,19 @@ store:
 # auth:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
-#   sessionTTL: 24h
+#   sessionTTL: 1h            # at most 1h; a longer value is cut down to it
 #   # The ceiling sessionTTL does not have: the longest a session can
-#   # live from when you signed in, however often you use it. Without
-#   # one, a session used even once a day never expires, so a browser
-#   # left signed in on a shared machine stays valid forever. Set to 0
-#   # to remove the ceiling.
-#   sessionMaxLifetime: 168h  # 7 days
+#   # live from when you signed in, however often you use it. At most
+#   # 24h; a longer value is cut down to it.
+#   sessionMaxLifetime: 24h
 #   tokensStorePath: /var/lib/mikroview/tokens.json
+#   # Every sign-in attempt, sealed under history.keyFile like the
+#   # accounts.
+#   signInsStorePath: /var/lib/mikroview/signins.json
+#   # required: every admin must hold a passkey; optional: any second
+#   # factor. Unset, it is required when publicUrl is https on a domain
+#   # name and optional otherwise.
+#   adminPasskey: required
 #   # Where the one-time recovery keys and the pepper that hashes them
 #   # live. Both default under the data volume, which is fine -- move
 #   # recoveryPepperPath only if you want the pepper off that volume

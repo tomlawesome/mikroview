@@ -73,7 +73,7 @@ const (
 // leaving to be discovered (#333, owner decision 2026-08-13: keep the
 // behaviour, write the trade-off down).
 //
-// The cost: internal/auth.Token's own doc comment says an ingest token
+// The cost: gauntlet.Token's own doc comment says an ingest token
 // sits on a router where any RouterOS user holding `read` can print it.
 // Whoever holds one can push a fabricated logging rule, and because this
 // function ignores which device a rule came from, that flips an entry

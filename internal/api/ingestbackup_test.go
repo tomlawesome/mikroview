@@ -15,8 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 )
@@ -175,7 +176,7 @@ func TestOneDeviceCannotContinueAnothersTransfer(t *testing.T) {
 	if !ok {
 		t.Fatal("the admin account was not created")
 	}
-	otherToken, _, err := s.Tokens.Create("router-2", auth.TokenKindIngest, "hex-s", admin, time.Now())
+	otherToken, _, err := s.Tokens.Create("router-2", gauntlet.TokenKindIngest, "hex-s", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}

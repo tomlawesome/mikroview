@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/recoverykeys"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // clearFactorFixture is an isolated deployment's worth of auth and
@@ -23,7 +27,11 @@ type clearFactorFixture struct {
 	authPath     string
 	recoveryPath string
 	pepperPath   string
-	store        *auth.Store
+	// key seals both stores, as it does every auth store since #1202:
+	// the command refuses to run without one.
+	key     *retention.Key
+	keyPath string
+	store   *gauntlet.Store
 	// keys is the recovery-key set committed for this fixture. Real
 	// deployments generate these with -generate-recovery-keys; seeding
 	// them directly here is the same operation without a terminal to
@@ -47,25 +55,35 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 	// DefaultDataDir -- which a sandboxed test has no business writing
 	// to, and would silently share across every test that didn't
 	// override it.
-	cfgPath := filepath.Join(dir, "config.yaml")
-	cfgYAML := fmt.Sprintf("auth:\n  storePath: %q\n  recoveryKeysPath: %q\n  recoveryPepperPath: %q\n",
-		f.authPath, f.recoveryPath, f.pepperPath)
-	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+	keyPath := filepath.Join(dir, "keys", "history.key")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", retention.MinKeyBytes)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := retention.LoadKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.key, f.keyPath = key, keyPath
+	cfgPath := filepath.Join(dir, "config.yaml")
 	t.Setenv("MIKROVIEW_CONFIG", cfgPath)
+	f.writeConfig(t)
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
 
-	store, err := auth.Open(f.authPath)
+	store, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(f.authPath, key).WithSealInPlace(), quietStoreOptions())
 	if err != nil {
-		t.Fatalf("auth.Open: %v", err)
+		t.Fatalf("gauntlet.OpenStore: %v", err)
 	}
 	f.store = store
-
-	recovery, err := recoverykeys.OpenRecovery(f.recoveryPath, f.pepperPath)
-	if err != nil {
-		t.Fatalf("recoverykeys.OpenRecovery: %v", err)
+	// gauntlet keeps an accounts document only while it holds an admin,
+	// so every fixture has one before the account under test is seeded.
+	if _, err := store.Register("gandalf", "you-shall-not-pass-7Qx!", time.Now()); err != nil {
+		t.Fatalf("registering the fixture's admin: %v", err)
 	}
+
+	recovery := f.openRecovery(t)
 	keys, err := recovery.Generate()
 	if err != nil {
 		t.Fatalf("recovery.Generate: %v", err)
@@ -78,6 +96,17 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 	return f
 }
 
+// writeConfig points MIKROVIEW_CONFIG's file at the fixture's paths and
+// key, as they stand now.
+func (f *clearFactorFixture) writeConfig(t *testing.T) {
+	t.Helper()
+	cfgYAML := fmt.Sprintf("auth:\n  storePath: %q\n  recoveryKeysPath: %q\n  recoveryPepperPath: %q\nhistory:\n  keyFile: %q\n",
+		f.authPath, f.recoveryPath, f.pepperPath, f.keyPath)
+	if err := os.WriteFile(os.Getenv("MIKROVIEW_CONFIG"), []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // openRecovery re-opens the fixture's recovery-key store from disk, the
 // same way a fresh CLI invocation would -- used after running the
 // command under test to check what actually got persisted, independent
@@ -85,9 +114,9 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 // believes happened.
 func (f *clearFactorFixture) openRecovery(t *testing.T) *recoverykeys.RecoveryStore {
 	t.Helper()
-	recovery, err := recoverykeys.OpenRecovery(f.recoveryPath, f.pepperPath)
+	recovery, err := recoverykeys.OpenRecoveryWithBackend(persist.NewEncryptedFileBackend(f.recoveryPath, f.key).WithSealInPlace(), f.pepperPath)
 	if err != nil {
-		t.Fatalf("recoverykeys.OpenRecovery: %v", err)
+		t.Fatalf("recoverykeys.OpenRecoveryWithBackend: %v", err)
 	}
 	return recovery
 }
@@ -97,10 +126,10 @@ func (f *clearFactorFixture) openRecovery(t *testing.T) *recoverykeys.RecoverySt
 // exactly the state a real account reaches after enrolling
 // (SetPendingTOTPSecret then ConfirmTOTP) and confirming
 // (GenerateRecoveryCodes), so ClearTOTP has real state to remove.
-func seedUserWithActiveTOTP(t *testing.T, store *auth.Store, username string) *auth.User {
+func seedUserWithActiveTOTP(t *testing.T, store *gauntlet.Store, username string) *gauntlet.User {
 	t.Helper()
 	now := time.Now()
-	u, err := store.CreateUser(username, "correct horse battery staple", auth.RoleUser, now)
+	u, err := store.CreateUser(username, "correct horse battery staple", gauntlet.RoleUser, now)
 	if err != nil {
 		t.Fatalf("CreateUser(%q): %v", username, err)
 	}
@@ -135,14 +164,14 @@ func seedUserWithActiveTOTP(t *testing.T, store *auth.Store, username string) *a
 // way a real first-factor activation mints them (design doc's "mint
 // when a factor activation finds RecoveryCodes empty"), so this is a
 // realistic passkey-only account, not merely a passkey with no codes.
-func seedUserWithPasskey(t *testing.T, store *auth.Store, username string) *auth.User {
+func seedUserWithPasskey(t *testing.T, store *gauntlet.Store, username string) *gauntlet.User {
 	t.Helper()
 	now := time.Now()
-	u, err := store.CreateUser(username, "correct horse battery staple", auth.RoleUser, now)
+	u, err := store.CreateUser(username, "correct horse battery staple", gauntlet.RoleUser, now)
 	if err != nil {
 		t.Fatalf("CreateUser(%q): %v", username, err)
 	}
-	if _, err := store.AddPasskey(u.ID, auth.Passkey{
+	if _, err := store.AddPasskey(u.ID, gauntlet.Passkey{
 		ID:        []byte(username + "-cred"),
 		PublicKey: []byte("fake-cose-public-key"),
 		RPID:      "mikroview.example",
@@ -172,10 +201,10 @@ func seedUserWithPasskey(t *testing.T, store *auth.Store, username string) *auth
 // mint a second set. TOTP is confirmed first here, matching
 // seedUserWithActiveTOTP's ordering, then the passkey is added onto the
 // same account without generating a second batch of codes.
-func seedUserWithBothFactors(t *testing.T, store *auth.Store, username string) *auth.User {
+func seedUserWithBothFactors(t *testing.T, store *gauntlet.Store, username string) *gauntlet.User {
 	t.Helper()
 	now := time.Now()
-	u, err := store.CreateUser(username, "correct horse battery staple", auth.RoleUser, now)
+	u, err := store.CreateUser(username, "correct horse battery staple", gauntlet.RoleUser, now)
 	if err != nil {
 		t.Fatalf("CreateUser(%q): %v", username, err)
 	}
@@ -185,7 +214,7 @@ func seedUserWithBothFactors(t *testing.T, store *auth.Store, username string) *
 	if err := store.ConfirmTOTP(u.ID, now, 1); err != nil {
 		t.Fatalf("ConfirmTOTP: %v", err)
 	}
-	if _, err := store.AddPasskey(u.ID, auth.Passkey{
+	if _, err := store.AddPasskey(u.ID, gauntlet.Passkey{
 		ID:        []byte(username + "-cred"),
 		PublicKey: []byte("fake-cose-public-key"),
 		RPID:      "mikroview.example",
@@ -352,7 +381,7 @@ func TestClearSecondFactorUnknownUsernameFailsCleanly(t *testing.T) {
 func TestClearSecondFactorReportsNoFactorHonestly(t *testing.T) {
 	f := newClearFactorFixture(t)
 	now := time.Now()
-	if _, err := f.store.CreateUser("frodo", "correct horse battery staple", auth.RoleUser, now); err != nil {
+	if _, err := f.store.CreateUser("frodo", "correct horse battery staple", gauntlet.RoleUser, now); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
@@ -482,10 +511,12 @@ func TestClearSecondFactorDeclinedConfirmationKeepsThePreviousKeys(t *testing.T)
 
 // A Commit that cannot be stored must be reported as a failure and must
 // leave the previous recovery keys valid, not neither set. The
-// recovery-key file is moved into a directory of its own and that
+// recovery-key document is moved into a directory of its own and that
 // directory made read-only, so the auth store beside the fixture's other
 // files can still be written (the clear happens first) while the
-// rotation's atomic write has nowhere to put its temp file.
+// rotation's atomic write has nowhere to put its temp file. Moved by
+// sealing it again at the new path, since the seal binds the path
+// (#1202): a renamed sealed file would not open there at all.
 func TestClearSecondFactorFailedCommitKeepsThePreviousKeys(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores the permission bits this test depends on")
@@ -498,16 +529,18 @@ func TestClearSecondFactorFailedCommitKeepsThePreviousKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := filepath.Join(keysDir, filepath.Base(f.recoveryPath))
-	if err := os.Rename(f.recoveryPath, moved); err != nil {
+	snap, err := persist.NewEncryptedFileBackend(f.recoveryPath, f.key).Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persist.NewEncryptedFileBackend(moved, f.key).Save(context.Background(), snap.Payload, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.recoveryPath); err != nil {
 		t.Fatal(err)
 	}
 	f.recoveryPath = moved
-	cfgPath := os.Getenv("MIKROVIEW_CONFIG")
-	cfgYAML := fmt.Sprintf("auth:\n  storePath: %q\n  recoveryKeysPath: %q\n  recoveryPepperPath: %q\n",
-		f.authPath, f.recoveryPath, f.pepperPath)
-	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	f.writeConfig(t)
 	if err := os.Chmod(keysDir, 0o500); err != nil { // read+execute, no write
 		t.Fatal(err)
 	}

@@ -196,8 +196,8 @@ type historyFilesDeleteRequest struct {
 // while history is on: it would be deleting files the writer is still
 // appending to, and the card only offers it once history is off.
 //
-// Password-gated like handleTOTPDelete, on the same
-// passwordRecheckLimiterKey bucket and for the same reason: a caller
+// Password-gated (recheckPassword), in gauntlet's per-account re-check
+// budget, for the same reason as every other re-check: a caller
 // who already holds a session is exactly the position a stolen-cookie
 // attacker is in, and this destroys up to a year of evidence in one
 // call. Admin-only for the PUT's reasons.
@@ -232,16 +232,9 @@ func (s *Server) handleHistoryFilesDelete(w http.ResponseWriter, r *http.Request
 	}
 
 	now := time.Now()
-	userKey := passwordRecheckLimiterKey(user.Username)
-	if !s.LoginLimiter.Reserve(userKey, now) {
-		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+	if !s.recheckPassword(w, user, req.Password, "incorrect password", now) {
 		return
 	}
-	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
-		writeUnauthorized(w, "incorrect password")
-		return
-	}
-	s.LoginLimiter.Release(userKey, now)
 
 	if err := s.HistoryControl.DeleteHistoryFiles(); err != nil {
 		if errors.Is(err, ErrHistoryOn) {

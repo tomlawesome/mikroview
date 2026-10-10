@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/device"
 )
 
@@ -155,8 +156,8 @@ func deviceErrorText(err error) string {
 // with nothing left half-done. Registry.Delete above already accounts
 // for two of the three things the ledger promises to forget -- the
 // record itself and the pending enrolment token -- but it does not
-// reach into internal/auth's token store, where a persistent ingest
-// bearer token (POST /api/tokens, auth.TokenKindIngest, minted for the
+// reach into the token store, where a persistent ingest
+// bearer token (POST /api/tokens, gauntlet.TokenKindIngest, minted for the
 // push and backup scripts to authenticate with) lives in a separate
 // store keyed by its own id, not the device's. Left alone, that token
 // would keep authenticating pushes for a router this registry no
@@ -196,7 +197,7 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	// for this name, and a 204 would tell the operator it had not.
 	revokedTokens, failedTokens := 0, 0
 	if s.Tokens != nil {
-		for _, tok := range s.Tokens.ByKind(auth.TokenKindIngest) {
+		for _, tok := range s.Tokens.ByKind(gauntlet.TokenKindIngest) {
 			if tok.Device != id {
 				continue
 			}
@@ -246,7 +247,7 @@ type deviceEnrolmentRequest struct {
 // affordance, since minting again is exactly a reroll. Admin-only: an
 // enrolment token is a bearer credential for attributing syslog traffic
 // to a device, the same tier every other token-issuing endpoint in this
-// API holds to (see handleTokensCreate).
+// API holds to (gauntlet's POST /api/tokens).
 func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -281,30 +282,21 @@ func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Requ
 	// inventing a weaker check for them would defeat the point of having
 	// one at all. Minting through a round trip back to the identity
 	// provider is its own piece of work; until it ships they are told
-	// plainly rather than quietly let through. Same shape and status as
-	// handleAuthChangePassword's answer to the same situation.
+	// plainly rather than quietly let through, with the 409 gauntlet's
+	// own password change gives the same situation.
 	if !user.LocalPassword() {
 		http.Error(w, "this account signs in through your identity provider, and minting an enrolment token needs a password re-check that does not exist for it yet; declare this router in config.yaml instead", http.StatusConflict)
 		return
 	}
-	// Rate-limited on the same limiter as login, in the shared
-	// password-re-check bucket: the password is a credential and this
-	// is a guess at it, so verifying one without counting the attempt
-	// is a brute-force oracle that happens to need a session -- and a
-	// session is exactly what an attacker who has stolen a cookie
-	// already has. handleAuthChangePassword guards the same thing
-	// through the same key rather than a copy of it.
-	userKey := passwordRecheckLimiterKey(user.Username)
-	if !s.LoginLimiter.Reserve(userKey, now) {
-		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+	// Counted in gauntlet's per-account password re-check budget (see
+	// recheckPassword): the password is a credential and this is a guess
+	// at it, so verifying one without counting the attempt is a
+	// brute-force oracle that happens to need a session -- and a session
+	// is exactly what an attacker who has stolen a cookie already has.
+	// gauntlet's own password change spends the same budget.
+	if !s.recheckPassword(w, user, req.Password, "password is incorrect", now) {
 		return
 	}
-	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
-		// Reservation stays claimed: that is what counts the failure.
-		writeUnauthorized(w, "password is incorrect")
-		return
-	}
-	s.LoginLimiter.Release(userKey, now)
 
 	id := r.PathValue("id")
 	token, expiresAt, err := s.Devices.MintEnrolment(id, strings.TrimSpace(req.ExpectedAddress), now)

@@ -5,11 +5,14 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backup"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // TestBackupRestoreRoundTripCarriesPasskeys pins #1250's half of the
@@ -27,7 +30,7 @@ import (
 // worked). This package has no WebAuthn ceremony to complete (that
 // dependency belongs to a parallel #1250 slice, internal/api/webauthn.go),
 // so instead it exercises the two operations that actually depend on
-// the restored data being live and correct: RecordPasskeyAssertion
+// the restored data being live and correct: RecordPasskeyAssertionIfFresh
 // (the store-level half of a passkey completing a login) advancing the
 // restored credential's SignCount and LastUsedAt, and BurnRecoveryCode
 // verifying a code that was minted -- and shown to the user -- before
@@ -38,22 +41,31 @@ func TestBackupRestoreRoundTripCarriesPasskeys(t *testing.T) {
 	srcDir := t.TempDir()
 	authPath := filepath.Join(srcDir, "users.json")
 
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	s, err := auth.Open(authPath)
-	if err != nil {
-		t.Fatalf("auth.Open: %v", err)
+	// The accounts are sealed under the key since #1202, so backup and
+	// restore both run with it, as the server would: the key file holds
+	// the same bytes openAccountsAt seals under.
+	keyPath := filepath.Join(srcDir, "history.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", retention.MinKeyBytes)), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	u, err := s.Register("admin", "password123", now)
+	t.Setenv("MIKROVIEW_HISTORY_KEY_FILE", keyPath)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	s, err := openAccountsAt(t, authPath)
+	if err != nil {
+		t.Fatalf("opening the accounts: %v", err)
+	}
+	u, err := s.Register("admin", "roundtrip-passphrase-7Qx!", now)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	credID := []byte{0xAB, 0xCD, 0xEF, 0x01}
-	added, err := s.AddPasskey(u.ID, auth.Passkey{
+	added, err := s.AddPasskey(u.ID, gauntlet.Passkey{
 		ID:         credID,
 		PublicKey:  []byte{1, 2, 3, 4, 5},
 		SignCount:  3,
 		Transports: []string{"internal", "hybrid"},
-		Flags: auth.PasskeyFlags{
+		Flags: gauntlet.PasskeyFlags{
 			UserPresent:    true,
 			UserVerified:   true,
 			BackupEligible: true,
@@ -116,9 +128,9 @@ func TestBackupRestoreRoundTripCarriesPasskeys(t *testing.T) {
 		t.Fatalf("runRestore = %d, want 0", code)
 	}
 
-	s2, err := auth.Open(newAuthPath)
+	s2, err := openAccountsAt(t, newAuthPath)
 	if err != nil {
-		t.Fatalf("auth.Open after restore: %v", err)
+		t.Fatalf("opening the accounts after restore: %v", err)
 	}
 	got, ok := s2.Get(u.ID)
 	if !ok {
@@ -140,7 +152,7 @@ func TestBackupRestoreRoundTripCarriesPasskeys(t *testing.T) {
 	if rp.SignCount != 3 {
 		t.Errorf("restored SignCount = %d, want 3", rp.SignCount)
 	}
-	if rp.Flags != (auth.PasskeyFlags{UserPresent: true, UserVerified: true, BackupEligible: true, BackupState: true}) {
+	if rp.Flags != (gauntlet.PasskeyFlags{UserPresent: true, UserVerified: true, BackupEligible: true, BackupState: true}) {
 		t.Errorf("restored Flags = %+v, did not round-trip", rp.Flags)
 	}
 	if len(got.RecoveryCodes) != 10 {
@@ -149,11 +161,11 @@ func TestBackupRestoreRoundTripCarriesPasskeys(t *testing.T) {
 
 	// Prove the restored passkey is genuinely live, not just present in
 	// the JSON: advance it past its pre-backup SignCount and confirm
-	// the store's forward-only guard (RecordPasskeyAssertion) accepts
-	// the advance against the restored data.
+	// the store's forward-only guard (RecordPasskeyAssertionIfFresh)
+	// accepts the advance against the restored data.
 	later := now.Add(time.Hour)
-	if err := s2.RecordPasskeyAssertion(u.ID, credID, 4, later); err != nil {
-		t.Fatalf("RecordPasskeyAssertion against the restored store: %v", err)
+	if accepted, err := s2.RecordPasskeyAssertionIfFresh(u.ID, credID, 4, later); err != nil || !accepted {
+		t.Fatalf("RecordPasskeyAssertionIfFresh against the restored store: accepted=%v err=%v", accepted, err)
 	}
 	got2, _ := s2.Get(u.ID)
 	if got2.Passkeys[0].SignCount != 4 {

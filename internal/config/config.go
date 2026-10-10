@@ -39,7 +39,7 @@ const DefaultDataDir = "/var/lib/mikroview"
 type Device struct {
 	// ID is the device's identity everywhere downstream: the deviceId on
 	// its events, the key its pushed router state is stored under, and
-	// the scope of an ingest token (internal/auth.Token.Device). Optional
+	// the scope of an ingest token (gauntlet.Token.Device). Optional
 	// in the file -- normaliseDevices fills it from SourceIP when unset,
 	// which is what a *discovered* router already gets
 	// (internal/device.Registry.Resolve), so declaring a router that has
@@ -383,12 +383,12 @@ type Notify struct {
 	Webhook     Webhook       `yaml:"webhook"`
 }
 
-// Auth configures internal/auth's local authentication. Unlike Flags'
-// StorePath, StorePath here is not truly optional -- mikroview stays
-// fully open (today's behavior) as long as no user account exists, but
-// the moment one is created it's required for that account to survive a
-// restart, so registration refuses to proceed without it configured.
-// See docs/configuration.md's "Authentication" section.
+// Auth configures local authentication, which is gauntlet's since #1202.
+// Unlike Flags' StorePath, StorePath here is not truly optional: the
+// moment an account is created it is required for that account to
+// survive a restart, so registration refuses to proceed without it
+// configured. Every auth store is sealed under history.keyFile, which is
+// required. See docs/configuration.md's "Authentication" section.
 type Auth struct {
 	StorePath string `yaml:"storePath"`
 	// SecureCookie sets the session cookie's Secure flag. Defaults to
@@ -403,6 +403,13 @@ type Auth struct {
 	// on each authenticated request, so this is "how long you can go
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
+	//
+	// One hour by default, and at most one hour (#1202, ruling 3):
+	// gauntlet holds every session to NIST SP 800-63B-4's AAL2 limits
+	// and refuses a session store configured past them, so a longer
+	// value is cut down to the limit when the store is built, silently
+	// -- the CHANGELOG is where that is said, since every existing
+	// config carried the old 24-hour default.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
 	// SessionMaxLifetime is the ceiling SessionTTL does not have: the
 	// longest a session can live from the moment it was issued, however
@@ -414,11 +421,10 @@ type Auth struct {
 	// on a shared machine -- or a cookie taken months ago -- stays valid
 	// indefinitely (#294 item 3).
 	//
-	// Seven days by default: long enough that an operator checking their
-	// firewall most days is not re-authenticating constantly, short
-	// enough that a forgotten session is not a permanent one. Set to 0
-	// to remove the ceiling and keep the old behaviour, which is a
-	// deliberate choice rather than an oversight if you make it.
+	// 24 hours by default, and at most 24 hours (#1202, ruling 3): the
+	// same AAL2 limit as SessionTTL's, applied the same silent way. A
+	// longer value -- or 0, which used to mean no ceiling at all -- is
+	// cut down to it.
 	SessionMaxLifetime time.Duration `yaml:"sessionMaxLifetime"`
 	// TokensStorePath: where read-only API bearer tokens (issue #101)
 	// persist across restarts, as a small JSON file (names + SHA-256
@@ -436,6 +442,20 @@ type Auth struct {
 	// the only thing able to validate a recovery key -- exactly the
 	// situation those commands exist to recover from.
 	RecoveryKeysPath string `yaml:"recoveryKeysPath"`
+	// SignInsStorePath is the sign-in history (#1202, ruling 8): every
+	// sign-in attempt, kept for an admin to page through, sealed under
+	// history.keyFile like the other auth stores. Recorded from v0.7.0;
+	// the page that shows it is #1442. Empty keeps no history -- the
+	// audit log still records every sign-in either way.
+	SignInsStorePath string `yaml:"signInsStorePath"`
+	// AdminPasskey says whether every admin account must hold a passkey
+	// (#1202, ruling 1; gauntlet ADR-0015): "required" or "optional".
+	// Unset, it is required when publicUrl is https on a domain name --
+	// the only address a browser can make a passkey for -- and optional
+	// otherwise. "required" with no such publicUrl is refused at start-up
+	// (CFG-0023): an admin held at a door that can never open is a
+	// lockout, not a rule.
+	AdminPasskey string `yaml:"adminPasskey"`
 	// RecoveryPepperPath holds the server-side secret mixed into every
 	// recovery-key digest.
 	//
@@ -671,9 +691,9 @@ type TLS struct {
 // OIDC configures optional SSO login via an external OIDC provider
 // (issue #43, Authentik-targeted but any standard OIDC provider works)
 // on top of, never instead of, local password auth -- see
-// internal/oidc for the protocol implementation and
-// internal/auth.Store.FindOrCreateOIDCUser for identity storage/JIT
-// provisioning. Empty IssuerURL means OIDC is not configured, the same
+// gauntlet/oidc for the protocol implementation and gauntlet's
+// Store.FindOrCreateOIDCUser for identity storage/JIT provisioning
+// (#1202). Empty IssuerURL means OIDC is not configured, the same
 // "empty means opt-out, no separate enabled bool" contract
 // Reputation.AbuseIPDBKey already uses -- there's no
 // scenario where a fully-populated OIDC block should be silently
@@ -697,12 +717,12 @@ type OIDC struct {
 	// "https://mikroview.example.com").
 	PublicBaseURL string `yaml:"publicBaseUrl"`
 	// Scopes defaults to {openid, profile, email} if empty -- see
-	// internal/oidc.New.
+	// gauntlet/oidc.New.
 	Scopes []string `yaml:"scopes"`
 
 	// AllowedGroups/GroupsClaim/AllowedEmails/AllowedEmailDomains/
 	// RequiredClaims restrict *which* accounts at the issuer may sign in.
-	// See internal/oidc.Policy for the full semantics; in short, leaving
+	// See gauntlet/oidc.Policy for the full semantics; in short, leaving
 	// all of them empty permits anyone the issuer vouches for, and each
 	// one that is set adds a condition that must hold.
 	//
@@ -1393,10 +1413,11 @@ func defaults() Config {
 		},
 		Auth: Auth{
 			StorePath:          DefaultDataDir + "/users.json",
-			SessionTTL:         24 * time.Hour,
-			SessionMaxLifetime: 7 * 24 * time.Hour,
+			SessionTTL:         time.Hour,
+			SessionMaxLifetime: 24 * time.Hour,
 			SecureCookie:       true,
 			TokensStorePath:    DefaultDataDir + "/tokens.json",
+			SignInsStorePath:   DefaultDataDir + "/signins.json",
 			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
 			RecoveryPepperPath: DefaultDataDir + "/recovery-pepper.key",
 		},
@@ -1938,6 +1959,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_SIGN_INS_STORE_PATH"); v != "" {
+		cfg.Auth.SignInsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_ADMIN_PASSKEY"); v != "" {
+		cfg.Auth.AdminPasskey = v
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

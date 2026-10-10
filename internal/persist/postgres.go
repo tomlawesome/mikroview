@@ -552,7 +552,7 @@ func (b *PostgresBackend) Load(ctx context.Context) (Snapshot, error) {
 // Version implements VersionReader: it answers "has this document
 // changed?" without transferring the document.
 //
-// This matters because internal/auth checks staleness on every
+// This matters because gauntlet checks staleness on every
 // authenticated request, and the accounts payload grows with the number
 // of accounts. Loading it whole to compare one integer meant every
 // request moved the entire accounts document -- password hashes

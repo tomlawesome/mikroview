@@ -30,7 +30,7 @@ func (b *FileBackend) Close() error { return nil }
 // Load reads the file. A missing file is the normal first-run case and
 // returns a zero Snapshot with a nil error; an unreadable one is a real
 // error, because treating it as absent is how a corrupt accounts file
-// silently becomes a fresh install (see internal/auth's own
+// silently becomes a fresh install (see gauntlet's own
 // fail-closed handling, which depends on being able to tell these
 // apart).
 func (b *FileBackend) Load(ctx context.Context) (Snapshot, error) {
@@ -171,7 +171,7 @@ func (b *FileBackend) Save(ctx context.Context, payload []byte, expect int64) (i
 	// unfixed code: 12 of 300 concurrent write pairs left the document
 	// as invalid JSON *after both writers had finished*, so it is
 	// settled corruption rather than a transient. For the accounts
-	// store that is a total lockout -- internal/auth deliberately
+	// store that is a total lockout -- gauntlet deliberately
 	// refuses to boot on an unreadable document rather than treat it as
 	// a fresh install, and recovery then needs host access and a
 	// backup. Two processes writing this document at once is not

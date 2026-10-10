@@ -106,8 +106,8 @@ func (s *Server) RestrictToAllowList(next http.Handler) http.Handler {
 		// in.
 		//
 		// uiAllowExemptPaths is keyed off r.URL.EscapedPath(), not
-		// r.URL.Path (#1390, the same fix requireAuth's exempt-path
-		// checks got in auth.go for #1389): next -- ultimately the same
+		// r.URL.Path (#1390, the same fix the auth gate's exempt-path
+		// checks got for #1389): next -- ultimately the same
 		// *http.ServeMux -- routes on the escaped path, so a request
 		// whose escaped and decoded forms differ must be classified by
 		// the same string it is dispatched by. An ordinary unescaped

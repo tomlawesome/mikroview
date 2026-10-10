@@ -110,7 +110,7 @@ func (e *editorState) session(sessionID string, now time.Time) *editorSession {
 
 // editorValues returns a copy of the caller's remembered secret values.
 func (s *Server) editorValues(r *http.Request) map[string]string {
-	id := requestSessionID(r)
+	id := s.requestSessionID(r)
 	s.editor.mu.Lock()
 	defer s.editor.mu.Unlock()
 	out := map[string]string{}
@@ -129,7 +129,7 @@ func (s *Server) editorValues(r *http.Request) map[string]string {
 // placeholder is never recorded -- that would make a mask stand for
 // itself.
 func (s *Server) rememberEditorValues(r *http.Request, values map[string]string, replace bool) {
-	id := requestSessionID(r)
+	id := s.requestSessionID(r)
 	if id == "" {
 		return
 	}
@@ -150,7 +150,7 @@ func (s *Server) rememberEditorValues(r *http.Request, values map[string]string,
 // editorUnlocked reports whether the caller's session opened the editor
 // with its password within the last editorUnlockWindow.
 func (s *Server) editorUnlocked(r *http.Request, now time.Time) bool {
-	id := requestSessionID(r)
+	id := s.requestSessionID(r)
 	if id == "" {
 		return false
 	}
@@ -238,9 +238,10 @@ type editorOpenResponse struct {
 // differs from what was read at start-up, changedSinceStart says so --
 // the running process is still on the old one until a restart.
 //
-// The password re-check is handleTOTPDelete's, bucket and all: a guess
-// at a live credential by a caller who already holds a session, which is
-// exactly where a stolen cookie puts an attacker.
+// The password is re-checked (recheckPassword), in gauntlet's per-account
+// re-check budget: a guess at a live credential by a caller who already
+// holds a session, which is exactly where a stolen cookie puts an
+// attacker.
 func (s *Server) handleConfigEditorOpen(w http.ResponseWriter, r *http.Request) {
 	if !s.editorGate(w, r) {
 		return
@@ -253,16 +254,9 @@ func (s *Server) handleConfigEditorOpen(w http.ResponseWriter, r *http.Request) 
 	}
 
 	now := time.Now()
-	userKey := passwordRecheckLimiterKey(user.Username)
-	if !s.LoginLimiter.Reserve(userKey, now) {
-		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+	if !s.recheckPassword(w, user, req.Password, "incorrect password", now) {
 		return
 	}
-	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
-		writeUnauthorized(w, "incorrect password")
-		return
-	}
-	s.LoginLimiter.Release(userKey, now)
 
 	ed := s.ConfigEditor
 	var raw []byte
@@ -279,7 +273,7 @@ func (s *Server) handleConfigEditorOpen(w http.ResponseWriter, r *http.Request) 
 	text := string(raw)
 	masked, values := config.MaskSecrets(text)
 
-	sessionID := requestSessionID(r)
+	sessionID := s.requestSessionID(r)
 	s.editor.mu.Lock()
 	st := s.editor.session(sessionID, now)
 	st.unlockedAt = now

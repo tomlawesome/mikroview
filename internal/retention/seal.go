@@ -33,6 +33,17 @@ const sealMagic = "MVS1"
 
 const sealVersion = 1
 
+// HasSealMagic reports whether b begins with this envelope's magic --
+// whether it at least claims to be something Seal wrote. It proves
+// nothing about the rest: a damaged or truncated envelope still has it,
+// and only Open can say whether it is sound. It exists for the one
+// caller that has to tell "never sealed" from "sealed and damaged"
+// without a key (internal/persist's seal-in-place, #1202 ruling 11),
+// where the second must fail rather than be read as plaintext.
+func HasSealMagic(b []byte) bool {
+	return len(b) >= len(sealMagic) && string(b[:len(sealMagic)]) == sealMagic
+}
+
 // sealHeaderBytes is the fixed prefix before the nonce and ciphertext:
 // magic, a version byte, and the random per-call salt.
 const sealHeaderBytes = len(sealMagic) + 1 + saltBytes

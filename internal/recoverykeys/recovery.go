@@ -64,7 +64,7 @@ const (
 
 var (
 	// ErrNotPersisted is returned by Generate and Commit on a store with
-	// no backend. It carries the text of internal/auth's error of the same
+	// no backend. It carries the text of gauntlet's error of the same
 	// name, which this file used before the move out of that package
 	// (#1202); nothing compared the two values.
 	ErrNotPersisted = errors.New("auth: storePath is not configured, refusing to create a user that would not survive a restart")

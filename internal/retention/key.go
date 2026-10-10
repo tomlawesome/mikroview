@@ -152,6 +152,22 @@ func (k *Key) Derive(salt []byte, info string) ([]byte, error) {
 	return hkdf.Key(sha256.New, k.material, salt, info, 32)
 }
 
+// Material returns a copy of the key's bytes, for the one caller that
+// has to hand the same master key to code outside this package:
+// gauntlet's persist.Encrypt, which seals the auth stores' Postgres rows
+// (#1202, ruling 2). It derives its own keys from these bytes under its
+// own label and info strings, so nothing it seals can be opened as
+// something this package sealed, or the other way round -- the same
+// one-key, separate-derivations rule Derive's doc comment sets out.
+//
+// A copy, so a caller that zeroes or reuses its slice cannot change the
+// key every other store here derives from.
+func (k *Key) Material() []byte {
+	out := make([]byte, len(k.material))
+	copy(out, k.material)
+	return out
+}
+
 // keyInfoPrefix namespaces this package's own per-day file keys. See
 // Derive's doc comment for why every user of the master key -- this
 // package included -- needs its own prefix.

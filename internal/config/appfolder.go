@@ -127,3 +127,11 @@ func applyAppFolder(cfg *Config) ([]AppFolderLookup, error) {
 
 	return lookups, nil
 }
+
+// SetAppFolderForTest moves the app folder for a process-level test
+// (#1202): the binary is started with config.yaml and keys/history.key in
+// a temp directory, where it has to find them by itself, as it would at
+// /etc/mikroview. main calls it only when MV_TEST_HOOKS=1 is set as well
+// as MV_TEST_APP_FOLDER -- the same off-unless-asked rule as every other
+// test hook, and still not an operator setting (see appFolderRoot).
+func SetAppFolderForTest(path string) { appFolderRoot = path }

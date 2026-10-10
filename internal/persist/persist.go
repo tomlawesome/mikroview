@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package persist is the storage boundary the six persisted stores sit
-// on: accounts/tokens (internal/auth), flags, entities, the MAC
+// on: accounts/tokens (gauntlet's stores, #1202), flags, entities, the MAC
 // registry, rule usage, and detector settings.
 //
 // Each store keeps its whole dataset in memory and serves reads from
@@ -101,7 +101,7 @@ type Backend interface {
 // version without transferring the document.
 //
 // It exists for callers that poll for staleness far more often than the
-// document actually changes -- internal/auth does this on every
+// document actually changes -- the accounts store does this on every
 // authenticated request, so a live server would otherwise pull the whole
 // accounts document over the wire per request just to compare an
 // integer. Callers must treat its absence as normal and fall back to
