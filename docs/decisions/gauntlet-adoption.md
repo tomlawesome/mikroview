@@ -234,9 +234,14 @@ new fields; it cannot parse the tokens object at all and would refuse to
 boot; and it would read a sealed Postgres row as an accounts document
 with no users -- an empty store, setup code and all (gauntlet ADR-0005
 consequences). So the upgrade adds **schema migration 4, "accounts and
-tokens on gauntlet"**, a stamp with no data change, on both backends:
-the existing downgrade guard (`SchemaTooNewError`) then refuses a v0.6.x
-build before it opens anything. Rolling back means restoring the copy
+tokens on gauntlet"**, a stamp with no data change, on both backends.
+On the file backend the existing downgrade guard (`SchemaTooNewError`)
+then refuses a v0.6.x build before it opens anything. On Postgres no
+released build has that guard: v0.6.x skips a migration it does not
+know (`verifyApplied`) and runs, and is stopped only because it cannot
+parse the sealed tokens row. From v0.7.0 the Postgres backend refuses
+an unknown applied migration the same way (ruling 18), so every later
+downgrade onto a v0.7+ database is refused before anything is opened. Rolling back means restoring the copy
 taken before the upgrade, as `docs/upgrades.md` already tells operators;
 no automatic pre-upgrade copy is made (`upgrade-framework.md` dropped
 that on purpose).
@@ -636,3 +641,9 @@ decision the design above states.
   passkey, and logs that it did; when an admin holds one (`publicUrl`
   moved from a domain to an IP in the same edit), it refuses, as
   ruling 16 does.
+- **Ruling 18, a downgrade guard on Postgres (2026-10-10):** start-up
+  on Postgres refuses when `schema_version` holds a migration this
+  build does not contain, as the file backend's `SchemaTooNewError`
+  does, reversing the earlier choice in `verifyApplied` to skip such
+  rows. Found while checking this record's "Downgrade" claim, which
+  was false for Postgres.
