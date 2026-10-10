@@ -45,6 +45,9 @@ trap cleanup EXIT
 ok()   { echo "  ok    $1"; }
 fail() { echo "  FAIL  $1"; failed=1; }
 check() { if [ "$1" = "0" ]; then ok "$2"; else fail "$2"; fi; }
+# give_up ends the run at a failure nothing after it can be checked past,
+# still printing the RESULT line every other failure ends with.
+give_up() { fail "$1"; echo; echo "RESULT: FAIL"; exit 1; }
 
 cfg() {
   cat <<YAML
@@ -90,7 +93,7 @@ go build -buildvcs=false -o "$DIR/mikroview" .
 mkdir -p "$SRC"
 cfg "$SRC" > "$SRC/cfg.yaml"
 
-start "$SRC" || { fail "the source instance never became healthy -- see $SRC/server.log"; exit 1; }
+start "$SRC" || give_up "the source instance never became healthy -- see $SRC/server.log"
 ok "a real instance started against the source directory"
 
 # Real state, written through the real API rather than by planting files:
@@ -110,11 +113,13 @@ check "$([ "$create" = "200" ] || [ "$create" = "201" ] && echo 0 || echo 1)" \
 stop
 ok "the source instance stopped cleanly"
 
-# The migration itself.
+# The migration itself. A failure ends the run here: with no destination
+# there is nothing left to compare or start, and the `mv` below would
+# otherwise stop the script under `set -e` with no result line.
 if MIKROVIEW_CONFIG="$SRC/cfg.yaml" "$DIR/mikroview" -migrate-data "$DST" > "$DIR/migrate.log" 2>&1; then
   ok "-migrate-data reported success"
 else
-  fail "-migrate-data failed: $(tail -3 "$DIR/migrate.log")"
+  give_up "-migrate-data failed: $(tail -3 "$DIR/migrate.log")"
 fi
 
 check "$([ -f "$DST/users.json" ] && echo 0 || echo 1)" "the accounts store arrived at the destination"
@@ -161,9 +166,12 @@ else
   fail "the migrated instance never became healthy -- see $SRC/server.log"
 fi
 
-code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/login" \
+# The password goes over stdin, as the register call above sends it, so
+# it never sits in a process listing.
+code="$(printf '%s' '{"username":"migrate-test","password":"correct horse battery staple 42"}' |
+  curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/login" \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-  -d '{"username":"migrate-test","password":"correct horse battery staple 42"}' 2>/dev/null || true)"
+  --data-binary @- 2>/dev/null || true)"
 check "$([ "$code" = "200" ] && echo 0 || echo 1)" "the account created before the migration can still sign in (got $code)"
 
 # Registration is closed on the destination: an account already exists,
@@ -173,9 +181,10 @@ check "$([ "$code" = "200" ] && echo 0 || echo 1)" "the account created before t
 # account, logs none.
 check "$(grep -q 'create the first admin with setup code' "$SRC/server.log" && echo 1 || echo 0)" \
   "the migrated instance logged no setup code, so it knows the migrated account exists"
-second="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \
+second="$(printf '%s' '{"username":"second-admin","password":"correct horse battery staple 42"}' |
+  curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-  -d '{"username":"second-admin","password":"correct horse battery staple 42"}' 2>/dev/null || true)"
+  --data-binary @- 2>/dev/null || true)"
 check "$([ "$second" = "409" ] && echo 0 || echo 1)" \
   "the migrated instance refuses a second first-account, so it knows the migrated one exists (got $second)"
 
