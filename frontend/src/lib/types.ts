@@ -587,7 +587,7 @@ export interface AuthSession {
   // passkey door until one is registered; adminPasskeyRequired: the admin
   // passkey rule is in force on this deployment; resumable: a timed-out
   // session could be resumed with the password alone (not used in
-  // v0.7.0). All absent on the old backend, read as false.
+  // v0.7.0). Gauntlet omits them when false; absent reads as false.
   mustEnrolPasskey?: boolean
   adminPasskeyRequired?: boolean
   resumable?: boolean
@@ -644,7 +644,7 @@ export interface UserSummary {
   // for an SSO account, same reasoning too.
   passkeyCount?: number
   // #1202: an admin with no passkey yet, held at the passkey door under
-  // the admin passkey rule. Absent on the old backend, read as false.
+  // the admin passkey rule. Gauntlet omits it when false; absent reads as false.
   heldForPasskey?: boolean
 }
 
@@ -700,7 +700,7 @@ export interface ApiToken {
   createdAt: string
   lastUsedAt?: string
   // #1202: when the token stops working (RFC 3339). Absent on a token
-  // that never expires, and on the old backend.
+  // that never expires.
   expiresAt?: string
   value?: string
 }

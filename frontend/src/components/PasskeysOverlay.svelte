@@ -48,8 +48,8 @@
   let codesCopied = $state(false)
   // #1202: a first passkey is held, with its codes, until
   // confirmRecoveryCodes says they were saved -- not listed or counted
-  // until then. Null on the old backend, where "I have saved these" only
-  // closes.
+  // until then. Null when the registration was not held (the account
+  // already had a second factor), where "I have saved these" only closes.
   let heldPasskey = $state<PasskeySummary | null>(null)
   let codesError = $state<string | null>(null)
 

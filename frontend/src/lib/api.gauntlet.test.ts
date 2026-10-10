@@ -127,8 +127,7 @@ describe('reading a gauntlet error (Problem Details, #1202 spec 31)', () => {
 })
 
 // B7 item 32, the api.ts half: the door header is X-Auth-Gate and gains
-// must-enrol-passkey. (The old X-Mikroview-Auth-Gate name keeps working
-// until commit 8, and is already pinned by api.test.ts.)
+// must-enrol-passkey.
 describe('the forced-auth-gate 403 under gauntlet (#1202 spec 32)', () => {
   function stubWithGateHeader(gate: string | null) {
     return vi.fn(async (url: string) => {
@@ -262,7 +261,7 @@ describe('the recovery-codes confirm call (#1202 spec 34)', () => {
     expect(result).toMatchObject({ recoveryCodes: codes, pendingConfirmation: true })
   })
 
-  it('confirmTOTP reports no pending confirmation when the server does not send the field (old backend)', async () => {
+  it('confirmTOTP reports no pending confirmation when the server does not send the field (gauntlet omits it unless true)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ recoveryCodes: codes })))
     const result = await confirmTOTP('123456')
     expect(result).toMatchObject({ recoveryCodes: codes })

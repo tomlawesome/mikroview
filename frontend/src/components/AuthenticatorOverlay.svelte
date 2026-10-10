@@ -49,7 +49,7 @@
   let busy = $state(false)
   let codesCopied = $state(false)
   // #1202: gauntlet holds a first factor, with its codes, until
-  // confirmRecoveryCodes says they were saved. False on the old backend,
+  // confirmRecoveryCodes says they were saved. False when the app went live at once,
   // where "I have saved these" only closes.
   let pendingConfirmation = $state(false)
 

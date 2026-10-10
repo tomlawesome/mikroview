@@ -4,7 +4,7 @@
 // app is the account's first second factor the server holds it, with its ten
 // codes, until POST /api/auth/recovery-codes/confirm; the overlay's
 // "I have saved these" must make that call and only then close. Without
-// `pendingConfirmation` (an old backend) it closes as before.
+// `pendingConfirmation` (a factor that went live at once) it closes as before.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'

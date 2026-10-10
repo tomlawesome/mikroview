@@ -102,17 +102,13 @@ export class ApiError extends Error {
 // ordinary error -- "Could not read the pushed rule tables: fetchDevices:
 // 403" instead of routing to the screen that actually gets the account
 // out. Detected here, in the one fetch path every call in this file goes
-// through, on the header requireAuth sets (forcedAuthGateHeader in
-// auth.go) -- never on the prose body, which stays free to reword and
+// through, on the X-Auth-Gate header gauntlet's gate sets -- never on the prose body, which stays free to reword and
 // stays indistinguishable from a genuine "you're not allowed to do that"
 // 403 (a viewer on an admin route) otherwise.
 export type ForcedAuthGate = 'must-change-password' | 'must-enrol-factor' | 'must-enrol-passkey'
 
-// #1202: gauntlet names the door header X-Auth-Gate; the old backend
-// says X-Mikroview-Auth-Gate. Both are read until the swap's cleanup
-// step drops the old one.
+// #1202: gauntlet names the door header X-Auth-Gate.
 const FORCED_AUTH_GATE_HEADER = 'X-Auth-Gate'
-const LEGACY_FORCED_AUTH_GATE_HEADER = 'X-Mikroview-Auth-Gate'
 
 // Registered once by auth.svelte.ts, which is the only thing that knows
 // what to do with a fresh session -- api.ts deliberately never imports
@@ -170,7 +166,7 @@ async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
   // needed it -- optional chaining here rather than assuming every
   // caller's stub carries a real Headers.
   if (res.status === 403) {
-    const gate = res.headers?.get?.(FORCED_AUTH_GATE_HEADER) ?? res.headers?.get?.(LEGACY_FORCED_AUTH_GATE_HEADER)
+    const gate = res.headers?.get?.(FORCED_AUTH_GATE_HEADER)
     if (gate === 'must-change-password' || gate === 'must-enrol-factor' || gate === 'must-enrol-passkey') {
       triggerForcedAuthGateRecheck(gate)
     }
@@ -189,12 +185,11 @@ async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
 
 // #1202: gauntlet answers errors as RFC 9457 Problem Details
 // (application/problem+json: type, title, status, detail), while
-// mikroview's own routes (and the old backend) answer one plain line.
+// mikroview's own routes answer one plain line.
 // readError reads either: `detail` is what to show, and `kind` is the
 // anchor of the problem `type` ("invalid-credentials", "step-expired")
 // -- gauntlet's errors.md says to branch on that, never on the words.
-// `kind` is empty for a plain-text body, so callers that still meet the
-// old backend's exact strings can fall back to them only then.
+// `kind` is empty for a plain-text body (mikroview's own routes).
 interface ReadError {
   detail: string
   kind: string
@@ -1038,10 +1033,9 @@ export async function submitLoginFactor(code: string): Promise<string | null> {
   return loginStepRefusal(res, 'submitLoginFactor')
 }
 
-// The literal refusal text handleAuthLoginFactor and its passkey-begin
-// counterpart (internal/api/auth.go, passkey.go) answer with once the
-// 5-minute pending-login cookie has already expired or was never sent --
-// exported so authState can tell that apart from an ordinary wrong code
+// The sentinel loginStepRefusal returns once the 5-minute pending-login
+// cookie has already expired or was never sent (gauntlet's #step-expired)
+// -- exported so authState can tell that apart from an ordinary wrong code
 // or a refused passkey assertion (both 401 too, from the same route,
 // with no other distinguishing signal) and bounce back to the password
 // form instead of leaving the code box up with no session left to
@@ -1049,8 +1043,8 @@ export async function submitLoginFactor(code: string): Promise<string | null> {
 export const PENDING_LOGIN_EXPIRED = 'sign in again'
 
 // #1202: gauntlet marks the same refusal with a problem type ending
-// #step-expired, whatever its detail says; the old backend only has the
-// words above. A typed problem is decided by its type alone, so a plain
+// #step-expired, whatever its detail says; PENDING_LOGIN_EXPIRED is the
+// sentinel handed on to the caller. Decided by the type alone, so a plain
 // wrong-code refusal is never mistaken for an expired step.
 async function loginStepRefusal(res: Response, name: string): Promise<string> {
   const { detail, kind } = await readError(res)
@@ -1092,21 +1086,19 @@ export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<s
   return loginStepRefusal(res, 'submitPasskeyLoginAssertion')
 }
 
-// The literal refusal body handleTOTPEnrol and handleAuthPasskeysRegisterBegin
-// (internal/api/auth.go, passkey.go) answer with on a wrong password (#1418,
-// #1422) -- exported so enrolTOTP/beginPasskeyRegistration below can tell
+// The sentinel enrolTOTP and beginPasskeyRegistration return for a wrong
+// password (gauntlet's #invalid-credentials; #1418, #1422) -- exported so enrolTOTP/beginPasskeyRegistration below can tell
 // that apart from the "session is gone" 401 they used to treat every 401
 // as, the same way PENDING_LOGIN_EXPIRED lets submitLoginFactor tell its
 // own two 401s apart.
 export const INCORRECT_PASSWORD = 'incorrect password'
 
 // #1202: gauntlet marks a wrong password at a re-check with a problem
-// type ending #invalid-credentials, whatever its detail says; the old
-// backend answers the exact text above. When the body is a typed
-// problem its type decides alone, so another 401 class whose detail
-// happens to read "incorrect password" is still the session being gone.
-function isIncorrectPassword({ detail, kind }: ReadError): boolean {
-  return kind ? kind === 'invalid-credentials' : detail.trim() === INCORRECT_PASSWORD
+// type ending #invalid-credentials, whatever its detail says. The type
+// decides alone, so another 401 class whose detail happens to read
+// "incorrect password" is still the session being gone.
+function isIncorrectPassword({ kind }: ReadError): boolean {
+  return kind === 'invalid-credentials'
 }
 
 // enrolTOTP mints a pending secret and returns the otpauth:// URI to draw
@@ -1153,7 +1145,7 @@ export interface TotpConfirmResult {
   alreadyIssued: boolean
   // #1202: gauntlet holds the account's first second factor, with its
   // codes, until confirmRecoveryCodes below says the person saved them.
-  // Absent on the old backend, which activates at once.
+  // Gauntlet sends it only when true; absent reads as false.
   pendingConfirmation?: boolean
 }
 
@@ -1230,8 +1222,8 @@ export async function regenerateRecoveryCodes(password: string): Promise<string[
 // confirmRecoveryCodes (#1202) tells gauntlet the person saved the codes
 // a held first factor came with: POST /api/auth/recovery-codes/confirm
 // with an empty body. Only then does the factor go live. Called only when
-// confirmTOTP or finishPasskeyRegistration answered pendingConfirmation;
-// the old backend never asks for it. Answers:
+// confirmTOTP or finishPasskeyRegistration answered pendingConfirmation.
+// Answers:
 //   null           the factor is live.
 //   STEP_EXPIRED   401 #step-expired: the hold ran out and was deleted.
 //   other text     409: nothing is on hold (confirmed already, or gone).
@@ -1883,8 +1875,7 @@ export async function createToken(
   // otherwise -- the server enforces it, the dialog mirrors it.
   //
   // #1202: the admin's own password goes with every token (a token
-  // outlives the session that minted it; the old backend ignores the
-  // field). A router's ingest token must not stop reporting on an
+  // outlives the session that minted it). A router's ingest token must not stop reporting on an
   // anniversary, so it asks never to expire; an API token sends no
   // expiresAt and gets the server's one-year default.
   const body: Record<string, string> = device ? { name, kind, device, password } : { name, kind, password }

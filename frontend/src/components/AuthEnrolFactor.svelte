@@ -67,8 +67,7 @@
   let codesLost = $state(false)
   // #1202: gauntlet holds a first factor, with its codes, until the person
   // says they saved them (confirmRecoveryCodes). Set from the result of
-  // confirmTOTP / registerPasskey; false on the old backend, which
-  // activates at once, so "I have saved these" then only re-reads the session.
+  // confirmTOTP / registerPasskey; false when the factor went live at once, so "I have saved these" then only re-reads the session.
   let pendingConfirmation = $state(false)
 
   // #1202: an admin held at gauntlet's passkey door sees the same walk

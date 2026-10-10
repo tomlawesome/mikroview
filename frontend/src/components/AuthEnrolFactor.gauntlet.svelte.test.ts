@@ -8,7 +8,7 @@
 //  - spec 34: a first factor is held with its ten codes until
 //    POST /api/auth/recovery-codes/confirm, so "I have saved these" calls
 //    confirm first and only then re-reads the session. Without the
-//    `pendingConfirmation` field (an old backend) it behaves as before.
+//    `pendingConfirmation` field (a factor that went live at once) it behaves as before.
 //
 // Same mocking as AuthEnrolFactor.svelte.test.ts: lib/api.ts is faked at the
 // network edge (the real module spread in, so ApiError stays real), the
@@ -248,7 +248,7 @@ describe('"I have saved these" confirms a held first factor (#1202 spec 34)', ()
   })
 
   // Pair for the above: without the field the button never calls confirm.
-  it('without pendingConfirmation (an old backend), does not call recovery-codes/confirm and re-reads the session as before', async () => {
+  it('without pendingConfirmation (gauntlet omits it unless true), does not call recovery-codes/confirm and re-reads the session as before', async () => {
     vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: TEN_CODES, alreadyIssued: false })
     vi.mocked(fetchAuthSession).mockResolvedValue(OPEN_SESSION)
 

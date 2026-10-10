@@ -3,7 +3,7 @@
 // #1202 (spec 34): the account menu's passkeys overlay. A first passkey is
 // held, with the ten codes, until POST /api/auth/recovery-codes/confirm; the
 // overlay's "I have saved these" must make that call and only then close.
-// Without `pendingConfirmation` (an old backend) it closes as before.
+// Without `pendingConfirmation` (a factor that went live at once) it closes as before.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
