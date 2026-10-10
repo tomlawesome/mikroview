@@ -208,7 +208,12 @@ still set `droplist.storePath` to `""`.
   path bound as today, and saved back atomically under the version it
   was read at. Anything else -- a damaged file, a wrong key -- fails to
   open as today, never sealed and never read as an empty store. Files it
-  already sealed open unchanged, byte for byte. Gauntlet's
+  already sealed open unchanged, byte for byte. Sealing in place, on
+  files and on Postgres, applies only while the stored schema is below
+  4 -- the first start of v0.7.0 -- and the schema moves to 4 only once
+  every auth store and the drop list have opened sealed (ruling 14).
+  From then on a plaintext document is refused, as an install with a
+  key always refused one before. Gauntlet's
   `persist.Encrypt` is not used for files: it binds its label rather
   than the path and writes the text envelope, so it cannot open files
   mikroview sealed before, and its own `EncryptedFileBackend` never
@@ -606,3 +611,10 @@ decision the design above states.
   gains an addendum ending #853 rule 6 and the 2026-09-18 drop-list
   addendum, and noting the auth stores as the exception to "Postgres
   is unaffected".
+- **Ruling 14, when sealing in place ends (2026-10-10):** only on the
+  first start of v0.7.0, while the stored schema is below 4; the stamp
+  moves to 4 only after every auth store and the drop list are sealed.
+  Afterwards a plaintext document is refused. Gauntlet's own
+  `MigratePlaintext` guidance: on for the upgrade release only. Found
+  by the A4 review: left on, anyone able to write the data folder
+  without the key could plant a plaintext accounts document.
