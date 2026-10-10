@@ -618,3 +618,10 @@ decision the design above states.
   `MigratePlaintext` guidance: on for the upgrade release only. Found
   by the A4 review: left on, anyone able to write the data folder
   without the key could plant a plaintext accounts document.
+- **Ruling 16, setup-only mode fails closed on the admin passkey rule
+  (2026-10-10):** when setup-only mode cannot read `publicUrl` or the
+  `auth` section and any admin already holds a passkey, it refuses to
+  start and says to fix the file on disk. Without this, an unset rule
+  worked out from a missing `publicUrl` reads as optional, and the
+  admin could sign in on the LAN without the passkey (OWASP "fail
+  securely"). (Ruling 15 was withdrawn; the number is not reused.)
