@@ -37,6 +37,7 @@ cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$PORT", httpRedirect: "", syslogTls: ""}
 tls: {enabled: true, storePath: $DIR/tls}
 $(mv_store_block "$DIR" true)
+$(mv_history_key_block "$DIR")
 EOF
 
 if [ ! -f web/dist/index.html ]; then

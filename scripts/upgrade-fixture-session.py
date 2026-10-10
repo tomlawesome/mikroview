@@ -239,7 +239,9 @@ manifest["viewerUsername"] = FIXTURE_VIEWER
 
 # 3. A read-only API token. Its raw value is returned exactly once and
 # is never written to the manifest -- only that one was created.
-api.post("/api/tokens", {"name": "upgrade-fixture-token", "kind": "api"})
+# The admin's own password is part of the request on a gauntlet-era image;
+# an older image ignores the extra field.
+api.post("/api/tokens", {"name": "upgrade-fixture-token", "kind": "api", "password": FIXTURE_PASSWORD})
 manifest["apiTokenName"] = "upgrade-fixture-token"
 
 # 4. A named entity.

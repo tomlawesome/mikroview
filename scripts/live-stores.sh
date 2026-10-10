@@ -37,6 +37,7 @@ auth:
   tokensStorePath: $dir/tokens.json
   signInsStorePath: $dir/signins.json
   secureCookie: $secure_cookie
+  adminPasskey: optional
 flags:
   storePath: $dir/flags.json
   ruleUsageStorePath: $dir/rule-usage.json
@@ -61,3 +62,34 @@ engine:
   decommissionStorePath: $dir/decommission.json
 YAML
 }
+
+# Since #1202 MikroView refuses to start without a key (CFG-0083): every
+# account, token, recovery-key and sign-in store is sealed under it.
+# `mv_history_key_block DIR` makes a fresh random key at DIR/history.key
+# the first time it is called for DIR (never committed, never reused
+# across runs -- DIR is a throwaway) and prints the config line that
+# names it, for the scripts that write their own config. A second call
+# for the same DIR keeps the key, so a source and the copy migrated from
+# it open under the same one. live-env.sh makes its own beside the data
+# directory, because it also turns retention on.
+mv_history_key_block() {
+  local key="$1/history.key"
+  if [ ! -s "$key" ]; then
+    mkdir -p "$1"
+    head -c 32 /dev/urandom | base64 > "$key"
+    chmod 600 "$key"
+  fi
+  echo "history: {keyFile: \"$key\"}"
+}
+
+# adminPasskey is "optional" in mv_store_block's auth section because the rule's
+# default turns to "required" on an https publicUrl a passkey can be
+# made for, and the harness's TLS instances are exactly that
+# (https://localhost:PORT): every admin request would answer 403
+# must-enrol-passkey, and the harness has no passkey to register.
+#
+# The common-password list fetch (#1202) is pointed at a closed local
+# port so a live run makes no outbound request and leaves no downloaded
+# list in the data directory. It is honoured only with MV_TEST_HOOKS=1
+# (gauntlet_wiring.go), which live-env.sh and live-migrate-data.sh set.
+MV_PASSWORDLIST_OFFLINE_URL="http://127.0.0.1:9/password-list-offline"

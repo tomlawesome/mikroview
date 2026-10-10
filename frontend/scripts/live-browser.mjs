@@ -31,6 +31,23 @@ const PASS = process.env.MV_PASS
 // re-enter their password at that moment, so a scenario driving the
 // real ledger has to type it into the wizard as an operator would.
 export const adminPassword = PASS
+
+/**
+ * tokenMint shapes the body of POST /api/tokens for the gauntlet-era
+ * contract (#1202): token creation re-checks the admin's own password,
+ * so every body carries it, and an ingest token says `expiresAt:
+ * "never"` (a router's pushes should not stop on a calendar date).
+ * An API token sends no expiry, so the server's one-year default
+ * applies. Wrap the body of every direct mint in this rather than
+ * writing the two fields out by hand.
+ */
+export function tokenMint(body) {
+  return {
+    ...body,
+    password: PASS,
+    ...(body.kind === 'ingest' && body.expiresAt === undefined ? { expiresAt: 'never' } : {}),
+  }
+}
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
@@ -951,6 +968,18 @@ export async function enrolFactorAndSignIn(page, password, urlBase = URL_BASE) {
   const confirmRes = await call('/api/auth/totp/confirm', { code: await freshTotpCode(secret) })
   if (confirmRes.status() !== 200) {
     throw new Error(`POST /api/auth/totp/confirm answered ${confirmRes.status()} -- the fresh code was refused`)
+  }
+  // gauntlet holds the first factor until the person says the recovery
+  // codes are saved (#1202): the confirm answer carries
+  // pendingConfirmation: true, and the door stays shut until
+  // POST /api/auth/recovery-codes/confirm. The codes themselves are not
+  // needed here. An older backend leaves the field out and the door is
+  // already open.
+  if ((await confirmRes.json().catch(() => ({}))).pendingConfirmation === true) {
+    const codesRes = await call('/api/auth/recovery-codes/confirm', {})
+    if (codesRes.status() !== 200) {
+      throw new Error(`POST /api/auth/recovery-codes/confirm answered ${codesRes.status()} -- the recovery codes were not confirmed`)
+    }
   }
 
   // The two fetches above changed the session's own state, not anything

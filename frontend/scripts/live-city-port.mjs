@@ -43,7 +43,7 @@
 // non-WAN lanes' event counts and sends enough SMB connections to clear
 // the cap's cutoff, rather than a fixed handful that only happened to
 // be enough before -declared and -marks existed.
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -64,7 +64,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-port', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-port', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value

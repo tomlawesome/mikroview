@@ -50,8 +50,10 @@ curl -fsS -k -c "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Request
 scripts/live-routeros.sh traffic 2 >/dev/null
 
 device="$(curl -fsS -k -b "$jar" "$MV_URL/api/devices" | python3 -c 'import json,sys; print(json.load(sys.stdin)["devices"][0]["id"])')"
+# Minting asks for the admin's own password, and an ingest token says it
+# never expires (#1202).
 token="$(curl -fsS -k -b "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-  -d "{\"name\":\"rule-coverage-probe\",\"kind\":\"ingest\",\"device\":\"$device\"}" \
+  -d "{\"name\":\"rule-coverage-probe\",\"kind\":\"ingest\",\"device\":\"$device\",\"expiresAt\":\"never\",\"password\":\"$MV_PASS\"}" \
   "$MV_URL/api/tokens" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
 
 scripts/live-routeros.sh push "$MV_URL" "$token" >/dev/null

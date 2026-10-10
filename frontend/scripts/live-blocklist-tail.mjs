@@ -21,7 +21,7 @@
 
 import http from 'http'
 import https from 'https'
-import { check, done, enrolDevice, goTo, pushFrom, session } from './live-browser.mjs'
+import { check, done, enrolDevice, goTo, pushFrom, session, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const DEVICE = 'bl-tail'
@@ -76,7 +76,7 @@ const caStatus = await new Promise((resolve, reject) => {
 check(caStatus === 200, `${DEVICE} fetches the certificate from ${ADDR} (${caStatus})`)
 const tokRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-blocklist-tail', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-blocklist-tail', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokRes.json()).value
 const pushed = await pushFrom(URL_BASE, ADDR, token, { kind: 'filter-rule', page: 1, pages: 1, routerosVersion: '7.24.4 (stable)', wizardVersion: 6, records: [] })

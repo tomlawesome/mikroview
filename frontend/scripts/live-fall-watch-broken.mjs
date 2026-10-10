@@ -28,7 +28,7 @@
 // (internal/watchlist's nights.go tests) and left as a follow-up here if
 // a live proof is ever wanted.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -56,7 +56,7 @@ for (let i = 0; i < 40 && !device; i++) {
 }
 check(!!device, `the instance reports the device events arrive from (${device})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: 'fall-watch-broken', kind: 'ingest', device })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: 'fall-watch-broken', kind: 'ingest', device }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 const token = tokenRes.body?.value
 

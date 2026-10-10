@@ -406,7 +406,12 @@ EOF
   # docs/configuration.md. It is set here and only here, so the routes
   # exist on a harness instance and nowhere else. The server logs a
   # warning naming both routes when it sees it.
-  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  #
+  # MV_TEST_PASSWORDLIST_URL (honoured only alongside MV_TEST_HOOKS=1)
+  # points the common-password list's daily fetch at a closed local port,
+  # so the run makes no outbound request and downloads nothing (#1202).
+  MV_TEST_HOOKS=1 MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
+    MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
   # From here to the last thing that can fail (TOTP confirm below), a
   # curl/python hiccup would otherwise trip set -e and exit with the
@@ -485,7 +490,7 @@ EOF
 
   # RFC 6238 over the standard library: HMAC-SHA1 of the big-endian
   # 30-second counter, dynamic truncation, six digits -- the same thing
-  # internal/auth/totp.go does, checked against GenerateTOTPCode for
+  # gauntlet's totp.go does, checked against GenerateTOTPCode for
   # matching secrets and counters rather than assumed compatible.
   # Prints the counter alongside the code, because confirming enrolment
   # spends that counter: VerifyTOTP's replay guard refuses it ever after,
@@ -504,10 +509,21 @@ print(counter, "%06d" % ((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 1
   totp_counter="${totp_pair%% *}"
   totp_code="${totp_pair##* }"
 
-  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+  totp_confirm="$(curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
     -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
     -d "{\"code\":\"$totp_code\"}" \
-    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm" >/dev/null
+    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm")"
+  # The first second factor is held until its recovery codes are
+  # confirmed (#1202): the answer says pendingConfirmation: true and the
+  # door stays shut until POST /api/auth/recovery-codes/confirm (empty
+  # object body). The codes themselves are not kept. The cookie jar
+  # carries the session, and the confirm hands this browser a fresh one.
+  if printf '%s' "$totp_confirm" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("pendingConfirmation") is True else 1)'; then
+    curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+      -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+      -d '{}' \
+      "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/recovery-codes/confirm" >/dev/null
+  fi
   echo "$totp_counter" > "$MV_DIR/totp-last-counter"
   trap - EXIT
 
@@ -697,7 +713,8 @@ upgrade() {
   # plus go, normally several seconds) taking that long on every host.
   sleep 1.1
   build "$MV_DIR/mikroview"
-  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  MV_TEST_HOOKS=1 MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
+    MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
   for _ in $(seq 1 40); do
     if curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi

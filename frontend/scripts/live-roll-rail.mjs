@@ -28,7 +28,7 @@
 // and is not disturbed) and leaves nothing behind but its syslog batch
 // and a viewer account it deletes again.
 
-import { session, feedSyslog, check, responsive, done, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, launchBrowser, enrolFactorAndSignIn, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -208,7 +208,9 @@ const users = usersRes.status() < 400 ? await usersRes.json() : []
 const viewerAccount = (Array.isArray(users) ? users : []).find((u) => u.username === VIEWER_USER)
 if (viewerAccount) {
   const del = await page.request.delete(`${URL_BASE}/api/auth/users/${encodeURIComponent(viewerAccount.id)}`, {
-    headers: { 'X-Requested-With': 'mikroview' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    // Deleting an account re-checks the calling admin's password (#1202).
+    data: { password: adminPassword },
   })
   check(del.status() === 200 || del.status() === 204, `the viewer account is removed again (${del.status()})`)
 }

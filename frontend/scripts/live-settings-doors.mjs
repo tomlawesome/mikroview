@@ -15,7 +15,7 @@
 //    window.confirm() dialog, and a stray click actually disarms it;
 //  - a freshly let-in account can actually sign in and reach the app.
 
-import { session, check, done, goTo, launchBrowser, grantClipboard, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, launchBrowser, grantClipboard, enrolFactorAndSignIn, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -57,6 +57,8 @@ await page.click(`${KEYS} .pform .seg[aria-label="Key kind"] button:has-text("in
 // By id, not text: the picker shows the device's name ("Live Router")
 // where it has one, and the id is what the chip and the API carry.
 await page.click(`${KEYS} .pform .seg[aria-label="which router"] button[data-device-id="${DEVICE}"]`)
+// Minting asks for the admin's own password (#1202).
+await page.fill(`${KEYS} .pform input[aria-label="your password"]`, adminPassword)
 await page.click(`${KEYS} .pform button:has-text("mint it")`)
 
 await page.waitForSelector(`${KEYS} .reveal code`)

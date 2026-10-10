@@ -51,11 +51,16 @@ cfg() {
 listen: {http: "127.0.0.1:$PORT", httpRedirect: "", syslogTls: ""}
 tls: {enabled: false, storePath: $1/tls}
 $(mv_store_block "$1" false)
+$(mv_history_key_block "$DIR")
 YAML
 }
 
 start() {
-  MIKROVIEW_CONFIG="$1/cfg.yaml" "$DIR/mikroview" > "$1/server.log" 2>&1 &
+  # MV_TEST_PASSWORDLIST_URL (honoured only with MV_TEST_HOOKS=1) keeps
+  # the common-password list's fetch off the network, so no downloaded
+  # list lands in the directory this script then compares file by file.
+  MV_TEST_HOOKS=1 MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
+    MIKROVIEW_CONFIG="$1/cfg.yaml" "$DIR/mikroview" > "$1/server.log" 2>&1 &
   PID=$!
   for _ in $(seq 1 40); do
     if curl -fsS "http://127.0.0.1:$PORT/api/healthz" >/dev/null 2>&1; then return 0; fi

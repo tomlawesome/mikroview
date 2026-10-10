@@ -13,7 +13,7 @@
 // TestDecodeRealRawRulePush and TestDecodeRealAddressListCountPush). The
 // block itself is proven on real CHRs by scripts/live-blocklist-chr.sh.
 
-import { check, done, enrolDevice, goTo, grantClipboard, pushFrom, session } from './live-browser.mjs'
+import { check, done, enrolDevice, goTo, grantClipboard, pushFrom, session, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const DEVICE = 'bl-rb5009'
@@ -29,7 +29,7 @@ if (!(Array.isArray(known) ? known : known.devices ?? []).some((d) => d.id === D
 }
 const tokRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-blocklist', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-blocklist', kind: 'ingest', device: DEVICE }),
 })
 check(tokRes.status() === 201, `an ingest token is minted for ${DEVICE} (${tokRes.status()})`)
 const token = (await tokRes.json()).value
