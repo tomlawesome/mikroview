@@ -156,8 +156,11 @@ describe('Builder: the token mint asks for the admin password (#1202 spec 33)', 
 
     await waitFor(() => expect(createToken).toHaveBeenCalledTimes(1))
     expect(createToken).toHaveBeenCalledWith('blocklist-rb5009', 'ingest', 'rb5009', 'hunter2')
-    await waitFor(() => expect(fetchBlocklistCommands).toHaveBeenCalled())
-    expect(vi.mocked(fetchBlocklistCommands).mock.calls[0][0]).toMatchObject({ device: 'rb5009', token: 'tok-1' })
+    // The page builds a token-less preview on open (existing behaviour); the
+    // request after the mint is the one that must carry the new token.
+    await waitFor(() =>
+      expect(vi.mocked(fetchBlocklistCommands).mock.lastCall?.[0]).toMatchObject({ device: 'rb5009', token: 'tok-1' }),
+    )
 
     // Reloading the same router does not mint a second token.
     await blocklistState.load('rb5009', false)
