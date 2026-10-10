@@ -872,8 +872,10 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   user explicitly clicks "investigate" on one specific public IP — see the
   "IP reputation lookup" section of
   [docs/configuration.md](docs/configuration.md) for exactly what that
-  does and doesn't do. **One request is made on MikroView's own
-  schedule since v0.7.0 (#1202): the common-password list.** At start-up
+  does and doesn't do. Two downloads run on MikroView's own schedule: the
+  country lookup file (DB-IP's free list by default, a new file each
+  month, or the IPinfo or MaxMind file when the operator enters a key for
+  one), and, **since v0.7.0 (#1202), the common-password list.** At start-up
   and about daily it fetches a signed list of the 10,000 most common
   passwords from gauntlet's public GitHub release, so a new password can be
   checked against it. The request carries no password and nothing of
