@@ -38,11 +38,16 @@ rewritten.
   steps, and why each command is needed, are in
   [docs/install.md](docs/install.md#the-key-make-it-once-before-the-first-start).
   Keep a copy of the key apart from the data: a lost key cannot be
-  recovered and the accounts cannot be read without it. Existing plaintext
-  accounts, tokens, recovery-key digests and drop list are sealed in place
-  on the first start of this version only; after that a plaintext copy is
-  refused. Take a copy of the data directory (or a `pg_dump`) first: see
-  [docs/upgrades.md](docs/upgrades.md).
+  recovered and the accounts cannot be read without it. Plaintext data is
+  **not** sealed in place: accounts, tokens, recovery-key digests or a drop
+  list that a keyless install left in the clear, on files or on Postgres,
+  stop this version starting, left exactly as they are, with a message
+  saying to restore a sealed copy or move them aside and start fresh. The
+  key has to be in place before you upgrade. Take a copy of the data
+  directory (or a `pg_dump`) first: see [docs/upgrades.md](docs/upgrades.md).
+  On Postgres the first start writes the sealed tokens row even when no
+  token exists, so a 0.6.x build refuses to start on the database rather
+  than reading the sealed accounts as none.
 - **Sessions are 1 hour idle and 24 hours in total at most** (#1202,
   owner ruling 2026-10-10). The defaults were 24 hours and 7 days. An
   `auth.sessionTTL` above 1h or an `auth.sessionMaxLifetime` above 24h is

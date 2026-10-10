@@ -95,27 +95,16 @@ func AdoptFile(ctx context.Context, filePath string, b Backend) (MigrateResult, 
 // which seals it again; any other store's dst is the plain Postgres
 // backend, as before the auth stores were sealed.
 //
-// A source that is not sealed but parses as JSON is taken as the
-// plaintext an earlier keyless release left (the drop list, the auth
-// stores). AdoptSealedFileOnly is the same refusing that case.
+// A source that is not sealed but parses as JSON -- the plaintext a
+// release that ran without a key left -- is refused with
+// ErrPlaintextDocument, as opening it in place is (#1202, ruling 19):
+// nothing is written and the file is left as it is.
 //
 // AdoptFile's three rules hold here too: only an empty dst is written,
 // the source file is never touched, and a file that does not exist is
 // a fresh install. A file that will not open -- the wrong key, damaged,
 // sealed for another path -- fails and writes nothing.
 func AdoptSealedFile(ctx context.Context, src string, key *retention.Key, dst Backend) (MigrateResult, error) {
-	return adoptSealedFile(ctx, src, key, dst, true)
-}
-
-// AdoptSealedFileOnly is AdoptSealedFile for a data directory whose
-// schema is already 4: a plaintext source is refused with
-// ErrPlaintextDocument, as opening it in place would be (#1202, ruling
-// 14), rather than carried into the database.
-func AdoptSealedFileOnly(ctx context.Context, src string, key *retention.Key, dst Backend) (MigrateResult, error) {
-	return adoptSealedFile(ctx, src, key, dst, false)
-}
-
-func adoptSealedFile(ctx context.Context, src string, key *retention.Key, dst Backend, allowPlaintext bool) (MigrateResult, error) {
 	res := MigrateResult{FilePath: src}
 	if src == "" || dst == nil {
 		return res, nil
@@ -142,13 +131,11 @@ func adoptSealedFile(ctx context.Context, src string, key *retention.Key, dst Ba
 	if !raw.Exists {
 		return res, nil // nothing to migrate: a genuinely fresh install
 	}
-	var doc Snapshot
 	if !retention.HasSealMagic(raw.Payload) && json.Valid(raw.Payload) {
-		if !allowPlaintext {
-			return res, fmt.Errorf("persist: migrating %s: %w", src, ErrPlaintextDocument)
-		}
-		doc = raw
-	} else if doc, err = file.unseal(raw); err != nil {
+		return res, fmt.Errorf("persist: migrating %s: %w", src, ErrPlaintextDocument)
+	}
+	doc, err := file.unseal(raw)
+	if err != nil {
 		return res, fmt.Errorf("persist: migrating %s: %w", src, err)
 	}
 

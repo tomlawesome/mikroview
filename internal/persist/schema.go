@@ -119,14 +119,16 @@ var schemaMigrations = []SchemaMigration{
 	},
 }
 
-// SchemaAuthSealed is schema 4's number, which also records that every
-// auth store and the drop list opened sealed (#1202, ruling 14). While
-// the stored schema is below it, the first start of v0.7.0, a plaintext
-// document those stores find is sealed in place; from then on it is
-// refused. So it is stamped last, once the stores have opened, not with
-// the rest at start-up: a start that fails part way leaves it unstamped,
-// and the next start seals what is left. Callers migrate to
-// SchemaAuthSealed-1 before opening anything and to CurrentSchema after.
+// SchemaAuthSealed is schema 4's number, the downgrade guard for the
+// move onto gauntlet: an older build refuses a data directory or
+// database stamped with it. It is stamped last, once every auth store
+// and the drop list have opened sealed, not with the rest at start-up:
+// a start that is refused part way -- a plaintext document, which is
+// never sealed in place (#1202, ruling 19), or a damaged one -- leaves
+// it unstamped, so the release the data came from can still open it.
+// Callers migrate to SchemaAuthSealed-1 before opening anything and to
+// CurrentSchema after, and a failure to write that last stamp refuses
+// start-up (#1202 review R20).
 const SchemaAuthSealed int64 = 4
 
 // CurrentSchema is the highest schema version this build knows how to

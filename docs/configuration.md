@@ -665,31 +665,21 @@ On Postgres each of the four lives in its own row, sealed under the same
 key with the store's name bound in: a row copied over another store's
 row fails to open instead of reading as that store.
 
-**Existing plaintext files are sealed once, on the first start of
-v0.7.0, and refused after that.** An install that ran keyless on an
-earlier release has plaintext accounts, tokens, recovery-key digests and
-a plaintext drop list. While the stored schema is below 4 (the first
-v0.7.0 start; see [Upgrading](upgrades.md)), MikroView seals each of
-them in place, then moves the schema to 4 only once every one has been
-sealed. If sealing stops part-way (say one file is damaged), the schema
-stays at 3; put the file right and the next start seals the rest. From
-schema 4 on, a plaintext copy of any of them stops MikroView starting:
-the file is left exactly as it was and no setup code is printed. That
-refusal is deliberate. If it sealed plaintext every time, anyone who could
-write to the data folder without the key could drop in an accounts file of
-their own with an admin they chose. Postgres rows follow the same rule.
-
-Setup-only mode never seals in place, whatever the schema. If it finds a
-plaintext accounts file it refuses, and says to fix the config on disk
-and start normally, which seals it. That way a rollback to the previous
-release, the likely next step when an upgraded config is refused, can
-still read its own accounts.
+**Plaintext files are never sealed in place: the key has to be there
+before you upgrade.** An install that ran keyless on an earlier release
+has plaintext accounts, tokens, recovery-key digests and a plaintext drop
+list. v0.7.0 refuses to start on any of them, whatever the stored schema,
+on files and on Postgres rows alike: the message says it was written
+without a key before v0.7.0, and to restore a sealed copy or move it
+aside and start fresh. The file or row is left exactly as it was and no
+setup code is printed. That refusal is deliberate. If MikroView sealed
+plaintext it found, anyone who could write to the data folder without the
+key could drop in an accounts file of their own with an admin they chose.
+Setup-only mode refuses the same way. See [Upgrading](upgrades.md).
 
 **Everything else is as it was under #853.** A document that fails to
 decrypt (the wrong key, or one written with no key at all) is refused the
 same way a corrupt document is — not silently treated as a fresh install.
-The one-time sealing in place above is the single exception, for the auth
-stores and the drop list on the first v0.7.0 start.
 
 **`-backup`/`-restore` still work.** Both run with the key available, so
 the backup file itself carries plain, readable JSON either way; `-restore`
@@ -1018,9 +1008,8 @@ Fix the file, put it on the host, and restart.
   did, and the admin signs in with their password and second factor; when
   an admin does hold one, it refuses, as above.
 - **It never seals anything.** A plaintext accounts file left by a release
-  without a key is refused here, with a message saying to fix the config
-  on disk and start normally -- that is what seals it -- so rolling back
-  to the previous release still works.
+  without a key is refused here, as at a normal start: restore a sealed
+  copy, or move it aside and start fresh. The file is left as it is.
 - **When it refuses to start at all**, as a refused config always did:
   the accounts store cannot be opened or holds no account (there would
   be nobody to sign in, and the first-run screen would hand the admin
@@ -1444,12 +1433,13 @@ history:
   keyFile: /etc/mikroview/keys/history.key   # outside the data directory
 ```
 
-Upgrading an install that never had a key? Make one before you start the
-new version, and keep a copy somewhere safe, apart from the data. The
-first start seals your existing accounts and tokens under it; see
+Upgrading an install that never had a key? v0.7.0 does not seal the
+plaintext accounts and tokens it left: it refuses them, and you restore a
+sealed copy or move them aside and start fresh; see
 [Upgrading](upgrades.md) and [the state
-store](#the-state-store-sealed-under-the-key-853-1202). Without the key
-nothing sealed can be read, so a lost key means the accounts are gone.
+store](#the-state-store-sealed-under-the-key-853-1202). Keep a copy of
+the key somewhere safe, apart from the data: without it nothing sealed
+can be read, so a lost key means the accounts are gone.
 
 #### CFG-0090
 
@@ -3766,8 +3756,8 @@ what follows is its behaviour, described here as MikroView uses it.
   the file is sealed (see [SECURITY.md](../SECURITY.md#data-handling)). A file sealed under a
   different key, or damaged, stops MikroView starting; it is never read
   as "no accounts", so the create-account screen does not reappear.
-  A plaintext file from an earlier release is sealed in place on the
-  first start of v0.7.0 only -- see [the state
+  A plaintext file from an earlier keyless release is refused, never
+  sealed in place -- see [the state
   store](#the-state-store-sealed-under-the-key-853-1202).
 - **`secureCookie`** — sets the session cookie's `Secure` flag. On by
   default, matching [TLS](#tls) being on by default -- there's no other
@@ -5350,7 +5340,9 @@ Three things worth knowing:
 - **This is a one-way door.** Once MikroView has started with Postgres
   configured, it records that, and removing `dsnFile` later will *not*
   bring you back on the JSON files — it refuses to start, and tells you
-  why and where the marker is.
+  why and where the marker is. It records it only once every file has
+  moved: if one fails to move (a damaged file, say), start-up stops, and
+  the next start, once the file is put right, finishes the move.
 
   That refusal is deliberate. Your JSON files stopped being current the
   moment you migrated, so quietly falling back to them would serve stale

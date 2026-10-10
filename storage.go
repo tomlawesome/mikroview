@@ -53,20 +53,11 @@ type storage struct {
 	// startup line claim "no history.keyFile configured" for a key that
 	// was configured but broken. See snapshotKeyState in snapshot.go.
 	keyErr error
-	// pastFirstStart is whether the stored schema -- the database's on
-	// Postgres, the data directory's on files -- had already reached
-	// persist.SchemaAuthSealed when the storage opened (#1202, ruling
-	// 14). Until it has, the first start of v0.7.0, the auth stores and
-	// the drop list seal a plaintext document they find; from then on
-	// they refuse it. openStorage always sets it, to true when the
-	// schema cannot be read (the fail-closed answer); see
-	// finishSchemaUpgrade for when it moves.
-	pastFirstStart bool
-	// filesPastFirstStart is the same question asked of the data
-	// directory alone, for the files a first move onto Postgres adopts:
-	// a plaintext file is carried over only while it could still be one
-	// an earlier keyless release left (see adopt).
-	filesPastFirstStart bool
+	// adoptFailed is set when moving a JSON file onto Postgres failed
+	// on this start (#1202 review R22). The adoption marker is then not
+	// written (recordPostgresAdoption), so the next start tries again
+	// rather than coming up with that store empty for good.
+	adoptFailed bool
 }
 
 // openStorage connects to Postgres if configured, and applies the schema.
@@ -108,18 +99,10 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 		log.Info("history.keyFile is configured -- the file-backed state store and warm-restart snapshots are encrypted under it (#853)")
 	}
 
-	// Unreadable reads as "already sealed": a plaintext document is
-	// then refused rather than sealed, the fail-closed answer. The
-	// server never gets here with an unreadable schema document --
-	// upgradeDataDirSchema has refused it.
-	stored, _, err := persist.ReadFileSchema(dataDir(cfg))
-	s.filesPastFirstStart = err != nil || stored >= persist.SchemaAuthSealed
-
 	if cfg.Postgres.DSNFile == "" {
 		if err := refuseIfPostgresAdopted(cfg); err != nil {
 			return nil, err
 		}
-		s.pastFirstStart = s.filesPastFirstStart
 		log.Info("persisting to JSON files under the configured store paths")
 		return s, nil
 	}
@@ -136,34 +119,21 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
 	// Up to the schema below SchemaAuthSealed only: that one is stamped
-	// once the stores have opened sealed (finishSchemaUpgrade, ruling
-	// 14), so what is stored now says whether this is the first start
-	// of v0.7.0.
-	dbSchema, err := pool.MigrateTo(ctx, persist.SchemaAuthSealed-1)
-	if err != nil {
+	// once the stores have opened sealed (finishSchemaUpgrade), so a
+	// start refused before then leaves the database where it was.
+	if _, err := pool.MigrateTo(ctx, persist.SchemaAuthSealed-1); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("postgres: applying schema: %w", err)
 	}
-	s.pastFirstStart = dbSchema >= persist.SchemaAuthSealed
 
 	s.pool = pool
 	s.cfg = cfg
 	// Whether this deployment had already run on Postgres *before* this
 	// boot. It is what stops the one-time JSON adoption running a second
 	// time -- see backendFor, and #294 item 1 for the failure that
-	// allowed.
-	//
-	// Read before marking, obviously, since marking makes it true.
+	// allowed. The marker itself is written only once every store has
+	// been adopted (recordPostgresAdoption, #1202 review R22).
 	s.adoptedBefore = postgresAlreadyAdopted(cfg)
-
-	// Recorded on every Postgres boot, not only the migrating one: a
-	// deployment that started on Postgres has no JSON files, so removing
-	// the DSN later would silently present a first-run setup screen and
-	// hand admin to whoever loaded it. Same fail-open, different route.
-	if err := markPostgresAdopted(cfg); err != nil {
-		pool.Close()
-		return nil, err
-	}
 	log.Info(fmt.Sprintf("persisting to %s", pool.Describe()))
 	log.Warn("this only separates your data from this host if Postgres is on a DIFFERENT machine, " +
 		"reachable over a restricted network path -- a database on this same host exposes its credential " +
@@ -214,15 +184,11 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 		if s.key == nil {
 			return nil, nil // #853: no key, no storage -- this store is memory-only
 		}
-		b := persist.NewEncryptedFileBackend(filePath, s.key)
-		// The drop list is the one store besides the auth stores that a
-		// keyless install kept, in the clear (#853's 2026-09-18
-		// addendum, now ended): it comes across the same way, on the
-		// same first start only (#1202 review R1, ruling 14).
-		if name == dropListStore && !s.pastFirstStart {
-			b = b.WithSealInPlace()
-		}
-		return b, nil
+		// Sealed, like every store: a plaintext file -- the drop list a
+		// keyless install kept in the clear (#853's 2026-09-18 addendum,
+		// now ended), say -- is refused, never sealed in place (#1202,
+		// ruling 19).
+		return persist.NewEncryptedFileBackend(filePath, s.key), nil
 	}
 
 	b := persist.NewPostgresBackend(s.pool, name)
@@ -231,10 +197,6 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 	}
 	return b, nil
 }
-
-// dropListStore is the drop list's store name (main.go's backendFor
-// call), named here for backendFor's one exception.
-const dropListStore = "droplist"
 
 // adopt performs the one-time JSON adoption into dst, a Postgres store
 // that is empty unless this deployment has run on Postgres before. dst
@@ -269,21 +231,20 @@ func (s *storage) adopt(ctx context.Context, dst persist.Backend, filePath strin
 	// The files are sealed under the key, path bound, so each is opened
 	// through its own file backend and its document handed to dst
 	// (#1202 review R2) -- not copied verbatim, which would leave the
-	// row holding an envelope nothing reads. A plaintext file is carried
-	// over only while the data directory is below schema 4, as opening
-	// it in place would be (ruling 14). With no key the file stores
-	// were never written, so there is nothing sealed to open.
-	adopt := persist.AdoptSealedFileOnly
-	switch {
-	case s.key == nil:
-		adopt = func(ctx context.Context, src string, _ *retention.Key, dst persist.Backend) (persist.MigrateResult, error) {
-			return persist.AdoptFile(ctx, src, dst)
-		}
-	case !s.filesPastFirstStart:
-		adopt = persist.AdoptSealedFile
+	// row holding an envelope nothing reads. A plaintext file is refused,
+	// never carried over, as opening it in place is (ruling 19). With no
+	// key the file stores were never written, so there is nothing sealed
+	// to open.
+	var res persist.MigrateResult
+	var err error
+	if s.key == nil {
+		res, err = persist.AdoptFile(ctx, filePath, dst)
+	} else {
+		res, err = persist.AdoptSealedFile(ctx, filePath, s.key, dst)
 	}
-	res, err := adopt(ctx, filePath, s.key, dst)
 	if err != nil {
+		// Not recorded as adopted, so the next start tries again (R22).
+		s.adoptFailed = true
 		return err
 	}
 	if res.Migrated {
@@ -312,20 +273,22 @@ var errAuthStoreNeedsKey = errors.New("the account stores are kept sealed under 
 
 // authBackendFor is backendFor for the four auth stores: the same
 // placement and the same one-time Postgres adoption, then sealed under
-// the key, with whatever an install that ran without one left in the
-// clear sealed in place on the first start of v0.7.0 (s.pastFirstStart,
-// ruling 14) and refused after it.
+// the key. A plaintext document -- what an install that ran without a
+// key left -- is refused, on files and on Postgres, whatever the schema:
+// there is no sealing in place (#1202, ruling 19).
 //
 //   - File backend: mikroview's own encrypted file backend, path bound as
-//     every other store's, with WithSealInPlace while sealing in place
-//     applies (ruling 11): a plaintext JSON file is sealed at the
-//     version it was read at; anything else that will not open fails as
-//     it always did.
+//     every other store's; a plaintext file is ErrPlaintextDocument.
 //   - Postgres: gauntlet's persist.Encrypt around the row, labelled with
-//     the store's name, MigratePlaintext while sealing in place applies.
-//     The other stores stay plaintext on Postgres, as
-//     docs/decisions/event-retention.md decided; these four are the
-//     exception (ruling 11).
+//     the store's name, never with MigratePlaintext; under it
+//     persist.RefusePlaintextRows, so a plaintext row is refused in the
+//     same words as a plaintext file. The other stores stay plaintext on
+//     Postgres, as docs/decisions/event-retention.md decided; these four
+//     are the exception (ruling 11).
+//
+// On Postgres the tokens store's row is written, sealed and empty, if
+// it does not exist once its file has been adopted (ruling 20): see
+// writeTokensRow.
 //
 // nil, nil means the store's path is empty on the file backend -- its
 // persistence is switched off, as for any other store.
@@ -337,14 +300,10 @@ func (s *storage) authBackendFor(ctx context.Context, name, filePath string) (gp
 		if filePath == "" {
 			return nil, nil // this store's persistence is switched off
 		}
-		b := persist.NewEncryptedFileBackend(filePath, s.key)
-		if !s.pastFirstStart {
-			b = b.WithSealInPlace()
-		}
-		return b, nil
+		return persist.NewEncryptedFileBackend(filePath, s.key), nil
 	}
-	b, err := gpersist.Encrypt(persist.NewPostgresBackend(s.pool, name), s.key.Material(),
-		gpersist.EncryptOptions{Label: name, MigratePlaintext: !s.pastFirstStart})
+	b, err := gpersist.Encrypt(persist.RefusePlaintextRows(persist.NewPostgresBackend(s.pool, name)), s.key.Material(),
+		gpersist.EncryptOptions{Label: name})
 	if err != nil {
 		return nil, err
 	}
@@ -353,14 +312,69 @@ func (s *storage) authBackendFor(ctx context.Context, name, filePath string) (gp
 	if err := s.adopt(ctx, b, filePath); err != nil {
 		return nil, err
 	}
+	if name == authStoreTokens {
+		if err := writeTokensRow(ctx, b); err != nil {
+			return nil, err
+		}
+	}
 	return b, nil
 }
 
-// neverSealInPlace turns sealing in place off for this process,
-// whatever the stored schema: setup-only mode's rule (configeditor.go).
-func (s *storage) neverSealInPlace() {
-	s.pastFirstStart = true
-	s.filesPastFirstStart = true
+// emptyTokensDocument is the tokens document writeTokensRow seals: the
+// bare, empty token list, the shape MikroView's tokens file had before
+// v0.7.0 and which gauntlet reads as tokens version 1 with none in it.
+// gauntlet writes its own shape at the first save.
+const emptyTokensDocument = "[]"
+
+// writeTokensRow writes the sealed tokens row if there is none yet
+// (#1202, ruling 20), so that a v0.6.x build can never start on a v0.7
+// database. Without the row, v0.6.x reads the sealed accounts row as an
+// accounts document with no users and offers account creation, and an
+// account made there overwrites the real ones; a sealed tokens row is
+// one it cannot parse, so it refuses to start. Only a create
+// (version 0): a row that exists, sealed or not, is left exactly as it
+// is, so later starts change nothing. Called after the tokens file has
+// been adopted, so the row never stands in the way of that move.
+func writeTokensRow(ctx context.Context, b gpersist.Backend) error {
+	if _, err := b.Save(ctx, []byte(emptyTokensDocument), 0); err != nil && !errors.Is(err, persist.ErrConflict) {
+		return fmt.Errorf("writing the sealed tokens row: %w", err)
+	}
+	return nil
+}
+
+// sealTokensRow is the tokens row's guarantee for a process that does
+// not open the tokens store itself -- the command-line tools, which may
+// run before the first start of v0.7.0 (#1202, ruling 20): the tokens
+// file is adopted, if this is the first move onto Postgres, and the
+// row written if it is missing. Nothing on the file backend.
+func (s *storage) sealTokensRow(ctx context.Context) error {
+	if s.pool == nil || s.key == nil {
+		return nil
+	}
+	_, err := s.authBackendFor(ctx, authStoreTokens, s.cfg.Auth.TokensStorePath)
+	return err
+}
+
+// recordPostgresAdoption writes the adoption marker once every store
+// has been moved onto Postgres (#1202 review R22): the server calls it
+// after the last store has opened, and only when no adoption failed on
+// this start. A start whose move failed part way leaves no marker, so
+// the next start finishes the move, rather than coming up with the
+// stores that did not move empty for good. Nothing on the file backend.
+//
+// Recorded on every Postgres boot, not only the migrating one: a
+// deployment that started on Postgres has no JSON files, so removing
+// the DSN later would silently present a first-run setup screen and
+// hand admin to whoever loaded it. Same fail-open, different route.
+func (s *storage) recordPostgresAdoption() error {
+	if s.pool == nil {
+		return nil
+	}
+	if s.adoptFailed {
+		s.log.Warn("moving the JSON files onto Postgres did not finish on this start -- it is tried again at the next start")
+		return nil
+	}
+	return markPostgresAdopted(s.cfg)
 }
 
 // requireKey is the no-key refusal (#1202, rulings 2 and 12), made
@@ -385,12 +399,13 @@ func requireKey(log *slog.Logger, cfg config.Config, what string) bool {
 // because turning Postgres off again would need it, and saying so once
 // per boot tells an operator it is safe to delete.
 //
-// The loud case is the one worth having this function for. The marker is
-// written when Postgres opens, before any store is adopted, so a process
-// that dies part-way through its first migration comes back with the
-// marker set and the remaining stores unadopted. Those stores are then
-// empty in Postgres while their file still holds the data, and nothing
-// would ever move it -- which without this would be silent, and would
+// The loud case is the one worth having this function for: a store
+// empty in Postgres while its file still holds data, after the move was
+// recorded as done. The marker is written only once every store has been
+// adopted (recordPostgresAdoption, #1202 review R22), so an interrupted
+// first move no longer leaves this behind; a database restored to a
+// snapshot from before a store was populated still does. Nothing would
+// ever move that file -- which without this would be silent, and would
 // look exactly like a store that was always empty.
 //
 // Not fixed by adopting anyway: this cannot distinguish that case from a
@@ -454,7 +469,8 @@ func (s *storage) Close() {
 //
 // It stops below persist.SchemaAuthSealed: that number is stamped by
 // finishSchemaUpgrade, once every auth store and the drop list have
-// opened sealed (#1202, ruling 14).
+// opened sealed, so a start refused before then leaves the schema where
+// it was.
 func upgradeDataDirSchema(cfg config.Config) error {
 	return migrateDataDirSchema(cfg, persist.SchemaAuthSealed-1)
 }
@@ -474,12 +490,16 @@ func migrateDataDirSchema(cfg config.Config, to int64) error {
 }
 
 // finishSchemaUpgrade stamps persist.SchemaAuthSealed, and anything this
-// build knows above it, on the database and the data directory (#1202,
-// ruling 14). The server calls it once every auth store and the drop
-// list have opened -- sealed, or sealed in place on this start -- and
-// never before: a start that stopped part way leaves the schema below
-// it, so the next start still seals what is left. From the stamp on, a
-// plaintext document is refused.
+// build knows above it, on the database and the data directory. The
+// server calls it once every auth store and the drop list have opened
+// sealed, and never before: a start refused part way -- a plaintext or
+// damaged document -- leaves the schema below it, so the release the
+// data came from can still open it.
+//
+// Unlike upgradeDataDirSchema, a stamp that cannot be written refuses
+// start-up (#1202 review R20): schema 4 is the downgrade guard that
+// stops an older build reading the sealed accounts wrongly, so carrying
+// on without it would leave that build free to start on this data.
 //
 // Setup-only mode and the command-line tools never call it; only a
 // normal start moves the schema.
@@ -489,7 +509,11 @@ func (s *storage) finishSchemaUpgrade(ctx context.Context, cfg config.Config) er
 			return fmt.Errorf("postgres: applying schema: %w", err)
 		}
 	}
-	return migrateDataDirSchema(cfg, persist.CurrentSchema())
+	if _, err := persist.MigrateFileSchemaTo(ctx, dataDir(cfg), version, persist.CurrentSchema()); err != nil {
+		return fmt.Errorf("recording schema %d in %s: %w -- refusing to start without it, because it is what stops "+
+			"an older release opening this data", persist.CurrentSchema(), dataDir(cfg), err)
+	}
+	return nil
 }
 
 // postgresAdoptedMarker records that this deployment has run on

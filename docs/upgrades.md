@@ -205,13 +205,18 @@ and keep a copy of it somewhere safe, apart from the data: a lost key
 cannot be recovered, and without it the sealed accounts cannot be read.
 This applies on Postgres too.
 
-On the **first start of 0.7.0** (while the stored schema is below 4) any
-plaintext accounts, tokens, recovery-key digests and drop list that an
-earlier keyless release left are sealed in place. The schema moves to 4
-only once all of them are sealed. If sealing stops part-way, for example
-because one file is damaged, the schema stays at 3: put the file right and
-start again, and the rest is sealed then. After that first start a
-plaintext copy of any of them is refused, not sealed again.
+**The key has to be in place before you upgrade.** 0.7.0 does not seal
+plaintext data in place. An install that ran without a key has its
+accounts, tokens, recovery-key digests and drop list in the clear, and
+0.7.0 refuses to start on any of them, on files or on Postgres: it says
+the data was written without a key before v0.7.0, leaves it exactly as it
+is and prints no setup code. Restore a sealed copy (one taken while a key
+was mounted), or move the plaintext file aside and start fresh, which
+means creating the admin account again. The schema moves to 4 only once
+every one of those stores has opened sealed, so a refused start leaves it
+at 3 and the release you came from can still read the data. If the
+schema stamp itself cannot be written, 0.7.0 refuses to start rather
+than run without it.
 
 **2. Take a copy of your data.** Stop MikroView, then copy the data
 directory (or run `pg_dump` for Postgres). MikroView does not take one

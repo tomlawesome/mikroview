@@ -878,10 +878,10 @@ func main() {
 	// A configured-but-unreachable database is fatal -- see openStorage.
 	//
 	// Accounts are gauntlet's (#1202), sealed under the key on either
-	// backend, with a plaintext document an earlier keyless release left
-	// sealed in place on this first open (authBackendFor). A document
-	// that exists and will not open -- damaged, or sealed under another
-	// key -- refuses start-up rather than reading as an empty store,
+	// backend (authBackendFor). A document that exists and will not
+	// open -- plaintext, which an earlier keyless release left and which
+	// is never sealed in place (ruling 19), damaged, or sealed under
+	// another key -- refuses start-up rather than reading as an empty store,
 	// which would present the first-run screen on an instance that has
 	// an admin (#378). The common-password list new passwords are
 	// checked against is built first: the store holds it from the start.
@@ -1085,16 +1085,16 @@ func main() {
 
 	// The recovery-key digests are the fourth auth store. Only the
 	// command-line tools use them, but they are opened here as well, so
-	// that the schema stamp below covers them like the other three: a
-	// plaintext file an earlier keyless release left is sealed on this
-	// first start, and refused after it (#1202, ruling 14).
+	// that a start is refused over them as over the other three: a
+	// plaintext file an earlier keyless release left is refused, never
+	// sealed in place (#1202, ruling 19).
 	mustOpenStore(logging.New("recovery-keys"), openRecoveryKeysSealed(bootCtx, persistence, cfg))
 
 	// Every auth store and the drop list have now opened sealed, so the
-	// schema can move to 4 (#1202, ruling 14): from here on a plaintext
-	// document is refused. Not before -- a start that stopped above
-	// leaves the schema where it was, and the next start seals what is
-	// left.
+	// schema can move to 4, the downgrade guard. Not before -- a start
+	// refused above leaves the schema where it was, so the release the
+	// data came from can still open it. A stamp that cannot be written
+	// refuses start-up (#1202 review R20).
 	if err := persistence.finishSchemaUpgrade(bootCtx, cfg); err != nil {
 		logging.New("schema").Error(err.Error())
 		os.Exit(1)
@@ -1552,6 +1552,14 @@ func main() {
 	}
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
+
+	// The last store has opened, so a first move onto Postgres is done
+	// -- unless one of them failed to move, in which case the marker is
+	// not written and the next start tries again (#1202 review R22).
+	if err := persistence.recordPostgresAdoption(); err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
 
 	// #1240: the build this data directory last ran, read out of the
@@ -2605,14 +2613,14 @@ func openRecoveryStoreForCLI() (*recoverykeys.RecoveryStore, func(), error) {
 		return nil, nil, fmt.Errorf("auth.recoveryKeysPath is not configured")
 	}
 
-	st, err := openStorage(context.Background(), cfg)
+	st, err := openStorageForCLI(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	// Sealed under the key like the other auth stores (#1202, ruling 2):
-	// a plaintext file an earlier keyless release wrote is sealed in
-	// place on this open. Every caller has already refused a missing key
-	// (cliRequireKey).
+	// a plaintext file an earlier keyless release wrote is refused, never
+	// sealed in place (ruling 19). Every caller has already refused a
+	// missing key (cliRequireKey).
 	backend, err := st.authBackendFor(context.Background(), authStoreRecoveryKeys, cfg.Auth.RecoveryKeysPath)
 	if err != nil {
 		st.Close()
@@ -3151,13 +3159,13 @@ func openAuthStoreForCLI(cmd string) (*gauntlet.Store, func(), error) {
 		return nil, nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
 	}
 
-	st, err := openStorage(context.Background(), cfg)
+	st, err := openStorageForCLI(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	// The same sealed backend the server opens (authBackendFor), so a
-	// plaintext document is sealed in place here too, and a damaged one
-	// refuses rather than reading as empty.
+	// plaintext or damaged document refuses here too, rather than
+	// reading as empty.
 	backend, err := st.authBackendFor(context.Background(), authStoreAccounts, cfg.Auth.StorePath)
 	if err != nil {
 		st.Close()

@@ -205,14 +205,6 @@ func runSetupOnly(result config.Result, problems int) int {
 		return 1
 	}
 	defer st.Close()
-	// Never seal in place here either (#1202, ruling 14), whatever the
-	// schema. Below 4 a plaintext accounts file is one the previous,
-	// keyless release wrote; sealing it would leave a rollback to that
-	// release -- the likely next step for an operator whose upgraded
-	// config was refused -- unable to read its own accounts. At 4 a
-	// plaintext file is refused anyway. Either way it is refused here,
-	// below, and a normal start seals it.
-	st.neverSealInPlace()
 
 	authBackend, err := st.authBackendFor(ctx, authStoreAccounts, cfg.Auth.StorePath)
 	if err != nil {
@@ -224,11 +216,12 @@ func runSetupOnly(result config.Result, problems int) int {
 	storeOpts := quietStoreOptionsFor(cfg)
 	storeOpts.Log = logging.New("auth")
 	authStore, err := gauntlet.OpenStore(authBackend, storeOpts)
+	// A plaintext accounts file is refused here as at a normal start
+	// (#1202, ruling 19; review R23): nothing seals it, at any schema.
 	if errors.Is(err, persist.ErrPlaintextDocument) {
-		log.Error(fmt.Sprintf("%s holds the accounts in the clear, as a release without a key left them -- setup-only mode "+
-			"does not seal them, so the previous release can still read them if you go back to it. Not starting the "+
-			"config editor: fix the config file on disk and start normally, which seals them (or roll back). Check the "+
-			"file with -validate-config", authBackend.Describe()))
+		log.Error(fmt.Sprintf("%s holds the accounts in the clear: it was written without a key before v0.7.0, and "+
+			"MikroView does not seal plaintext in place. Not starting the config editor: restore a sealed copy from a "+
+			"backup taken with the key mounted, or move it aside and start fresh", authBackend.Describe()))
 		return 1
 	}
 	if err != nil {

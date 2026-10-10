@@ -332,7 +332,17 @@ describe.each(actions)('$name asks the admin for their own password (#1202 revie
     await typeAndConfirm('sw0rdfish-secret')
 
     expect(screen.queryByLabelText(/your password/i)).toBeNull()
-    expect(document.body.innerHTML).not.toContain('sw0rdfish-secret')
+    // Not on the page: not in its text, in any attribute, or in any
+    // field's live value.
+    expect(document.body.textContent).not.toContain('sw0rdfish-secret')
+    for (const el of document.body.querySelectorAll('*')) {
+      for (const attr of el.getAttributeNames()) {
+        expect(el.getAttribute(attr)).not.toContain('sw0rdfish-secret')
+      }
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        expect(el.value).not.toContain('sw0rdfish-secret')
+      }
+    }
     expect(JSON.stringify(usersState)).not.toContain('sw0rdfish-secret')
   })
 

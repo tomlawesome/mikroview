@@ -818,13 +818,12 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   written with no key) is refused outright, the same way a corrupted one
   always was, rather than treated as a fresh install.
 
-  **Sealing a plaintext file happens once.** On the first start of v0.7.0
-  an earlier keyless release's plaintext accounts, tokens, recovery-key
-  digests and drop list are sealed in place; the data schema is stamped 4
-  only after all are sealed. From then on a plaintext copy is refused and
-  start-up stops, so someone who can write the data folder but does not
-  hold the key cannot plant an accounts file of their own with an admin
-  they chose. Setup-only mode never seals in place.
+  **A plaintext file is never sealed in place** (#1202, ruling 19). An
+  earlier keyless release's plaintext accounts, tokens, recovery-key
+  digests or drop list -- on files or in Postgres rows -- are refused at
+  any schema and start-up stops, so someone who can write the data folder
+  but does not hold the key cannot plant an accounts file of their own
+  with an admin they chose. The key has to be in place before upgrading.
 
   With a key, the flags file contains the IP addresses that triggered a
   flag and a short human-readable description (encrypted); the accounts

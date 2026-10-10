@@ -225,9 +225,8 @@ func newPasswordList(cfg config.Config) (*blocklist.Refresher, error) {
 
 // openRecoveryKeysSealed opens the recovery-key digests' document at
 // start-up, through the same sealed backend the command-line tools use,
-// so a plaintext one an earlier keyless release left is sealed in place
-// on the first start of v0.7.0 and refused after it, as the other auth
-// stores are (#1202, ruling 14). It only reads: the store itself, and
+// so a plaintext one an earlier keyless release left refuses start-up,
+// as the other auth stores do (#1202, ruling 19). It only reads: the store itself, and
 // its pepper, are the command-line tools' (recoverykeys). A document
 // that will not open, or is not JSON, is a *persist.StartupError.
 func openRecoveryKeysSealed(ctx context.Context, st *storage, cfg config.Config) error {
@@ -277,7 +276,10 @@ func runTokenSweep(ctx context.Context, g *gate.Gate, log *slog.Logger) {
 
 // cliRequireKey is requireKey for the four commands that open the
 // account stores: the same refusal as start-up, before anything is
-// opened or prompted for.
+// opened or prompted for. It also refuses a data directory a newer
+// build wrote (persist.CheckFileSchema, #1202 review R25), as start-up
+// does, so a command never rewrites newer data in this build's older
+// shapes; checking writes nothing.
 func cliRequireKey(log *slog.Logger, cmd string) bool {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
@@ -285,5 +287,31 @@ func cliRequireKey(log *slog.Logger, cmd string) bool {
 		// that runs next.
 		return true
 	}
-	return requireKey(log, cfg, "run "+cmd)
+	if !requireKey(log, cfg, "run "+cmd) {
+		return false
+	}
+	if err := persist.CheckFileSchema(dataDir(cfg)); err != nil {
+		log.Error(err.Error())
+		return false
+	}
+	return true
+}
+
+// openStorageForCLI is openStorage for the four commands that open the
+// account stores. On Postgres it also writes the sealed tokens row if
+// there is none, as the first start does (#1202, ruling 20): a command
+// may be the first thing v0.7 runs on the database, and once it has put
+// a sealed accounts row there a v0.6.x build must not be able to start
+// on it.
+func openStorageForCLI(cfg config.Config) (*storage, error) {
+	ctx := context.Background()
+	st, err := openStorage(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := st.sealTokensRow(ctx); err != nil {
+		st.Close()
+		return nil, err
+	}
+	return st, nil
 }
