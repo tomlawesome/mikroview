@@ -68,6 +68,11 @@ func (b *EncryptedFileBackend) Describe() string { return b.inner.Describe() }
 
 func (b *EncryptedFileBackend) Close() error { return b.inner.Close() }
 
+// ProtectedAtRest implements gauntlet's persist.AtRest: the file holds
+// ciphertext only, so gauntlet's store accepts this backend without
+// Options.AllowPlaintextAtRest (#1202).
+func (b *EncryptedFileBackend) ProtectedAtRest() bool { return true }
+
 // Load reads the file and decrypts it. A document that fails to decrypt
 // -- the wrong key, or a file altered or written by something else -- is
 // a real error, not a missing-document case: treating it as absent would

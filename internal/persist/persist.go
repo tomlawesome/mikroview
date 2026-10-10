@@ -32,7 +32,8 @@ package persist
 
 import (
 	"context"
-	"errors"
+
+	gpersist "github.com/tomlawesome/gauntlet/persist"
 )
 
 // ErrConflict is returned by Save when the stored version is not the one
@@ -43,23 +44,29 @@ import (
 // exactly the situation that used to cause a silent lost update against
 // the file backend (the server persisting over a change a CLI command
 // had just made). Callers must not treat it as fatal.
-var ErrConflict = errors.New("persist: store was modified by someone else")
+//
+// It is gauntlet's own sentinel (#1202): gauntlet's stores compare
+// against gpersist.ErrConflict, and every store here compares against
+// this one, so the two must be the same value.
+var ErrConflict = gpersist.ErrConflict
 
 // Snapshot is one store's persisted document plus the token needed to
-// write it back safely.
-type Snapshot struct {
-	// Payload is the store's serialized state, exactly as the store
-	// marshalled it -- this package never inspects or rewrites it.
-	Payload []byte
-	// Version is what Save must be given to accept the next write. Zero
-	// means "nothing stored yet", which is the value to pass when
-	// creating a store's first document.
-	Version int64
-	// Exists distinguishes "stored, and happens to be empty" from "never
-	// stored". Auto-migration depends on the difference: an existing
-	// empty document must not be overwritten from a stale JSON file.
-	Exists bool
-}
+// write it back safely. It is gauntlet's type (#1202), so this package's
+// backends satisfy gauntlet's persist.Backend with no adapter. The fields
+// are Payload, Version and Exists, as documented on the gauntlet type;
+// "Exists" matters here because auto-migration must not overwrite an
+// existing empty document from a stale JSON file.
+type Snapshot = gpersist.Snapshot
+
+// Every backend here satisfies gauntlet's persist.Backend as it is, and
+// the encrypted file backend its AtRest (#1202). A compile-time check, so
+// a signature drift fails the build rather than a gauntlet store at start.
+var (
+	_ gpersist.Backend = (*FileBackend)(nil)
+	_ gpersist.Backend = (*EncryptedFileBackend)(nil)
+	_ gpersist.Backend = (*PostgresBackend)(nil)
+	_ gpersist.AtRest  = (*EncryptedFileBackend)(nil)
+)
 
 // Backend is where one store's document lives.
 //

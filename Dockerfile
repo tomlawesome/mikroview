@@ -18,6 +18,9 @@ RUN npm run build
 # --- backend build ----------------------------------------------------------
 FROM golang:1.27.1-alpine AS backend
 WORKDIR /src
+# #1202: fetch gauntlet straight from GitHub, never via the public Go proxy
+# or checksum database (that would publish the version permanently).
+ENV GOPRIVATE=github.com/tomlawesome/gauntlet
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .

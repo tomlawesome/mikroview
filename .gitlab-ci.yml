@@ -44,6 +44,10 @@ default:
 
 variables:
   GOFLAGS: "-mod=readonly"
+  # #1202: gauntlet is fetched straight from GitHub, never through the public
+  # Go proxy or checksum database (resolving it there would publish the
+  # version permanently). GOPRIVATE also sets GONOSUMDB.
+  GOPRIVATE: "github.com/tomlawesome/gauntlet"
 
 # #1091: the only thing this workflow:rules block exists for is to set
 # NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
