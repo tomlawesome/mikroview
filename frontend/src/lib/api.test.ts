@@ -797,15 +797,15 @@ describe('submitLoginFactor and clearUserTOTP (#1249)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ code: 'a1b2-c3d4-e5f6-g7h8' })
   })
 
-  it('clearUserTOTP sends no body, identifying the target by URL', async () => {
+  it('clearUserTOTP identifies the target by URL and sends the admin password in the body (#1202 U8)', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await clearUserTOTP('u-42')
+    const result = await clearUserTOTP('u-42', 'hunter2')
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/totp')
     expect(init?.method).toBe('DELETE')
-    expect(init?.body).toBeUndefined()
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 })
 
@@ -954,15 +954,15 @@ describe('the passkey calls (#1250)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ assertion: { id: 'c1' } })
   })
 
-  it('clearUserPasskeys sends no body, identifying the target by URL', async () => {
+  it('clearUserPasskeys identifies the target by URL and sends the admin password in the body (#1202 U8)', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await clearUserPasskeys('u-42')
+    const result = await clearUserPasskeys('u-42', 'hunter2')
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/passkeys')
     expect(init?.method).toBe('DELETE')
-    expect(init?.body).toBeUndefined()
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 })
 

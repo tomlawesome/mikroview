@@ -1240,15 +1240,33 @@ export async function confirmRecoveryCodes(): Promise<string | null> {
   throw new ApiError(err.detail.trim() || wordsForStatus(res.status), res.status)
 }
 
+// #1202 U8: gauntlet re-checks the calling admin's own password (a rate
+// limited re-check) on the four admin actions on another account. How
+// their refusals read, shared so the four cannot drift apart:
+//   INCORRECT_PASSWORD  401 #invalid-credentials, whatever its detail says.
+//   other text          429 too many attempts; 409 own account, last admin
+//                       or an SSO-only caller -- the server's reason.
+// Any other 401 (#sign-in-required, or untyped) is the session being gone,
+// not a wrong password, and is thrown for the caller to route to sign-in.
+async function adminRecheckRefusal(res: Response, name: string): Promise<string> {
+  if (res.status === 401) {
+    const err = await readError(res)
+    if (isIncorrectPassword(err)) return INCORRECT_PASSWORD
+    throw new ApiError(err.detail.trim() || wordsForStatus(401), 401)
+  }
+  return (await errorText(res)) || `${name}: ${res.status}`
+}
+
 // clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
-// /api/auth/users/{id}/totp turns someone else's factor off with no
-// password, audited server-side. Refused on the admin's own id -- see
-// EngineRoom's people group, which never renders the button on that row
-// in the first place.
-export async function clearUserTOTP(id: string): Promise<string | null> {
-  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/totp`)
+// /api/auth/users/{id}/totp turns someone else's factor off, audited
+// server-side. Takes the calling admin's own password (#1202 U8, see
+// adminRecheckRefusal), sent in the body and nowhere else. Refused on the
+// admin's own id -- see EngineRoom's people group, which never renders the
+// button on that row in the first place.
+export async function clearUserTOTP(id: string, password: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/totp`, { password })
   if (res.ok) return null
-  return (await errorText(res)) || `clearUserTOTP: ${res.status}`
+  return adminRecheckRefusal(res, 'clearUserTOTP')
 }
 
 // fetchPasskeys feeds PasskeysOverlay's list step (#1250). Q5-F2: this
@@ -1339,13 +1357,14 @@ export async function disablePasskey(id: string, password: string): Promise<Disa
 
 // clearUserPasskeys is the admin's side of a lost device (#1250): DELETE
 // /api/auth/users/{id}/passkeys turns every one of someone else's
-// passkeys off with no password, audited server-side -- mirrors
-// clearUserTOTP above, including being refused on the admin's own id
-// (EngineRoom never renders the button on that row in the first place).
-export async function clearUserPasskeys(id: string): Promise<string | null> {
-  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/passkeys`)
+// passkeys off, audited server-side -- mirrors clearUserTOTP above,
+// including the admin's own password in the body (#1202 U8) and being
+// refused on the admin's own id (EngineRoom never renders the button on
+// that row in the first place).
+export async function clearUserPasskeys(id: string, password: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/passkeys`, { password })
   if (res.ok) return null
-  return (await errorText(res)) || `clearUserPasskeys: ${res.status}`
+  return adminRecheckRefusal(res, 'clearUserPasskeys')
 }
 
 // Change the signed-in account's own password (#294 item 4). Returns
@@ -1421,10 +1440,12 @@ export async function fetchUsers(): Promise<UserSummary[]> {
   return (await res.json()) ?? []
 }
 
-export async function deleteUser(id: string): Promise<string | null> {
-  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`)
+// deleteUser takes the calling admin's own password (#1202 U8), sent in
+// the body and nowhere else; see adminRecheckRefusal for the refusals.
+export async function deleteUser(id: string, password: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`, { password })
   if (res.ok) return null
-  return (await errorText(res)) || `deleteUser: ${res.status}`
+  return adminRecheckRefusal(res, 'deleteUser')
 }
 
 // resetUserPassword is the admin's way back in for somebody who has lost
@@ -1432,11 +1453,12 @@ export async function deleteUser(id: string): Promise<string | null> {
 // error text otherwise, the same shape createToken uses -- and for the
 // same reason: the successful answer is a credential that exists in this
 // response and nowhere else. Nothing here may store it, log it or put it
-// in a URL; show it once and let it go.
-export async function resetUserPassword(id: string): Promise<PasswordResetCode | string> {
-  const res = await postJSON(`/api/auth/users/${encodeURIComponent(id)}/reset-password`)
+// in a URL; show it once and let it go. Also takes the calling admin's own
+// password (#1202 U8), likewise only in the body.
+export async function resetUserPassword(id: string, password: string): Promise<PasswordResetCode | string> {
+  const res = await postJSON(`/api/auth/users/${encodeURIComponent(id)}/reset-password`, { password })
   if (res.ok) return res.json()
-  return (await errorText(res)) || `resetUserPassword: ${res.status}`
+  return adminRecheckRefusal(res, 'resetUserPassword')
 }
 
 // setNewPasswordAfterReset is the far end of that flow, for a session

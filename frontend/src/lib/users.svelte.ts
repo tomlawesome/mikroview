@@ -27,6 +27,11 @@ class UsersState {
     return null
   }
 
+  // The four admin actions on another account (remove, resetPassword,
+  // clearFactor, clearPasskeys) take the calling admin's own password
+  // (#1202 U8) and pass it straight to api.ts: this module is a
+  // long-lived singleton, so none of them keeps a copy.
+  //
   // resetPassword returns the one-time code on success (#1251) and
   // error text otherwise. The code is handed straight back to the caller
   // and never held here: this module is a long-lived singleton, and a
@@ -34,21 +39,21 @@ class UsersState {
   // sitting in memory for the rest of the session with nothing left to
   // do. The list is refreshed because the reset ends that account's
   // sessions, which changes what its row says.
-  async resetPassword(id: string): Promise<PasswordResetCode | string> {
-    const result = await resetUserPassword(id)
+  async resetPassword(id: string, password: string): Promise<PasswordResetCode | string> {
+    const result = await resetUserPassword(id, password)
     if (typeof result === 'string') return result
     await this.refresh()
     return result
   }
 
   // clearFactor is the admin's side of a lost phone (#1249) -- turns
-  // someone else's authenticator app off with no password of theirs.
+  // someone else's authenticator app off.
   // Refreshed rather than patched locally: unlike remove/resetPassword
   // above, this is the one row field EngineRoom's people group reads
   // straight off the list (user.hasTOTP), so the row has to see the
   // server's new answer, not an assumption that the call did what it said.
-  async clearFactor(id: string): Promise<string | null> {
-    const err = await clearUserTOTP(id)
+  async clearFactor(id: string, password: string): Promise<string | null> {
+    const err = await clearUserTOTP(id, password)
     if (err) return err
     await this.refresh()
     return null
@@ -58,15 +63,15 @@ class UsersState {
   // path -- a separate method, not a parameter on clearFactor, since the
   // two clear different server routes and EngineRoom offers them as two
   // distinct buttons (an account can hold either factor, or both).
-  async clearPasskeys(id: string): Promise<string | null> {
-    const err = await clearUserPasskeys(id)
+  async clearPasskeys(id: string, password: string): Promise<string | null> {
+    const err = await clearUserPasskeys(id, password)
     if (err) return err
     await this.refresh()
     return null
   }
 
-  async remove(id: string): Promise<string | null> {
-    const err = await deleteUser(id)
+  async remove(id: string, password: string): Promise<string | null> {
+    const err = await deleteUser(id, password)
     if (err) return err
     // Dropped locally rather than re-fetching: the server has already
     // confirmed, and nothing else in this list can have changed as a
