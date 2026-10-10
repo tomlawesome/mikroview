@@ -659,3 +659,9 @@ decision the design above states.
   schema stamp letting a planted plaintext accounts file be sealed and
   accepted). Where the sections above describe sealing in place, this
   ruling replaces them.
+- **Ruling 20, v0.6 can never start on a v0.7 Postgres database
+  (2026-10-10):** the first v0.7 start always writes the sealed tokens
+  row, even with no tokens. v0.6.x cannot parse it and refuses to start,
+  instead of reading the sealed accounts row as an empty store, offering
+  account creation and overwriting the real accounts. Ruling 18 guards
+  every later downgrade; this covers the releases already shipped.
