@@ -66,6 +66,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/prefs"
+	"github.com/tomlawesome/mikroview/internal/recoverykeys"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -2507,7 +2508,7 @@ func runValidateConfig(args []string) int {
 // The pepper stays a local file in both cases. That is the whole design:
 // a database dump yields digests nothing can test, and this host yields a
 // pepper with no digests to apply it to.
-func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
+func openRecoveryStoreForCLI() (*recoverykeys.RecoveryStore, func(), error) {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config: %w", err)
@@ -2536,7 +2537,7 @@ func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
 		st.Close()
 		return nil, nil, fmt.Errorf("the recovery-key store has no working backend -- check auth.recoveryKeysPath and the Postgres configuration")
 	}
-	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
+	store, err := recoverykeys.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
 	if err != nil {
 		st.Close()
 		return nil, nil, err

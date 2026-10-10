@@ -27,6 +27,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/recoverykeys"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -674,7 +675,7 @@ func TestVersionFileIsReleasable(t *testing.T) {
 // invariant the ordering depends on.
 func TestRedeemDoesNotConsumeAKeyUntilCommitted(t *testing.T) {
 	dir := t.TempDir()
-	rs, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	rs, err := recoverykeys.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -693,7 +694,7 @@ func TestRedeemDoesNotConsumeAKeyUntilCommitted(t *testing.T) {
 	}
 
 	// A fresh store, as the next invocation of the command would open.
-	again, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	again, err := recoverykeys.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
 	if err != nil {
 		t.Fatal(err)
 	}

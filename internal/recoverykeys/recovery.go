@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-package auth
+package recoverykeys
 
 import (
 	"context"
@@ -63,6 +63,11 @@ const (
 )
 
 var (
+	// ErrNotPersisted is returned by Generate and Commit on a store with
+	// no backend. It carries the text of internal/auth's error of the same
+	// name, which this file used before the move out of that package
+	// (#1202); nothing compared the two values.
+	ErrNotPersisted = errors.New("auth: storePath is not configured, refusing to create a user that would not survive a restart")
 	// ErrNoRecoveryKeys is returned when a gated command runs on a
 	// deployment that has none. Deliberately not "allow through" -- an
 	// absent key file must never read as "no gate configured".

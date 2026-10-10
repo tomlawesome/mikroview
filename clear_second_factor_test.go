@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/recoverykeys"
 )
 
 // clearFactorFixture is an isolated deployment's worth of auth and
@@ -61,9 +62,9 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 	}
 	f.store = store
 
-	recovery, err := auth.OpenRecovery(f.recoveryPath, f.pepperPath)
+	recovery, err := recoverykeys.OpenRecovery(f.recoveryPath, f.pepperPath)
 	if err != nil {
-		t.Fatalf("auth.OpenRecovery: %v", err)
+		t.Fatalf("recoverykeys.OpenRecovery: %v", err)
 	}
 	keys, err := recovery.Generate()
 	if err != nil {
@@ -80,13 +81,13 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 // openRecovery re-opens the fixture's recovery-key store from disk, the
 // same way a fresh CLI invocation would -- used after running the
 // command under test to check what actually got persisted, independent
-// of whatever the command's own (already-discarded) *auth.RecoveryStore
+// of whatever the command's own (already-discarded) *recoverykeys.RecoveryStore
 // believes happened.
-func (f *clearFactorFixture) openRecovery(t *testing.T) *auth.RecoveryStore {
+func (f *clearFactorFixture) openRecovery(t *testing.T) *recoverykeys.RecoveryStore {
 	t.Helper()
-	recovery, err := auth.OpenRecovery(f.recoveryPath, f.pepperPath)
+	recovery, err := recoverykeys.OpenRecovery(f.recoveryPath, f.pepperPath)
 	if err != nil {
-		t.Fatalf("auth.OpenRecovery: %v", err)
+		t.Fatalf("recoverykeys.OpenRecovery: %v", err)
 	}
 	return recovery
 }
