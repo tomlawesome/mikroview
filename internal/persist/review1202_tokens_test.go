@@ -3,6 +3,7 @@
 package persist_test
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -38,8 +39,13 @@ func TestATokenRecordedWithNoKindIsListedAndAuthenticatesAsNothing(t *testing.T)
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "tokens.json")
-	writeFile(t, path, doc)
-	ts := openTokens(t, persist.NewEncryptedFileBackend(path, freshKey(t)).WithSealInPlace())
+	// Sealed as the previous release sealed its tokens document (#1202
+	// review R26: nothing seals a plaintext file on open any more).
+	key := freshKey(t)
+	if _, err := persist.NewEncryptedFileBackend(path, key).Save(context.Background(), doc, 0); err != nil {
+		t.Fatal(err)
+	}
+	ts := openTokens(t, persist.NewEncryptedFileBackend(path, key))
 
 	listed := false
 	for _, tok := range ts.List() {

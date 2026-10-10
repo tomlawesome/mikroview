@@ -4,8 +4,10 @@ package persist
 
 // #1202 ruling 2 and 11, Postgres half: each auth store's row is wrapped
 // in gauntlet's persist.Encrypt under its own label (`auth`, `tokens`,
-// `recovery_keys`, `signins`), a plaintext row is sealed on first open,
-// and a sealed row copied into another store's place fails to open.
+// `recovery_keys`, `signins`), a plaintext row is refused (#1202 review
+// R26, ruling 19: nothing seals a plaintext row on open, so the wrapper is
+// never given MigratePlaintext), and a sealed row copied into another
+// store's place fails to open.
 //
 // These run against a real Postgres (the harness in postgres_test.go) and
 // skip without MIKROVIEW_TEST_POSTGRES. They exercise mikroview's
@@ -35,7 +37,7 @@ func pgKey(t *testing.T) []byte {
 
 func sealedPG(t *testing.T, p *Pool, name string, key []byte) gpersist.Backend {
 	t.Helper()
-	b, err := gpersist.Encrypt(NewPostgresBackend(p, name), key, gpersist.EncryptOptions{Label: name, MigratePlaintext: true})
+	b, err := gpersist.Encrypt(NewPostgresBackend(p, name), key, gpersist.EncryptOptions{Label: name})
 	if err != nil {
 		t.Fatalf("Encrypt(%s): %v", name, err)
 	}
@@ -60,10 +62,14 @@ func openPGAccounts(t *testing.T, b gpersist.Backend, announced *bool) (*gauntle
 	})
 }
 
-// #1202 B1.5 and B8.35 (Postgres): a plaintext `auth` row left by an
-// earlier release is sealed on the first open, every account still
-// works, and a second open reads it back.
-func TestPostgresAuthRowIsSealedOnFirstOpenAndReadsBack(t *testing.T) {
+// #1202 B1.5 and B8.35 (Postgres), as changed by R26 (ruling 19): a
+// plaintext `auth` row left by an earlier release is refused on open, not
+// sealed. The accounts store does not open, announces no setup code (it
+// is not an empty store), the error says the data was written without a
+// key before v0.7.0 and to restore a sealed copy or move it aside, and
+// the row is left byte for byte. Paired: a row sealed under the key opens,
+// reads back on a second open, and a wrong key is refused.
+func TestPostgresPlaintextAuthRowIsRefusedAndASealedOneReadsBack(t *testing.T) {
 	p := newTestPool(t)
 	ctx := context.Background()
 	key := pgKey(t)
@@ -84,40 +90,58 @@ func TestPostgresAuthRowIsSealedOnFirstOpenAndReadsBack(t *testing.T) {
 	if _, err := NewPostgresBackend(p, "auth").Save(ctx, snap.Payload, 0); err != nil {
 		t.Fatalf("seeding the plaintext row: %v", err)
 	}
-	if row, _ := pgRow(t, p, "auth"); bytes.HasPrefix([]byte(row), []byte(`{"sealed"`)) {
+	planted, _ := pgRow(t, p, "auth")
+	if bytes.HasPrefix([]byte(planted), []byte(`{"sealed"`)) {
 		t.Fatal("test setup: the seeded row is already sealed")
 	}
 
 	var announced bool
 	st, err := openPGAccounts(t, sealedPG(t, p, "auth", key), &announced)
-	if err != nil {
-		t.Fatalf("first open: %v", err)
+	if err == nil {
+		t.Fatalf("a plaintext auth row opened, with %d accounts (it was sealed in place)", st.Count())
 	}
+	// (The refusal text is gauntlet's own persist.Encrypt wrapper's; the
+	// ruling-19 wording is held to mikroview's errors in the start-up
+	// tests of internal/authe2e.)
 	if announced {
-		t.Error("an existing install announced a setup code")
+		t.Error("a plaintext auth row announced a setup code, as if the store were empty")
 	}
-	row, ok := pgRow(t, p, "auth")
-	if !ok || !bytes.HasPrefix(bytes.TrimSpace([]byte(row)), []byte(`{"sealed"`)) {
-		t.Fatalf("the auth row is not {\"sealed\": ...} after the first open: %.80s", row)
-	}
-	if bytes.Contains([]byte(row), []byte("pg-admin")) {
-		t.Error("the sealed row still contains the username in the clear")
-	}
-	if _, err := st.Authenticate("pg-admin", "fixture-only-not-real", time.Now()); err != nil {
-		t.Errorf("sign-in after sealing: %v", err)
+	if row, _ := pgRow(t, p, "auth"); row != planted {
+		t.Errorf("the plaintext row was sealed or rewritten:\n%.80s", row)
 	}
 
-	again, err := openPGAccounts(t, sealedPG(t, p, "auth", key), &announced)
+	// Paired: the same account, stored sealed under the key (the way
+	// v0.7.0 writes it), opens, announces nothing and reads back.
+	other := newTestPool(t)
+	var announcedSealed bool
+	fresh, err := openPGAccounts(t, sealedPG(t, other, "auth", key), &announcedSealed)
+	if err != nil {
+		t.Fatalf("opening an empty sealed store: %v", err)
+	}
+	if _, err := fresh.Register("pg-admin", "fixture-only-not-real", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	row, ok := pgRow(t, other, "auth")
+	if !ok || !bytes.HasPrefix(bytes.TrimSpace([]byte(row)), []byte(`{"sealed"`)) {
+		t.Fatalf("the auth row is not {\"sealed\": ...} after a write: %.80s", row)
+	}
+	if bytes.Contains([]byte(row), []byte("pg-admin")) {
+		t.Error("the sealed row contains the username in the clear")
+	}
+	again, err := openPGAccounts(t, sealedPG(t, other, "auth", key), &announcedSealed)
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
 	if again.Count() != 1 {
 		t.Errorf("second open sees %d accounts, want 1", again.Count())
 	}
+	if _, err := again.Authenticate("pg-admin", "fixture-only-not-real", time.Now()); err != nil {
+		t.Errorf("sign-in after a re-open: %v", err)
+	}
 
 	// A wrong key is refused and never reads as an empty store.
 	var announcedWrong bool
-	if s, err := openPGAccounts(t, sealedPG(t, p, "auth", pgKey(t)), &announcedWrong); err == nil {
+	if s, err := openPGAccounts(t, sealedPG(t, other, "auth", pgKey(t)), &announcedWrong); err == nil {
 		t.Errorf("a different key opened the row, with %d accounts", s.Count())
 	}
 	if announcedWrong {

@@ -329,37 +329,72 @@ func TestAdminPasskeyDefaultFollowsThePublicURL(t *testing.T) {
 	}
 }
 
-// #1202 B8.35 (file backend): plaintext accounts, tokens and recovery-key
-// documents left by an earlier release are sealed on first open; every
-// account and token still works; a second start-up reads them back; a wrong
-// key fails start-up and never reads as an empty store.
-func TestPlaintextAuthFilesAreSealedOnFirstStartAndKeepWorking(t *testing.T) {
+// #1202 B8.35 (file backend), as changed by R26 (ruling 19; it was
+// "plaintext accounts, tokens and recovery-key documents are sealed on
+// first open and keep working"): a plaintext accounts, tokens, recovery-key
+// or sign-in file left by an earlier release refuses start-up -- whichever
+// of the four it is, with the other three sealed. The file is left byte
+// for byte, no setup code is logged, and the refusal has the ruling-19
+// wording. Paired: put right, the install starts.
+func TestPlaintextAuthFilesRefuseStartUpAndAreLeftAlone(t *testing.T) {
 	t.Parallel()
-	// Make a real install, then unseal its documents to what a previous
-	// release wrote: this needs the plaintext, so take it from a sealed
-	// run by driving the file backend directly.
-	f := newLegacyInstall(t)
+	f := newLegacyInstallSealed(t)
+	sealed := map[string][]byte{
+		"users.json":  readBytes(t, filepath.Join(f.root, "data", "users.json")),
+		"tokens.json": readBytes(t, filepath.Join(f.root, "data", "tokens.json")),
+	}
+	plain := map[string][]byte{
+		"users.json":    f.accounts,
+		"tokens.json":   f.tokenDoc,
+		"recovery.json": []byte(`{"keys":[]}`),
+		"signins.json":  []byte(`{"entries":[]}`),
+	}
+	for name, body := range plain {
+		path := filepath.Join(f.root, "data", name)
+		must(t, os.WriteFile(path, body, 0o600))
+		code, out, _ := refused(t, Opts{Root: f.root, KeyFile: f.keyPath})
+		if code == 0 {
+			t.Errorf("%s plaintext: exit status 0\n%s", name, out)
+		}
+		wantRuling19Refusal(t, name+" plaintext", out)
+		if setupCodeRe.MatchString(out) {
+			t.Errorf("%s plaintext: a setup code was logged:\n%s", name, out)
+		}
+		if got := readBytes(t, path); !bytes.Equal(got, body) {
+			t.Errorf("%s plaintext: the file was changed (sealed or rewritten)", name)
+		}
+		if orig, ok := sealed[name]; ok {
+			must(t, os.WriteFile(path, orig, 0o600))
+		} else {
+			must(t, os.Remove(path))
+		}
+	}
+
+	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
+	if a.client().session(t).SetupRequired {
+		t.Error("the sealed install reads as empty")
+	}
+}
+
+// #1202 B8.35 (file backend), the half that was always about sealed files:
+// accounts and tokens the previous release sealed under the key keep
+// working -- sign-in, an API token, a droplist-pull token -- and a second
+// start-up reads them back; a wrong key fails start-up and never reads as
+// an empty store.
+func TestSealedAuthFilesKeepWorkingAcrossRestartsAndAWrongKeyIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newLegacyInstallSealed(t)
 
 	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
 	if setupCodeRe.MatchString(a.log()) {
 		t.Errorf("an install with accounts announced a setup code:\n%s", a.log())
 	}
-	for _, name := range []string{"users.json", "tokens.json"} {
-		raw := readBytes(t, a.file(name))
-		if json.Valid(raw) {
-			t.Errorf("%s is still valid JSON after first start-up; it was not sealed", name)
-		}
-	}
-	if raw, err := os.ReadFile(a.file("recovery.json")); err == nil && json.Valid(raw) {
-		t.Error("recovery.json is still valid JSON after first start-up; it was not sealed")
-	}
-
 	w := &world{a: a, admin: f.admin}
 	_, r := w.signIn(t, f.admin, f.admin.recovery(t))
 	wantStatus(t, "sign-in of a pre-existing account", r, 200)
 	wantStatus(t, "api token on /api/stats", a.client().bearer(f.tokens["api"], "GET", "/api/stats"), 200)
 	if r := a.client().bearer(f.tokens["droplist-pull"], "GET", "/api/droplist.rsc"); r.Status == 401 || r.Status == 403 || r.Status == 404 {
-		t.Errorf("the droplist-pull token was refused after sealing: %s", r)
+		t.Errorf("the droplist-pull token was refused: %s", r)
 	}
 	a.stop()
 
@@ -479,13 +514,21 @@ func TestAuthFileThatIsNeitherSealedNorJSONFailsStartUpAndIsLeftAlone(t *testing
 		})
 	}
 
-	// Paired: a valid JSON file is sealed in place instead (ruling 11).
-	t.Run("valid JSON is sealed instead", func(t *testing.T) {
+	// Paired: a valid JSON file is refused as plaintext instead (#1202
+	// review R26, ruling 19; ruling 11 used to seal it), with the ruling-19
+	// wording rather than a damaged-file error, and left alone.
+	t.Run("valid JSON is refused as plaintext instead", func(t *testing.T) {
 		t.Parallel()
-		f := newLegacyInstall(t)
-		a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
-		if json.Valid(readBytes(t, a.file("users.json"))) {
-			t.Error("plaintext accounts were not sealed")
+		f := newLegacyInstallSealed(t)
+		path := filepath.Join(f.root, "data", "users.json")
+		must(t, os.WriteFile(path, f.accounts, 0o600))
+		code, out, _ := refused(t, Opts{Root: f.root, KeyFile: f.keyPath})
+		if code == 0 {
+			t.Errorf("exit status 0 with plaintext accounts\n%s", out)
+		}
+		wantRuling19Refusal(t, "valid JSON accounts file", out)
+		if got := readBytes(t, path); !bytes.Equal(got, f.accounts) {
+			t.Error("plaintext accounts were sealed or rewritten")
 		}
 	})
 }
@@ -522,7 +565,9 @@ func TestDropListFileIsSealedAndNoLogLineListsUnencryptedStores(t *testing.T) {
 // afterwards, and only on those.
 func TestBareTokenListOpensAndAllThreeKindsAuthenticateOnTheirRoutes(t *testing.T) {
 	t.Parallel()
-	f := newLegacyInstall(t)
+	// The bare list is sealed as the previous release sealed its tokens
+	// document: a plaintext one is refused (#1202 review R26, ruling 19).
+	f := newLegacyInstallSealed(t)
 	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
 	c := a.client()
 

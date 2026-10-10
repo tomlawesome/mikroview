@@ -108,7 +108,20 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 				// Recordings were made by a container with the default
 				// data directory, which the encrypted files are bound to.
 				return persist.NewEncryptedFileBackendForPath(
-					filepath.Join(dataDir, name), config.DefaultDataDir+"/"+name, key).WithSealInPlace()
+					filepath.Join(dataDir, name), config.DefaultDataDir+"/"+name, key)
+			}
+			if !m.HistoryKeyEncrypted {
+				// #1202 review R26 (ruling 19): a recording made without a
+				// key holds plaintext accounts and tokens. They are
+				// refused and left as they were -- there is no sealing in
+				// place.
+				runPlaintextRefusalChecks(t, plaintextCase{
+					accounts:    func() gpersist.Backend { return backend("users.json") },
+					tokens:      func() gpersist.Backend { return backend("tokens.json") },
+					rawAccounts: func() []byte { return readFile(t, filepath.Join(dataDir, "users.json")) },
+					rawTokens:   func() []byte { return readFile(t, filepath.Join(dataDir, "tokens.json")) },
+				})
+				return
 			}
 			runGauntletChecks(t, gauntletCase{
 				accounts:         func() gpersist.Backend { return backend("users.json") },
@@ -120,15 +133,18 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 				apiTokenName:     m.APITokenName,
 				apiTokenKindless: version == "v0.1.0", // #1202 review R12
 				totp:             m.SecondFactorEnrolled,
-				plaintext:        !m.HistoryKeyEncrypted,
 			})
 		})
 	}
 }
 
 // The same checks on a data directory built in the shape earlier
-// releases wrote (unversioned accounts object, bare token list, no
-// key), so the path runs without recordings. #1202 C.1-C.6, B1.8, B8.35.
+// releases wrote (unversioned accounts object, bare token list), so the
+// path runs without recordings. Two halves (#1202 review R26, ruling 19):
+// the documents as a keyless release left them are plaintext and are
+// refused; the same documents sealed the way the previous release sealed
+// them (mikroview's encrypted file backend) open and pass every check.
+// #1202 C.1-C.6, B1.8, B8.35.
 func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 	for _, withTOTP := range []bool{false, true} {
 		name := "no second factor"
@@ -136,60 +152,93 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 			name = "authenticator app enrolled"
 		}
 		t.Run(name, func(t *testing.T) {
-			l := buildLegacy(t, withTOTP)
-			dir := t.TempDir()
-			usersPath := filepath.Join(dir, "users.json")
-			tokensPath := filepath.Join(dir, "tokens.json")
-			writeFile(t, usersPath, l.accountsJSON)
-			writeFile(t, tokensPath, l.tokensJSON)
-			key := freshKey(t)
+			t.Run("plaintext is refused", func(t *testing.T) {
+				l := buildLegacy(t, withTOTP)
+				dir := t.TempDir()
+				usersPath := filepath.Join(dir, "users.json")
+				tokensPath := filepath.Join(dir, "tokens.json")
+				writeFile(t, usersPath, l.accountsJSON)
+				writeFile(t, tokensPath, l.tokensJSON)
+				key := freshKey(t)
 
-			res, err := persist.MigrateFileSchema(context.Background(), dir, "upgrade_test")
-			if err != nil {
-				t.Fatalf("MigrateFileSchema: %v", err)
-			}
-			if res.To != 4 {
-				t.Errorf("schema = %d, want 4", res.To)
-			}
-			// A stamp, not a conversion: the documents are as they were.
-			if got := readFile(t, usersPath); string(got) != string(l.accountsJSON) {
-				t.Error("the schema migration rewrote the accounts document; migration 4 is a stamp with no data change")
-			}
-
-			backend := func(path string) gpersist.Backend {
-				return persist.NewEncryptedFileBackend(path, key).WithSealInPlace()
-			}
-			runGauntletChecks(t, gauntletCase{
-				accounts:     func() gpersist.Backend { return backend(usersPath) },
-				tokens:       func() gpersist.Backend { return backend(tokensPath) },
-				rawAccounts:  func() []byte { return readFile(t, usersPath) },
-				rawTokens:    func() []byte { return readFile(t, tokensPath) },
-				admin:        l.admin,
-				viewer:       l.viewer,
-				apiTokenName: "upgrade-fixture-token",
-				totp:         withTOTP,
-				plaintext:    true,
+				if _, err := persist.MigrateFileSchema(context.Background(), dir, "upgrade_test"); err != nil {
+					t.Fatalf("MigrateFileSchema: %v", err)
+				}
+				backend := func(path string) gpersist.Backend { return persist.NewEncryptedFileBackend(path, key) }
+				runPlaintextRefusalChecks(t, plaintextCase{
+					accounts:    func() gpersist.Backend { return backend(usersPath) },
+					tokens:      func() gpersist.Backend { return backend(tokensPath) },
+					rawAccounts: func() []byte { return readFile(t, usersPath) },
+					rawTokens:   func() []byte { return readFile(t, tokensPath) },
+				})
+				// The documents are byte for byte what the keyless release wrote.
+				if got := readFile(t, usersPath); string(got) != string(l.accountsJSON) {
+					t.Error("the plaintext accounts document differs from what was written")
+				}
+				if got := readFile(t, tokensPath); string(got) != string(l.tokensJSON) {
+					t.Error("the plaintext tokens document differs from what was written")
+				}
 			})
 
-			// B1.8: all three raw values (32 hex, no prefix) still
-			// authenticate, each on its own kind and no other.
-			ts := openTokens(t, backend(tokensPath))
-			now := time.Now()
-			for _, c := range []struct {
-				raw  string
-				kind gauntlet.TokenKind
-			}{
-				{l.apiRaw, gauntlet.TokenKindAPI},
-				{l.ingestRaw, gauntlet.TokenKindIngest},
-				{l.dropRaw, gauntlet.TokenKind("droplist-pull")},
-			} {
-				if _, ok := ts.Authenticate(c.raw, c.kind, now); !ok {
-					t.Errorf("the legacy %s token (%d hex, no prefix) no longer authenticates", c.kind, len(c.raw))
+			t.Run("sealed by the previous release opens", func(t *testing.T) {
+				l := buildLegacy(t, withTOTP)
+				dir := t.TempDir()
+				usersPath := filepath.Join(dir, "users.json")
+				tokensPath := filepath.Join(dir, "tokens.json")
+				key := freshKey(t)
+				for path, doc := range map[string][]byte{usersPath: l.accountsJSON, tokensPath: l.tokensJSON} {
+					if _, err := persist.NewEncryptedFileBackend(path, key).Save(context.Background(), doc, 0); err != nil {
+						t.Fatalf("sealing %s as the previous release did: %v", path, err)
+					}
 				}
-			}
-			if _, ok := ts.Authenticate(l.apiRaw, gauntlet.TokenKindIngest, now); ok {
-				t.Error("an api token authenticated as an ingest token")
-			}
+				sealedUsers := readFile(t, usersPath)
+
+				res, err := persist.MigrateFileSchema(context.Background(), dir, "upgrade_test")
+				if err != nil {
+					t.Fatalf("MigrateFileSchema: %v", err)
+				}
+				if res.To != 4 {
+					t.Errorf("schema = %d, want 4", res.To)
+				}
+				// A stamp, not a conversion: the documents are as they were.
+				if got := readFile(t, usersPath); string(got) != string(sealedUsers) {
+					t.Error("the schema migration rewrote the accounts document; migration 4 is a stamp with no data change")
+				}
+
+				backend := func(path string) gpersist.Backend {
+					return persist.NewEncryptedFileBackend(path, key)
+				}
+				runGauntletChecks(t, gauntletCase{
+					accounts:     func() gpersist.Backend { return backend(usersPath) },
+					tokens:       func() gpersist.Backend { return backend(tokensPath) },
+					rawAccounts:  func() []byte { return readFile(t, usersPath) },
+					rawTokens:    func() []byte { return readFile(t, tokensPath) },
+					admin:        l.admin,
+					viewer:       l.viewer,
+					apiTokenName: "upgrade-fixture-token",
+					totp:         withTOTP,
+				})
+
+				// B1.8: all three raw values (32 hex, no prefix) still
+				// authenticate, each on its own kind and no other.
+				ts := openTokens(t, backend(tokensPath))
+				now := time.Now()
+				for _, c := range []struct {
+					raw  string
+					kind gauntlet.TokenKind
+				}{
+					{l.apiRaw, gauntlet.TokenKindAPI},
+					{l.ingestRaw, gauntlet.TokenKindIngest},
+					{l.dropRaw, gauntlet.TokenKind("droplist-pull")},
+				} {
+					if _, ok := ts.Authenticate(c.raw, c.kind, now); !ok {
+						t.Errorf("the legacy %s token (%d hex, no prefix) no longer authenticates", c.kind, len(c.raw))
+					}
+				}
+				if _, ok := ts.Authenticate(l.apiRaw, gauntlet.TokenKindIngest, now); ok {
+					t.Error("an api token authenticated as an ingest token")
+				}
+			})
 		})
 	}
 }
@@ -199,13 +248,17 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 func TestSealedAccountsUnderAnotherKeyFailToOpenOnGauntlet(t *testing.T) {
 	l := buildLegacy(t, false)
 	path := filepath.Join(t.TempDir(), "users.json")
-	writeFile(t, path, l.accountsJSON)
 
 	keyA, keyB := freshKey(t), freshKey(t)
+	// Sealed the way the previous release sealed it (#1202 review R26: no
+	// open seals a plaintext file any more).
+	if _, err := persist.NewEncryptedFileBackend(path, keyA).Save(context.Background(), l.accountsJSON, 0); err != nil {
+		t.Fatalf("sealing the legacy accounts: %v", err)
+	}
 	opts := gauntlet.Options{OnSetupCode: gauntlet.SetupCodeFunc(func(string) {}), ProductName: "MikroView"}
-	first, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, keyA).WithSealInPlace(), opts)
+	first, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, keyA), opts)
 	if err != nil {
-		t.Fatalf("first open under the right key (seals the legacy file): %v", err)
+		t.Fatalf("first open under the right key: %v", err)
 	}
 	if first.Count() != 2 {
 		t.Fatalf("Count() = %d, want 2", first.Count())
@@ -213,7 +266,7 @@ func TestSealedAccountsUnderAnotherKeyFailToOpenOnGauntlet(t *testing.T) {
 	before := readFile(t, path)
 
 	var announced bool
-	other := persist.NewEncryptedFileBackend(path, keyB).WithSealInPlace()
+	other := persist.NewEncryptedFileBackend(path, keyB)
 	st, err := gauntlet.OpenStore(other, gauntlet.Options{
 		OnSetupCode: gauntlet.SetupCodeFunc(func(string) { announced = true }), ProductName: "MikroView",
 	})

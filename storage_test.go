@@ -3,14 +3,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
@@ -186,17 +188,36 @@ func TestAuthBackendForRefusesWithoutAKey(t *testing.T) {
 	}
 }
 
-// With a key, each auth store's file is sealed, and one an earlier
-// keyless release left in plain JSON is sealed in place on its first
-// open (#1202, ruling 11) -- unlike every other store, which refuses a
-// plaintext file.
-func TestAuthBackendForSealsAPlaintextAuthFileInPlace(t *testing.T) {
+// With a key, each auth store's file is sealed. A file an earlier keyless
+// release left in plain JSON is refused on its first open, like every
+// other store's plaintext file (#1202 review R26, ruling 19, which
+// removed sealing in place that ruling 11 had given the auth stores): the
+// load fails with persist.ErrPlaintextDocument, the message says the data
+// was written without a key before v0.7.0 and to restore a sealed copy or
+// move it aside, and the file is left byte for byte. Paired: a sealed
+// file of the same store opens, and an ordinary store refuses its
+// plaintext file in the same way.
+func TestAuthBackendForRefusesAPlaintextAuthFile(t *testing.T) {
 	key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &storage{key: key}
 	ctx := context.Background()
+	wantRuling19 := func(what string, err error) {
+		t.Helper()
+		low := strings.ToLower(err.Error())
+		for _, w := range []string{"without a key", "v0.7.0", "restore a sealed copy", "move it aside"} {
+			if !strings.Contains(low, w) {
+				t.Errorf("%s: the refusal does not say %q:\n%v", what, w, err)
+			}
+		}
+		for _, w := range []string{"first start of v0.7.0", "seals it", "will seal", "normal start"} {
+			if strings.Contains(low, w) {
+				t.Errorf("%s: the refusal still says %q:\n%v", what, w, err)
+			}
+		}
+	}
 	for _, name := range []string{authStoreAccounts, authStoreTokens, authStoreRecoveryKeys, authStoreSignIns} {
 		path := filepath.Join(t.TempDir(), name+".json")
 		plain := []byte(`{"users":[]}`)
@@ -207,16 +228,33 @@ func TestAuthBackendForSealsAPlaintextAuthFileInPlace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: authBackendFor: %v", name, err)
 		}
-		snap, err := b.Load(ctx)
+		if snap, err := b.Load(ctx); err == nil {
+			t.Errorf("%s: a plaintext auth file opened, Payload %q (it was sealed in place)", name, snap.Payload)
+		} else {
+			if !errors.Is(err, persist.ErrPlaintextDocument) {
+				t.Errorf("%s: err = %v, want one wrapping persist.ErrPlaintextDocument", name, err)
+			}
+			wantRuling19(name, err)
+		}
+		if onDisk, _ := os.ReadFile(path); !bytes.Equal(onDisk, plain) {
+			t.Errorf("%s: the refused file was changed: %q", name, onDisk)
+		}
+
+		// Paired: a sealed file of the same store opens.
+		sealedPath := filepath.Join(t.TempDir(), name+".json")
+		sb, err := s.authBackendFor(ctx, name, sealedPath)
 		if err != nil {
-			t.Fatalf("%s: first open of a plaintext file: %v", name, err)
+			t.Fatalf("%s: authBackendFor: %v", name, err)
 		}
-		if string(snap.Payload) != string(plain) {
-			t.Errorf("%s: Payload = %q, want the plaintext document", name, snap.Payload)
+		if _, err := sb.Save(ctx, plain, 0); err != nil {
+			t.Fatalf("%s: Save: %v", name, err)
 		}
-		onDisk, _ := os.ReadFile(path)
-		if json.Valid(onDisk) {
-			t.Errorf("%s: the file is still plain JSON after its first open", name)
+		again, err := s.authBackendFor(ctx, name, sealedPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := again.Load(ctx); err != nil || string(got.Payload) != string(plain) {
+			t.Errorf("%s: the sealed file of the same store did not open: %q, %v", name, got.Payload, err)
 		}
 	}
 
@@ -230,6 +268,6 @@ func TestAuthBackendForSealsAPlaintextAuthFileInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := b.Load(ctx); err == nil {
-		t.Error("an ordinary store opened a plaintext file; only the auth stores seal in place")
+		t.Error("an ordinary store opened a plaintext file")
 	}
 }

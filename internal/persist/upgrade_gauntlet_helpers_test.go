@@ -5,15 +5,19 @@
 // release, and the synthetic stand-in below, must pass once gauntlet
 // opens the stored accounts and tokens documents in place.
 //
-// Written from the specification before the code exists. Names invented
-// here for the build to provide (see also seal_in_place_test.go):
+// Written from the specification before the code exists. Names the build
+// provides (see also seal_in_place_test.go):
 //
-//	persist.(*EncryptedFileBackend).WithSealInPlace()
 //	persist.CurrentSchema() == 4  ("accounts and tokens on gauntlet")
 //
 // and, for these backends to be handed to gauntlet at all, mikroview's
 // persist.Snapshot must be gauntlet's persist.Snapshot (an alias), so
 // that mikroview's backends satisfy gauntlet's persist.Backend.
+//
+// #1202 review R26 (ruling 19): there is no sealing in place. Everything
+// runGauntletChecks opens is already sealed (a recording made with a key,
+// or a stand-in sealed the way the previous release sealed it), and a
+// plaintext document goes through runPlaintextRefusalChecks instead.
 package persist_test
 
 import (
@@ -24,6 +28,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,12 +58,6 @@ type gauntletCase struct {
 	apiTokenKindless bool
 	// totp: the manifest says an authenticator app was enrolled.
 	totp bool
-	// plaintext: the stored documents were plaintext before this open,
-	// so the first open must seal them.
-	plaintext bool
-	// postgres: stored as {"sealed": ...} text in a row rather than the
-	// file backend's binary envelope.
-	postgres bool
 }
 
 const roundTripPassword = "a-fresh-long-passphrase-7Qz!"
@@ -131,12 +130,11 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 	t.Helper()
 	now := time.Now()
 
-	// Step 2. The stored bytes before the first open.
+	// Step 2. The stored bytes before the first open: already sealed
+	// (ruling 19), so opening them changes nothing.
 	beforeAccounts, beforeTokens := c.rawAccounts(), c.rawTokens()
-	if c.plaintext {
-		if !json.Valid(beforeAccounts) {
-			t.Fatal("test setup: the accounts document should be plaintext JSON before the first open")
-		}
+	if json.Valid(beforeAccounts) || json.Valid(beforeTokens) {
+		t.Fatal("test setup: a document handed to runGauntletChecks is plaintext; those go to runPlaintextRefusalChecks")
 	}
 
 	var announced bool
@@ -147,20 +145,7 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 	if st.Count() != 2 {
 		t.Errorf("Count() = %d, want 2 (the recorded admin and viewer)", st.Count())
 	}
-
-	afterAccounts := c.rawAccounts()
-	if c.plaintext {
-		// Sealed on this first open.
-		if bytes.Equal(beforeAccounts, afterAccounts) {
-			t.Error("the plaintext accounts document was not sealed on first open (bytes unchanged)")
-		}
-		if !c.postgres && json.Valid(afterAccounts) {
-			t.Error("the accounts file is still valid JSON after first open")
-		}
-		if c.postgres && !bytes.HasPrefix(bytes.TrimSpace(afterAccounts), []byte(`{"sealed"`)) {
-			t.Errorf("the accounts row does not read {\"sealed\": ...} after first open: %.60s", afterAccounts)
-		}
-	} else if !bytes.Equal(beforeAccounts, afterAccounts) {
+	if afterAccounts := c.rawAccounts(); !bytes.Equal(beforeAccounts, afterAccounts) {
 		t.Error("an already-sealed accounts document changed on open; it must open as it is")
 	}
 
@@ -189,10 +174,8 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 
 	// Step 5. Tokens.
 	ts := openTokens(t, c.tokens())
-	if c.plaintext {
-		if bytes.Equal(beforeTokens, c.rawTokens()) {
-			t.Error("the plaintext tokens document was not sealed on first open")
-		}
+	if !bytes.Equal(beforeTokens, c.rawTokens()) {
+		t.Error("an already-sealed tokens document changed on open; it must open as it is")
 	}
 	found := false
 	for _, tok := range ts.List() {
@@ -255,6 +238,83 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 	}
 	if v := docVersion(t, decryptedDocument(t, c.tokens())); v != 3 {
 		t.Errorf("tokens document version after the first save = %d, want 3", v)
+	}
+}
+
+// plaintextCase is a stored accounts document and tokens document that
+// are plaintext JSON, written before v0.7.0 without a key.
+type plaintextCase struct {
+	accounts, tokens       func() gpersist.Backend
+	rawAccounts, rawTokens func() []byte
+	// gauntletWords: the refusal comes from gauntlet's own persist.Encrypt
+	// wrapper (Postgres rows), whose wording is gauntlet's and not
+	// mikroview's to choose, so only the file backend's refusal, which is
+	// mikroview's ErrPlaintextDocument, is held to the ruling-19 wording.
+	gauntletWords bool
+}
+
+// #1202 review R26 (ruling 19). Whatever the schema and whichever way the
+// plaintext got there (a keyless v0.6 install, an old recording), opening
+// it is refused: gauntlet's open fails for both stores, never an empty
+// store and never a setup code, the error says the data was written
+// without a key before v0.7.0 and to restore a sealed copy or move it
+// aside, and the stored bytes are exactly as they were.
+func runPlaintextRefusalChecks(t *testing.T, c plaintextCase) {
+	t.Helper()
+	beforeAccounts, beforeTokens := c.rawAccounts(), c.rawTokens()
+	if !json.Valid(beforeAccounts) || !json.Valid(beforeTokens) {
+		t.Fatal("test setup: the stored accounts and tokens documents should both be plaintext JSON")
+	}
+
+	var announced bool
+	st, err := gauntlet.OpenStore(c.accounts(), gauntlet.Options{
+		OnSetupCode:  gauntlet.SetupCodeFunc(func(string) { announced = true }),
+		OnUnlockCode: gauntlet.UnlockCodeFunc(func(string, string) {}),
+		ProductName:  "MikroView",
+	})
+	if err == nil {
+		t.Errorf("gauntlet.OpenStore opened a plaintext accounts document, with %d accounts (it was sealed in place)", st.Count())
+	} else {
+		if !c.gauntletWords {
+			wantRuling19Text(t, "accounts", err.Error())
+		}
+	}
+	if announced {
+		t.Error("a plaintext accounts document announced a setup code, as if the store were empty")
+	}
+	if got := c.rawAccounts(); !bytes.Equal(got, beforeAccounts) {
+		t.Error("the plaintext accounts document was changed (sealed or rewritten)")
+	}
+
+	ts, err := gauntlet.OpenTokenStore(c.tokens(), gauntlet.TokenOptions{
+		Kinds: []gauntlet.TokenKind{gauntlet.TokenKindAPI, gauntlet.TokenKindIngest, gauntlet.TokenKind("droplist-pull")},
+	})
+	if err == nil {
+		t.Errorf("gauntlet.OpenTokenStore opened a plaintext tokens document, listing %d tokens (it was sealed in place)", len(ts.List()))
+	} else {
+		if !c.gauntletWords {
+			wantRuling19Text(t, "tokens", err.Error())
+		}
+	}
+	if got := c.rawTokens(); !bytes.Equal(got, beforeTokens) {
+		t.Error("the plaintext tokens document was changed (sealed or rewritten)")
+	}
+}
+
+// wantRuling19Text is the wording check of seal_in_place_test.go, for
+// this package.
+func wantRuling19Text(t *testing.T, what, msg string) {
+	t.Helper()
+	low := strings.ToLower(msg)
+	for _, w := range []string{"without a key", "v0.7.0", "restore a sealed copy", "move it aside"} {
+		if !strings.Contains(low, w) {
+			t.Errorf("%s: the refusal does not say %q:\n%s", what, w, msg)
+		}
+	}
+	for _, w := range []string{"first start of v0.7.0", "seals it", "will seal", "normal start"} {
+		if strings.Contains(low, w) {
+			t.Errorf("%s: the refusal still says %q:\n%s", what, w, msg)
+		}
 	}
 }
 

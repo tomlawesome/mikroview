@@ -20,16 +20,16 @@ import (
 )
 
 // openAccountsAt opens an accounts file the way the server opens it
-// (#1202): sealed under a key, with a plaintext JSON document sealed in
-// place on this first open, and anything else refused. The key is a
-// fixed test one, so a file this helper sealed opens again under it.
+// (#1202): sealed under a key, and anything else -- a plaintext JSON
+// document included (ruling 19, no sealing in place) -- refused. The key
+// is a fixed test one, so a file sealed under it opens again under it.
 func openAccountsAt(t *testing.T, path string) (*gauntlet.Store, error) {
 	t.Helper()
 	key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, key).WithSealInPlace(), quietStoreOptions())
+	return gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, key), quietStoreOptions())
 }
 
 // TestRestoreOverwritesACorruptStoreDocument is issue #378's other
@@ -61,6 +61,15 @@ func TestRestoreOverwritesACorruptStoreDocument(t *testing.T) {
 		t.Fatal("test setup: expected the corrupt accounts file to fail to open")
 	}
 
+	// #1202 review R26 (ruling 19): the restore runs with the key mounted,
+	// as every install does since v0.7.0, so the accounts file it writes
+	// is sealed under it -- a plaintext accounts file would be refused on
+	// the next open, there being no sealing in place.
+	keyPath := filepath.Join(dir, "history.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", retention.MinKeyBytes)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MIKROVIEW_HISTORY_KEY_FILE", keyPath)
 	t.Setenv("MIKROVIEW_CONFIG", "")
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
 	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
@@ -79,28 +88,15 @@ func TestRestoreOverwritesACorruptStoreDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// backup.Write's own envelope encoding re-indents the nested raw
-	// JSON (whitespace only), so compare the parsed shape rather than
-	// raw bytes -- what matters here is that the corrupt content is
-	// gone and the restored document is what was backed up.
 	if strings.Contains(string(got), "not valid json") {
 		t.Errorf("accounts file after restore still contains the corrupt content: %q", got)
 	}
-	var gotFile, wantFile struct {
-		Users []struct{} `json:"users"`
-	}
-	if err := json.Unmarshal(got, &gotFile); err != nil {
-		t.Fatalf("accounts file after restore is not valid JSON: %v (%q)", err, got)
-	}
-	if err := json.Unmarshal(restored, &wantFile); err != nil {
-		t.Fatal(err)
-	}
-	if len(gotFile.Users) != len(wantFile.Users) {
-		t.Errorf("accounts file after restore has %d users, want %d", len(gotFile.Users), len(wantFile.Users))
+	if json.Valid(got) {
+		t.Errorf("the restored accounts file is plaintext JSON although a key is mounted: %q", got)
 	}
 
-	// The whole point of the remedy: the store opens cleanly now --
-	// sealed in place on this first open, as the server would.
+	// The whole point of the remedy: the store opens cleanly now, sealed,
+	// as the server would open it.
 	s, err := openAccountsAt(t, authPath)
 	if err != nil {
 		t.Fatalf("opening the accounts after restore: %v", err)

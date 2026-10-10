@@ -195,6 +195,12 @@ type Opts struct {
 	NoTestHooks bool
 	// LogLevel overrides log.level.
 	LogLevel string
+	// FileSizeLimit, if above zero, starts the process with that many
+	// bytes as its largest writable file (RLIMIT_FSIZE), so a write of
+	// anything bigger fails with "file too large". The test that sets it
+	// must not call t.Parallel: the limit is lowered in this process for
+	// the instant of the fork and restored straight after.
+	FileSizeLimit uint64
 }
 
 type app struct {
@@ -420,7 +426,16 @@ func start(t *testing.T, o Opts) (*app, error) {
 	cmd.Stdout = a.out
 	cmd.Stderr = a.out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
+	restore := func() {}
+	if o.FileSizeLimit > 0 {
+		var old syscall.Rlimit
+		must(t, syscall.Getrlimit(syscall.RLIMIT_FSIZE, &old))
+		must(t, syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: o.FileSizeLimit, Max: old.Max}))
+		restore = func() { _ = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &old) }
+	}
+	err := cmd.Start()
+	restore()
+	if err != nil {
 		t.Fatalf("starting the binary: %v", err)
 	}
 	a.cmd = cmd

@@ -72,7 +72,7 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 	f.writeConfig(t)
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
 
-	store, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(f.authPath, key).WithSealInPlace(), quietStoreOptions())
+	store, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(f.authPath, key), quietStoreOptions())
 	if err != nil {
 		t.Fatalf("gauntlet.OpenStore: %v", err)
 	}
@@ -114,7 +114,7 @@ func (f *clearFactorFixture) writeConfig(t *testing.T) {
 // believes happened.
 func (f *clearFactorFixture) openRecovery(t *testing.T) *recoverykeys.RecoveryStore {
 	t.Helper()
-	recovery, err := recoverykeys.OpenRecoveryWithBackend(persist.NewEncryptedFileBackend(f.recoveryPath, f.key).WithSealInPlace(), f.pepperPath)
+	recovery, err := recoverykeys.OpenRecoveryWithBackend(persist.NewEncryptedFileBackend(f.recoveryPath, f.key), f.pepperPath)
 	if err != nil {
 		t.Fatalf("recoverykeys.OpenRecoveryWithBackend: %v", err)
 	}

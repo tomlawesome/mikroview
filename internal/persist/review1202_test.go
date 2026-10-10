@@ -9,9 +9,10 @@ package persist
 // Names the fix must provide, invented here:
 //
 //	AdoptSealedFile(ctx, src string, key *retention.Key, dst Backend) (AdoptResult, error)
-//	    AdoptFile for a source the encrypted file backend sealed (or, with
-//	    a valid-JSON source, a plain one): the document is opened with key
-//	    and handed to dst readable. Whether it is then stored sealed is
+//	    AdoptFile for a source the encrypted file backend sealed: the
+//	    document is opened with key and handed to dst readable. A source
+//	    that is plain JSON is refused (ErrPlaintextDocument, #1202 review
+//	    R26, ruling 19), whichever store it is for. Whether it is then stored sealed is
 //	    dst's business -- an auth store's dst is gauntlet's persist.Encrypt
 //	    under the store's label; any other store's dst is the plain
 //	    backend. The source file is never touched. The result has the same
@@ -21,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -61,7 +63,7 @@ func TestAdoptSealedFileHandsAnAuthStoreItsDocumentReadable(t *testing.T) {
 
 	// The destination: what Postgres gets for the auth store.
 	underlying := NewFileBackend(filepath.Join(dir, "dst-auth-row.json"))
-	dst, err := gpersist.Encrypt(underlying, bytes.Repeat([]byte("p"), gpersist.MinKeyBytes), gpersist.EncryptOptions{Label: "auth", MigratePlaintext: true})
+	dst, err := gpersist.Encrypt(underlying, bytes.Repeat([]byte("p"), gpersist.MinKeyBytes), gpersist.EncryptOptions{Label: "auth"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,5 +163,76 @@ func TestAdoptSealedFileKeepsAdoptFilesGuards(t *testing.T) {
 	res, err = AdoptSealedFile(ctx, filepath.Join(dir, "absent.json"), fileKey, empty)
 	if err != nil || res.Migrated {
 		t.Errorf("no file: migrated = %v, err = %v; want a fresh install", res.Migrated, err)
+	}
+}
+
+// #1202 review R26 (ruling 19), plaintext sources in file-to-Postgres
+// adoption: a plain-JSON accounts file, and a plain-JSON drop list, are
+// refused rather than adopted or sealed on the way. The error wraps
+// ErrPlaintextDocument and says the data was written without a key before
+// v0.7.0 and to restore a sealed copy or move it aside; nothing is written
+// to the destination (it still reads as no document) and the source is
+// byte for byte as it was. Paired with the sealed source of the same
+// store, which is adopted.
+func TestAdoptSealedFileRefusesAPlaintextSourceAndWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	fileKey := testKey(t, 0x07)
+	cases := map[string]struct {
+		name  string
+		plain []byte
+		dst   func(t *testing.T, dir string) Backend
+	}{
+		"accounts into a sealed auth destination": {
+			name:  "users.json",
+			plain: []byte(`{"users":[{"id":"aaaa","username":"moved-admin","role":"admin"}]}`),
+			dst: func(t *testing.T, dir string) Backend {
+				b, err := gpersist.Encrypt(NewFileBackend(filepath.Join(dir, "dst-auth-row.json")), bytes.Repeat([]byte("p"), gpersist.MinKeyBytes), gpersist.EncryptOptions{Label: "auth"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return b
+			},
+		},
+		"drop list into the plain destination": {
+			name:  "droplist.json",
+			plain: []byte(`{"entries":[{"cidr":"203.0.114.0/24","addedBy":"admin","addedAt":"2026-01-02T03:04:05Z","reason":"keyless era"}]}`),
+			dst:   func(t *testing.T, dir string) Backend { return NewFileBackend(filepath.Join(dir, "dst.json")) },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, tc.name)
+			writePlain(t, src, tc.plain)
+			dst := tc.dst(t, dir)
+
+			res, err := AdoptSealedFile(ctx, src, fileKey, dst)
+			if err == nil {
+				t.Fatalf("a plaintext source was adopted (migrated = %v)", res.Migrated)
+			}
+			if !errors.Is(err, ErrPlaintextDocument) {
+				t.Errorf("err = %v, want one wrapping ErrPlaintextDocument", err)
+			}
+			wantRuling19Wording(t, name, err.Error())
+			if res.Migrated {
+				t.Error("Migrated is true for a refused source")
+			}
+			if got := readFileBytes(t, src); !bytes.Equal(got, tc.plain) {
+				t.Errorf("the source was changed (sealed or rewritten): %q", got)
+			}
+			if snap, err := dst.Load(ctx); err == nil && snap.Exists {
+				t.Errorf("the destination holds %q after a refused adoption", snap.Payload)
+			}
+
+			// Paired: the same document sealed by the previous release is adopted.
+			sealedSrc := filepath.Join(dir, "sealed-"+tc.name)
+			if _, err := NewEncryptedFileBackend(sealedSrc, fileKey).Save(ctx, tc.plain, 0); err != nil {
+				t.Fatal(err)
+			}
+			res, err = AdoptSealedFile(ctx, sealedSrc, fileKey, dst)
+			if err != nil || !res.Migrated {
+				t.Errorf("the sealed source of the same store: migrated = %v, err = %v; want adopted", res.Migrated, err)
+			}
+		})
 	}
 }

@@ -4,7 +4,11 @@
 // half (build notes section C, "Postgres recordings"): every recorded
 // pg_dump restored into a database of its own, then the auth rows opened
 // through persist.NewPostgresBackend wrapped in gauntlet's persist.Encrypt
-// with MigratePlaintext and a test key. There is no unwrapped variant.
+// under their own labels and a test key, never with MigratePlaintext
+// (#1202 review R26, ruling 19: no sealing in place). There is no
+// unwrapped variant. Every recorded dump holds plaintext auth rows (a
+// release before v0.7.0 wrote them so on Postgres), so every dump is
+// refused and its rows are left as they were.
 //
 // Skips without MIKROVIEW_TEST_POSTGRES and without recorded dumps, as
 // upgrade_postgres_test.go does.
@@ -23,9 +27,9 @@ import (
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
-// #1202 C (Postgres): schema 4 in the migrations table, auth rows
-// sealed on first open under their own labels, sign-in works after a
-// re-open, version-10 and version-3 documents round-trip.
+// #1202 C (Postgres): schema 4 in the migrations table; the plaintext auth
+// rows a release before v0.7.0 left are refused, not sealed, and not read
+// as an empty store (#1202 review R26, ruling 19).
 func TestUpgradeFixturesPostgresOpenOnGauntlet(t *testing.T) {
 	dsn := os.Getenv("MIKROVIEW_TEST_POSTGRES")
 	if dsn == "" {
@@ -47,7 +51,7 @@ func TestUpgradeFixturesPostgresOpenOnGauntlet(t *testing.T) {
 		version := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(dump), "upgrade-fixture-"), "-postgres.sql.gz")
 		t.Run(version, func(t *testing.T) {
 			ctx := t.Context()
-			m := loadGauntletManifest(t, root, version)
+			_ = loadGauntletManifest(t, root, version) // the manifest must exist, as for the file recordings
 			database := restoreDump(t, dsn, version, dump)
 			pool, err := persist.OpenPool(ctx, database)
 			if err != nil {
@@ -69,7 +73,7 @@ func TestUpgradeFixturesPostgresOpenOnGauntlet(t *testing.T) {
 			}
 			sealed := func(name string) gpersist.Backend {
 				b, err := gpersist.Encrypt(persist.NewPostgresBackend(pool, name), key,
-					gpersist.EncryptOptions{Label: name, MigratePlaintext: true})
+					gpersist.EncryptOptions{Label: name})
 				if err != nil {
 					t.Fatalf("gpersist.Encrypt(%s): %v", name, err)
 				}
@@ -84,18 +88,13 @@ func TestUpgradeFixturesPostgresOpenOnGauntlet(t *testing.T) {
 					return []byte(payload)
 				}
 			}
-			runGauntletChecks(t, gauntletCase{
-				accounts:         func() gpersist.Backend { return sealed("auth") },
-				tokens:           func() gpersist.Backend { return sealed("tokens") },
-				rawAccounts:      raw("auth"),
-				rawTokens:        raw("tokens"),
-				admin:            m.AdminUsername,
-				viewer:           m.ViewerUsername,
-				apiTokenName:     m.APITokenName,
-				apiTokenKindless: version == "v0.1.0", // #1202 review R12
-				totp:             m.SecondFactorEnrolled,
-				plaintext:        true, // whatever the file recording says, the dumps hold plaintext rows
-				postgres:         true,
+			runPlaintextRefusalChecks(t, plaintextCase{
+				accounts:    func() gpersist.Backend { return sealed("auth") },
+				tokens:      func() gpersist.Backend { return sealed("tokens") },
+				rawAccounts: raw("auth"),
+				rawTokens:   raw("tokens"),
+				// The refusal is gauntlet's own persist.Encrypt wrapper's.
+				gauntletWords: true,
 			})
 		})
 	}

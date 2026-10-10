@@ -10,8 +10,10 @@ package authe2e
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -141,43 +143,107 @@ func TestPostgresAuthRowsAreSealedAndStartUpWithoutAKeyIsRefused(t *testing.T) {
 	}
 }
 
-// #1202 B8.35 (Postgres): plaintext auth rows left by an earlier release
-// are sealed on first open; every account and token still works.
-func TestPostgresPlaintextAuthRowsAreSealedOnFirstStart(t *testing.T) {
+// #1202 B8.35 (Postgres), as changed by R26 (ruling 19; it was "plaintext
+// auth rows left by an earlier release are sealed on first open"): a
+// plaintext `auth` or `tokens` row refuses start-up, at the schema the
+// database was left at (3 or 4) alike. The row is left byte for byte, no
+// setup code is logged and the refusal has the ruling-19 wording. Paired:
+// with the sealed rows put back the install starts and signs in.
+func TestPostgresPlaintextAuthRowsRefuseStartUpAndAreLeftAlone(t *testing.T) {
+	for _, schema := range []int{4, 3} {
+		t.Run(fmt.Sprintf("schema %d", schema), func(t *testing.T) {
+			p := newPG(t)
+			f := newLegacyInstallSealed(t)
+
+			// A first start moves the sealed files onto Postgres and makes the
+			// tables; keep the sealed rows to put back.
+			first := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
+			first.stop()
+			sealedRows := map[string]string{}
+			for _, name := range []string{"auth", "tokens"} {
+				row, ok := p.row(t, name)
+				if !ok || !isSealedRow(row) {
+					t.Fatalf("test setup: no sealed %q row after the first start: %.60s", name, row)
+				}
+				sealedRows[name] = row
+			}
+			setRow := func(name, payload string) {
+				if _, err := p.conn.Exec(context.Background(),
+					`INSERT INTO store_blob (name, payload, version) VALUES ($1, $2, 1)
+					 ON CONFLICT (name) DO UPDATE SET payload = EXCLUDED.payload, version = store_blob.version + 1`, name, payload); err != nil {
+					t.Fatalf("planting the %s row: %v", name, err)
+				}
+			}
+			if schema == 3 {
+				if _, err := p.conn.Exec(context.Background(), `DELETE FROM schema_version WHERE version = 4`); err != nil {
+					t.Fatalf("putting the stored schema back to 3: %v", err)
+				}
+			}
+
+			for name, doc := range map[string][]byte{"auth": f.accounts, "tokens": f.tokenDoc} {
+				setRow(name, string(doc))
+				code, out, _ := refused(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
+				if code == 0 {
+					t.Errorf("%s row plaintext: exit status 0\n%s", name, out)
+				}
+				wantRuling19Refusal(t, name+" row plaintext", out)
+				if setupCodeRe.MatchString(out) {
+					t.Errorf("%s row plaintext: a setup code was logged:\n%s", name, out)
+				}
+				if after, _ := p.row(t, name); after != string(doc) {
+					t.Errorf("%s row plaintext: the row was sealed or rewritten: %.80s", name, after)
+				}
+				setRow(name, sealedRows[name])
+			}
+
+			a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
+			if setupCodeRe.MatchString(a.log()) {
+				t.Errorf("an install with accounts announced a setup code:\n%s", a.log())
+			}
+			_, r := (&world{a: a, admin: f.admin}).signIn(t, f.admin, f.admin.recovery(t))
+			wantStatus(t, "sign-in with the sealed rows back", r, 200)
+			wantStatus(t, "api token with the sealed rows back", a.client().bearer(f.tokens["api"], "GET", "/api/stats"), 200)
+		})
+	}
+}
+
+// #1202 review R26 (ruling 19), plaintext sources in file-to-Postgres
+// adoption: a file install whose accounts and tokens files are plaintext
+// (a keyless v0.6 install, now given a key and a Postgres address at
+// once) is not moved onto Postgres. Start-up is refused with the ruling-19
+// wording, no setup code is logged, the files are byte for byte as they
+// were, nothing readable is written to the database and the adoption is
+// not marked done. Paired: TestSealedFileInstallMovesOntoPostgres moves
+// the same install when its files are sealed.
+func TestPlaintextFilesAreNotMovedOntoPostgres(t *testing.T) {
 	p := newPG(t)
 	f := newLegacyInstall(t)
+	data := filepath.Join(f.root, "data")
+	beforeUsers := readBytes(t, filepath.Join(data, "users.json"))
+	beforeTokens := readBytes(t, filepath.Join(data, "tokens.json"))
 
-	// One start to create the tables, then plant the old plaintext rows.
-	first := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
-	first.stop()
-	for name, doc := range map[string][]byte{"auth": f.accounts, "tokens": f.tokenDoc} {
-		if _, err := p.conn.Exec(context.Background(),
-			`INSERT INTO store_blob (name, payload, version) VALUES ($1, $2, 1)
-			 ON CONFLICT (name) DO UPDATE SET payload = EXCLUDED.payload, version = store_blob.version + 1`, name, string(doc)); err != nil {
-			t.Fatalf("planting the %s row: %v", name, err)
-		}
+	code, out, a := refused(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
+	if code == 0 {
+		t.Errorf("exit status 0 moving plaintext files onto Postgres\n%s", out)
 	}
-
-	// #1202 review R0 (ruling 14): sealing in place applies only on the
-	// first start of v0.7.0. The first start above stamped schema 4, so
-	// put the database back at 3, as the earlier release left it.
-	if _, err := p.conn.Exec(context.Background(), `DELETE FROM schema_version WHERE version = 4`); err != nil {
-		t.Fatalf("putting the stored schema back to 3: %v", err)
+	wantRuling19Refusal(t, "plaintext files onto Postgres", out)
+	if setupCodeRe.MatchString(out) {
+		t.Errorf("a setup code was logged:\n%s", out)
 	}
-
-	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath, PostgresDSN: p.dsn})
-	if setupCodeRe.MatchString(a.log()) {
-		t.Errorf("an install with accounts announced a setup code:\n%s", a.log())
+	if !bytes.Equal(readBytes(t, filepath.Join(data, "users.json")), beforeUsers) || !bytes.Equal(readBytes(t, filepath.Join(data, "tokens.json")), beforeTokens) {
+		t.Error("a plaintext source file was changed (sealed or rewritten)")
 	}
 	for _, name := range []string{"auth", "tokens"} {
-		payload, _ := p.row(t, name)
-		if !isSealedRow(payload) {
-			t.Errorf("the %q row is still plaintext after first open: %.80s", name, payload)
+		if row, ok := p.row(t, name); ok && strings.Contains(row, f.admin.name) {
+			t.Errorf("the %q row holds the account in the clear after a refused move: %.80s", name, row)
 		}
 	}
-	_, r := (&world{a: a, admin: f.admin}).signIn(t, f.admin, f.admin.recovery(t))
-	wantStatus(t, "sign-in of a pre-existing account", r, 200)
-	wantStatus(t, "api token on /api/stats", a.client().bearer(f.tokens["api"], "GET", "/api/stats"), 200)
+	for _, name := range dataFiles(t, a) {
+		low := strings.ToLower(name)
+		if strings.Contains(low, "postgres") || strings.Contains(low, "adopt") {
+			t.Errorf("%s was written although the move onto Postgres was refused: the adoption is marked done", name)
+		}
+	}
 }
 
 // #1202 B9.42: the sealed `tokens` row copied into the `auth` row's place

@@ -2,27 +2,32 @@
 
 package persist
 
-// #1202 (authentication moves onto gauntlet), ruling 11 and the build
-// notes' A1 step 3: mikroview's own EncryptedFileBackend gains a
-// seal-in-place option for the auth stores, and says it protects its
-// document at rest.
+// #1202 (authentication moves onto gauntlet), rulings 11 and 19 and the
+// build notes' A1 step 3.
 //
-// Written from the specification (docs/decisions/gauntlet-adoption.md,
-// "Owner rulings" 2 and 11; build notes B8 35 and B9 40, 41) before the
-// code exists. Names invented here for the build to provide:
+// Ruling 11 gave mikroview's EncryptedFileBackend a seal-in-place option
+// for the auth stores; ruling 19 (2026-10-10, R26) removed sealing in
+// place altogether. The tests below that used to expect a plaintext
+// document to be sealed on first load now expect a refusal that leaves
+// the file byte for byte, and none of them calls WithSealInPlace (which
+// the fix deletes), so this file compiles before and after.
 //
-//	(*EncryptedFileBackend).WithSealInPlace() *EncryptedFileBackend
-//	    switches the option on and returns the same backend.
+// Wording the fix must provide (ruling 19), for the error that
+// ErrPlaintextDocument wraps: it says the data was written without a key
+// before v0.7.0, and to restore a sealed copy or move it aside. It no
+// longer says anything about the first start of v0.7.0 or about a start
+// sealing the file (R24, R23).
+//
 //	(*EncryptedFileBackend).ProtectedAtRest() bool   (true)
 //	(*WriteBehind).ProtectedAtRest() bool            (the inner backend's answer)
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,108 +54,117 @@ func readFileBytes(t *testing.T, path string) []byte {
 	return b
 }
 
-// #1202 B8.35 (file backend half): a plaintext JSON document is read as
-// the plaintext, sealed under the key with the path bound, and saved
-// back; it opens again afterwards with no option set.
-func TestSealInPlaceSealsAPlaintextJSONDocumentOnFirstLoad(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	plain := []byte(`{"users":[{"id":"aaaa","username":"admin","role":"admin"}]}`)
-	writePlain(t, path, plain)
-	plainVersion := contentVersion(plain)
+// ruling19Wanted is what every plaintext refusal must tell the operator
+// (ruling 19), and ruling19Banned what it must no longer claim.
+var (
+	ruling19Wanted = []string{"without a key", "v0.7.0", "restore a sealed copy", "move it aside"}
+	ruling19Banned = []string{"first start of v0.7.0", "seals it", "will seal", "normal start"}
+)
 
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01)).WithSealInPlace()
-	snap, err := b.Load(context.Background())
-	if err != nil {
-		t.Fatalf("Load of a plaintext document with the seal-in-place option: %v", err)
+func wantRuling19Wording(t *testing.T, what, msg string) {
+	t.Helper()
+	low := strings.ToLower(msg)
+	for _, w := range ruling19Wanted {
+		if !strings.Contains(low, w) {
+			t.Errorf("%s: the refusal does not say %q:\n%s", what, w, msg)
+		}
 	}
-	if !bytes.Equal(snap.Payload, plain) {
-		t.Errorf("Payload = %q, want the plaintext document %q", snap.Payload, plain)
-	}
-	if !snap.Exists {
-		t.Error("Exists = false for a document that was there")
-	}
-
-	onDisk := readFileBytes(t, path)
-	if json.Valid(onDisk) {
-		t.Fatalf("the file is still valid JSON after the first open; it was not sealed:\n%s", onDisk)
-	}
-	if bytes.Contains(onDisk, []byte("admin")) {
-		t.Error("the sealed file still contains the account name in the clear")
-	}
-
-	// The version handed back is the sealed file's, so the next Save
-	// (which the store makes from this version) is accepted.
-	if snap.Version == plainVersion {
-		t.Error("Load returned the plaintext file's version; the file was sealed under a new one")
-	}
-	if v, exists, err := b.Version(context.Background()); err != nil || !exists || v != snap.Version {
-		t.Errorf("Version() = %d, %v, %v; want the version Load returned (%d)", v, exists, err, snap.Version)
-	}
-	if _, err := b.Save(context.Background(), []byte(`{"users":[]}`), snap.Version); err != nil {
-		t.Errorf("Save under the version Load returned: %v", err)
-	}
-
-	// A second open with the same key and no option reads it back: the
-	// seal is the ordinary one, bound to this path.
-	again := NewEncryptedFileBackend(path, testKey(t, 0x01))
-	snap2, err := again.Load(context.Background())
-	if err != nil {
-		t.Fatalf("re-open without the option: %v", err)
-	}
-	if string(snap2.Payload) != `{"users":[]}` {
-		t.Errorf("re-open Payload = %q", snap2.Payload)
+	for _, w := range ruling19Banned {
+		if strings.Contains(low, w) {
+			t.Errorf("%s: the refusal still says %q:\n%s", what, w, msg)
+		}
 	}
 }
 
-// Pairs with the test above: without the option the same plaintext file
-// is refused and left alone (the behaviour for every non-auth store).
-func TestSealInPlaceOffRefusesAPlaintextDocumentAndLeavesItAlone(t *testing.T) {
+// #1202 review R26 (ruling 19), replacing "a plaintext document is sealed
+// on first load" (B8.35, file backend half): a plaintext JSON document,
+// an accounts object or a bare token list, is refused with
+// ErrPlaintextDocument, and the file is left byte for byte. Nothing is
+// sealed. Paired: moved aside, the path takes a sealed document and opens.
+func TestAPlaintextJSONDocumentIsRefusedAndLeftByteForByte(t *testing.T) {
+	cases := map[string][]byte{
+		"accounts object": []byte(`{"users":[{"id":"aaaa","username":"admin","role":"admin"}]}`),
+		"bare token list": []byte(`[{"id":"t1","name":"grafana","kind":"api"}]`),
+	}
+	for name, plain := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "users.json")
+			writePlain(t, path, plain)
+
+			b := NewEncryptedFileBackend(path, testKey(t, 0x01))
+			snap, err := b.Load(context.Background())
+			if err == nil {
+				t.Fatalf("Load accepted a plaintext document, Payload %q", snap.Payload)
+			}
+			if !errors.Is(err, ErrPlaintextDocument) {
+				t.Errorf("err = %v, want one wrapping ErrPlaintextDocument", err)
+			}
+			wantRuling19Wording(t, name, err.Error())
+			if got := readFileBytes(t, path); !bytes.Equal(got, plain) {
+				t.Errorf("the refused file was changed (sealed or rewritten): %q", got)
+			}
+
+			// Paired: the operator moves it aside; the path then takes a
+			// sealed document, which opens.
+			if err := os.Rename(path, path+".aside"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Save(context.Background(), []byte(`{"users":[]}`), 0); err != nil {
+				t.Fatalf("Save after moving the plaintext aside: %v", err)
+			}
+			again, err := NewEncryptedFileBackend(path, testKey(t, 0x01)).Load(context.Background())
+			if err != nil || string(again.Payload) != `{"users":[]}` {
+				t.Errorf("a sealed document at the same path did not open: %q, %v", again.Payload, err)
+			}
+		})
+	}
+}
+
+// #1202 review R24: the refusal of a plaintext document does not claim it
+// is "the first start of v0.7.0", for any store -- a stale plaintext
+// flags.json is not an auth store and never had a first-start window.
+// Paired with the sealed document of the same store, which opens.
+func TestAPlaintextDocumentForANonAuthStoreIsRefusedWithoutClaimingTheFirstStart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	plain := []byte(`{"users":[]}`)
+	plain := []byte(`{"flags":[]}`)
 	writePlain(t, path, plain)
 
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01))
-	if _, err := b.Load(context.Background()); err == nil {
-		t.Fatal("a plaintext file was accepted without the option")
+	_, err := NewEncryptedFileBackend(path, testKey(t, 0x01)).Load(context.Background())
+	if err == nil {
+		t.Fatal("a plaintext file was accepted")
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "first start of v0.7.0") {
+		t.Errorf("the refusal of a non-auth store's file claims the first start of v0.7.0:\n%v", err)
+	}
+	if strings.Contains(strings.ToLower(ErrPlaintextDocument.Error()), "first start of v0.7.0") {
+		t.Errorf("ErrPlaintextDocument still claims the first start of v0.7.0:\n%v", ErrPlaintextDocument)
 	}
 	if got := readFileBytes(t, path); !bytes.Equal(got, plain) {
 		t.Errorf("the refused file was changed: %q", got)
 	}
-}
 
-// The tokens document of an older release is a bare JSON list, not an
-// object (build notes B1.8): it must be sealed too.
-func TestSealInPlaceSealsABareJSONListToo(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tokens.json")
-	plain := []byte(`[{"id":"t1","name":"grafana","kind":"api"}]`)
-	writePlain(t, path, plain)
-
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01)).WithSealInPlace()
-	snap, err := b.Load(context.Background())
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	sealedPath := filepath.Join(t.TempDir(), "flags.json")
+	if _, err := NewEncryptedFileBackend(sealedPath, testKey(t, 0x01)).Save(context.Background(), plain, 0); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Equal(snap.Payload, plain) {
-		t.Errorf("Payload = %q, want %q", snap.Payload, plain)
-	}
-	if json.Valid(readFileBytes(t, path)) {
-		t.Error("the bare list was not sealed")
+	if _, err := NewEncryptedFileBackend(sealedPath, testKey(t, 0x01)).Load(context.Background()); err != nil {
+		t.Errorf("the sealed document of the same store did not open: %v", err)
 	}
 }
 
 // #1202 B9.40: a file the previous release sealed opens unchanged, and
 // its bytes do not change until the first save.
-func TestSealInPlaceLeavesAFileTheLastReleaseSealedByteForByte(t *testing.T) {
+func TestAFileTheLastReleaseSealedOpensByteForByteUntilTheFirstSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	key := testKey(t, 0x07)
 
-	// What the previous release wrote: the encrypted backend, no option.
+	// What the previous release wrote: the encrypted backend.
 	if _, err := NewEncryptedFileBackend(path, key).Save(context.Background(), []byte(`{"users":[{"username":"admin"}]}`), 0); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
 	before := readFileBytes(t, path)
 
-	b := NewEncryptedFileBackend(path, key).WithSealInPlace()
+	b := NewEncryptedFileBackend(path, key)
 	snap, err := b.Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -172,9 +186,10 @@ func TestSealInPlaceLeavesAFileTheLastReleaseSealedByteForByte(t *testing.T) {
 }
 
 // #1202 B9.41 (store level): a file that is neither sealed nor valid
-// JSON fails to open, is never sealed, never read as an empty store, and
-// is left byte for byte as it was.
-func TestSealInPlaceRefusesAFileThatIsNeitherSealedNorJSON(t *testing.T) {
+// JSON fails to open, is never read as an empty store, and is left byte
+// for byte as it was. Paired with the valid-JSON case in the test above,
+// which is refused as plaintext, so no input is "repaired" by sealing it.
+func TestAFileThatIsNeitherSealedNorJSONFailsToOpenAndIsLeftAlone(t *testing.T) {
 	cases := map[string][]byte{
 		"truncated json": []byte(`{"users":[{"id":"a"`),
 		"random bytes":   {0x00, 0x01, 0xfe, 0xff, 0x10, 0x20, 0x30},
@@ -187,7 +202,7 @@ func TestSealInPlaceRefusesAFileThatIsNeitherSealedNorJSON(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "users.json")
 			writePlain(t, path, body)
 
-			b := NewEncryptedFileBackend(path, testKey(t, 0x01)).WithSealInPlace()
+			b := NewEncryptedFileBackend(path, testKey(t, 0x01))
 			snap, err := b.Load(context.Background())
 			if err == nil {
 				t.Fatalf("Load succeeded with Payload %q; a damaged file must fail to open, not read as empty", snap.Payload)
@@ -200,8 +215,8 @@ func TestSealInPlaceRefusesAFileThatIsNeitherSealedNorJSON(t *testing.T) {
 }
 
 // A sealed file damaged after the fact (cut short) is neither sealed
-// properly nor JSON: it fails, and is not "repaired" by sealing it.
-func TestSealInPlaceRefusesATruncatedSealedFile(t *testing.T) {
+// properly nor JSON: it fails, and is not "repaired".
+func TestATruncatedSealedFileFailsToOpenAndIsLeftAlone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	key := testKey(t, 0x01)
 	if _, err := NewEncryptedFileBackend(path, key).Save(context.Background(), []byte(`{"users":[{"username":"admin"}]}`), 0); err != nil {
@@ -211,7 +226,7 @@ func TestSealInPlaceRefusesATruncatedSealedFile(t *testing.T) {
 	cut := whole[:len(whole)/2]
 	writePlain(t, path, cut)
 
-	if _, err := NewEncryptedFileBackend(path, key).WithSealInPlace().Load(context.Background()); err == nil {
+	if _, err := NewEncryptedFileBackend(path, key).Load(context.Background()); err == nil {
 		t.Fatal("a truncated sealed file opened")
 	}
 	if got := readFileBytes(t, path); !bytes.Equal(got, cut) {
@@ -220,14 +235,14 @@ func TestSealInPlaceRefusesATruncatedSealedFile(t *testing.T) {
 }
 
 // A wrong key fails as today and never seals over the document.
-func TestSealInPlaceWrongKeyFailsAndLeavesTheSealedFileAlone(t *testing.T) {
+func TestAWrongKeyFailsAndLeavesTheSealedFileAlone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	if _, err := NewEncryptedFileBackend(path, testKey(t, 0x01)).Save(context.Background(), []byte(`{"users":[]}`), 0); err != nil {
 		t.Fatal(err)
 	}
 	before := readFileBytes(t, path)
 
-	b := NewEncryptedFileBackend(path, testKey(t, 0x02)).WithSealInPlace()
+	b := NewEncryptedFileBackend(path, testKey(t, 0x02))
 	if _, err := b.Load(context.Background()); err == nil {
 		t.Fatal("a file sealed under another key opened")
 	}
@@ -237,26 +252,22 @@ func TestSealInPlaceWrongKeyFailsAndLeavesTheSealedFileAlone(t *testing.T) {
 }
 
 // The seal binds the file's path "as today": sealed bytes copied to another
-// path do not open there, with or without the option.
-func TestSealInPlaceBindsTheSealToThePath(t *testing.T) {
+// path do not open there.
+func TestTheSealBindsTheFileToItsPath(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "users.json")
-	writePlain(t, a, []byte(`{"users":[]}`))
-	if _, err := NewEncryptedFileBackend(a, testKey(t, 0x01)).WithSealInPlace().Load(context.Background()); err != nil {
+	if _, err := NewEncryptedFileBackend(a, testKey(t, 0x01)).Save(context.Background(), []byte(`{"users":[]}`), 0); err != nil {
 		t.Fatalf("sealing at a: %v", err)
+	}
+	if _, err := NewEncryptedFileBackend(a, testKey(t, 0x01)).Load(context.Background()); err != nil {
+		t.Fatalf("the sealed file does not open at its own path: %v", err)
 	}
 	sealed := readFileBytes(t, a)
 
 	other := filepath.Join(dir, "tokens.json")
 	writePlain(t, other, sealed)
-	for _, withOption := range []bool{false, true} {
-		b := NewEncryptedFileBackend(other, testKey(t, 0x01))
-		if withOption {
-			b = b.WithSealInPlace()
-		}
-		if _, err := b.Load(context.Background()); err == nil {
-			t.Errorf("sealed bytes copied to another path opened (option=%v)", withOption)
-		}
+	if _, err := NewEncryptedFileBackend(other, testKey(t, 0x01)).Load(context.Background()); err == nil {
+		t.Error("sealed bytes copied to another path opened")
 	}
 	if !bytes.Equal(readFileBytes(t, other), sealed) {
 		t.Error("the copied file was changed by a refused open")
@@ -265,23 +276,30 @@ func TestSealInPlaceBindsTheSealToThePath(t *testing.T) {
 
 // The recorded upgrade fixtures were made by a container whose path is
 // not the test's: NewEncryptedFileBackendForPath binds the logical path.
-// The option must work through that constructor too.
-func TestSealInPlaceWorksThroughTheLogicalPathConstructor(t *testing.T) {
+// A document sealed under it opens under it and not under the real path;
+// a plaintext document is refused through it as through the other.
+func TestTheLogicalPathConstructorSealsAndRefusesLikeTheOther(t *testing.T) {
 	real := filepath.Join(t.TempDir(), "users.json")
-	writePlain(t, real, []byte(`{"users":[]}`))
-	b := NewEncryptedFileBackendForPath(real, "/var/lib/mikroview/users.json", testKey(t, 0x03)).WithSealInPlace()
-	if _, err := b.Load(context.Background()); err != nil {
-		t.Fatalf("Load: %v", err)
+	const logical = "/var/lib/mikroview/users.json"
+	if _, err := NewEncryptedFileBackendForPath(real, logical, testKey(t, 0x03)).Save(context.Background(), []byte(`{"users":[]}`), 0); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
-	if json.Valid(readFileBytes(t, real)) {
-		t.Fatal("not sealed")
-	}
-	// Opens under the same logical path, not under the real one.
-	if _, err := NewEncryptedFileBackendForPath(real, "/var/lib/mikroview/users.json", testKey(t, 0x03)).Load(context.Background()); err != nil {
+	if _, err := NewEncryptedFileBackendForPath(real, logical, testKey(t, 0x03)).Load(context.Background()); err != nil {
 		t.Errorf("re-open under the logical path: %v", err)
 	}
 	if _, err := NewEncryptedFileBackend(real, testKey(t, 0x03)).Load(context.Background()); err == nil {
 		t.Error("the seal was bound to the real path, not the logical one")
+	}
+
+	plainPath := filepath.Join(t.TempDir(), "users.json")
+	plain := []byte(`{"users":[]}`)
+	writePlain(t, plainPath, plain)
+	_, err := NewEncryptedFileBackendForPath(plainPath, logical, testKey(t, 0x03)).Load(context.Background())
+	if !errors.Is(err, ErrPlaintextDocument) {
+		t.Errorf("a plaintext document through the logical-path constructor: err = %v, want ErrPlaintextDocument", err)
+	}
+	if got := readFileBytes(t, plainPath); !bytes.Equal(got, plain) {
+		t.Error("the refused plaintext document was changed")
 	}
 }
 

@@ -7,6 +7,10 @@ package authe2e
 // (// #1202 review R3). R6 (the newer stored password list) and R15
 // (wording) have no test here: see the commit message.
 //
+// #1202 review R26 (ruling 19) changed R0a, R0c and R1's drop list from
+// "plaintext is sealed" to "plaintext is refused": see the comments on
+// each, and the wording the refusals must have in review1202_go2_test.go.
+//
 // Wording the fix must provide, chosen here:
 //   - R13: the refusal says "history section" when that section of the
 //     config file cannot be read.
@@ -140,24 +144,42 @@ func (ri *richInstall) checkAllSealed(t *testing.T) {
 	}
 }
 
-// ---- R0: sealing in place only on the first start of v0.7.0 -------------
+// ---- R0: plaintext is refused at any schema (ruling 19) -----------------
 
-// #1202 review R0a (ruling 14): with the stored schema at 3, plaintext
-// auth files and a plaintext drop list are sealed on start-up and the
-// schema becomes 4.
-func TestPlaintextFilesAreSealedOnTheFirstStartAtSchema3(t *testing.T) {
+// #1202 review R0a, as changed by R26 (ruling 19; it was "plaintext files
+// are sealed on the first start at schema 3"): with the stored schema at
+// 3, a plaintext auth file or drop list -- whichever of the five it is --
+// refuses start-up. The file is left byte for byte, no setup code is
+// logged, the schema stays 3, and the refusal has the ruling-19 wording.
+// Paired: the sealed originals at schema 3 start, are stamped 4 and work.
+func TestPlaintextFileAtSchema3RefusesStartUpAndIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	ri := newRichInstall(t)
+	stampSchema(t, ri.w.a.data, 3)
 	for _, name := range ri.files {
 		ri.write(t, name, ri.plain[name])
+		code, out, a := refused(t, ri.opts())
+		if code == 0 {
+			t.Errorf("%s plaintext at schema 3: exit status 0\n%s", name, out)
+		}
+		wantRuling19Refusal(t, name+" plaintext at schema 3", out)
+		if setupCodeRe.MatchString(out) {
+			t.Errorf("%s plaintext at schema 3: a setup code was logged:\n%s", name, out)
+		}
+		if got := readBytes(t, a.file(name)); !bytes.Equal(got, ri.plain[name]) {
+			t.Errorf("%s plaintext at schema 3: the file was changed (sealed or rewritten)", name)
+		}
+		if got := storedSchema(t, a.data); got != 3 {
+			t.Errorf("%s plaintext at schema 3: schema is now %d, want 3", name, got)
+		}
+		ri.write(t, name, ri.sealed[name]) // restore for the next case
 	}
-	stampSchema(t, ri.w.a.data, 3)
 
 	a := mustStart(t, ri.opts())
-	ri.checkAllSealed(t)
 	if got := storedSchema(t, a.data); got != 4 {
-		t.Errorf("schema after the first start = %d, want 4", got)
+		t.Errorf("schema after the first start of the sealed install = %d, want 4", got)
 	}
+	ri.checkAllSealed(t)
 	ri.checkWorks(t, a)
 }
 
@@ -190,10 +212,14 @@ func TestPlaintextFileAtSchema4RefusesStartUpAndIsLeftAlone(t *testing.T) {
 	ri.checkWorks(t, a)
 }
 
-// #1202 review R0c (ruling 14): sealing fails partway when one auth file
-// is damaged. The schema stays 3 and the damaged file is untouched. After
-// it is restored the next start seals the rest and stamps 4.
-func TestSealingThatFailsPartwayLeavesSchema3AndTheNextStartFinishes(t *testing.T) {
+// #1202 review R0c, as changed by R26 (ruling 19; it was "sealing that
+// fails partway leaves schema 3 and the next start finishes"): with every
+// auth file and the drop list plaintext at schema 3 and the tokens file
+// also damaged, start-up is refused and nothing is touched -- not the
+// damaged file and not a single one of the plaintext files, which a start
+// that sealed as it went would have changed -- and the schema stays 3.
+// Paired: with the sealed originals back, the next start works and stamps 4.
+func TestPlaintextAndDamagedFilesAtSchema3LeaveEveryFileUntouched(t *testing.T) {
 	t.Parallel()
 	ri := newRichInstall(t)
 	for _, name := range ri.files {
@@ -202,24 +228,31 @@ func TestSealingThatFailsPartwayLeavesSchema3AndTheNextStartFinishes(t *testing.
 	stampSchema(t, ri.w.a.data, 3)
 	damaged := []byte(`{"version":3,"seq":4,"tokens":[{"id":"a1b2`)
 	ri.write(t, "tokens.json", damaged)
+	want := map[string][]byte{}
+	for _, name := range ri.files {
+		want[name] = readBytes(t, ri.w.a.file(name))
+	}
 
 	code, out, a := refused(t, ri.opts())
 	if code == 0 {
-		t.Errorf("exit status 0 with a damaged tokens file\n%s", out)
+		t.Errorf("exit status 0 with plaintext and damaged files\n%s", out)
 	}
 	if setupCodeRe.MatchString(out) {
-		t.Errorf("a setup code was logged over a damaged file:\n%s", out)
+		t.Errorf("a setup code was logged over plaintext and damaged files:\n%s", out)
 	}
 	if got := storedSchema(t, a.data); got != 3 {
-		t.Errorf("schema after a start that failed partway = %d, want 3", got)
+		t.Errorf("schema after a refused start = %d, want 3", got)
 	}
-	if got := readBytes(t, a.file("tokens.json")); !bytes.Equal(got, damaged) {
-		t.Error("the damaged file was changed")
+	for _, name := range ri.files {
+		if got := readBytes(t, a.file(name)); !bytes.Equal(got, want[name]) {
+			t.Errorf("%s was changed by a refused start", name)
+		}
 	}
 
-	ri.write(t, "tokens.json", ri.plain["tokens.json"])
+	for _, name := range ri.files {
+		ri.write(t, name, ri.sealed[name])
+	}
 	b := mustStart(t, ri.opts())
-	ri.checkAllSealed(t)
 	if got := storedSchema(t, b.data); got != 4 {
 		t.Errorf("schema after the restored start = %d, want 4", got)
 	}
@@ -255,28 +288,45 @@ func TestPostgresPlaintextAuthRowAtSchema4RefusesStartUp(t *testing.T) {
 
 // ---- R1: a keyless install's plain drop list -----------------------------
 
-// #1202 review R1: a keyless v0.6 install's plain droplist.json opens once
-// a key is mounted and is sealed in place, with its entry intact. Paired
-// with a damaged drop list, which fails start-up and is left alone.
-func TestPlainDropListIsSealedInPlaceWhenAKeyIsMounted(t *testing.T) {
+// #1202 review R1, as changed by R26 (ruling 19; it was "a keyless
+// install's plain droplist.json is sealed in place when a key is
+// mounted"): a plain droplist.json refuses start-up with the ruling-19
+// wording, whatever the schema, and is left byte for byte. The accounts
+// and tokens are sealed, so the drop list is the only thing wrong.
+// Paired: moved aside, the install starts and the admin signs in.
+func TestPlainDropListRefusesStartUpAndIsLeftAlone(t *testing.T) {
 	t.Parallel()
-	f := newLegacyInstall(t)
-	plain := `{"entries":[{"cidr":"` + reviewCIDR + `","addedBy":"mv-admin","addedAt":"2026-01-02T03:04:05Z","reason":"keyless era"}]}`
-	path := filepath.Join(f.root, "data", "droplist.json")
-	must(t, os.WriteFile(path, []byte(plain), 0o600))
+	for _, schema := range []int{3, 4} {
+		t.Run(fmt.Sprintf("schema %d", schema), func(t *testing.T) {
+			f := newLegacyInstallSealed(t)
+			plain := []byte(`{"entries":[{"cidr":"` + reviewCIDR + `","addedBy":"mv-admin","addedAt":"2026-01-02T03:04:05Z","reason":"keyless era"}]}`)
+			path := filepath.Join(f.root, "data", "droplist.json")
+			must(t, os.WriteFile(path, plain, 0o600))
+			stampSchema(t, filepath.Join(f.root, "data"), schema)
 
-	a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
-	if json.Valid(readBytes(t, path)) {
-		t.Error("droplist.json is still plain JSON after start-up with a key")
-	}
-	w := &world{a: a, admin: f.admin}
-	c, r := w.signIn(t, f.admin, f.admin.recovery(t))
-	wantStatus(t, "sign-in", r, 200)
-	if l := c.get("/api/droplist"); l.Status != 200 || !strings.Contains(string(l.Body), reviewCIDR) {
-		t.Errorf("the drop list lost its entry: %s", l)
+			code, out, _ := refused(t, Opts{Root: f.root, KeyFile: f.keyPath})
+			if code == 0 {
+				t.Errorf("exit status 0 with a plain drop list\n%s", out)
+			}
+			wantRuling19Refusal(t, "plain droplist.json", out)
+			if setupCodeRe.MatchString(out) {
+				t.Errorf("a setup code was logged:\n%s", out)
+			}
+			if got := readBytes(t, path); !bytes.Equal(got, plain) {
+				t.Errorf("the plain drop list was changed (sealed or rewritten): %q", got)
+			}
+
+			must(t, os.Rename(path, path+".aside"))
+			a := mustStart(t, Opts{Root: f.root, KeyFile: f.keyPath})
+			_, r := (&world{a: a, admin: f.admin}).signIn(t, f.admin, f.admin.recovery(t))
+			wantStatus(t, "sign-in with the drop list moved aside", r, 200)
+		})
 	}
 }
 
+// A damaged drop list. The install is sealed, so the damaged drop list is
+// the only thing that can stop it (#1202 review R26: with plaintext
+// accounts it would be refused for that instead).
 func TestDamagedDropListFailsStartUpAndIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string][]byte{
@@ -284,7 +334,7 @@ func TestDamagedDropListFailsStartUpAndIsLeftAlone(t *testing.T) {
 		"garbage":        {0x00, 0x13, 0x37, 0xff, 0xfe},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newLegacyInstall(t)
+			f := newLegacyInstallSealed(t)
 			path := filepath.Join(f.root, "data", "droplist.json")
 			must(t, os.WriteFile(path, body, 0o600))
 			code, out, _ := refused(t, Opts{Root: f.root, KeyFile: f.keyPath})
