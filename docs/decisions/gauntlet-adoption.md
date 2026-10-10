@@ -1,11 +1,12 @@
 # Authentication moves onto gauntlet: what is replaced, what carries over, what changes
 
-**Status:** proposed design, 2026-10-10 (issue #1202, milestone v0.7.0;
-owner opened the work the same day: "Gauntlet has reached v0.4.1 with no
-issues left outstanding; it's ready to adopt"). The owner answered the
-ten design questions on 2026-10-10, and the three points left open the
-same day (rulings 11-13); the rulings are at the end and the design
-below states them. The build follows this record.
+**Status:** built on `feat/1202-gauntlet`, not yet merged (design
+2026-10-10; issue #1202, milestone v0.7.0; owner opened the work the same
+day: "Gauntlet has reached v0.4.1 with no issues left outstanding; it's
+ready to adopt"). The owner answered the ten design questions on
+2026-10-10, and the points left open and raised during the build the same
+day (rulings 11-14 and 16-18); the rulings are at the end and the design below
+states them.
 **Applies to:** `internal/auth`, `internal/oidc`,
 `internal/api/{auth,oidc,tokens,passkey,webauthn}.go`, `main.go`'s auth
 wiring and CLI commands, `internal/persist` (one interface method),

@@ -24,6 +24,12 @@
 # is the inventory), not a general list of acceptable ones: a dependency
 # arriving under a licence not yet here fails the job, and adding the entry
 # is a reviewed change rather than a silent pass (owner decision, #948).
+#
+# github.com/tomlawesome/gauntlet v0.4.1 (authentication, #1202) is
+# Apache-2.0 -- checked against the LICENSE file at that tag -- which is
+# already allowed below for go-oidc, so it needed no new entry. Apache-2.0
+# is one-way compatible with this project's AGPL-3.0-only; its licence text
+# is in THIRD-PARTY-NOTICES.md.
 allow-licenses:
   - Apache-2.0
   - BSD-2-Clause
