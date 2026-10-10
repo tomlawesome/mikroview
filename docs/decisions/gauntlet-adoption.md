@@ -625,3 +625,14 @@ decision the design above states.
   worked out from a missing `publicUrl` reads as optional, and the
   admin could sign in on the LAN without the passkey (OWASP "fail
   securely"). (Ruling 15 was withdrawn; the number is not reused.)
+- **Ruling 17, a required admin passkey that cannot be met in setup-only
+  mode (2026-10-10, replacing withdrawn ruling 15):** `required` is
+  already refused unless `publicUrl` is a domain name (CFG-0023), so a
+  running MikroView never holds this combination; it appears only when
+  that refusal is what started setup-only mode. On an IP address no
+  passkey can ever have been made, so the admin has always signed in
+  with a password and a second factor there. Setup-only mode therefore
+  starts with the rule treated as optional when no admin holds a
+  passkey, and logs that it did; when an admin holds one (`publicUrl`
+  moved from a domain to an IP in the same edit), it refuses, as
+  ruling 16 does.
