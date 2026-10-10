@@ -193,6 +193,12 @@ func TestPostgresPlaintextAuthRowsRefuseStartUpAndAreLeftAlone(t *testing.T) {
 				if after, _ := p.row(t, name); after != string(doc) {
 					t.Errorf("%s row plaintext: the row was sealed or rewritten: %.80s", name, after)
 				}
+				// #1202 review round 3, S6: a refused start records no schema 4.
+				if schema == 3 {
+					if n := p.schema4Rows(t); n != 0 {
+						t.Errorf("%s row plaintext: the refused start recorded schema 4 (%d version-4 row(s))", name, n)
+					}
+				}
 				setRow(name, sealedRows[name])
 			}
 
@@ -232,6 +238,9 @@ func TestPlaintextFilesAreNotMovedOntoPostgres(t *testing.T) {
 	}
 	if !bytes.Equal(readBytes(t, filepath.Join(data, "users.json")), beforeUsers) || !bytes.Equal(readBytes(t, filepath.Join(data, "tokens.json")), beforeTokens) {
 		t.Error("a plaintext source file was changed (sealed or rewritten)")
+	}
+	if n := p.schema4Rows(t); n != 0 { // #1202 review round 3, S6
+		t.Errorf("the refused move recorded schema 4 (%d version-4 row(s))", n)
 	}
 	for _, name := range []string{"auth", "tokens"} {
 		if row, ok := p.row(t, name); ok && strings.Contains(row, f.admin.name) {

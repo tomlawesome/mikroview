@@ -199,6 +199,7 @@ func TestTheFirstStartWritesTheSealedTokensRowWithNoTokensEverMinted(t *testing.
 // 3 and no tokens row -- a command-line mode runs first (it moves the
 // schema to 4), and the first start after it still ends with the sealed
 // tokens row in place. Paired: yet another start leaves it as it is.
+// (Round 3, S5: and the command alone, before any start, has written it.)
 func TestTheSealedTokensRowIsWrittenWhenACommandRunsBeforeTheFirstStart(t *testing.T) {
 	p := newPG(t)
 	w := bootstrap(t, Opts{PostgresDSN: p.dsn})
@@ -215,6 +216,17 @@ func TestTheSealedTokensRowIsWrittenWhenACommandRunsBeforeTheFirstStart(t *testi
 	code, out, _ := cli(t, Opts{Root: w.a.root, PostgresDSN: p.dsn}, "saved\n", "-generate-recovery-keys")
 	if code != 0 {
 		t.Fatalf("-generate-recovery-keys exit %d:\n%s", code, out)
+	}
+	// #1202 review round 3, S5: the command alone wrote the row. No server
+	// has been started since, so it is there the moment the command
+	// returns (no waiting), sealed, and opens under the install's key to
+	// an empty token list.
+	if row, _, ok := p.blob(t, "tokens"); !ok {
+		t.Fatal("the command wrote no tokens row before any server start")
+	} else if !isSealedRow(row) {
+		t.Fatalf("the tokens row the command wrote is not {\"sealed\": ...}: %.80s", row)
+	} else if toks := openSealedTokensRow(t, row, w.a.key); len(toks) != 0 {
+		t.Errorf("the tokens row opens with %d token(s), want an empty list", len(toks))
 	}
 	a := mustStart(t, Opts{Root: w.a.root, PostgresDSN: p.dsn})
 	payload, version := p.waitForSealedRow(t, "tokens")
