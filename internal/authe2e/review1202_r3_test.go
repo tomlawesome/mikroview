@@ -6,15 +6,13 @@ package authe2e
 // the data openable by the release it came from"), written from the
 // specification before the fixes exist. Each test carries its point
 // (// S1 ...). All on Postgres except S8. Wording: the ruling-19 wording of
-// wantRuling19Refusal; S8's refusal says, as ruling 16's does, to fix the
-// file "on disk".
+// wantRuling19Refusal.
 
 import (
 	"bytes"
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/tomlawesome/gauntlet"
@@ -176,6 +174,59 @@ func TestAFailedMoveOntoPostgresDoesNotRecordSchema4(t *testing.T) {
 	}
 }
 
+// S3 (#1202 review round 3), a failed move of a store that is NOT an auth
+// store: on the first move onto Postgres a flags, entities or audit file
+// that cannot be moved (sealed under another key, or damaged) may let the
+// start carry on with a warning -- R22 retries the move at the next start
+// -- but schema 4 is not recorded, in the database or in the data
+// directory. Paired: with the file moved aside the next start records 4.
+func TestAFailedMoveOfANonAuthStoreOntoPostgresDoesNotRecordSchema4(t *testing.T) {
+	for _, file := range []string{"flags.json", "entities.json", "audit.json"} {
+		for _, how := range []string{"sealed under another key", "damaged"} {
+			t.Run(file+" "+how, func(t *testing.T) {
+				p, f, _, o := moveWithADropList(t, nil)
+				data := filepath.Join(f.root, "data")
+				_ = os.Remove(filepath.Join(data, "droplist.json"))
+				path := filepath.Join(data, file)
+				if how == "damaged" {
+					must(t, os.WriteFile(path, []byte{0x00, 0x13, 0x37, 0xff, 0xfe}, 0o600))
+				} else {
+					otherKeyPath := filepath.Join(f.root, "other-keys", "other.key")
+					writeKey(t, otherKeyPath)
+					other, err := retention.LoadKey(otherKeyPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := persist.NewEncryptedFileBackend(path, other).Save(context.Background(), []byte(`{}`), 0); err != nil {
+						t.Fatalf("sealing %s under the other key: %v", file, err)
+					}
+				}
+				before := readBytes(t, path)
+
+				// The start may refuse or carry on; either way it must not
+				// record schema 4.
+				if a, err := start(t, o); err == nil {
+					a.stop()
+				}
+				wantSchemaUnstamped(t, file+" "+how, p, data)
+				if got := readBytes(t, path); !bytes.Equal(got, before) {
+					t.Errorf("%s was changed by the failed move", file)
+				}
+
+				must(t, os.Rename(path, path+".aside"))
+				a := mustStart(t, o)
+				a.stop()
+				if n := p.schema4Rows(t); n != 1 {
+					t.Errorf("after the start that completed the move, schema_version holds %d version-4 row(s), want 1", n)
+				}
+				if got := storedSchema(t, data); got != 4 {
+					t.Errorf("after the start that completed the move, the data directory's schema record is %d, want 4", got)
+				}
+			})
+		}
+	}
+}
+
 // ---- S4: when the tokens row is written (ruling 20) ---------------------------
 
 // plaintextAccountsOnPostgres: an install that has run on Postgres, then
@@ -291,38 +342,33 @@ func openSealedTokensRow(t *testing.T, payload, keyPath string) []gauntlet.Token
 
 // ---- S8: setup-only mode and a config file that cannot be parsed ---------------
 
-// S8 (#1202 review round 3, ruling 16 and 17): setup-only mode over a
-// config file that cannot be parsed at all (a YAML syntax error, or a root
-// that is not a mapping) and an admin who holds a passkey is refused and
-// says to fix the file on disk, as when the auth section or publicUrl
-// cannot be read. Paired: the same broken file with no admin holding a
-// passkey starts setup-only mode.
-func TestSetupOnlyRefusesAnUnparseableConfigWhenAnAdminHoldsAPasskey(t *testing.T) {
+// S8 (#1202 review round 3, #1347 wins over the earlier reading of rulings
+// 16 and 17): setup-only mode over a config file that cannot be parsed at
+// all (a YAML syntax error, or a root that is not a mapping) is refused
+// before any passkey question arises -- whether or not an admin holds a
+// passkey. The refusal's wording is not pinned. A regression guard.
+func TestSetupOnlyRefusesAnUnparseableConfigWhetherOrNotAnAdminHoldsAPasskey(t *testing.T) {
 	t.Parallel()
 	for name, cfg := range map[string]string{
 		"yaml syntax error":     "auth: [unclosed\n  x: : :\n",
 		"root is not a mapping": "- a\n- b\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Run("an admin holds a passkey", func(t *testing.T) {
-				f := newPasskeyInstall(t)
-				code, out, _ := refused(t, Opts{Root: f.root, RawConfig: cfg, KeyFromEnv: true, KeyFile: f.keyPath})
-				if code == 0 {
-					t.Errorf("exit status 0\n%s", out)
-				}
-				low := strings.ToLower(out)
-				if !strings.Contains(low, "on disk") || !strings.Contains(low, "fix") {
-					t.Errorf("the refusal does not say to fix the file on disk:\n%s", out)
-				}
-				if setupCodeRe.MatchString(out) {
-					t.Errorf("a setup code was logged although start-up was refused:\n%s", out)
-				}
-			})
-			t.Run("no admin holds a passkey", func(t *testing.T) {
-				f := newLegacyInstallSealed(t)
-				a := mustStart(t, Opts{Root: f.root, RawConfig: cfg, KeyFromEnv: true, KeyFile: f.keyPath})
-				setupOnlyAdminCanSignIn(t, a, f)
-			})
+			for who, install := range map[string]func(*testing.T) *legacyInstall{
+				"an admin holds a passkey": newPasskeyInstall,
+				"no admin holds a passkey": newLegacyInstallSealed,
+			} {
+				t.Run(who, func(t *testing.T) {
+					f := install(t)
+					code, out, _ := refused(t, Opts{Root: f.root, RawConfig: cfg, KeyFromEnv: true, KeyFile: f.keyPath})
+					if code == 0 {
+						t.Errorf("exit status 0\n%s", out)
+					}
+					if setupCodeRe.MatchString(out) {
+						t.Errorf("a setup code was logged although start-up was refused:\n%s", out)
+					}
+				})
+			}
 		})
 	}
 }
