@@ -23,7 +23,7 @@
 //     list. GET /api/auth/users is admin-only (#657), so a viewer
 //     issuing it would be a page that loads and immediately 403s.
 
-import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal, waitForStreamRows } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, eventsTotal, waitForEventsTotal, waitForStreamRows, removePerson } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -287,14 +287,9 @@ check(
 // internal/api/tokens_test.go.
 
 // --- Clean up: this account should not outlive the scenario -------------
-// Arm-then-confirm (round 28's gesture, retained rather than a confirm()
-// dialog): a click arms remove, a second click on the same button
-// confirms it.
+// Remove asks for the admin's password (#1202 U8): removePerson types it.
 
-const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
-await remove.click()
-await remove.click()
-await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+await removePerson(page, VIEWER_USER)
 // safe: waitForSelector above throws on timeout
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
