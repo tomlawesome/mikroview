@@ -7,7 +7,7 @@ prototypes, the screenshots and the verbatim verdict trail; the same
 trail is on #1374. This document is the consolidated record the build
 implements from. The prototype is reference for execution quality:
 **port its markup and CSS, never build from an impression of it**
-(AGENTS.md, "Building a ratified design"); where this text and the
+(docs/design/screens/README.md, "Building a ratified design"); where this text and the
 prototype disagree, this text wins.
 
 It replaces the modal design below ("Superseded: the wizard as a
@@ -19,7 +19,7 @@ forward, its modal, its seven steps and its finish do not.
 The wizard is a **full screen**, not a modal: the bar, the strip, the
 step rail, the body, the footer. It is still a **claim ledger** — every
 check is an observation, MikroView never connects to the router (the
-AGENTS.md invariant), each step ends on evidence or is set aside — and
+invariant in docs/decisions/observe-never-probe.md), each step ends on evidence or is set aside — and
 still **stateless beyond the evidence**: receipts are server-side, so
 closing never loses progress and reopening shows the ledger as it
 stands.

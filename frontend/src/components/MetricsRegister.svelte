@@ -109,7 +109,7 @@
   // the same figures beside the paper had no work left to do. Its empty
   // state ("Pick a minute on the register to read it across every
   // series") went with it -- a printed instruction of exactly the kind
-  // round 30 struck everywhere. Removed wholesale per AGENTS.md rather
+  // round 30 struck everywhere. Removed wholesale per docs/development.md rather
   // than left as a flag nothing can turn on.
 
   // No flag columns at all -- 0 fired this hour -- means no group gap to

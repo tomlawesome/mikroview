@@ -64,6 +64,29 @@ see `../.claude/skills/live-check/SKILL.md`.
 - Go coverage is gated per package by a ratchet — see
   [docs/testing.md](testing.md).
 
+## Conventions
+
+**Removals are wholesale.** When a feature, flag, endpoint, or code path is
+removed, it is removed completely. No aliases that print "this moved", no
+handlers that exist only to return a friendlier error, no fields read solely
+to warn about a state that no longer exists.
+
+The reasoning is that pre-1.0 there is no installed base to protect, and a
+shim is not free: it is code reachable from the outside that no longer has a
+job, which is the definition of avoidable attack surface. A retired command
+still parses argv, still opens config, still touches the account store.
+Keeping it trades a real, permanent cost against a one-time inconvenience for
+an operator with a stale runbook.
+
+Removals are communicated in `CHANGELOG.md`, which is what release notes are
+for. That is the correct channel for "this is gone and here is what to do
+instead" -- not a stub in `main.go`.
+
+**Dependencies and list data.** A new third-party dependency needs the
+owner's approval on an issue first, and list or lookup data is fetched at
+runtime, never vendored. The reasons are in
+[docs/decisions/scope-and-companion-projects.md](decisions/scope-and-companion-projects.md).
+
 ## Security
 
 See [SECURITY.md](../SECURITY.md).
@@ -89,4 +112,9 @@ requires and why.
 - [docs/release-signing.md](release-signing.md) — how a release's two
   independent signatures are produced, and the owner-only setup on the
   signing runner behind them
+- [docs/gitlab-delivery.md](gitlab-delivery.md) — how development and
+  release run on GitLab, with GitHub as the mirror
+- [docs/runner-host.md](runner-host.md) — the second host: live-check,
+  the CI gate and the runner
+- [docs/demos.md](demos.md) — building a demo instance the owner can review
 - [docs/decisions/](decisions/) — design and delivery decisions

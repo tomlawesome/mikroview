@@ -253,7 +253,7 @@ check(!!copyStarted, 'Copy starts the router’s turn')
 
 // Standing in for the router's own `/tool fetch` of the first section of
 // the block: this harness drives a real browser and a real listener but
-// not a real RouterOS device (the AGENTS.md invariant -- MikroView never
+// not a real RouterOS device (the invariant in docs/decisions/observe-never-probe.md -- MikroView never
 // connects to a router, and nothing here can make one connect to
 // MikroView either), so the certificate leg is exercised the same way
 // live-journey.mjs already does, a plain GET of the public endpoint the

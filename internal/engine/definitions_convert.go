@@ -97,7 +97,7 @@ type shippedDetector struct {
 	// noted every detector was seeded programmatic "pending this issue" --
 	// this field, and shippedDeclarativeBuilders (shipped_declarative.go),
 	// are #405's fix to that mapping, one detector at a time as each is
-	// actually ported (see AGENTS.md's "removals are wholesale" applied
+	// actually ported (see the "removals are wholesale" rule, docs/development.md, applied
 	// in reverse: nothing here claims a detector is declarative before
 	// its evaluation logic actually exists as one).
 	kind Kind

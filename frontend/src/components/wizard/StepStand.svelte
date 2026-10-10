@@ -15,7 +15,7 @@
   // (wizardRun.undoTextFor, backed by internal/routeros/commands.go's
   // Undo* functions), and the tagged-rules Undo from wizardTune.undoBlock
   // against the same pushed rule table StepTune reads -- nothing here
-  // hand-writes a RouterOS line (AGENTS.md).
+  // hand-writes a RouterOS line (docs/decisions/observe-never-probe.md).
 
   import { fetchRouterRules, type RouterFilterRule, type RouterTable } from '../../lib/api'
   import { wizardState } from '../../lib/wizard.svelte'

@@ -972,7 +972,7 @@ func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
 	url := fmt.Sprintf(`https://%s/api/ingest/router-backup`, quote(address))
 	// token is quoted here even though PushBlock's identical Bearer
 	// header spot leaves it bare (relying on the handler's Token
-	// validation, #1095) -- AGENTS.md's rule that templated command text
+	// validation, #1095) -- the house rule that templated command text
 	// must be "validated and quoted, never interpolated raw" is easiest
 	// to just satisfy outright in a function being written fresh, rather
 	// than lean on a validator this package cannot see from here.

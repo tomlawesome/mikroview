@@ -5,8 +5,8 @@ Notable changes to MikroView. Format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Removals before 1.0 are wholesale — no compatibility aliases or
-stub commands are left behind (see `AGENTS.md`, "Removals are
-wholesale"). This file is where they are communicated, so read it before
+stub commands are left behind (see [docs/development.md](docs/development.md),
+"Removals are wholesale"). This file is where they are communicated, so read it before
 upgrading.
 
 `0.1.0` was tagged on 2026-08-07 without its notes being cut, so

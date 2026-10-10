@@ -32,8 +32,8 @@
 # work up next, not repository state -- the issues and PRs are that.
 /.agents/
 
-# Parallel-agent worktrees are created here (see AGENTS.md on running agents
-# in parallel). They are separate checkouts, not content of this one.
+# Parallel-agent worktrees are created here (parallel agents
+# each get their own). They are separate checkouts, not content of this one.
 /worktrees/
 
 # The remote gate tees its full run here (scripts/gate-remote.sh). It is a

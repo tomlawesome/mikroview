@@ -13,8 +13,8 @@ Not the test suite. Run it in addition, not instead.
 
 **CI runs it; you do not run it before a cut.** Since 2026-09-08 the gate
 is a blocking stage on every MR and `dev` pipeline, and no loop runs
-anywhere. Run it by hand only to reproduce a red gate job. AGENTS.md, "The
-gate blocks the merge, in CI", has the rule and the reasoning.
+anywhere. Run it by hand only to reproduce a red gate job. docs/runner-host.md, "The
+gate in CI", has the rule and the reasoning.
 
 **It does not have to run here.** `make live-check-remote` runs the same gate
 on the second host, so this machine stays free for the 35-50 minutes it takes.

@@ -65,7 +65,7 @@ type nameProvenanceResponse struct {
 //
 // Reads only what mikroview already holds (the entity store, the config
 // maps, and state the router pushed); nothing here contacts a device,
-// per AGENTS.md's observe-never-probe invariant.
+// per the observe-never-probe invariant (docs/decisions/observe-never-probe.md).
 func (s *Server) handleNameProvenance(w http.ResponseWriter, r *http.Request) {
 	if !callerIsUser(r) {
 		http.Error(w, "user role required", http.StatusForbidden)

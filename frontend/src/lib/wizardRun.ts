@@ -10,7 +10,7 @@
 // wizard exists to avoid.
 //
 // Nothing here talks to the server, and nothing here connects to a
-// router (the AGENTS.md invariant). Evidence is read; it is never
+// router (the invariant in docs/decisions/observe-never-probe.md). Evidence is read; it is never
 // fetched from this module.
 
 // 'block' is the first-run tail (#1360): an offer after the five steps,
@@ -700,7 +700,7 @@ export function latestArrivalHeadline(stations: TrackStation[], ev: Evidence, na
 // pick" (internal/routeros/commands.go's SyslogCommands, #1370) -- and
 // the enrol line last, skipping the topics guard in between since that
 // line never needed re-pasting. Built from the server's own rendered
-// syslog block rather than a hand-written RouterOS line (AGENTS.md);
+// syslog block rather than a hand-written RouterOS line (docs/decisions/observe-never-probe.md);
 // falls back to the whole block if it is not the shape this expects
 // (e.g. no token minted yet, so there is no enrol line to keep last).
 export function refusedFixBlock(syslogCommands: string): string {

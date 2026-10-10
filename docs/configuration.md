@@ -1890,7 +1890,7 @@ droplist:
 
 A router pulls the current drop list itself, on its own schedule, with
 its own pull-only key -- MikroView never connects to a router (see
-`AGENTS.md`'s "MikroView observes; it never scans or connects"). Minting
+[the observe-never-probe decision](decisions/observe-never-probe.md)). Minting
 a key (`POST /api/droplist/key`, or Settings ▸ Engine room's drop list
 group) prints four RouterOS commands, already filled in with the real
 address and key, to paste into the router's terminal. Both are guarded
@@ -2373,7 +2373,7 @@ which kind of quiet it is:
 
 MikroView learns all of this from the feed alone. It never probes a host
 to find out whether it is still there -- see the "observes, never scans"
-rule in [AGENTS.md](../AGENTS.md).
+rule in [observe-never-probe](decisions/observe-never-probe.md).
 
 ```yaml
 hosts:
@@ -2544,7 +2544,7 @@ mark makes.
 
 MikroView learns all of this from the feed alone -- it never probes a
 line to find out whether it still exists; see the "observes, never
-scans" rule in [AGENTS.md](../AGENTS.md).
+scans" rule in [observe-never-probe](decisions/observe-never-probe.md).
 
 ```yaml
 baseline:

@@ -15,7 +15,7 @@ import (
 //
 // MikroView prints these commands and never runs them: the router fetches
 // each list straight from its source on its own schedule, and MikroView
-// never serves, copies or vendors list data (AGENTS.md, "List and lookup
+// never serves, copies or vendors list data (docs/decisions/scope-and-companion-projects.md, "Why list and lookup
 // data"). What the block leaves on a router, all named so Undo can find
 // it again:
 //

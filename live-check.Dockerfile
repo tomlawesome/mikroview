@@ -16,7 +16,7 @@
 # product Dockerfile's Node major, frontend/package.json's Playwright --
 # so a bump here is the same decision as a bump there, not a second one.
 #
-# Base images name a tag, never a @sha256 digest, per AGENTS.md: a digest
+# Base images name a tag, never a @sha256 digest, per docs/decisions/base-images-on-tags.md: a digest
 # freezes the base and stops it receiving the security patches published
 # by moving the tag, and nothing here bumps digests automatically.
 FROM node:26-bookworm

@@ -325,7 +325,7 @@ check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | '
 
 // --- put the estate back the way the scenario before this one left it ---
 //
-// Scenarios share one instance in filename order (AGENTS.md, "A scenario
+// Scenarios share one instance in filename order (docs/runner-host.md, "A scenario
 // cannot be judged on its own"), so five extra WireGuard interfaces
 // would follow this file into every later one's map and city. Push the
 // tables back to exactly what live-topography-tunnel.mjs leaves: wg0

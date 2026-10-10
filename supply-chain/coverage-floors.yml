@@ -142,14 +142,13 @@ floors:
                              # readDSNFile, openStorage and
                              # watchForCertificateReload -- these are the
                              # flows the live-check gate exercises at the
-                             # integration level (AGENTS.md, "The gate
-                             # blocks the merge, in CI"), not unit tests.
+                             # integration level (docs/runner-host.md, "The gate
+                             # in CI"), not unit tests.
                              # Raising this is out of scope for #1333.
 
   # --- below the 70% band: known debt ---
   cmd/demo-history: 0       # No test files. Dev-data seeding tool for
-                             # demos (AGENTS.md, "Demos the owner
-                             # reviews") -- not shipped in the release
+                             # demos (docs/demos.md) -- not shipped in the release
                              # binary.
   internal/evict: 100       # #1328 added the first direct test of its
                              # contract; 100% measured 2026-09-27.
