@@ -84,10 +84,14 @@ devices:
 # which only bounds what a live query can see in memory. There is no
 # unencrypted mode: "on" needs a keyFile too, pointing at a key mounted
 # outside this data directory (never inside it, and never in this
-# file). install.sh generates one for you on a fresh install. With this
-# block commented out (as here) or missing entirely, and no key
-# mounted, MikroView still comes up -- memory-only, saying so once at
-# startup. Generate your own key with:
+# file). A key is REQUIRED from v0.7.0, whether history is on or not:
+# MikroView seals its accounts, API tokens, recovery keys and sign-in
+# history under it, and refuses to start without one (CFG-0083). With
+# this block commented out (as here), the key is found at
+# mikroview/keys/history.key in the app folder. install.sh generates one
+# for you on a fresh install; otherwise make your own before the first
+# start, and keep a copy somewhere safe (a lost key means the sealed
+# accounts cannot be read). Generate it with:
 #   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
 # The key file has to be readable by the container's user (uid 1000),
 # the same rule as every other file you mount in -- if it is not,
@@ -116,13 +120,12 @@ devices:
 # device name and that device's ingest token (no separate credential to
 # invent); a login can only write into its own folder and cannot list,
 # read, delete, rename or overwrite anything. Every pair is encrypted
-# under history.keyFile above -- the same "no key, no storage" rule:
-# with no key configured the drop box refuses every login rather than
-# keeping anything unencrypted. 10 generations kept per router, 16 MiB
+# under history.keyFile above (MikroView does not start without that
+# key), so nothing is ever kept unencrypted. 10 generations kept per router, 16 MiB
 # per file, oldest dropped first. Port 47022 is a fixed, deliberately
 # unconventional default (not 22 or 2222, which draw scanner traffic).
 # The setup wizard's backup step prints the exact router-side script
-# once a key is mounted and the drop box is open. See
+# once the drop box is open. See
 # docs/configuration.md's "Router backups" section and SECURITY.md for
 # the on-path caveat: RouterOS never verifies this server's host key.
 # backup:
