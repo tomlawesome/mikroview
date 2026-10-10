@@ -649,10 +649,12 @@ decision the design above states.
   rows. Found while checking this record's "Downgrade" claim, which
   was false for Postgres.
 - **Ruling 19, no sealing in place (2026-10-10; supersedes rulings 11
-  and 14):** there is no plaintext-to-sealed migration at all. A plaintext
-  auth document or drop list, on files or Postgres, is always refused
-  at start-up with a message saying it was written without a key before
-  v0.7.0, and to restore a sealed copy or move it aside and start fresh.
+  and 14; narrowed by ruling 21):** there is no plaintext-to-sealed
+  migration at all. A plaintext auth document, on files or Postgres, or
+  a plaintext drop-list file, including one being moved onto Postgres,
+  is always refused at start-up with a message saying it was written
+  without a key before v0.7.0, and to restore a sealed copy or move it
+  aside and start fresh.
   An install must already run with a key before it upgrades. Owner: no
   one but the owner runs MikroView yet, so the upgrade cost falls on
   them alone, and it removes the hole ruling 14 left (a rolled-back
@@ -665,3 +667,10 @@ decision the design above states.
   instead of reading the sealed accounts row as an empty store, offering
   account creation and overwriting the real accounts. Ruling 18 guards
   every later downgrade; this covers the releases already shipped.
+- **Ruling 21, drop-list rows on Postgres (2026-10-11):** ruling 19's
+  drop-list refusal covers drop-list files, including one being moved
+  onto Postgres, which is refused in the file backend's words. Drop-list
+  rows already in Postgres stay as the database holds them, unsealed
+  like every non-auth store, protected by the database's own access
+  control. Not chosen: sealing drop-list rows too, which under ruling 19
+  would refuse every existing Postgres drop list at upgrade.

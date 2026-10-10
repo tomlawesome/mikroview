@@ -39,10 +39,13 @@ rewritten.
   [docs/install.md](docs/install.md#the-key-make-it-once-before-the-first-start).
   Keep a copy of the key apart from the data: a lost key cannot be
   recovered and the accounts cannot be read without it. Plaintext data is
-  **not** sealed in place: accounts, tokens, recovery-key digests or a drop
-  list that a keyless install left in the clear, on files or on Postgres,
+  **not** sealed in place: accounts, tokens or recovery-key digests that a
+  keyless install left in the clear, on files or on Postgres, and a
+  plaintext drop-list file (including one being moved onto Postgres),
   stop this version starting, left exactly as they are, with a message
-  saying to restore a sealed copy or move them aside and start fresh. The
+  saying to restore a sealed copy or move them aside and start fresh. A
+  drop list already in Postgres stays as it is, unsealed like the other
+  stores there. The
   key has to be in place before you upgrade. Take a copy of the data
   directory (or a `pg_dump`) first: see [docs/upgrades.md](docs/upgrades.md).
   On Postgres the first start writes the sealed tokens row even when no

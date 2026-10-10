@@ -208,15 +208,19 @@ This applies on Postgres too.
 **The key has to be in place before you upgrade.** 0.7.0 does not seal
 plaintext data in place. An install that ran without a key has its
 accounts, tokens, recovery-key digests and drop list in the clear, and
-0.7.0 refuses to start on any of them, on files or on Postgres: it says
-the data was written without a key before v0.7.0, leaves it exactly as it
-is and prints no setup code. Restore a sealed copy (one taken while a key
-was mounted), or move the plaintext file aside and start fresh, which
-means creating the admin account again. The schema moves to 4 only once
-every one of those stores has opened sealed, so a refused start leaves it
-at 3 and the release you came from can still read the data. If the
-schema stamp itself cannot be written, 0.7.0 refuses to start rather
-than run without it.
+0.7.0 refuses to start on any of them: the account stores on files or on
+Postgres, the drop list as a file, including when this start would move
+it onto Postgres. It says the data was written without a key before
+v0.7.0, leaves it exactly as it is and prints no setup code. Restore a
+sealed copy (one taken while a key was mounted), or move the plaintext
+file aside and start fresh, which means creating the admin account again.
+A drop list that is already in Postgres is left as it is: like every
+store there apart from the account stores, it is not sealed. The schema
+moves to 4 only once every one of those stores has opened sealed and
+every file has moved onto Postgres, so a refused start, or one where a
+file did not move, leaves it at 3 and the release you came from can
+still read the data. If the schema stamp itself cannot be written, 0.7.0
+refuses to start rather than run without it.
 
 **2. Take a copy of your data.** Stop MikroView, then copy the data
 directory (or run `pg_dump` for Postgres). MikroView does not take one

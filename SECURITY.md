@@ -819,11 +819,15 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   always was, rather than treated as a fresh install.
 
   **A plaintext file is never sealed in place** (#1202, ruling 19). An
-  earlier keyless release's plaintext accounts, tokens, recovery-key
-  digests or drop list -- on files or in Postgres rows -- are refused at
-  any schema and start-up stops, so someone who can write the data folder
+  earlier keyless release's plaintext accounts, tokens or recovery-key
+  digests -- on files or in Postgres rows -- and a plaintext drop-list
+  file, including one being moved onto Postgres, are refused at any
+  schema and start-up stops, so someone who can write the data folder
   but does not hold the key cannot plant an accounts file of their own
   with an admin they chose. The key has to be in place before upgrading.
+  Drop-list rows already in Postgres are left as the database holds them:
+  unsealed, like every store other than the four account stores, and
+  protected by the database's own access control (ruling 21).
 
   With a key, the flags file contains the IP addresses that triggered a
   flag and a short human-readable description (encrypted); the accounts
