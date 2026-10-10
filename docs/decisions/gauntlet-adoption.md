@@ -461,7 +461,7 @@ licence-policy.yml`, and gauntlet's own notice for the Have I Been
 Pwned-derived list travels with the embedded list (gauntlet README:
 "an application that embeds gauntlet does not have to repeat it").
 
-The pin is exact: `github.com/tomlawesome/gauntlet v0.4.1`, never a
+The pin is exact: `github.com/tomlawesome/gauntlet v0.4.2`, never a
 branch or pseudo-version, bumped by a merge request of its own each
 time (gauntlet ADR-0002: "a version-number change and a green pipeline,
 nothing else"). The module is fetched directly from GitHub, not through
