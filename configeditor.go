@@ -320,14 +320,24 @@ func runSetupOnly(result config.Result, problems int) int {
 	}
 	passkeys := passkeysFor(rp)
 	rule := adminPasskeyRule(cfg, rp)
-	// An admin held to a passkey that cannot be made here would be held
-	// at that door with no way through it, editor and all. The rule is
-	// not loosened to let them in: what the operator asked for stands,
-	// and the file is fixed on disk instead, as a refused config always
-	// was.
+	// Ruling 17 (#1202 review R18): auth.adminPasskey: required with a
+	// publicUrl that cannot offer passkeys (an IP address) is the very
+	// combination CFG-0023 refuses, so it is what starts this mode. An
+	// admin held to a passkey that cannot be made here would be held at
+	// that door with no way through it, editor and all. When no admin
+	// holds a passkey (and an IP address can never have issued one)
+	// nothing is lost by treating the rule as optional, so it is, and
+	// the log says so. When an admin does hold one, the rule is not
+	// loosened: this mode refuses and the file is fixed on disk, as in
+	// ruling 16. A normal start is unaffected and still refuses
+	// (CFG-0023).
 	if rule == gate.AdminPasskeyRequired && passkeys == nil {
-		log.Error("auth.adminPasskey is required, but passkeys cannot be offered at the configured publicUrl -- not starting the config editor; fix the file on disk and check it with -validate-config")
-		return 1
+		if anyAdminHoldsPasskey(authStore) {
+			log.Error("auth.adminPasskey is required, but passkeys cannot be offered at the configured publicUrl -- not starting the config editor; fix the file on disk and check it with -validate-config")
+			return 1
+		}
+		log.Warn("auth.adminPasskey is required, but passkeys cannot be made at the configured publicUrl and no admin holds one -- the admin passkey rule is relaxed (treated as optional) for setup-only mode; fix the file on disk and restart")
+		rule = gate.AdminPasskeyOptional
 	}
 	g, err := srv.NewGate(api.GateOptions{
 		SecureCookie: cfg.Auth.SecureCookie,
