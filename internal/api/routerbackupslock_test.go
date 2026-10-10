@@ -141,10 +141,11 @@ func TestSetPassphraseThenLockRefusesTheDownloadUntilUnlocked(t *testing.T) {
 func TestAnotherSessionOfTheSameAdminStillSeesALockedVault(t *testing.T) {
 	_, ts, admin, gen := vaultLockFixture(t)
 
-	// mikroview holds one admin account (auth.ErrSingleAdmin), so "another
-	// admin" is another sign-in by the same person -- a second browser, or
-	// the phone in their pocket. That is the case worth pinning: the
-	// unlock belongs to the session that made it, not to the account.
+	// "Another admin" here is another sign-in by the same admin -- a
+	// second browser, or the phone in their pocket. Gauntlet allows
+	// several admin accounts, but this is the case worth pinning: the
+	// unlock belongs to the session that made it, not to the account, so
+	// even the same account's other session sees the vault locked.
 	// loggedInClient (not a bare login) because admin already holds a
 	// confirmed factor (vaultLockFixture's setUpAdmin) -- #1249 means the
 	// password alone only reaches the pending-login step now, and

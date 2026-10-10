@@ -11,6 +11,14 @@ import (
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
+// ErrPlaintextDocument is the refusal of a document that parses as JSON
+// but is not sealed, by a backend not asked to seal it in place
+// (#1202, ruling 14). From the first start of v0.7.0 on, every store
+// file MikroView writes is sealed, so a plaintext one was put there by
+// something else -- and anyone who can write the data directory, key or
+// no key, could otherwise plant an accounts document of their own.
+var ErrPlaintextDocument = errors.New("the file holds a plaintext document where a sealed one belongs -- sealing in place applies only on the first start of v0.7.0, and MikroView has not written a plaintext store file since")
+
 // EncryptedFileBackend wraps FileBackend so every document a file-backed
 // store writes is ciphertext under the operator's retention key (#853) --
 // the same key and the same AES-256-GCM/HKDF scheme internal/retention
@@ -42,10 +50,13 @@ type EncryptedFileBackend struct {
 
 // WithSealInPlace makes Load seal a plaintext document it finds instead
 // of refusing it, and returns b (#1202, ruling 11). It is for the auth
-// stores alone -- accounts, tokens, recovery keys and the sign-in
-// history -- which an install that ran without a key kept in the clear
-// (#853 rule 6, now ended): from v0.7.0 a key is required, and those
-// files have to come across without a manual step.
+// stores -- accounts, tokens, recovery keys and the sign-in history --
+// and the drop list, which an install that ran without a key kept in
+// the clear (#853 rule 6, now ended): from v0.7.0 a key is required, and
+// those files have to come across without a manual step. The caller
+// sets it only while the stored schema is below 4, the first start of
+// v0.7.0 (ruling 14); from then on a plaintext document is refused
+// (ErrPlaintextDocument).
 //
 // Only a file that does not carry the sealed envelope's header and
 // parses as JSON is treated as plaintext. It is read as it is, sealed
@@ -132,9 +143,21 @@ func (b *EncryptedFileBackend) load(ctx context.Context) (Snapshot, error) {
 	// its magic, which no JSON document can, so either alone would do
 	// today -- but which rule decides is the security property here, and
 	// it is written out rather than left to that coincidence.
-	if b.sealInPlace && !retention.HasSealMagic(snap.Payload) && json.Valid(snap.Payload) {
-		return b.sealPlaintext(ctx, snap)
+	if !retention.HasSealMagic(snap.Payload) && json.Valid(snap.Payload) {
+		if b.sealInPlace {
+			return b.sealPlaintext(ctx, snap)
+		}
+		// Named, so a caller can say what it means in its own words
+		// (setup-only mode does). Refused exactly as before either way:
+		// never read, never rewritten.
+		return Snapshot{}, fmt.Errorf("persist: %s: %w", b.inner.path, ErrPlaintextDocument)
 	}
+	return b.unseal(snap)
+}
+
+// unseal opens the sealed document snap holds, with this backend's path
+// bound, and hands back the plaintext under the same version.
+func (b *EncryptedFileBackend) unseal(snap Snapshot) (Snapshot, error) {
 	plain, err := b.key.Open(retention.StateStoreKeyInfo, b.aad, snap.Payload)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("persist: %s: %w", b.inner.path, err)

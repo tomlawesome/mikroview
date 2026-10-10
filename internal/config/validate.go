@@ -522,6 +522,25 @@ func KeyRequired(keyFile string, noKey bool, keyErr error) Problem {
 	}
 }
 
+// KeyRequiredHistoryUnreadable is KeyRequired for setup-only mode when
+// the config file's history section -- where history.keyFile lives --
+// could not be read (#1202 review R13). "No key is mounted" would be
+// wrong there: a key may well be named in the part that failed. So it
+// says what happened and names the two places a key is found without
+// that section: MIKROVIEW_HISTORY_KEY_FILE, and the app folder's
+// keys/history.key at appFolderKey. Same code as KeyRequired.
+func KeyRequiredHistoryUnreadable(appFolderKey string) Problem {
+	return Problem{
+		Code: "CFG-0083", Severity: SeverityFatal, Key: "history.keyFile",
+		Message: "cannot be found: the config file's history section could not be read, so any key it names is unknown, " +
+			"and none was found anywhere else -- the account stores are sealed under that key, so nothing has been started or written",
+		Remediation: fmt.Sprintf("set MIKROVIEW_HISTORY_KEY_FILE to the key file's path, or put the key at %s, and start again; "+
+			"then fix the history section in the config editor", appFolderKey),
+		Example: examplesByCode["CFG-0083"],
+		Docs:    docsAnchor("CFG-0083"),
+	}
+}
+
 // validateNotify warns about a webhook that would ship this
 // deployment's flag data, and whatever credential is configured to reach
 // the receiver, in cleartext.

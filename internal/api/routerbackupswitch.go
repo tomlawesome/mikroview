@@ -100,7 +100,7 @@ func (s *Server) handleRouterBackupSwitchUpdate(w http.ResponseWriter, r *http.R
 			writeUnauthorized(w, "sign in first")
 			return
 		}
-		if !s.recheckPassword(w, user, req.Password, "incorrect password", now) {
+		if !s.recheckPassword(w, r, user, req.Password, "incorrect password") {
 			return
 		}
 

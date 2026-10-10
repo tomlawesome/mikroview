@@ -145,9 +145,11 @@ func (k *Key) fileKey(salt []byte, day string) ([]byte, error) {
 // Exported so other packages that hold the same master key -- #853 puts
 // internal/persist's file-backed stores and internal/snapshot's
 // warm-restart documents under it -- derive through this one function
-// rather than growing their own copy of the HKDF call. See keyInfoPrefix
-// for why every caller must use its own info string: two callers sharing
-// one would seal different kinds of data with the same derived key.
+// rather than growing their own copy of the HKDF call. Each kind of data
+// gets its own info string (keyInfoPrefix here, StateStoreKeyInfo for
+// the store documents): two kinds sharing one would be sealed under the
+// same derived key, and only what the seal binds as additional
+// authenticated data would then keep one from opening as the other.
 func (k *Key) Derive(salt []byte, info string) ([]byte, error) {
 	return hkdf.Key(sha256.New, k.material, salt, info, 32)
 }
@@ -155,10 +157,16 @@ func (k *Key) Derive(salt []byte, info string) ([]byte, error) {
 // Material returns a copy of the key's bytes, for the one caller that
 // has to hand the same master key to code outside this package:
 // gauntlet's persist.Encrypt, which seals the auth stores' Postgres rows
-// (#1202, ruling 2). It derives its own keys from these bytes under its
-// own label and info strings, so nothing it seals can be opened as
-// something this package sealed, or the other way round -- the same
-// one-key, separate-derivations rule Derive's doc comment sets out.
+// (#1202, ruling 2). Gauntlet derives with the same construction and the
+// same info string as the store documents here (StateStoreKeyInfo,
+// "mikroview/state-store/v1/"), on purpose: its file backend opens files
+// mikroview sealed. So the derivation does not keep the two apart. What
+// does is the additional authenticated data each seal binds -- the
+// store's label ("auth", "tokens", ...) for a row, the file's path for a
+// file -- and the envelope: a row is a {"sealed": "<base64>"} text
+// document, a file the raw sealed bytes. A row cannot open as a file's
+// document, or the other way round, unless a label and a path were the
+// same string, which no store's are.
 //
 // A copy, so a caller that zeroes or reuses its slice cannot change the
 // key every other store here derives from.
@@ -168,9 +176,9 @@ func (k *Key) Material() []byte {
 	return out
 }
 
-// keyInfoPrefix namespaces this package's own per-day file keys. See
-// Derive's doc comment for why every user of the master key -- this
-// package included -- needs its own prefix.
+// keyInfoPrefix namespaces this package's own per-day file keys and
+// SealDocument's documents, apart from the store documents
+// (StateStoreKeyInfo). See Derive's doc comment.
 const keyInfoPrefix = "mikroview/event-retention/v1/"
 
 // SealDocument encrypts plaintext as a single self-contained document

@@ -30,6 +30,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/prefs"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/tlssniff"
 )
@@ -137,6 +138,17 @@ func runSetupOnly(result config.Result, problems int) int {
 	// the key, found here as at a normal start -- history.keyFile if the
 	// file's history block survived, MIKROVIEW_HISTORY_KEY_FILE, or the
 	// app folder's keys/history.key.
+	//
+	// With the history section unreadable, history.keyFile is unknown
+	// rather than unset, and saying "no key is mounted" would send the
+	// operator looking in the wrong place (#1202 review R13).
+	if salvage.Broken["history"] || salvage.Broken["(whole file)"] {
+		if _, err := retention.LoadKey(cfg.History.KeyFile); errors.Is(err, retention.ErrNoKey) {
+			p := config.KeyRequiredHistoryUnreadable(config.AppFolderHistoryKeyPath())
+			log.Error(fmt.Sprintf("refusing to start the config editor:\n%s", config.Report([]config.Problem{p})))
+			return 1
+		}
+	}
 	if !requireKey(log, cfg, "start the config editor") {
 		return 1
 	}
@@ -193,6 +205,14 @@ func runSetupOnly(result config.Result, problems int) int {
 		return 1
 	}
 	defer st.Close()
+	// Never seal in place here either (#1202, ruling 14), whatever the
+	// schema. Below 4 a plaintext accounts file is one the previous,
+	// keyless release wrote; sealing it would leave a rollback to that
+	// release -- the likely next step for an operator whose upgraded
+	// config was refused -- unable to read its own accounts. At 4 a
+	// plaintext file is refused anyway. Either way it is refused here,
+	// below, and a normal start seals it.
+	st.neverSealInPlace()
 
 	authBackend, err := st.authBackendFor(ctx, authStoreAccounts, cfg.Auth.StorePath)
 	if err != nil {
@@ -201,9 +221,16 @@ func runSetupOnly(result config.Result, problems int) int {
 	}
 	// quietStoreOptions: this editor refuses an empty store just below,
 	// so a setup code announced here could never be used (#1415).
-	storeOpts := quietStoreOptions()
+	storeOpts := quietStoreOptionsFor(cfg)
 	storeOpts.Log = logging.New("auth")
 	authStore, err := gauntlet.OpenStore(authBackend, storeOpts)
+	if errors.Is(err, persist.ErrPlaintextDocument) {
+		log.Error(fmt.Sprintf("%s holds the accounts in the clear, as a release without a key left them -- setup-only mode "+
+			"does not seal them, so the previous release can still read them if you go back to it. Not starting the "+
+			"config editor: fix the config file on disk and start normally, which seals them (or roll back). Check the "+
+			"file with -validate-config", authBackend.Describe()))
+		return 1
+	}
 	if err != nil {
 		log.Error(err.Error())
 		return 1
@@ -214,6 +241,18 @@ func runSetupOnly(result config.Result, problems int) int {
 	// Refuse, as a refused config always did.
 	if authStore.Count() == 0 {
 		log.Error(fmt.Sprintf("no account in %s to sign in with -- the config editor needs an admin, so not starting it", authBackend.Describe()))
+		return 1
+	}
+	// Whether admins must sign in with a passkey is worked out from
+	// publicUrl unless auth.adminPasskey says (ruling 1). With either
+	// unreadable the rule is unknown, and the worked-out answer would
+	// fall to "optional" -- letting an admin who holds a passkey in on
+	// a password alone. Fail closed when one does (ruling 16, #1202
+	// review R17); with no admin holding a passkey nothing is loosened.
+	if field, unknown := passkeyRuleUnreadable(salvage, cfg); unknown && anyAdminHoldsPasskey(authStore) {
+		log.Error(fmt.Sprintf("the config file's %s could not be read, so setup-only mode cannot tell whether admins must "+
+			"sign in with a passkey, and an admin holds one -- not starting the config editor, rather than let that "+
+			"admin in without it. Fix the file on disk and check it with -validate-config", field))
 		return 1
 	}
 	// No token reaches anything in this mode (SetupOnlyRoutes registers
@@ -242,6 +281,7 @@ func runSetupOnly(result config.Result, problems int) int {
 		log.Error(err.Error())
 		return 1
 	}
+	loginLimiter.SetLog(storeOpts.Log) // #1202 review R4, as at a normal start
 	idle, ceiling := sessionLimits(cfg.Auth)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -362,6 +402,31 @@ func runSetupOnly(result config.Result, problems int) int {
 	// Stopped by a signal. Still a refused config: exit non-zero, so
 	// nothing watching the exit code reads this as a healthy stop.
 	return 1
+}
+
+// passkeyRuleUnreadable reports whether setup-only mode cannot work out
+// the admin passkey rule (ruling 16), and names the part of the file
+// that is to blame: the auth section (auth.adminPasskey itself), or
+// publicUrl when auth.adminPasskey is not set to settle it.
+func passkeyRuleUnreadable(salvage config.SetupOnly, cfg config.Config) (string, bool) {
+	switch {
+	case salvage.Broken["auth"]:
+		return "auth section", true
+	case salvage.Broken["publicUrl"] && cfg.Auth.AdminPasskey == "":
+		return "publicUrl", true
+	}
+	return "", false
+}
+
+// anyAdminHoldsPasskey reports whether an admin account holds at least
+// one passkey.
+func anyAdminHoldsPasskey(store *gauntlet.Store) bool {
+	for _, a := range store.Admins() {
+		if store.PasskeyCount(a.ID) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // openOptionalStore opens one of setup-only mode's two small stores

@@ -119,6 +119,16 @@ var schemaMigrations = []SchemaMigration{
 	},
 }
 
+// SchemaAuthSealed is schema 4's number, which also records that every
+// auth store and the drop list opened sealed (#1202, ruling 14). While
+// the stored schema is below it, the first start of v0.7.0, a plaintext
+// document those stores find is sealed in place; from then on it is
+// refused. So it is stamped last, once the stores have opened, not with
+// the rest at start-up: a start that fails part way leaves it unstamped,
+// and the next start seals what is left. Callers migrate to
+// SchemaAuthSealed-1 before opening anything and to CurrentSchema after.
+const SchemaAuthSealed int64 = 4
+
 // CurrentSchema is the highest schema version this build knows how to
 // produce. Data stamped above it is refused -- see SchemaTooNewError.
 func CurrentSchema() int64 { return highestSchema(schemaMigrations) }
@@ -312,7 +322,27 @@ func MigrateFileSchema(ctx context.Context, dir, buildVersion string) (FileSchem
 	return migrateFileSchema(ctx, dir, buildVersion, schemaMigrations)
 }
 
+// MigrateFileSchemaTo is MigrateFileSchema stopping at schema version
+// to: migrations numbered above it are left pending for a later call.
+// The downgrade guard still compares against everything this build
+// knows. See SchemaAuthSealed for the one caller that needs it.
+func MigrateFileSchemaTo(ctx context.Context, dir, buildVersion string, to int64) (FileSchemaResult, error) {
+	list := make([]SchemaMigration, 0, len(schemaMigrations))
+	for _, m := range schemaMigrations {
+		if m.Number <= to {
+			list = append(list, m)
+		}
+	}
+	return migrateFileSchemaWithin(ctx, dir, buildVersion, list, CurrentSchema())
+}
+
 func migrateFileSchema(ctx context.Context, dir, buildVersion string, list []SchemaMigration) (FileSchemaResult, error) {
+	return migrateFileSchemaWithin(ctx, dir, buildVersion, list, highestSchema(list))
+}
+
+// migrateFileSchemaWithin runs list's pending migrations, refusing data
+// stamped above known.
+func migrateFileSchemaWithin(ctx context.Context, dir, buildVersion string, list []SchemaMigration, known int64) (FileSchemaResult, error) {
 	if err := validateSchemaList(list); err != nil {
 		return FileSchemaResult{}, err
 	}
@@ -323,7 +353,6 @@ func migrateFileSchema(ctx context.Context, dir, buildVersion string, list []Sch
 	}
 	res := FileSchemaResult{From: stored, To: stored}
 
-	known := highestSchema(list)
 	if err := guardSchema(dir, stored, writtenBy, known); err != nil {
 		return res, err
 	}
@@ -335,6 +364,10 @@ func migrateFileSchema(ctx context.Context, dir, buildVersion string, list []Sch
 		}
 	}
 	if len(pending) == 0 {
+		if stored < known {
+			schemaLog.Info(fmt.Sprintf("data directory schema is at version %d (%s); version %d is stamped once the stores have opened", stored, dir, known))
+			return res, nil
+		}
 		schemaLog.Info(fmt.Sprintf("data directory schema is up to date at version %d (%s)", stored, dir))
 		return res, nil
 	}

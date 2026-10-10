@@ -294,7 +294,7 @@ func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Requ
 	// brute-force oracle that happens to need a session -- and a session
 	// is exactly what an attacker who has stolen a cookie already has.
 	// gauntlet's own password change spends the same budget.
-	if !s.recheckPassword(w, user, req.Password, "password is incorrect", now) {
+	if !s.recheckPassword(w, r, user, req.Password, "password is incorrect") {
 		return
 	}
 

@@ -69,6 +69,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/recoverykeys"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -905,7 +906,9 @@ func main() {
 		// (#1415); this says what it is for.
 		authLog.Info("no account yet -- MikroView is showing the create-account screen, which asks for the setup code logged above (see docs/configuration.md)")
 	default:
-		authLog.Info("no account yet -- MikroView is showing the create-account screen (see docs/configuration.md)")
+		// auth.storePath is empty: an account would not outlive this
+		// process, so no setup code is issued and none can be created.
+		authLog.Warn("auth.storePath is empty, so accounts are not kept and no account can be created -- nobody can sign in until auth.storePath names a file (see docs/configuration.md)")
 	}
 
 	// The sign-in history (#1202, ruling 8): every sign-in attempt, for
@@ -1079,6 +1082,23 @@ func main() {
 	droplistStore, err := droplist.OpenWithBackend(droplistBackend)
 	mustOpenStore(droplistLog, err)
 	droplistStore.SetAuditor(auditStore)
+
+	// The recovery-key digests are the fourth auth store. Only the
+	// command-line tools use them, but they are opened here as well, so
+	// that the schema stamp below covers them like the other three: a
+	// plaintext file an earlier keyless release left is sealed on this
+	// first start, and refused after it (#1202, ruling 14).
+	mustOpenStore(logging.New("recovery-keys"), openRecoveryKeysSealed(bootCtx, persistence, cfg))
+
+	// Every auth store and the drop list have now opened sealed, so the
+	// schema can move to 4 (#1202, ruling 14): from here on a plaintext
+	// document is refused. Not before -- a start that stopped above
+	// leaves the schema where it was, and the next start seals what is
+	// left.
+	if err := persistence.finishSchemaUpgrade(bootCtx, cfg); err != nil {
+		logging.New("schema").Error(err.Error())
+		os.Exit(1)
+	}
 
 	// The per-user preferences store (issue #1283): one versioned JSON
 	// record per account, read on sign-in and written on change,
@@ -1921,6 +1941,9 @@ func main() {
 		authLog.Error(fmt.Sprintf("the login limiter: %v", err))
 		os.Exit(1)
 	}
+	// Without a log the limiter drops what it has to report: a lockout
+	// it could not save, and pressure on its capped map (#1202 review R4).
+	loginLimiter.SetLog(authLog)
 	ingestLimiter, err := gauntlet.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow)
 	if err != nil {
 		authLog.Error(fmt.Sprintf("the ingest limiter: %v", err))
@@ -2512,7 +2535,17 @@ func runValidateConfig(args []string) int {
 		return validateConfigExitUnusable
 	}
 	_ = args
-	_ = cfg
+
+	// A key is required to start (#1202, ruling 2), so a missing or
+	// unusable one is a problem this command reports like any other
+	// fatal, with the same CFG-0083 the server refuses with (#1202
+	// review R14) -- not a clean bill of health for a config that will
+	// not start.
+	if _, err := retention.LoadKey(cfg.History.KeyFile); err != nil {
+		fmt.Fprint(os.Stderr, config.Report([]config.Problem{config.KeyRequired(cfg.History.KeyFile, errors.Is(err, retention.ErrNoKey), err)}))
+		fmt.Fprintf(os.Stderr, "\n1 problem(s). MikroView would refuse to start.\n")
+		return validateConfigExitProblems
+	}
 
 	// #1218's item 4: the same "N new settings are available" list the
 	// server itself would log on its next restart if this were an
@@ -2804,6 +2837,18 @@ func runTransferAdmin(args []string) int {
 		return 1
 	}
 
+	// Several admins: there is no one admin to hand over from, and
+	// gauntlet refuses rather than demote one nobody named
+	// (ErrSeveralAdmins). Its advice -- change each account's role --
+	// is a web UI action, so say how to reach it from here (#1202
+	// review R15). After the key, like everything else that describes
+	// the accounts.
+	if admins := store.Admins(); len(admins) > 1 {
+		logger.Error(severalAdminsAdvice(len(admins), current.Username))
+		fmt.Println("\nNothing was changed, and your recovery keys are unchanged.")
+		return 1
+	}
+
 	// Now that the key has been proven, naming the account is fine --
 	// and still useful, since the operator is about to choose what to
 	// transfer it to.
@@ -2835,6 +2880,11 @@ func runTransferAdmin(args []string) int {
 	}
 
 	from, to, err := store.TransferAdmin(target, time.Now())
+	if errors.Is(err, gauntlet.ErrSeveralAdmins) {
+		// Another admin appeared since the check above.
+		logger.Error("transfer failed, no keys were consumed: " + severalAdminsAdvice(len(store.Admins()), current.Username))
+		return 1
+	}
 	if err != nil {
 		logger.Error(fmt.Sprintf("transfer failed, no keys were consumed: %v", err))
 		return 1
@@ -2856,6 +2906,19 @@ func runTransferAdmin(args []string) int {
 	}
 	logger.Info(fmt.Sprintf("admin transferred from %s to %s", logging.Printable(from.Username), logging.Printable(to.Username)))
 	return 0
+}
+
+// severalAdminsAdvice is -transfer-admin's answer on a deployment with
+// more than one admin, in steps an operator at the command line can
+// follow: roles are changed in the web UI by any admin, and if none can
+// sign in, -recover-admin-account gets one back in first. firstAdmin is
+// the account that command resets (gauntlet's Store.Admin, the first
+// admin by username).
+func severalAdminsAdvice(n int, firstAdmin string) string {
+	return fmt.Sprintf("this deployment has %d admin accounts, so there is no single admin to hand over from -- "+
+		"-transfer-admin is for a deployment with one. Sign in to the web UI as any admin and change the roles in "+
+		"the Users group of Settings instead. If no admin can sign in, run -recover-admin-account first: it resets the password "+
+		"of %q, who can then sign in and change them", n, logging.Printable(firstAdmin))
 }
 
 // runClearSecondFactor backs `-clear-second-factor <username>` -- the way
@@ -3112,7 +3175,7 @@ func openAuthStoreForCLI(cmd string) (*gauntlet.Store, func(), error) {
 	// quietStoreOptions: on an empty store this process would otherwise
 	// announce a setup code of its own, which the running server does
 	// not know and would refuse (#1415, gauntlet ADR-0003 decision 6).
-	store, err := gauntlet.OpenStore(backend, quietStoreOptions())
+	store, err := gauntlet.OpenStore(backend, quietStoreOptionsFor(cfg))
 	if err != nil {
 		st.Close()
 		return nil, nil, err
@@ -3243,6 +3306,17 @@ func runRecoverAdminAccount(args []string) int {
 		return 1
 	}
 	fmt.Printf("Password for %q updated. Existing sessions for that account are now invalid.\n", admin.Username)
+	// A recovered admin signs in straight away: a sign-in disabled by
+	// failed attempts -- quite likely what brought the operator here --
+	// is lifted, with the lockout and its count (#1202 review R3). This
+	// process holds no limiter, so the store's own UnlockLogin is the
+	// one to call; the running server's limiter forgets its in-memory
+	// count at its next restart.
+	if err := store.UnlockLogin(admin.ID); err != nil {
+		logger.Error(fmt.Sprintf("the password was changed, but lifting the disabled sign-in failed: %v -- "+
+			"no key was consumed; the disable lifts itself %s after it began, or run this command again", err, gauntlet.LoginDisableDuration))
+		return 1
+	}
 
 	// Past this point the recovery itself has succeeded. Every remaining
 	// failure leaves the previous keys valid and says so -- rotating

@@ -10,6 +10,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -25,6 +27,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // setupCodeLine is the setup code's log line, in mikroview's own words:
@@ -68,6 +71,34 @@ func quietStoreOptions() gauntlet.Options {
 		OnSetupCode:  gauntlet.SetupCodeFunc(func(string) {}),
 		OnUnlockCode: gauntlet.UnlockCodeFunc(func(string, string) {}),
 	}
+}
+
+// quietStoreOptionsFor is quietStoreOptions with the common-password
+// list a password set here is checked against: the newer copy the
+// server keeps, if it has one (storedPasswordList), not only the one
+// built into this release (#1202 review R6).
+func quietStoreOptionsFor(cfg config.Config) gauntlet.Options {
+	opts := quietStoreOptions()
+	if list := storedPasswordList(cfg); list != nil {
+		opts.PasswordBlocklist = list
+	}
+	return opts
+}
+
+// storedPasswordList is the common-password list as the server last
+// kept it, for the command-line tools and setup-only mode: the newer
+// verified copy in passwordListDir, or the list built into this release
+// when there is none. Read only -- NewRefresher makes no request and
+// writes nothing, and Run, which would fetch, is never called here: the
+// server owns the fetch and the directory. nil only if the refresher
+// refuses its own configuration, which is the built-in list again
+// (gauntlet uses it when Options.PasswordBlocklist is nil).
+func storedPasswordList(cfg config.Config) *blocklist.Refresher {
+	r, err := blocklist.NewRefresher(blocklist.RefreshConfig{Dir: passwordListDir(cfg), Log: logging.New("passwordlist")})
+	if err != nil {
+		return nil
+	}
+	return r
 }
 
 // openTokens opens the token store with every kind mikroview issues
@@ -178,11 +209,39 @@ func passwordListDir(cfg config.Config) string {
 // only alongside MV_TEST_HOOKS=1 -- the same off-unless-asked rule as
 // every other test hook, and never an operator setting.
 func newPasswordList(cfg config.Config) (*blocklist.Refresher, error) {
+	// Made now, not at the first fetch that adopts a list: a directory
+	// that cannot be made stops start-up here, naming it, rather than
+	// leaving every refresh to fail with a Warn nobody reads (#1202
+	// review R5).
+	if err := os.MkdirAll(passwordListDir(cfg), 0o700); err != nil {
+		return nil, err
+	}
 	rc := blocklist.RefreshConfig{Dir: passwordListDir(cfg), Log: logging.New("passwordlist")}
 	if os.Getenv("MV_TEST_HOOKS") == "1" {
 		rc.URL = os.Getenv("MV_TEST_PASSWORDLIST_URL")
 	}
 	return blocklist.NewRefresher(rc)
+}
+
+// openRecoveryKeysSealed opens the recovery-key digests' document at
+// start-up, through the same sealed backend the command-line tools use,
+// so a plaintext one an earlier keyless release left is sealed in place
+// on the first start of v0.7.0 and refused after it, as the other auth
+// stores are (#1202, ruling 14). It only reads: the store itself, and
+// its pepper, are the command-line tools' (recoverykeys). A document
+// that will not open, or is not JSON, is a *persist.StartupError.
+func openRecoveryKeysSealed(ctx context.Context, st *storage, cfg config.Config) error {
+	b, err := st.authBackendFor(ctx, authStoreRecoveryKeys, cfg.Auth.RecoveryKeysPath)
+	if err != nil || b == nil {
+		return err
+	}
+	_, _, err = persist.Open(ctx, b, "the recovery-key store", func(data []byte) error {
+		if !json.Valid(data) {
+			return errors.New("not a JSON document")
+		}
+		return nil
+	})
+	return err
 }
 
 // firstTokenSweepDelay is how long after start-up the first token sweep

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
 )
@@ -231,8 +230,7 @@ func (s *Server) handleHistoryFilesDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	now := time.Now()
-	if !s.recheckPassword(w, user, req.Password, "incorrect password", now) {
+	if !s.recheckPassword(w, r, user, req.Password, "incorrect password") {
 		return
 	}
 

@@ -128,6 +128,10 @@ func applyAppFolder(cfg *Config) ([]AppFolderLookup, error) {
 	return lookups, nil
 }
 
+// AppFolderHistoryKeyPath is where the app folder's history key is
+// looked for, for a message that has to name it.
+func AppFolderHistoryKeyPath() string { return filepath.Join(appFolderRoot, appFolderHistoryKey) }
+
 // SetAppFolderForTest moves the app folder for a process-level test
 // (#1202): the binary is started with config.yaml and keys/history.key in
 // a temp directory, where it has to find them by itself, as it would at

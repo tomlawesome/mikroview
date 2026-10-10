@@ -254,7 +254,7 @@ func (s *Server) handleConfigEditorOpen(w http.ResponseWriter, r *http.Request) 
 	}
 
 	now := time.Now()
-	if !s.recheckPassword(w, user, req.Password, "incorrect password", now) {
+	if !s.recheckPassword(w, r, user, req.Password, "incorrect password") {
 		return
 	}
 

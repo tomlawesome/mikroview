@@ -17,7 +17,9 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -349,17 +351,52 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*gauntlet.User, bo
 // so a wrong password keeps its reservation -- that is what counts it.
 // It writes the refusal itself -- 429 past the budget, 401 with wrongMsg
 // for a wrong password -- and reports whether the caller may go on.
-func (s *Server) recheckPassword(w http.ResponseWriter, user *gauntlet.User, password, wrongMsg string, now time.Time) bool {
+//
+// The attempt is stamped with the server's clock, s.now(), as gate
+// stamps its own -- not the caller's time.Now(), which under the test
+// clock would never age out of the window (#1202 review R9). A wrong
+// password is audited, and a refusal by the limiter logged, as gate's
+// own re-checks are (#1202 review R10, ASVS 16.3.1).
+func (s *Server) recheckPassword(w http.ResponseWriter, r *http.Request, user *gauntlet.User, password, wrongMsg string) bool {
+	now := s.now()
 	if !s.LoginLimiter.ReserveRecheck(user.ID, now) {
+		s.recheckRefused(user)
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return false
 	}
 	if !s.Auth.PasswordMatches(user.ID, password) {
+		s.recheckFailed(r, user)
 		writeUnauthorized(w, wrongMsg)
 		return false
 	}
 	s.LoginLimiter.ReleaseRecheck(user.ID, now)
 	return true
+}
+
+// recheckFailed records a wrong password at one of mikroview's re-checks
+// exactly as gate records one at its own: user.login_failed, marked
+// step=recheck, in gate's detail format, so the audit page reads the
+// same whichever route the guess was made at. Never the password.
+func (s *Server) recheckFailed(r *http.Request, user *gauntlet.User) {
+	if s.Audit == nil {
+		return
+	}
+	s.Audit.Record(user.Username, "user.login_failed", user.Username,
+		fmt.Sprintf("outcome=%s method=%s step=recheck from=%q",
+			gauntlet.SignInWrongPassword, gauntlet.SignInMethodPassword, s.clientIP(r)))
+}
+
+// recheckRefusedLog keeps recheckRefused's Warn to one line a minute: a
+// session holder can hit a refused route as fast as they like.
+var recheckRefusedLog = logging.NewLimiter(time.Minute)
+
+// recheckRefused is the Warn for a re-check the limiter refused, as
+// gate leaves one for its own.
+func (s *Server) recheckRefused(user *gauntlet.User) {
+	if total, ok := recheckRefusedLog.Allow(); ok {
+		authLog.Warn(fmt.Sprintf("password re-check refused by the limiter: account=%q (%d refused re-check(s) since start-up)",
+			logging.Printable(user.Username), total))
+	}
 }
 
 // gateRoutes mounts gauntlet's route table, with the side effects
@@ -368,7 +405,8 @@ func (s *Server) recheckPassword(w http.ResponseWriter, user *gauntlet.User, pas
 // cannot know about is the router-backup vault's unlock, which belongs
 // to a session (#956, #1120), or a deleted account's preferences record
 // (#1283). Each follow-up runs only after a 2xx, so a refused request
-// changes nothing here either.
+// changes nothing here either -- with one exception, a deletion gauntlet
+// carried out but answered 500 partially-completed (see below).
 func (s *Server) gateRoutes(routes http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/auth/", routes)
@@ -399,28 +437,81 @@ func (s *Server) gateRoutes(routes http.Handler) http.Handler {
 	target := func(r *http.Request) { s.lockVaultForUser(r.PathValue("id")) }
 	mux.Handle("POST /api/auth/users/{id}/reset-password", s.afterSuccess(routes, target))
 	mux.Handle("POST /api/auth/users/{id}/logout-all", s.afterSuccess(routes, target))
-	mux.Handle("DELETE /api/auth/users/{id}", s.afterSuccess(routes, func(r *http.Request) {
+	// A role change ends the account's sessions in gauntlet (a
+	// downgrade), and whatever it was, the unlock was made under the
+	// role it no longer has: it goes too (#1202 review R8).
+	mux.Handle("PUT /api/auth/users/{id}/role", s.afterSuccess(routes, target))
+	// Ending one session ends that session's unlock, as signing it out
+	// does (#1202 review R8). The route names the session by its ref,
+	// within the caller's own account; the holder's ref is worked out
+	// from its ID, read before gate ends it.
+	mux.Handle("DELETE /api/auth/sessions/{ref}", s.afterOutcome(routes, func(r *http.Request) func(int) {
+		holder, holderUser := s.vaultUnlock.holding()
+		caller := userFromContext(r)
+		ref := r.PathValue("ref")
+		return func(status int) {
+			if !success(status) || holder == "" || caller == nil || holderUser != caller.ID {
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(gauntlet.Session{ID: holder}.Ref()), []byte(ref)) == 1 {
+				s.lockVaultForSession(holder)
+			}
+		}
+	}))
+	// A deleted account's preferences and unlock go with it. That
+	// includes gauntlet's 500 partially-completed, where the account
+	// was deleted and only revoking its tokens failed (#1202 review R7):
+	// the account is gone either way, so the request is judged by
+	// whether it is, not by the status alone.
+	mux.Handle("DELETE /api/auth/users/{id}", s.afterOutcome(routes, func(r *http.Request) func(int) {
 		id := r.PathValue("id")
-		s.lockVaultForUser(id)
-		if err := s.Prefs.Delete(id); err != nil {
-			// The deletion already committed, so the request still
-			// succeeds -- but a write that did not land is said out
-			// loud rather than reported as done (R6).
-			authLog.Error("deleting preferences for deleted user " + id + ": " + err.Error())
+		_, existed := s.Auth.Get(id)
+		return func(status int) {
+			if !success(status) && !(status == http.StatusInternalServerError && existed && accountGone(s.Auth, id)) {
+				return
+			}
+			s.lockVaultForUser(id)
+			if err := s.Prefs.Delete(id); err != nil {
+				// The deletion already committed, so the request still
+				// stands -- but a write that did not land is said out
+				// loud rather than reported as done (R6).
+				authLog.Error("deleting preferences for deleted user " + id + ": " + err.Error())
+			}
 		}
 	}))
 	return mux
 }
 
+// accountGone reports whether the account id no longer exists.
+func accountGone(store *gauntlet.Store, id string) bool {
+	_, ok := store.Get(id)
+	return !ok
+}
+
+// success reports whether status is a 2xx.
+func success(status int) bool { return status >= 200 && status < 300 }
+
 // afterSuccess serves r through next and then, if the answer was a 2xx,
 // runs then with the same request.
 func (s *Server) afterSuccess(next http.Handler, then func(*http.Request)) http.Handler {
+	return s.afterOutcome(next, func(r *http.Request) func(int) {
+		return func(status int) {
+			if success(status) {
+				then(r)
+			}
+		}
+	})
+}
+
+// afterOutcome serves r through next, with before called first -- to
+// read what the request is about to change -- and the function it
+// returns called afterwards with the status that was written.
+func (s *Server) afterOutcome(next http.Handler, before func(*http.Request) func(status int)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		after := before(r)
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		if rec.status >= 200 && rec.status < 300 {
-			then(r)
-		}
+		after(rec.status)
 	})
 }
 

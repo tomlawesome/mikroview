@@ -271,9 +271,18 @@ func (p *Pool) Describe() string { return p.safeDesc }
 // duration afterwards, so a migration that hangs or crashes the process
 // is identifiable from the last line written rather than by elimination.
 func (p *Pool) Migrate(ctx context.Context) error {
+	_, err := p.MigrateTo(ctx, CurrentSchema())
+	return err
+}
+
+// MigrateTo is Migrate stopping at schema version to: migrations
+// numbered above it stay pending for a later call (see
+// SchemaAuthSealed). It returns the highest version the database has
+// recorded once it is done.
+func (p *Pool) MigrateTo(ctx context.Context, to int64) (int64, error) {
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("persist: acquiring migration connection: %w", err)
+		return 0, fmt.Errorf("persist: acquiring migration connection: %w", err)
 	}
 	defer conn.Release()
 
@@ -289,7 +298,7 @@ func (p *Pool) Migrate(ctx context.Context) error {
 	// several transactions (one per migration), so it can't live inside
 	// any one of them.
 	if _, err := conn.Exec(ctx, sqlAdvisoryLock, int64(migrationLockID)); err != nil {
-		return fmt.Errorf("persist: taking migration lock: %w", err)
+		return 0, fmt.Errorf("persist: taking migration lock: %w", err)
 	}
 	defer func() {
 		// Best-effort: a failure here means the connection is already
@@ -298,44 +307,44 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		_, _ = conn.Exec(context.WithoutCancel(ctx), sqlAdvisoryUnlock, int64(migrationLockID))
 	}()
 	if _, err := conn.Exec(ctx, sqlEnsureSchemaTable); err != nil {
-		return fmt.Errorf("persist: creating schema_version: %w", err)
+		return 0, fmt.Errorf("persist: creating schema_version: %w", err)
 	}
 	if _, err := conn.Exec(ctx, sqlEnsureSchemaChecksum); err != nil {
-		return fmt.Errorf("persist: adding schema_version.checksum: %w", err)
+		return 0, fmt.Errorf("persist: adding schema_version.checksum: %w", err)
 	}
 
 	applied := map[int64]string{}
 	rows, err := conn.Query(ctx, sqlAppliedVersions)
 	if err != nil {
-		return fmt.Errorf("persist: reading schema_version: %w", err)
+		return 0, fmt.Errorf("persist: reading schema_version: %w", err)
 	}
 	for rows.Next() {
 		var v int64
 		var sum string
 		if err := rows.Scan(&v, &sum); err != nil {
 			rows.Close()
-			return fmt.Errorf("persist: reading schema_version: %w", err)
+			return 0, fmt.Errorf("persist: reading schema_version: %w", err)
 		}
 		applied[v] = sum
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("persist: reading schema_version: %w", err)
+		return 0, fmt.Errorf("persist: reading schema_version: %w", err)
 	}
 
 	migrations, err := loadMigrations()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if err := verifyApplied(applied, migrations, p.Describe()); err != nil {
-		return err
+		return 0, err
 	}
 
 	startVersion := highestVersion(applied)
 	pending := make([]migration, 0, len(migrations))
 	for _, m := range migrations {
-		if _, done := applied[m.version]; !done {
+		if _, done := applied[m.version]; !done && m.version <= to {
 			pending = append(pending, m)
 		}
 	}
@@ -343,7 +352,7 @@ func (p *Pool) Migrate(ctx context.Context) error {
 	if len(pending) == 0 {
 		schemaLog.Info(fmt.Sprintf("database schema is up to date at version %d (%s)",
 			startVersion, p.Describe()))
-		return nil
+		return startVersion, nil
 	}
 
 	// Announced before the first one runs, so an upgrade that stalls is
@@ -357,33 +366,36 @@ func (p *Pool) Migrate(ctx context.Context) error {
 
 		tx, err := conn.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("persist: starting migration %d: %w", m.version, err)
+			return 0, fmt.Errorf("persist: starting migration %d: %w", m.version, err)
 		}
 		if _, err := tx.Exec(ctx, m.sql); err != nil {
 			_ = tx.Rollback(ctx)
 			schemaLog.Error(fmt.Sprintf("migration %s (version %d) failed and was rolled back -- "+
 				"the schema is unchanged, still at version %d", m.name, m.version, startVersion))
-			return fmt.Errorf("persist: applying migration %d (%s): %w", m.version, m.name, err)
+			return 0, fmt.Errorf("persist: applying migration %d (%s): %w", m.version, m.name, err)
 		}
 		// The checksum goes in inside the same transaction as the
 		// migration itself, so a version can never be recorded without
 		// the hash that makes it verifiable.
 		if _, err := tx.Exec(ctx, sqlRecordVersion, m.version, m.checksum()); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("persist: recording migration %d: %w", m.version, err)
+			return 0, fmt.Errorf("persist: recording migration %d: %w", m.version, err)
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("persist: committing migration %d: %w", m.version, err)
+			return 0, fmt.Errorf("persist: committing migration %d: %w", m.version, err)
 		}
 
 		schemaLog.Info(fmt.Sprintf("applied %s in %s", m.name, time.Since(began).Round(time.Millisecond)))
 	}
 
 	endVersion := pending[len(pending)-1].version
+	if startVersion > endVersion {
+		endVersion = startVersion
+	}
 	schemaLog.Warn(fmt.Sprintf("database schema updated from version %d to version %d -- "+
 		"an older MikroView image may no longer read this database correctly",
 		startVersion, endVersion))
-	return nil
+	return endVersion, nil
 }
 
 // verifyApplied checks that what the database recorded as applied is
