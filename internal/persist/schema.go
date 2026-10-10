@@ -121,9 +121,10 @@ var schemaMigrations = []SchemaMigration{
 
 // SchemaAuthSealed is schema 4's number, the downgrade guard for the
 // move onto gauntlet: an older build refuses a data directory or
-// database stamped with it. It is stamped last, once every auth store
-// and the drop list have opened sealed, not with the rest at start-up:
-// a start that is refused part way -- a plaintext document, which is
+// database stamped with it. It is stamped last, once every store has
+// opened (the auth stores and the drop list sealed), and not on a start
+// where a file failed to move onto Postgres, rather than with the rest
+// at start-up: a start that is refused part way -- a plaintext document, which is
 // never sealed in place (#1202, ruling 19), or a damaged one -- leaves
 // it unstamped, so the release the data came from can still open it.
 // Callers migrate to SchemaAuthSealed-1 before opening anything and to
