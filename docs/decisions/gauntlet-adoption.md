@@ -3,8 +3,9 @@
 **Status:** proposed design, 2026-10-10 (issue #1202, milestone v0.7.0;
 owner opened the work the same day: "Gauntlet has reached v0.4.1 with no
 issues left outstanding; it's ready to adopt"). The owner answered the
-ten design questions on 2026-10-10; the rulings are at the end and the
-design below states them. The build follows this record.
+ten design questions on 2026-10-10, and the three points left open the
+same day (rulings 11-13); the rulings are at the end and the design
+below states them. The build follows this record.
 **Applies to:** `internal/auth`, `internal/oidc`,
 `internal/api/{auth,oidc,tokens,passkey,webauthn}.go`, `main.go`'s auth
 wiring and CLI commands, `internal/persist` (one interface method),
@@ -13,7 +14,8 @@ wiring and CLI commands, `internal/persist` (one interface method),
 (compatibility promise), ADR-0003 (setup code), ADR-0005 (encryption at
 rest), ADR-0010 (several admins), ADR-0015 (every admin holds a
 passkey); here `upgrade-framework.md`, `event-retention.md` (#853 rule
-6, which ends for the auth stores: ruling 2), `multi-tenant-oidc.md`,
+6 and the drop-list addendum, both ended: rulings 2 and 13),
+`multi-tenant-oidc.md`,
 `postgres-backend.md`.
 
 ## Context
@@ -129,7 +131,10 @@ the clock) and by this project's needs:
   `LoginLimiter.ReserveRecheck/ReleaseRecheck` and
   `Store.PasswordMatches`, keeping their separate budget.
 - **Setup-only mode** (`setuponly.go`) is unchanged: it mounts gate's
-  routes and the config editor under `Protect` as before.
+  routes and the config editor under `Protect` as before. The no-key
+  refusal (decision 2) applies to it as to a normal start (ruling 12):
+  the key is still found with a broken config file, through the app
+  folder's `keys/history.key` or `MIKROVIEW_HISTORY_KEY_FILE`.
 - **Frontend**: stays, and changes where the contract does (decision 4).
 - **CLI**: `-recover-admin-account`, `-generate-recovery-keys`,
   `-transfer-admin`, `-clear-second-factor` keep their names and
@@ -172,9 +177,13 @@ included) in the clear, and mikroview will not set
 `AllowPlaintextAtRest`. This ends the #853 rule 6 exception for the
 auth stores: accounts, tokens, recovery-key digests and sign-in history
 are all sealed under the key, on both the file and Postgres backends.
-The exception list in `storage.go` (`plaintextWithoutKeyStores`) loses
-`auth`, `tokens` and `recovery_keys`; the drop list stays on it, as
-that ruling was different.
+The exception list in `storage.go` (`plaintextWithoutKeyStores`) is
+deleted outright, with `plaintextStoreNames`, `plaintextWithoutKeyList`
+and the no-key log line that names them (ruling 13). The drop list was
+on it only so its entries survived a restart on a keyless install; no
+install runs keyless now, so with a key it is sealed like every other
+store. `handleDroplistPull`'s empty-feed guard stays: an operator can
+still set `droplist.storePath` to `""`.
 
 - **Refusal.** Start-up stops with its own CFG error code and a message
   that says how to mount a key (generate `mikroview/keys/history.key`,
@@ -184,13 +193,26 @@ that ruling was different.
   refusal.
 - **Existing plaintext data is sealed in place on first open**
   (`MigratePlaintext`), so an install that has run keyless upgrades
-  without a manual step once a key is mounted. Postgres: the `auth` row
-  is wrapped in `persist.Encrypt(..., Label: "auth", MigratePlaintext:
-  true)` (gauntlet §3, ADR-0005); the column stays `text` because the
-  envelope is JSON text (`{"sealed": "<base64>"}`). File backend:
-  mikroview's `EncryptedFileBackend` fails on a plaintext file today, so
-  the build gives the auth files the same seal-in-place-on-first-open
-  behaviour; already-sealed files must keep opening.
+  without a manual step once a key is mounted. Postgres: each auth
+  store's row is wrapped in `persist.Encrypt(..., MigratePlaintext:
+  true)` under its own label, the store's name (`auth`, `tokens`,
+  `recovery_keys`, `signins`), so a row copied into another store's
+  place fails to open rather than reading as that store (gauntlet §3,
+  ADR-0005); the column stays `text` because the envelope is JSON text
+  (`{"sealed": "<base64>"}`). This is the one exception to
+  `event-retention.md`'s "Postgres is unaffected": the other stores stay
+  plaintext on Postgres, as decided there. File backend (ruling 11):
+  mikroview's own `EncryptedFileBackend` gains a seal-in-place option,
+  set for the auth stores: a file without the sealed header that parses
+  as JSON is read as plaintext, sealed under the key with the file's
+  path bound as today, and saved back atomically under the version it
+  was read at. Anything else -- a damaged file, a wrong key -- fails to
+  open as today, never sealed and never read as an empty store. Files it
+  already sealed open unchanged, byte for byte. Gauntlet's
+  `persist.Encrypt` is not used for files: it binds its label rather
+  than the path and writes the text envelope, so it cannot open files
+  mikroview sealed before, and its own `EncryptedFileBackend` never
+  migrates plaintext. Gauntlet is not changed.
 - **Shipped files.** `deploy/docker-compose.yml` and the install docs
   ship with a key mounted (today the compose file leaves history
   memory-only until the operator adds one).
@@ -573,3 +595,14 @@ decision the design above states.
 - **Ruling 8, sign-in history:** recorded from v0.7.0; the page is #1442.
 - **Ruling 9, passkey-alone sign-in:** off; tracked in #1443.
 - **Ruling 10, SSO group roles:** off; tracked in #1444.
+- **Ruling 11, sealing plaintext auth files (2026-10-10):** mikroview's
+  own `EncryptedFileBackend` gains the seal-in-place option rather than
+  gauntlet gaining one; files already sealed open unchanged. On
+  Postgres each auth store's row has its own label.
+- **Ruling 12, setup-only mode:** the no-key refusal applies there too,
+  with the same message.
+- **Ruling 13, the plaintext exception list:** deleted outright, drop
+  list included, since no install runs keyless. `event-retention.md`
+  gains an addendum ending #853 rule 6 and the 2026-09-18 drop-list
+  addendum, and noting the auth stores as the exception to "Postgres
+  is unaffected".
