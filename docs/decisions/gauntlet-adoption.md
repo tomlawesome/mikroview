@@ -618,10 +618,3 @@ decision the design above states.
   `MigratePlaintext` guidance: on for the upgrade release only. Found
   by the A4 review: left on, anyone able to write the data folder
   without the key could plant a plaintext accounts document.
-- **Ruling 15, the admin passkey rule in setup-only mode (2026-10-10):**
-  when `auth.adminPasskey: required` cannot be met because passkeys
-  cannot be made at this address, setup-only mode starts with the rule
-  treated as optional and logs that it did, instead of refusing. Setup-
-  only mode serves only the config editor, which is how the operator
-  fixes that setting; the admin still signs in with a password and a
-  second factor. A normal start keeps refusing.
