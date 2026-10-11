@@ -872,10 +872,23 @@ test:container:
     - *reuse_gate
     - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
     - docker build --tag "$APP" .
+    # From v0.7.0 the server refuses to start without a key (#1202, ruling
+    # 2), so the job makes a throwaway one the way install.sh does: in a
+    # volume, written by a helper container, mounted read-only. A volume
+    # rather than a bind mount because this socket is the host's daemon,
+    # which cannot see the job's own filesystem.
+    - docker volume create "$APP-etc" >/dev/null
+    - >-
+      docker run --rm -v "$APP-etc:/etc/mikroview" alpine:3.24 sh -c
+      'mkdir -p /etc/mikroview/keys &&
+      head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key &&
+      chown 1000:1000 /etc/mikroview/keys/history.key &&
+      chmod 600 /etc/mikroview/keys/history.key'
     - >-
       docker run --detach --name "$APP"
       --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
       --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
+      -v "$APP-etc:/etc/mikroview:ro"
       --cap-drop ALL --security-opt no-new-privileges
       --pids-limit 64 --memory 128m --cpus 0.5
       "$APP"
@@ -896,6 +909,7 @@ test:container:
     - *reuse_evidence
   after_script:
     - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+    - docker volume rm "mikroview-test-$CI_JOB_ID-etc" >/dev/null 2>&1 || true
     - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
   artifacts:
     paths:
