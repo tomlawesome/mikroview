@@ -28,6 +28,11 @@
 #   - a floor only ever goes UP, when a package's coverage genuinely improves.
 #     Never lower one to make a change pass -- if a change would require
 #     that, the change needs more tests, not a smaller floor.
+#   - one exception: a Go toolchain change that alters how coverage is
+#     counted re-measures the affected floors in the same merge request,
+#     with before/after numbers in the commit (owner, 2026-10-10, #1440).
+#     go1.27.2 counts fewer statements per block than go1.27.1 on the same
+#     code and hits, so 25 floors were re-measured on go1.27.2 then.
 #   - scripts/coverage-floor.py also fails a package sitting more than 5
 #     points ABOVE its floor (RATCHET_SLACK) -- that means the floor is
 #     stale, and the fix is to raise it here to lock the gain in, not to
@@ -83,8 +88,11 @@
 # rather than diverging from it. First CI run on this branch is the
 # confirmation that a real GitLab checkout agrees.
 #
-# Total: 86.0% on 2026-10-11 with the real program's runs merged in
-# (#1451; `go tool cover -func` over the merged coverage.out). Before that,
+# Measured with: go1.27.2 (the golang image pinned in .gitlab-ci.yml).
+#
+# Total: 84.4% on 2026-10-11 on go1.27.2 with the real program's runs
+# merged in (86.0% on go1.27.1; #1451; `go tool cover -func` over the
+# merged coverage.out). Before that,
 # 81.7% of statements across 55 packages (81.6% measured 2026-09-24 on
 # fix/v061-audit without -race, as the codex user; 81.5% on 2026-09-22, #1290)
 # -- close enough that -race and the uid drop do not materially move the
@@ -102,15 +110,14 @@
 
 floors:
   # --- inside the 70-85% band, once the real program's runs count ---
-  .: 75                     # #1451: 77.4% (2508 of 3239 statements) on
-                             # 2026-10-11 with the binary's runs merged in,
-                             # measured as test:go does (golang:1.27.1,
-                             # ci-test uid, fresh clone) and identically on
-                             # the host. Set under the 77 that allows,
-                             # until a CI run confirms it: CI has read the
-                             # root package lower than local runs before.
-                             # Raise it to the CI figure, rounded down, on
-                             # the first green pipeline. #1290's 0% paths
+  .: 71                     # 71.6% (1800 of 2514 statements) on
+                             # 2026-10-11, golang:1.27.2, ci-test uid,
+                             # fresh clone, binary's runs merged in. The
+                             # same source read 77.4% (2508 of 3239) on
+                             # golang:1.27.1: go1.27.2 counts fewer
+                             # statements per block, not fewer covered
+                             # (#1440). Replaces the provisional 75
+                             # (#1451). #1290's 0% paths
                              # below now read 53-100% (main() 81.7%).
                              # History below is unit tests alone.
                              # 40.8% on 2026-10-11 once #1202's storage and
@@ -143,8 +150,9 @@ floors:
   scripts/routerosappendrow: 29  # 29.2% measured 2026-09-27. A CLI dev-tool
                              # under scripts/, not shipped in the release
                              # binary.
-  scripts/routeroscommands: 45   # No test files of its own; 45.3% from
-                             # internal/api's test running it (#1451,
+  scripts/routeroscommands: 36   # No test files of its own; 36.3% from
+                             # internal/api's test running it on go1.27.2
+                             # (45.3% on go1.27.1; #1451, #1440,
                              # 2026-10-11). CLI dev-tool under scripts/,
                              # not shipped.
   scripts/routerosfreshness: 0   # No test files. CLI dev-tool under
@@ -154,59 +162,59 @@ floors:
 
   # --- inside the 70-85% band ---
   internal/api: 84
-  internal/backupvault: 83
+  internal/backupvault: 82
   internal/decommission: 82
   internal/ingest: 77
-  internal/notify: 79
+  internal/notify: 78
   internal/oidc: 85
-  internal/retention: 78
-  internal/servertls: 83
-  internal/snapshot: 80
-  internal/tlssniff: 79
+  internal/retention: 77
+  internal/servertls: 81
+  internal/snapshot: 79
+  internal/tlssniff: 77
   web: 71
 
   # --- above the band: done, not chased toward 100 ---
-  internal/audit: 95
+  internal/audit: 94
   internal/auth: 88
-  internal/backup: 91
-  internal/backupsftp: 87
+  internal/backup: 89
+  internal/backupsftp: 85
   internal/backupslice: 93
-  internal/baseline: 90
+  internal/baseline: 89
   internal/blcatalogue: 100  # new with #1360; 100.0% measured 2026-10-01
-  internal/blocklist: 93
+  internal/blocklist: 92
   internal/config: 86
-  internal/configsnap: 81    # new with #1347; 81.2% measured 2026-09-27
+  internal/configsnap: 80    # new with #1347; 81.2% measured 2026-09-27
   internal/coverage: 95
   internal/device: 91
-  internal/dossier: 91
+  internal/dossier: 90
   internal/droplist: 91
-  internal/engine: 86
-  internal/entities: 95
+  internal/engine: 85
+  internal/entities: 94
   internal/flags: 94
   internal/geoip: 83         # 83.4% after #1352 added the three runtime
                              # sources (100% on the earlier, smaller package)
-  internal/hosts: 95
+  internal/hosts: 94
   internal/hub: 100
   internal/logging: 86
   internal/naming: 89
-  internal/netclass: 86
-  internal/oui: 86
-  internal/prefs: 89
+  internal/netclass: 84
+  internal/oui: 84
+  internal/prefs: 87
   internal/recoverykeys: 89  # new with #1202 (moved out of internal/auth); 89.5%
                              # measured 2026-10-11 (102 of 114 statements),
                              # 82.5% before its pepper, rotation-failure and
                              # no-backend paths had tests
-  internal/reputation: 93
+  internal/reputation: 90
   internal/routeros: 91
   internal/routeros/export: 96
   internal/routerstate: 87
   internal/rules: 96
   internal/seen: 85         # 85.8% on the host run of 2026-09-27
   internal/settings: 96
-  internal/setup: 88
-  internal/store: 96
+  internal/setup: 87
+  internal/store: 95
   internal/suggest: 90
-  internal/syslog: 96
+  internal/syslog: 95
   internal/watchlist: 94
 
 # --- test:postgres's own floors (#1290) ---
