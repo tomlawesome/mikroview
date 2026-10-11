@@ -104,11 +104,13 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 			} else {
 				key = freshKey(t)
 			}
-			backend := func(name string) gpersist.Backend {
+			backend := func(file string) gpersist.Backend {
 				// Recordings were made by a container with the default
-				// data directory, which the encrypted files are bound to.
+				// data directory, which the encrypted files are bound to;
+				// the store name is the one the server opens the file
+				// under (storage.go), not the file's name.
 				return persist.NewEncryptedFileBackendForPath(
-					filepath.Join(dataDir, name), config.DefaultDataDir+"/"+name, name, key)
+					filepath.Join(dataDir, file), config.DefaultDataDir+"/"+file, productionStoreName(t, file), key)
 			}
 			if !m.HistoryKeyEncrypted {
 				// #1202 review R26 (ruling 19): a recording made without a
@@ -133,6 +135,7 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 				apiTokenName:     m.APITokenName,
 				apiTokenKindless: version == "v0.1.0", // #1202 review R12
 				totp:             m.SecondFactorEnrolled,
+				oldFormat:        true, // recorded by a release before #1450
 			})
 		})
 	}
@@ -165,7 +168,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 					t.Fatalf("MigrateFileSchema: %v", err)
 				}
 				backend := func(path string) gpersist.Backend {
-					return persist.NewEncryptedFileBackend(path, filepath.Base(path), key)
+					return persist.NewEncryptedFileBackend(path, productionStoreName(t, filepath.Base(path)), key)
 				}
 				runPlaintextRefusalChecks(t, plaintextCase{
 					accounts:    func() gpersist.Backend { return backend(usersPath) },
@@ -189,9 +192,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 				tokensPath := filepath.Join(dir, "tokens.json")
 				key := freshKey(t)
 				for path, doc := range map[string][]byte{usersPath: l.accountsJSON, tokensPath: l.tokensJSON} {
-					if _, err := persist.NewEncryptedFileBackend(path, filepath.Base(path), key).Save(context.Background(), doc, 0); err != nil {
-						t.Fatalf("sealing %s as the previous release did: %v", path, err)
-					}
+					sealOldFormat(t, key, path, path, doc) // as the previous release did
 				}
 				sealedUsers := readFile(t, usersPath)
 
@@ -208,7 +209,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 				}
 
 				backend := func(path string) gpersist.Backend {
-					return persist.NewEncryptedFileBackend(path, filepath.Base(path), key)
+					return persist.NewEncryptedFileBackend(path, productionStoreName(t, filepath.Base(path)), key)
 				}
 				runGauntletChecks(t, gauntletCase{
 					accounts:     func() gpersist.Backend { return backend(usersPath) },
@@ -219,6 +220,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 					viewer:       l.viewer,
 					apiTokenName: "upgrade-fixture-token",
 					totp:         withTOTP,
+					oldFormat:    true,
 				})
 
 				// B1.8: all three raw values (32 hex, no prefix) still
@@ -296,4 +298,29 @@ func TestGauntletRefusesMikroviewsPlainFileBackendButOpensTheEncryptedOne(t *tes
 	if _, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(filepath.Join(dir, "sealed.json"), "auth", freshKey(t)), opts); err != nil {
 		t.Errorf("gauntlet.OpenStore refused mikroview's encrypted file backend: %v", err)
 	}
+}
+
+// productionStoreName is the name the server opens a store file under
+// (storage.go: authStoreAccounts and the rest, and the names main.go gives
+// backendFor), which a sealed file is bound to since #1450. A file name is
+// not that name: a test that passes the file name proves nothing about the
+// binding the server uses.
+func productionStoreName(t *testing.T, file string) string {
+	t.Helper()
+	names := map[string]string{
+		"users.json":       "auth",
+		"tokens.json":      "tokens",
+		"recovery.json":    "recovery_keys",
+		"signins.json":     "signins",
+		"flags.json":       "flags",
+		"entities.json":    "entities",
+		"definitions.json": "definitions",
+		"coverage.json":    "coverage",
+		"hosts.json":       "hosts",
+	}
+	n, ok := names[file]
+	if !ok {
+		t.Fatalf("no production store name known for %s", file)
+	}
+	return n
 }

@@ -3,10 +3,13 @@
 package authe2e
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // #1450: a keyed install's data directory moved to a new path, with the
@@ -55,4 +58,53 @@ func TestMovedDataDirectoryStartsAndKeepsAccountsTokensAndDropList(t *testing.T)
 		t.Fatalf("an install whose data directory moved to a new path did not start: %v", err)
 	}
 	ri.checkWorks(t, a)
+}
+
+// #1450 S2, end to end: a keyed install whose files are all still sealed the
+// old way (bound to their absolute paths) is backed up with -backup, which
+// succeeds and leaves every store file byte for byte as it was; a later
+// server start then reads and re-binds them, and everything still works.
+func TestBackupOfAnOldFormatInstallWritesNothingAndTheNextStartRebinds(t *testing.T) {
+	ri := newRichInstall(t)
+	key, err := retention.LoadKey(ri.w.a.key)
+	must(t, err)
+
+	// Put every sealed file back into the pre-#1450 format.
+	old := map[string][]byte{}
+	for _, name := range ri.files {
+		path := ri.w.a.file(name)
+		sealed, err := key.Seal(retention.StateStoreKeyInfo, []byte(path), ri.plain[name])
+		must(t, err)
+		must(t, os.WriteFile(path, sealed, 0o600))
+		old[name] = sealed
+	}
+
+	// A stopped server leaves a match log that -backup cannot read as sealed
+	// ("not a sealed document (too short)") whatever the binding -- a
+	// separate matter from #1450 -- so it is cleared to keep this test about
+	// the store files.
+	must(t, os.Remove(ri.w.a.file("matchlog.jsonl")))
+
+	out := filepath.Join(ri.w.a.root, "out.backup")
+	code, text, _ := cli(t, Opts{Root: ri.w.a.root}, "", "-backup", out, "--force")
+	if code != 0 {
+		t.Fatalf("-backup of an old-format install exit %d:\n%s", code, text)
+	}
+	for _, name := range ri.files {
+		if got := readBytes(t, ri.w.a.file(name)); !bytes.Equal(got, old[name]) {
+			t.Errorf("-backup rewrote %s; it must never write to the data directory", name)
+		}
+	}
+
+	a, err := start(t, Opts{Root: ri.w.a.root})
+	if err != nil {
+		t.Fatalf("start after -backup on an old-format install: %v", err)
+	}
+	ri.checkWorks(t, a)
+	a.stop()
+	for _, name := range []string{"users.json", "tokens.json", "droplist.json"} {
+		if bytes.Equal(readBytes(t, ri.w.a.file(name)), old[name]) {
+			t.Errorf("%s was not re-bound to its store name by the start", name)
+		}
+	}
 }

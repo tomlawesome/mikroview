@@ -32,6 +32,8 @@ import (
 	"time"
 
 	gpersist "github.com/tomlawesome/gauntlet/persist"
+
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // atRest is gauntlet's optional interface (persist.AtRest), restated so
@@ -152,16 +154,21 @@ func TestAPlaintextDocumentForANonAuthStoreIsRefusedWithoutClaimingTheFirstStart
 	}
 }
 
-// #1202 B9.40: a file the previous release sealed opens unchanged, and
-// its bytes do not change until the first save.
-func TestAFileTheLastReleaseSealedOpensByteForByteUntilTheFirstSave(t *testing.T) {
+// #1202 B9.40, as #1450 amends it: a file the previous release sealed (bound
+// to its absolute path) opens at that path and is re-bound to the store name
+// as it opens; once re-bound its bytes do not change again until the first
+// save.
+func TestAFileTheLastReleaseSealedIsReboundOnOpenThenStaysPutUntilTheFirstSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	key := testKey(t, 0x07)
 
-	// What the previous release wrote: the encrypted backend.
-	if _, err := NewEncryptedFileBackend(path, "auth", key).Save(context.Background(), []byte(`{"users":[{"username":"admin"}]}`), 0); err != nil {
-		t.Fatalf("seeding: %v", err)
+	// What the previous release wrote: sealed with the absolute path as the
+	// associated data. Nothing in the product writes this any more.
+	sealed, err := key.Seal(retention.StateStoreKeyInfo, []byte(path), []byte(`{"users":[{"username":"admin"}]}`))
+	if err != nil {
+		t.Fatal(err)
 	}
+	writePlain(t, path, sealed)
 	before := readFileBytes(t, path)
 
 	b := NewEncryptedFileBackend(path, "auth", key)
@@ -172,11 +179,47 @@ func TestAFileTheLastReleaseSealedOpensByteForByteUntilTheFirstSave(t *testing.T
 	if string(snap.Payload) != `{"users":[{"username":"admin"}]}` {
 		t.Errorf("Payload = %q", snap.Payload)
 	}
-	if after := readFileBytes(t, path); !bytes.Equal(before, after) {
-		t.Error("opening an already-sealed file rewrote it; the bytes must not change until the first save")
+	rebound := readFileBytes(t, path)
+	if bytes.Equal(before, rebound) {
+		t.Error("opening an old-format file did not re-bind it to the store name")
+	}
+
+	// Once re-bound, further opens leave the bytes alone.
+	again := NewEncryptedFileBackend(path, "auth", key)
+	snap, err = again.Load(context.Background())
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if after := readFileBytes(t, path); !bytes.Equal(rebound, after) {
+		t.Error("opening an already re-bound file rewrote it; the bytes must not change until the first save")
 	}
 
 	// Paired: the first save does change them.
+	if _, err := again.Save(context.Background(), []byte(`{"users":[]}`), snap.Version); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if after := readFileBytes(t, path); bytes.Equal(rebound, after) {
+		t.Error("a save left the bytes unchanged")
+	}
+}
+
+// A file sealed under the store-name binding (what the server writes now)
+// opens byte for byte until the first save.
+func TestAFileAlreadyBoundToItsStoreNameOpensByteForByteUntilTheFirstSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	key := testKey(t, 0x07)
+	if _, err := NewEncryptedFileBackend(path, "auth", key).Save(context.Background(), []byte(`{"users":[{"username":"admin"}]}`), 0); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+	before := readFileBytes(t, path)
+	b := NewEncryptedFileBackend(path, "auth", key)
+	snap, err := b.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if after := readFileBytes(t, path); !bytes.Equal(before, after) {
+		t.Error("opening a file already bound to its store name rewrote it")
+	}
 	if _, err := b.Save(context.Background(), []byte(`{"users":[]}`), snap.Version); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

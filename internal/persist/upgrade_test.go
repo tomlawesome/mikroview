@@ -155,7 +155,7 @@ func testOneFixture(t *testing.T, root, version, tarPath string) {
 			// never to this test's own t.TempDir(). See
 			// NewEncryptedFileBackendForPath's doc comment.
 			logicalPath := config.DefaultDataDir + "/" + name
-			return persist.NewEncryptedFileBackendForPath(realPath, logicalPath, name, key)
+			return persist.NewEncryptedFileBackendForPath(realPath, logicalPath, productionStoreName(t, name), key)
 		}
 		return persist.NewFileBackend(realPath)
 	}

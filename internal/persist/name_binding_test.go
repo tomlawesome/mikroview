@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 // Tests for #1450, written from its specification before the fix: a sealed
@@ -217,5 +219,62 @@ func TestForgedEditedAndPlaintextFilesAreStillRefused(t *testing.T) {
 	// Sealed under another key, at the right name.
 	if _, err := NewEncryptedFileBackend(good, "flags", testKey(t, 0x02)).Load(ctx); err == nil {
 		t.Error("a file sealed under another key opened")
+	}
+}
+
+// #1450 S1: the store-name binding can never equal any old path binding
+// (its associated data holds a byte, NUL, that no path can). A store whose
+// configured relative path is the literal text the name binding would have
+// used if it had no NUL cannot open another store's new-format file through
+// the legacy fallback.
+func TestStoreNameBindingCanNeverBeReachedThroughALegacyPathBinding(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	// The tokens store's genuine new-format file.
+	sealedAt := filepath.Join(tmp, "tokens-real.json")
+	if _, err := NewEncryptedFileBackend(sealedAt, "tokens", testKey(t, 0x01)).Save(ctx, []byte(`{"tokens":[]}`), 0); err != nil {
+		t.Fatal(err)
+	}
+	sealed := readFileBytes(t, sealedAt)
+
+	// Another store, whose configured relative path spells out the
+	// binding text, and which holds those bytes.
+	const hostile = "mikroview/sealed-store-name/v1:tokens"
+	if err := os.MkdirAll(filepath.Dir(hostile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writePlain(t, hostile, sealed)
+	if _, err := NewEncryptedFileBackend(hostile, "accounts", testKey(t, 0x01)).Load(ctx); err == nil {
+		t.Fatal("the tokens store's file opened as another store through its path being the binding text")
+	}
+	if !bytes.Equal(sealed, readFileBytes(t, hostile)) {
+		t.Error("a refused open changed the file")
+	}
+	// Control: the same bytes are the tokens store's own at any path.
+	if _, err := NewEncryptedFileBackend(hostile, "tokens", testKey(t, 0x01)).Load(ctx); err != nil {
+		t.Errorf("control: the tokens file did not open as the tokens store: %v", err)
+	}
+}
+
+// The old-format writer used by the other tests of this file agrees with
+// the committed fixture's format: a file sealed with the path as associated
+// data opens through the legacy route. (Nothing in the product writes the
+// old format any more, so this guards the helper the tests rely on.)
+func TestOldFormatHelperAgreesWithTheCommittedFixture(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "flags.json")
+	sealed, err := testKey(t, 0x07).Seal(retention.StateStoreKeyInfo, []byte(legacyLogical), []byte(legacyPayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePlain(t, p, sealed)
+	snap, err := NewEncryptedFileBackendForPath(p, legacyLogical, "flags", testKey(t, 0x07)).Load(context.Background())
+	if err != nil {
+		t.Fatalf("a file sealed by hand with the path as associated data did not open: %v", err)
+	}
+	if string(snap.Payload) != legacyPayload {
+		t.Errorf("payload = %q", snap.Payload)
 	}
 }
