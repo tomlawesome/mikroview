@@ -4115,6 +4115,18 @@ file to name the new volume or host directory, and start MikroView
 again. Nothing in the running deployment ever mounts
 `/var/lib/mikroview-migrate`.
 
+**The new path does not have to match the old one.** Each sealed store
+file is bound to its store's name, not to where it sits (#1450), so a
+data directory copied to a different path -- a bare-metal install, or a
+config naming a new directory -- starts there, as long as the config
+names the new paths and the same `history.keyFile` key is in place.
+What is still refused at start-up, naming the store: a file not made
+with your key (forged, edited or plaintext), and one store's file put
+in another store's place. A file written by a release before v0.7.0 is
+bound to its old absolute path: start v0.7.0 once at the old path first
+(each such file is re-sealed the new way when MikroView opens it, and
+the log says so once per file), then move it.
+
 **What moves.** Everything under the data directory — the same list as
 [backing up](#backing-up-and-restoring) — plus three things that section
 deliberately leaves out:

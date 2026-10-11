@@ -221,6 +221,16 @@ rewritten.
 
 ### Fixed
 
+- **The data directory can move to a new path** (#1450). Each sealed
+  store file was bound to its own absolute path, so a data directory
+  copied or moved to a different path -- a bare-metal install, or a
+  config naming a new directory -- was refused at start-up as altered.
+  From v0.7.0 every install has a key, so this would have hit everyone.
+  Files are now bound to their store's name instead: a file put in
+  another store's place is still refused, naming the store, and a file
+  not made with your key still never opens. A file sealed by an earlier
+  release opens once at the path it was sealed at and is re-sealed the
+  new way, which the log notes once per file; after that it can move.
 - **An open tab no longer keeps you signed in** (#1448). The live
   view's connection checked the session every 30 seconds, and each check
   counted as activity, so a tab left open stayed signed in until the
