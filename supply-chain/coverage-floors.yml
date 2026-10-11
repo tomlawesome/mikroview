@@ -84,7 +84,9 @@
 
 floors:
   # --- below the 70% band: known debt ---
-  .: 39                     # 39.9% re-measured 2026-09-27 on the M22 batch
+  .: 39                     # 40.8% on 2026-10-11 once #1202's storage and
+                             # gauntlet-wiring helpers had tests (37.4% in CI
+                             # before). 39.9% re-measured 2026-09-27 on the M22 batch
                              # (dev at 010892bc, after #1347 added CLI code
                              # here); 42.3% on the earlier base. The root `main`
                              # package -- CLI subcommand dispatch
@@ -157,6 +159,10 @@ floors:
   internal/netclass: 86
   internal/oui: 86
   internal/prefs: 89
+  internal/recoverykeys: 89  # new with #1202 (moved out of internal/auth); 89.5%
+                             # measured 2026-10-11 (102 of 114 statements),
+                             # 82.5% before its pepper, rotation-failure and
+                             # no-backend paths had tests
   internal/reputation: 93
   internal/routeros: 91
   internal/routeros/export: 96
@@ -181,6 +187,12 @@ floors:
 # #1290 (MR !1115, pipeline 1765, job 25736): persist 81.5%, matchlog 81.8%.
 # The earlier 62/58 were carried over from test:go, where the
 # Postgres-backed statements never ran.
+#
+# internal/persist raised 81 -> 84 on 2026-10-11 (#1202): 85.5% measured
+# locally against a throwaway TLS Postgres (513 of 600 statements), 80.3% in
+# CI before the sealed-document guards, adoption and file-schema paths had
+# tests. CI read 0.7 points under the local run before this, so 84 is set
+# under the 85 the local figure would allow.
 postgres-floors:
-  internal/persist: 81
+  internal/persist: 84
   internal/matchlog: 81
