@@ -416,6 +416,7 @@ func (s *storage) reportUnadoptedFile(ctx context.Context, b persist.Backend, fi
 	if filePath == "" {
 		return
 	}
+	// #nosec G703 -- a store path from this deployment's own config (MIKROVIEW_CONFIG or its env overrides), not from a request.
 	info, err := os.Stat(filePath)
 	if err != nil || info.Size() == 0 {
 		return

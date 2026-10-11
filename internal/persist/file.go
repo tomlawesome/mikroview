@@ -84,6 +84,7 @@ func contentVersion(data []byte) int64 {
 // see Save's own comment for why the plain rename alone is not enough.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -94,6 +95,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp := f.Name()
 	cleanup := func() {
 		f.Close()
+		// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 		os.Remove(tmp)
 	}
 	if err := f.Chmod(perm); err != nil {
@@ -108,14 +110,17 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		cleanup()
 		return err
 	}
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return err
 	}
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return err
 	}
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if d, err := os.Open(dir); err == nil {
 		// Best effort: some filesystems refuse to sync a directory, and
 		// a failure here costs durability of the rename, not
@@ -137,10 +142,12 @@ func (b *FileBackend) Save(ctx context.Context, payload []byte, expect int64) (i
 		return 0, fmt.Errorf("persist: no file path configured")
 	}
 	dir := filepath.Dir(b.path)
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, err
 	}
 
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	current, readErr := os.ReadFile(b.path)
 	switch {
 	case os.IsNotExist(readErr):
