@@ -108,7 +108,7 @@ func TestADropListSealedUnderAnotherKeyRefusesTheFirstMoveOntoPostgres(t *testin
 		t.Fatal(err)
 	}
 	must(t, os.Remove(dropList))
-	if _, err := persist.NewEncryptedFileBackend(dropList, other).Save(context.Background(), []byte(plainDropList), 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(dropList, "droplist", other).Save(context.Background(), []byte(plainDropList), 0); err != nil {
 		t.Fatalf("sealing the drop list under the other key: %v", err)
 	}
 	sealedBefore := readBytes(t, dropList)
@@ -197,7 +197,7 @@ func TestAFailedMoveOfANonAuthStoreOntoPostgresDoesNotRecordSchema4(t *testing.T
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err := persist.NewEncryptedFileBackend(path, other).Save(context.Background(), []byte(`{}`), 0); err != nil {
+					if _, err := persist.NewEncryptedFileBackend(path, storeNameFor(file), other).Save(context.Background(), []byte(`{}`), 0); err != nil {
 						t.Fatalf("sealing %s under the other key: %v", file, err)
 					}
 				}

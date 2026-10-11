@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
@@ -42,39 +43,69 @@ var ErrPlaintextDocument = errors.New("the file holds a plaintext document where
 type EncryptedFileBackend struct {
 	inner *FileBackend
 	key   *retention.Key
-	// aad binds every envelope to the store it belongs to (its file
-	// path), so a document copied from one store's file to another's
-	// fails to open there instead of silently decrypting as something
-	// else.
+	// store is the store's own name ("flags", "tokens", ...), the one
+	// its Postgres row uses where it has one. Every envelope is bound to
+	// it (#1450): a sealed file moved to a new path, or a whole data
+	// directory moved, still opens as the same store, while a genuine
+	// file of one store put in another's place does not open there --
+	// whatever the two files are called, since store paths are
+	// separately configurable and two may share a base name.
+	store string
+	// aad is storeBindingPrefix + store.
 	aad []byte
+	// legacyAAD is what this file was bound to before #1450: its
+	// absolute path. A file still sealed that way opens once under it and
+	// is re-saved under aad (see Load). Re-binding sealed data is not
+	// sealing plaintext, so #1202 ruling 19 is untouched.
+	legacyAAD []byte
 }
 
+// storeBindingPrefix is the domain separation in front of the store
+// name in a seal's associated data (#1450). The legacy binding was a
+// bare absolute path, which begins with "/"; this never does, so a
+// store-name binding can never equal a path binding's bytes, whatever a
+// store is called.
+const storeBindingPrefix = "mikroview/sealed-store-name/v1:"
+
+// rebindLog reports each file re-sealed from the old path binding to
+// the store-name binding -- once per file, since a re-bound file never
+// takes that route again.
+var rebindLog = logging.New("persist")
+
 // NewEncryptedFileBackend wraps the file at path so every read decrypts
-// and every write encrypts under key. key must not be nil -- callers
-// decide whether a store persists at all by whether they have a key (see
-// storage.go's backendFor), and this type has no unencrypted mode to fall
-// back to.
-func NewEncryptedFileBackend(path string, key *retention.Key) *EncryptedFileBackend {
-	return &EncryptedFileBackend{inner: NewFileBackend(path), key: key, aad: []byte(path)}
+// and every write encrypts under key, bound to storeName. key must not
+// be nil -- callers decide whether a store persists at all by whether
+// they have a key (see storage.go's backendFor), and this type has no
+// unencrypted mode to fall back to. storeName must be stable: it is in
+// every envelope this store has written, so renaming it makes the store
+// unreadable.
+func NewEncryptedFileBackend(path, storeName string, key *retention.Key) *EncryptedFileBackend {
+	return NewEncryptedFileBackendForPath(path, path, storeName, key)
 }
 
 // NewEncryptedFileBackendForPath is NewEncryptedFileBackend with the
-// bytes-on-disk location and the AAD-binding location told apart, for
-// the one legitimate case they differ: a document read from somewhere
-// other than where it was originally written and sealed.
+// bytes-on-disk location and the location a pre-#1450 file was sealed
+// at told apart, for the one legitimate case they differ: a document
+// sealed before #1450 (bound to its absolute path), read from somewhere
+// other than where it was written.
 //
 // internal/persist/upgrade_test.go is the reason this exists (#1239):
 // every recorded upgrade fixture was written by a real container at the
 // file backend's fixed default data directory
 // (config.DefaultDataDir, "/var/lib/mikroview"), which is where its
 // ciphertext is bound to -- but the test unpacks the recording into a
-// t.TempDir() to read it back, and NewEncryptedFileBackend has no way to
-// open a document at one path while treating it as though it still
-// lived at another. Ordinary callers -- every store main.go opens --
-// always read a document from exactly where it lives, so they keep
-// using NewEncryptedFileBackend; this is deliberately not the default.
-func NewEncryptedFileBackendForPath(realPath, logicalPath string, key *retention.Key) *EncryptedFileBackend {
-	return &EncryptedFileBackend{inner: NewFileBackend(realPath), key: key, aad: []byte(logicalPath)}
+// t.TempDir() to read it back. Ordinary callers -- every store main.go
+// opens -- always read a document from exactly where it lives, so they
+// keep using NewEncryptedFileBackend; this is deliberately not the
+// default.
+func NewEncryptedFileBackendForPath(realPath, logicalPath, storeName string, key *retention.Key) *EncryptedFileBackend {
+	return &EncryptedFileBackend{
+		inner:     NewFileBackend(realPath),
+		key:       key,
+		store:     storeName,
+		aad:       []byte(storeBindingPrefix + storeName),
+		legacyAAD: []byte(logicalPath),
+	}
 }
 
 func (b *EncryptedFileBackend) Describe() string { return b.inner.Describe() }
@@ -87,38 +118,82 @@ func (b *EncryptedFileBackend) Close() error { return b.inner.Close() }
 func (b *EncryptedFileBackend) ProtectedAtRest() bool { return true }
 
 // Load reads the file and decrypts it. A document that fails to decrypt
-// -- the wrong key, or a file altered or written by something else -- is
-// a real error, not a missing-document case: treating it as absent would
-// silently reopen a first-run setup on top of a store that actually holds
-// data. See internal/persist.Open, which every store's OpenWithBackend
-// funnels through, for what happens with that error (issue #378: refuse
-// to start rather than build a store around it).
+// -- the wrong key, or a file altered, written by something else, or
+// belonging to another store -- is a real error, not a missing-document
+// case: treating it as absent would silently reopen a first-run setup on
+// top of a store that actually holds data. See internal/persist.Open,
+// which every store's OpenWithBackend funnels through, for what happens
+// with that error (issue #378: refuse to start rather than build a store
+// around it).
+//
+// A file sealed before #1450, bound to its absolute path, opens here
+// only at that path, and is re-saved under the store-name binding
+// before Load returns, so the next open -- from wherever the data
+// directory has moved to -- needs nothing from the old binding.
 func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
-	snap, err := b.inner.Load(ctx)
-	if err != nil || !snap.Exists {
-		return snap, err
+	// Twice at most: a re-save that loses a race to another writer reads
+	// the file again, which that writer will have re-bound or replaced.
+	for attempt := 0; ; attempt++ {
+		snap, err := b.inner.Load(ctx)
+		if err != nil || !snap.Exists {
+			return snap, err
+		}
+		// Both tests, not just the JSON one: a sealed envelope begins
+		// with its magic, which no JSON document can, so either alone
+		// would do today -- but which rule decides is the security
+		// property here, and it is written out rather than left to that
+		// coincidence.
+		if !retention.HasSealMagic(snap.Payload) && json.Valid(snap.Payload) {
+			// Named, so a caller can say what it means in its own words
+			// (setup-only mode does). Never read, never rewritten
+			// (#1202, ruling 19).
+			return Snapshot{}, fmt.Errorf("persist: store %q (%s): %w", b.store, b.inner.path, ErrPlaintextDocument)
+		}
+		out, legacy, err := b.unseal(snap)
+		if err != nil || !legacy {
+			return out, err
+		}
+		out, err = b.rebind(ctx, out)
+		if errors.Is(err, ErrConflict) && attempt == 0 {
+			continue
+		}
+		return out, err
 	}
-	// Both tests, not just the JSON one: a sealed envelope begins with
-	// its magic, which no JSON document can, so either alone would do
-	// today -- but which rule decides is the security property here, and
-	// it is written out rather than left to that coincidence.
-	if !retention.HasSealMagic(snap.Payload) && json.Valid(snap.Payload) {
-		// Named, so a caller can say what it means in its own words
-		// (setup-only mode does). Never read, never rewritten (#1202,
-		// ruling 19).
-		return Snapshot{}, fmt.Errorf("persist: %s: %w", b.inner.path, ErrPlaintextDocument)
-	}
-	return b.unseal(snap)
 }
 
-// unseal opens the sealed document snap holds, with this backend's path
-// bound, and hands back the plaintext under the same version.
-func (b *EncryptedFileBackend) unseal(snap Snapshot) (Snapshot, error) {
+// unseal opens the sealed document snap holds and hands back the
+// plaintext under the same version. legacy reports that it opened only
+// under the pre-#1450 path binding, and wants re-saving.
+func (b *EncryptedFileBackend) unseal(snap Snapshot) (out Snapshot, legacy bool, err error) {
 	plain, err := b.key.Open(retention.StateStoreKeyInfo, b.aad, snap.Payload)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("persist: %s: %w", b.inner.path, err)
+		var legacyErr error
+		plain, legacyErr = b.key.Open(retention.StateStoreKeyInfo, b.legacyAAD, snap.Payload)
+		if legacyErr != nil {
+			// The store-name error, not the legacy one: for anything
+			// that is not an old file at its old path, that is the
+			// binding that refused it.
+			return Snapshot{}, false, fmt.Errorf("persist: store %q (%s) did not open: "+
+				"it was not sealed under this key as this store, or it was altered: %w", b.store, b.inner.path, err)
+		}
+		legacy = true
 	}
 	snap.Payload = plain
+	return snap, legacy, nil
+}
+
+// rebind re-seals a document opened under the pre-#1450 path binding
+// under the store-name binding, written atomically through the wrapped
+// FileBackend (WriteFileAtomic, with its version check against the bytes
+// just read), and returns it under the new version.
+func (b *EncryptedFileBackend) rebind(ctx context.Context, snap Snapshot) (Snapshot, error) {
+	version, err := b.Save(ctx, snap.Payload, snap.Version)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("persist: store %q (%s): re-sealing under its store name: %w", b.store, b.inner.path, err)
+	}
+	rebindLog.Info(fmt.Sprintf("re-sealed %s, store %q, bound to its store name instead of its path, "+
+		"so its data directory can now move (#1450); this happens once per file", b.inner.path, b.store))
+	snap.Version = version
 	return snap, nil
 }
 
@@ -128,7 +203,7 @@ func (b *EncryptedFileBackend) unseal(snap Snapshot) (Snapshot, error) {
 func (b *EncryptedFileBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
 	sealed, err := b.key.Seal(retention.StateStoreKeyInfo, b.aad, payload)
 	if err != nil {
-		return 0, fmt.Errorf("persist: encrypting %s: %w", b.inner.path, err)
+		return 0, fmt.Errorf("persist: encrypting store %q (%s): %w", b.store, b.inner.path, err)
 	}
 	return b.inner.Save(ctx, sealed, expect)
 }

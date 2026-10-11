@@ -1000,5 +1000,21 @@ func must(t *testing.T, err error) {
 	}
 }
 
+// storeNameFor is the store name the server seals each harness data file
+// under (#1450): the name storage.go opens it by, which the file's seal
+// is bound to. A test that seals or opens a data file itself uses it.
+func storeNameFor(file string) string {
+	names := map[string]string{
+		"users.json": "auth", "tokens.json": "tokens", "recovery.json": "recovery_keys",
+		"signins.json": "signins", "droplist.json": "droplist", "flags.json": "flags",
+		"entities.json": "entities", "audit.json": "audit", "settings.json": "settings",
+	}
+	name, ok := names[file]
+	if !ok {
+		panic("storeNameFor: no store name for " + file)
+	}
+	return name
+}
+
 var _ = context.Background
 var _ = strconv.Itoa

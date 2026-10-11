@@ -42,10 +42,10 @@ func TestATokenRecordedWithNoKindIsListedAndAuthenticatesAsNothing(t *testing.T)
 	// Sealed as the previous release sealed its tokens document (#1202
 	// review R26: nothing seals a plaintext file on open any more).
 	key := freshKey(t)
-	if _, err := persist.NewEncryptedFileBackend(path, key).Save(context.Background(), doc, 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(path, "tokens", key).Save(context.Background(), doc, 0); err != nil {
 		t.Fatal(err)
 	}
-	ts := openTokens(t, persist.NewEncryptedFileBackend(path, key))
+	ts := openTokens(t, persist.NewEncryptedFileBackend(path, "tokens", key))
 
 	listed := false
 	for _, tok := range ts.List() {

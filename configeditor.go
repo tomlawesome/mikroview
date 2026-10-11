@@ -79,6 +79,10 @@ func configSnapshotsPath(cfg config.Config) string {
 	return filepath.Join(dataDir(cfg), "config-snapshots.json")
 }
 
+// configSnapshotsStore is the snapshot store's name: its name in a
+// backup, and the name its sealed file is bound to (#1450).
+const configSnapshotsStore = "config_snapshots"
+
 // openConfigSnapshots opens the snapshot store sealed under the
 // retention key, the way router backups are sealed (see
 // openRouterBackupVault), and always as a file: a snapshot is a whole
@@ -95,7 +99,7 @@ func openConfigSnapshots(st *storage, cfg config.Config) (*configsnap.Store, str
 	case st.key == nil:
 		return nil, "snapshots hold the config's secrets, so they are only ever kept sealed under the retention key, and history.keyFile is not set"
 	}
-	store, err := configsnap.Open(context.Background(), persist.NewEncryptedFileBackend(path, st.key))
+	store, err := configsnap.Open(context.Background(), persist.NewEncryptedFileBackend(path, configSnapshotsStore, st.key))
 	if err != nil {
 		return nil, err.Error()
 	}

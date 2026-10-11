@@ -72,7 +72,7 @@ func newClearFactorFixture(t *testing.T) *clearFactorFixture {
 	f.writeConfig(t)
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
 
-	store, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(f.authPath, key), quietStoreOptions())
+	store, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(f.authPath, authStoreAccounts, key), quietStoreOptions())
 	if err != nil {
 		t.Fatalf("gauntlet.OpenStore: %v", err)
 	}
@@ -114,7 +114,7 @@ func (f *clearFactorFixture) writeConfig(t *testing.T) {
 // believes happened.
 func (f *clearFactorFixture) openRecovery(t *testing.T) *recoverykeys.RecoveryStore {
 	t.Helper()
-	recovery, err := recoverykeys.OpenRecoveryWithBackend(persist.NewEncryptedFileBackend(f.recoveryPath, f.key), f.pepperPath)
+	recovery, err := recoverykeys.OpenRecoveryWithBackend(persist.NewEncryptedFileBackend(f.recoveryPath, authStoreRecoveryKeys, f.key), f.pepperPath)
 	if err != nil {
 		t.Fatalf("recoverykeys.OpenRecoveryWithBackend: %v", err)
 	}
@@ -529,11 +529,11 @@ func TestClearSecondFactorFailedCommitKeepsThePreviousKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := filepath.Join(keysDir, filepath.Base(f.recoveryPath))
-	snap, err := persist.NewEncryptedFileBackend(f.recoveryPath, f.key).Load(context.Background())
+	snap, err := persist.NewEncryptedFileBackend(f.recoveryPath, authStoreRecoveryKeys, f.key).Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := persist.NewEncryptedFileBackend(moved, f.key).Save(context.Background(), snap.Payload, 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(moved, authStoreRecoveryKeys, f.key).Save(context.Background(), snap.Payload, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(f.recoveryPath); err != nil {

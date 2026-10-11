@@ -29,7 +29,7 @@ func openAccountsAt(t *testing.T, path string) (*gauntlet.Store, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, key), quietStoreOptions())
+	return gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, authStoreAccounts, key), quietStoreOptions())
 }
 
 // TestRestoreOverwritesACorruptStoreDocument is issue #378's other
