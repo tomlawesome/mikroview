@@ -275,9 +275,11 @@ func TestTheSealBindsTheFileToItsPath(t *testing.T) {
 }
 
 // The recorded upgrade fixtures were made by a container whose path is
-// not the test's: NewEncryptedFileBackendForPath binds the logical path.
-// A document sealed under it opens under it and not under the real path;
-// a plaintext document is refused through it as through the other.
+// not the test's: NewEncryptedFileBackendForPath reads a file sealed
+// under that logical path. What it saves is bound to the store name
+// (#1450), like the other constructor's, so it opens through either
+// under the same store name and is refused under another; a plaintext
+// document is refused through it as through the other.
 func TestTheLogicalPathConstructorSealsAndRefusesLikeTheOther(t *testing.T) {
 	real := filepath.Join(t.TempDir(), "users.json")
 	const logical = "/var/lib/mikroview/users.json"
@@ -287,8 +289,11 @@ func TestTheLogicalPathConstructorSealsAndRefusesLikeTheOther(t *testing.T) {
 	if _, err := NewEncryptedFileBackendForPath(real, logical, "auth", testKey(t, 0x03)).Load(context.Background()); err != nil {
 		t.Errorf("re-open under the logical path: %v", err)
 	}
-	if _, err := NewEncryptedFileBackend(real, "auth", testKey(t, 0x03)).Load(context.Background()); err == nil {
-		t.Error("the seal was bound to the real path, not the logical one")
+	if _, err := NewEncryptedFileBackend(real, "auth", testKey(t, 0x03)).Load(context.Background()); err != nil {
+		t.Errorf("a document saved through the logical-path constructor did not open under the same store name: %v", err)
+	}
+	if _, err := NewEncryptedFileBackend(real, "tokens", testKey(t, 0x03)).Load(context.Background()); err == nil {
+		t.Error("a document sealed for the auth store opened as the tokens store")
 	}
 
 	plainPath := filepath.Join(t.TempDir(), "users.json")
