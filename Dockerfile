@@ -22,6 +22,8 @@ WORKDIR /src
 # or checksum database (that would publish the version permanently).
 ENV GOPRIVATE=github.com/tomlawesome/gauntlet
 COPY go.mod go.sum ./
+# git: with GOPRIVATE set, Go fetches gauntlet from GitHub using the git binary, which the alpine image lacks.
+RUN apk add --no-cache git
 RUN go mod download
 COPY . .
 COPY --from=frontend /src/frontend/dist ./web/dist
