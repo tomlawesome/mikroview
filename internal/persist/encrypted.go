@@ -54,18 +54,23 @@ type EncryptedFileBackend struct {
 	// aad is storeBindingPrefix + store.
 	aad []byte
 	// legacyAAD is what this file was bound to before #1450: its
-	// absolute path. A file still sealed that way opens once under it and
+	// configured path. A file still sealed that way opens once under it and
 	// is re-saved under aad (see Load). Re-binding sealed data is not
 	// sealing plaintext, so #1202 ruling 19 is untouched.
 	legacyAAD []byte
+	// noRebind makes Load leave a legacy file as it is (see
+	// WithoutRebind).
+	noRebind bool
 }
 
 // storeBindingPrefix is the domain separation in front of the store
-// name in a seal's associated data (#1450). The legacy binding was a
-// bare absolute path, which begins with "/"; this never does, so a
-// store-name binding can never equal a path binding's bytes, whatever a
-// store is called.
-const storeBindingPrefix = "mikroview/sealed-store-name/v1:"
+// name in a seal's associated data (#1450). The legacy binding was the
+// store's configured path, as written -- relative or absolute, since
+// config never makes it absolute -- so it could be any text a path can
+// be. This prefix holds a NUL byte, which no path can, so a store-name
+// binding can never equal a legacy path binding's bytes, whatever a
+// store is called or wherever it is configured.
+const storeBindingPrefix = "mikroview/sealed-store-name/v1\x00"
 
 // rebindLog reports each file re-sealed from the old path binding to
 // the store-name binding -- once per file, since a re-bound file never
@@ -108,6 +113,17 @@ func NewEncryptedFileBackendForPath(realPath, logicalPath, storeName string, key
 	}
 }
 
+// WithoutRebind is this backend for a caller that must never write to
+// the data directory -- -backup (#1450 S2). Load still opens a file
+// sealed under the pre-#1450 path binding, but hands its document back
+// without re-sealing it; the server re-binds it at its next start. Save
+// is unchanged.
+func (b *EncryptedFileBackend) WithoutRebind() *EncryptedFileBackend {
+	c := *b
+	c.noRebind = true
+	return &c
+}
+
 func (b *EncryptedFileBackend) Describe() string { return b.inner.Describe() }
 
 func (b *EncryptedFileBackend) Close() error { return b.inner.Close() }
@@ -132,7 +148,8 @@ func (b *EncryptedFileBackend) ProtectedAtRest() bool { return true }
 // directory has moved to -- needs nothing from the old binding.
 func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 	// Twice at most: a re-save that loses a race to another writer reads
-	// the file again, which that writer will have re-bound or replaced.
+	// the file again, which that writer will have re-bound or replaced;
+	// losing it a second time returns the document as read.
 	for attempt := 0; ; attempt++ {
 		snap, err := b.inner.Load(ctx)
 		if err != nil || !snap.Exists {
@@ -150,14 +167,21 @@ func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("persist: store %q (%s): %w", b.store, b.inner.path, ErrPlaintextDocument)
 		}
 		out, legacy, err := b.unseal(snap)
-		if err != nil || !legacy {
+		if err != nil || !legacy || b.noRebind {
 			return out, err
 		}
-		out, err = b.rebind(ctx, out)
-		if errors.Is(err, ErrConflict) && attempt == 0 {
-			continue
+		rebound, err := b.rebind(ctx, out)
+		if errors.Is(err, ErrConflict) {
+			if attempt == 0 {
+				continue
+			}
+			// Lost the race twice: the document is genuine, so hand it
+			// back; the next save writes it under the store name.
+			rebindLog.Info(fmt.Sprintf("%s, store %q, opened under its old path binding but could not be "+
+				"re-sealed (another writer kept changing it); it will be re-sealed at its next save", b.inner.path, b.store))
+			return out, nil
 		}
-		return out, err
+		return rebound, err
 	}
 }
 

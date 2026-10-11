@@ -43,6 +43,17 @@ func backupBackendFor(path, name string, key *retention.Key) persist.Backend {
 	return persist.NewEncryptedFileBackend(path, name, key)
 }
 
+// backupReaderFor is backupBackendFor for runBackup's reads, which never
+// write to the data directory (#1450 S2): a file still sealed under its
+// pre-#1450 path binding is read as it is, not re-sealed -- the server
+// does that at its next start.
+func backupReaderFor(path, name string, key *retention.Key) persist.Backend {
+	if key == nil {
+		return persist.NewFileBackend(path)
+	}
+	return persist.NewEncryptedFileBackend(path, name, key).WithoutRebind()
+}
+
 // backedUpStores is every store the envelope carries, paired with where
 // it lives on a JSON deployment.
 //
@@ -500,7 +511,7 @@ func runBackup(args []string) int {
 		if s.Path == "" {
 			continue
 		}
-		data, _, err := persist.LoadDocument(ctx, backupBackendFor(s.Path, s.Name, ourKey))
+		data, _, err := persist.LoadDocument(ctx, backupReaderFor(s.Path, s.Name, ourKey))
 		if err != nil {
 			logger.Error(fmt.Sprintf("reading %s (%s): %v", s.Name, s.Path, err))
 			return 1
