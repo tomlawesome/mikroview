@@ -58,7 +58,7 @@ func ptyRun(t *testing.T, a *app, env []string, steps []ptyStep, args ...string)
 
 	cmd := exec.Command(buildBinary(t), args...)
 	cmd.Dir = a.root
-	cmd.Env = env
+	cmd.Env = withCover(env)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	must(t, cmd.Start())

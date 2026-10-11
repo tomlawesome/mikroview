@@ -411,6 +411,23 @@ workflow:
 # did, including a failure before this line.
 .reuse_evidence: &reuse_evidence node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
 
+# #1451: coverage of the real program, merged into the unit-test profile.
+# test:go and test:postgres run tests with MIKROVIEW_COVERDIR set, so every
+# binary those tests start is built with -cover and writes its counts
+# there (internal/authe2e's coverDir); this turns them into a text profile
+# (Go's documented method, https://go.dev/doc/build-cover) and merges it
+# with coverage-unit.out into coverage.out, each block once, covered if
+# either side covered it. No counts at all means the switch broke: fail,
+# rather than measure the unit tests alone and call it the whole figure.
+.merge_program_coverage: &merge_program_coverage |
+  covdir="$CI_PROJECT_DIR/.coverdata/go"
+  if ! ls "$covdir"/covcounters.* >/dev/null 2>&1; then
+    echo "no coverage counts from the real program in $covdir (#1451)"
+    exit 1
+  fi
+  go tool covdata textfmt -i="$covdir" -o=coverage-program.out
+  python3 scripts/merge-coverprofiles.py coverage.out coverage-unit.out coverage-program.out
+
 # ---------------------------------------------------------------------------
 # POLICY — the three-lane promotion order, dev -> preview -> main, with no
 # shortcuts. Replaces .github/workflows/branch-policy.yml, which cannot see
@@ -534,6 +551,7 @@ lint:script-tests:
     - bash scripts/ci-reuse-gate.test.sh
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
+    - bash scripts/merge-coverprofiles.test.sh
 
 lint:go:
   stage: lint
@@ -641,10 +659,20 @@ test:go:
     # 430-600s under -race on the shared runner before #1392 cut its
     # password-hashing cost; the timeout is here to catch a hang, not to
     # time the suite.
-    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -timeout 20m -coverprofile=coverage.out"
+    #
+    # #1451: MIKROVIEW_COVERDIR makes every test that starts the real
+    # program (internal/authe2e's binary, internal/api's `go run` of
+    # scripts/routeroscommands) build it with -cover and leave its counts
+    # there; covdata turns them into a text profile, and the merge adds
+    # them to the unit-test profile block by block, so coverage.out counts
+    # code run from outside as well as code called directly. Unset (a
+    # plain local `go test`), nothing changes.
+    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test MIKROVIEW_COVERDIR='$CI_PROJECT_DIR/.coverdata/go' go test ./... -race -timeout 20m -coverprofile=coverage-unit.out"
+    - *merge_program_coverage
     # #1333: the ratchet against supply-chain/coverage-floors.yml. Runs as
-    # root (back from `su` above), which is fine -- coverage.out is
-    # ci-test-owned but world-readable, and nothing below writes to it.
+    # root (back from `su` above), which is fine -- the profiles are
+    # ci-test-owned but world-readable, and the merge writes coverage.out
+    # beside them as root (after_script hands everything back).
     - python3 scripts/coverage-floor.py coverage.out
   # The runner reuses its build directory between pipelines, so leaving the
   # checkout owned by ci-test hands the next pipeline's root-run jobs a
@@ -654,6 +682,8 @@ test:go:
   artifacts:
     paths:
       - coverage.out
+      - coverage-unit.out
+      - coverage-program.out
     expire_in: 1 week
 
 test:frontend:
@@ -798,7 +828,7 @@ test:postgres:
     # Postgres-backed statements (see supply-chain/coverage-floors.yml's
     # header), and this run, with MIKROVIEW_TEST_POSTGRES set above, is a
     # strict superset of what test:go covers for them.
-    - go test -race -count=1 -coverprofile=coverage-postgres.out ./internal/persist/... ./internal/matchlog/...
+    - go test -race -count=1 -coverprofile=coverage-unit.out ./internal/persist/... ./internal/matchlog/...
     # internal/authe2e's Postgres tests (#1202): the real binary against
     # this job's database. They skip without MIKROVIEW_TEST_POSTGRES, so
     # until now they ran nowhere in CI. Only those tests, by -run, not the
@@ -807,10 +837,14 @@ test:postgres:
     # for these alone. 'Postgres|TokensRow' matches every test in the
     # package that opens the database (newPG); a new one has to carry
     # one of those words to run here. Its own line, so -run does not
-    # filter the two packages above, and no coverage profile: these test
-    # the binary from outside, and the profile above stays those two
-    # packages' alone.
-    - go test -race -count=1 -run 'Postgres|TokensRow' ./internal/authe2e/...
+    # filter the two packages above. No -coverprofile of its own: these
+    # test the binary from outside, so what they cover is the binary's run
+    # (#1451, MIKROVIEW_COVERDIR as in test:go), merged into
+    # coverage-postgres.out below -- only persist's and matchlog's share
+    # of it is checked here.
+    - MIKROVIEW_COVERDIR="$CI_PROJECT_DIR/.coverdata/go" go test -race -count=1 -run 'Postgres|TokensRow' ./internal/authe2e/...
+    - *merge_program_coverage
+    - mv coverage.out coverage-postgres.out
     # The ratchet against postgres-floors: in supply-chain/coverage-floors.yml
     # -- the same mechanism test:go's coverage-floor.py call uses, scoped to
     # just the two packages this job measures.
@@ -820,6 +854,8 @@ test:postgres:
     paths:
       - ci-reuse-evidence/
       - coverage-postgres.out
+      - coverage-unit.out
+      - coverage-program.out
     expire_in: 1 week
 
 # Container smoke test, ported from GitHub's ci.yml (#942, the second

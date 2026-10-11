@@ -103,6 +103,12 @@ func buildBinary(t *testing.T) string {
 		binPath = filepath.Join(dir, "mikroview")
 
 		args := []string{"build", "-buildvcs=false", "-ldflags", "-X main.version=0.0.0-authe2e", "-o", binPath}
+		if cov, err := coverDir(); err != nil {
+			buildErr = err
+			return
+		} else if cov != "" {
+			args = append(args, coverBuildFlags...)
+		}
 		if matches, _ := filepath.Glob(filepath.Join(root, "web", "dist", "*")); len(matches) == 0 {
 			// go:embed all:dist needs one file; supply it virtually.
 			empty := filepath.Join(dir, "empty")
@@ -132,6 +138,41 @@ func buildBinary(t *testing.T) string {
 		t.Fatalf("building the mikroview binary: %v", buildErr)
 	}
 	return binPath
+}
+
+// ---- coverage of the real program (#1451) ---------------------------------
+
+// coverBuildFlags instrument every mikroview package the binary links --
+// not gauntlet, whose files coverage-floor.py would refuse as outside the
+// module -- in the mode `go test -race` uses, so the counts merge with the
+// unit-test profile (scripts/merge-coverprofiles.py).
+var coverBuildFlags = []string{"-cover", "-covermode=atomic", "-coverpkg=github.com/tomlawesome/mikroview/..."}
+
+// coverDir is MIKROVIEW_COVERDIR, created if missing: when set, the binary
+// is built with coverBuildFlags and every run writes its counts there
+// (GOCOVERDIR; one file per process, so parallel runs never collide).
+// Unset, the build and the runs are exactly as without it. CI sets it in
+// test:go and test:postgres. It must be absolute: each run starts in its
+// own temp directory.
+func coverDir() (string, error) {
+	dir := os.Getenv("MIKROVIEW_COVERDIR")
+	if dir == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("MIKROVIEW_COVERDIR must be an absolute path, got %q", dir)
+	}
+	return dir, os.MkdirAll(dir, 0o750)
+}
+
+// withCover adds GOCOVERDIR to a run's environment when coverage is being
+// collected. A -cover binary without it prints a warning, which would
+// reach the output the tests read.
+func withCover(env []string) []string {
+	if dir, _ := coverDir(); dir != "" {
+		return append(env[:len(env):len(env)], "GOCOVERDIR="+dir)
+	}
+	return env
 }
 
 // ---- running it ---------------------------------------------------------
@@ -382,7 +423,7 @@ func (a *app) runOnce(t *testing.T, env []string, stdin string, args ...string) 
 	t.Helper()
 	cmd := exec.Command(buildBinary(t), args...)
 	cmd.Dir = a.root
-	cmd.Env = env
+	cmd.Env = withCover(env)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out syncBuf
 	cmd.Stdout = &out
@@ -422,7 +463,7 @@ func start(t *testing.T, o Opts) (*app, error) {
 	a, env := prepare(t, o)
 	cmd := exec.Command(buildBinary(t))
 	cmd.Dir = a.root
-	cmd.Env = env
+	cmd.Env = withCover(env)
 	cmd.Stdout = a.out
 	cmd.Stderr = a.out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

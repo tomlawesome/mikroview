@@ -10,3 +10,5 @@ docs/design
 # Recorded upgrade fixtures: password/token hashes and a TLS key, never
 # committed (.gitignore) and never in a build context either.
 .upgrade-fixtures
+# Coverage counts from test runs (#1451), never in a build context.
+.coverdata
