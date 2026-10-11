@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -347,5 +348,34 @@ func TestOpenRefusesAnUnreadableDocument(t *testing.T) {
 	// a document it could not read.
 	if _, err := Open(path); err == nil {
 		t.Error("Open on an unparseable document returned no error")
+	}
+}
+
+// A register whose save loop has gone idle is woken by the next change
+// and saves it without waiting for Close. Before this test the woken-idle
+// path only ran when the scheduler happened to park the loop first, so
+// this package's coverage moved between runs (85.0% / 85.5%).
+func TestAnIdleSaveLoopIsWokenByTheNextChangeAndSavesIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seen.json")
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+
+	// Let the loop find nothing to do and park on its wake channel.
+	time.Sleep(50 * time.Millisecond)
+	r.Observe("sctp", "", "", time.Now())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), "sctp") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the change was not saved within 5s of waking the idle loop (last read: %v)", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
