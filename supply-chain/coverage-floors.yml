@@ -3,6 +3,16 @@
 # `go test ./... -race -coverprofile=...` in the `test:go` job in
 # .gitlab-ci.yml, on every merge request and on push to dev.
 #
+# The numbers include the real program's runs (#1451, from 2026-10-11):
+# tests that start the binary -- internal/authe2e, and internal/api's run of
+# scripts/routeroscommands -- build it with -cover when MIKROVIEW_COVERDIR
+# is set, and test:go and test:postgres merge those counts into the
+# unit-test profile (scripts/merge-coverprofiles.py) before this file is
+# checked. A statement counts as covered if either a test called it or the
+# running binary reached it, so a package reads higher here than in `go
+# test`'s own per-package line. Measure that way or the root package reads
+# about 37 points low.
+#
 # STATEMENT coverage, not branch coverage -- Go's own toolchain has no branch-
 # coverage mode. A package at 100% here means every line ran at least once,
 # not that every condition was tried both ways.
@@ -35,9 +45,15 @@
 #   useradd -m -u 10001 ci-test
 #   chown -R ci-test:ci-test "$CI_PROJECT_DIR"
 #   su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test \
-#     go test ./... -race -coverprofile=coverage.out"
-#   go tool cover -func=coverage.out | tail -1
+#     MIKROVIEW_COVERDIR='$CI_PROJECT_DIR/.coverdata/go' \
+#     go test ./... -race -coverprofile=coverage-unit.out"
+#   go tool covdata textfmt -i=.coverdata/go -o=coverage-program.out
+#   python3 scripts/merge-coverprofiles.py coverage.out \
+#     coverage-unit.out coverage-program.out
 #   python3 scripts/coverage-floor.py coverage.out
+#
+# (test:go's .merge_program_coverage step is the canonical copy of the
+# middle two lines; it also fails when the binary left no counts at all.)
 #
 # test:go never sets MIKROVIEW_TEST_POSTGRES, so every Postgres-backed test
 # in internal/persist and internal/matchlog calls t.Skip there -- #1290 found
@@ -67,7 +83,9 @@
 # rather than diverging from it. First CI run on this branch is the
 # confirmation that a real GitLab checkout agrees.
 #
-# Total: 81.7% of statements across 55 packages (81.6% measured 2026-09-24 on
+# Total: 86.0% on 2026-10-11 with the real program's runs merged in
+# (#1451; `go tool cover -func` over the merged coverage.out). Before that,
+# 81.7% of statements across 55 packages (81.6% measured 2026-09-24 on
 # fix/v061-audit without -race, as the codex user; 81.5% on 2026-09-22, #1290)
 # -- close enough that -race and the uid drop do not materially move the
 # total, though they do move individual packages (see
@@ -83,8 +101,19 @@
 # follows.
 
 floors:
-  # --- below the 70% band: known debt ---
-  .: 39                     # 40.8% on 2026-10-11 once #1202's storage and
+  # --- inside the 70-85% band, once the real program's runs count ---
+  .: 75                     # #1451: 77.4% (2508 of 3239 statements) on
+                             # 2026-10-11 with the binary's runs merged in,
+                             # measured as test:go does (golang:1.27.1,
+                             # ci-test uid, fresh clone) and identically on
+                             # the host. Set under the 77 that allows,
+                             # until a CI run confirms it: CI has read the
+                             # root package lower than local runs before.
+                             # Raise it to the CI figure, rounded down, on
+                             # the first green pipeline. #1290's 0% paths
+                             # below now read 53-100% (main() 81.7%).
+                             # History below is unit tests alone.
+                             # 40.8% on 2026-10-11 once #1202's storage and
                              # gauntlet-wiring helpers had tests (37.4% in CI
                              # before). 39.9% re-measured 2026-09-27 on the M22 batch
                              # (dev at 010892bc, after #1347 added CLI code
@@ -103,6 +132,8 @@ floors:
                              # integration level (AGENTS.md, "The gate
                              # blocks the merge, in CI"), not unit tests.
                              # Raising this is out of scope for #1333.
+
+  # --- below the 70% band: known debt ---
   cmd/demo-history: 0       # No test files. Dev-data seeding tool for
                              # demos (AGENTS.md, "Demos the owner
                              # reviews") -- not shipped in the release
@@ -112,8 +143,10 @@ floors:
   scripts/routerosappendrow: 29  # 29.2% measured 2026-09-27. A CLI dev-tool
                              # under scripts/, not shipped in the release
                              # binary.
-  scripts/routeroscommands: 0    # No test files. CLI dev-tool under
-                             # scripts/, not shipped.
+  scripts/routeroscommands: 45   # No test files of its own; 45.3% from
+                             # internal/api's test running it (#1451,
+                             # 2026-10-11). CLI dev-tool under scripts/,
+                             # not shipped.
   scripts/routerosfreshness: 0   # No test files. CLI dev-tool under
                              # scripts/, not shipped.
   scripts/routerosreference: 0   # No test files. CLI dev-tool under
@@ -193,6 +226,11 @@ floors:
 # CI before the sealed-document guards, adoption and file-schema paths had
 # tests. CI read 0.7 points under the local run before this, so 84 is set
 # under the 85 the local figure would allow.
+#
+# #1451: with the binary's runs from internal/authe2e's Postgres tests
+# merged in, measured as test:postgres does (golang:1.27.1, root, a TLS
+# Postgres 18): persist 85.3% (85.0% unit tests alone), matchlog 84.1%
+# (81.8%). Both within five points of their floors, so neither moved.
 postgres-floors:
   internal/persist: 84
   internal/matchlog: 81
