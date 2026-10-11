@@ -107,6 +107,7 @@ testing-and-ci skill (owner, 2026-09-08).
 ## live-topography-trace-list: a keyboard re-trace lands on no row
 
 - 2026-09-14 · 4a4655b2 (feature/wizard-upgrade-safety) · pipeline 1101, `gate:scenarios 4/4` · `the list stays open across a keyboard re-trace` and `the second row is now the traced one (-1)` -- `onIndex` came back `-1`, so the re-trace selected nothing rather than the wrong thing. The branch touches no topography code at all; `dev` passed the same scenario at e4296ef3 (pipeline 1100) an hour earlier, and the same branch passed it at bef16483 (pipeline 1102) with only banner-text and wizard changes in between.
+- 2026-10-11 · 5423a1c7 (feat/1202-gauntlet, manual `scripts/gate-remote.sh --shards 4`) · shard 4/4 · the same two checks, `onIndex` `-1` again. The branch's changes since 91584d9d, which passed this scenario on the same host hours earlier, touch no topography code (auth fixes, gauntlet v0.4.2, live-script helpers).
 
 ## live-topography-port-trace: waitForSelector(.note-t) times out (10 s) after other scenarios
 

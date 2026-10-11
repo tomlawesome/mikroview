@@ -80,7 +80,7 @@ export async function mintBlocklistKey(page) {
   const field = page.locator('#bl-key-password')
   await field.waitFor({ state: 'visible', timeout: 10000 })
   await field.fill(PASS)
-  await page.getByRole('button', { name: 'Mint key' }).click()
+  await page.locator('button.keymint').click()
   await field.waitFor({ state: 'detached', timeout: 10000 })
 }
 
