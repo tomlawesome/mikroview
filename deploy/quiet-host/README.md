@@ -112,6 +112,23 @@ rm /srv/quiet-host/hold
 The `HOLD applied` and restore lines should never show the rest of the
 config file — only the `concurrent` line's value.
 
+While a hold is in force the script also logs a `leak:` line on every run
+(about once a minute), counting jobs that started past the hold on other
+lanes (ai/agent-infra #24). It reads the runner's own metrics on loopback,
+with no token. Add this to the global section of `config.toml` (above the
+first `[[runners]]`), then restart the runner once:
+
+```
+listen_address = "127.0.0.1:9252"
+```
+
+Without it the line reads `leak: unknown (metrics unavailable: ...)` and
+nothing else changes. After two weeks, count the holds that were overrun:
+
+```
+journalctl -u quiet-host.service | grep '^leak: [1-9]'
+```
+
 ## Recovery
 
 If the box looks stuck with `concurrent = 1` and nothing seems to be
