@@ -7,7 +7,7 @@ document does not decide is an escalation, not a guess.
 
 **Library**: `github.com/go-webauthn/webauthn` **v0.18.2**, BSD-3-Clause,
 licence and version checked 2026-09-23. Needs Go >= 1.26; the project is on
-1.27.1. Settled — do not re-open. Passwordless sign-in is out of scope:
+1.27.3. Settled — do not re-open. Passwordless sign-in is out of scope:
 password first, passkey second, and the docs say so.
 
 ## The public URL setting
