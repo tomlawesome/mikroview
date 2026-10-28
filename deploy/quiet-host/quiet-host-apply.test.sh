@@ -206,4 +206,152 @@ check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 4" "a rewritten hold fi
 [ -f "$QH_DIR/hold" ] && { echo "FAIL - the over-age hold should be deleted"; fail=1; } || echo "ok - the over-age hold was deleted"
 [ -f "$QH_STATE/hold.since" ] && { echo "FAIL - release should clear hold.since"; fail=1; } || echo "ok - release cleared hold.since"
 
+# ai/agent-infra #24: the hold logs how many other jobs are running on other
+# lanes, read from the runner's Prometheus endpoint. These tests are written
+# from the specification, before the code. A curl stub serves the file named
+# by $CURL_BODY, exits ${CURL_RC:-0}, and records its arguments.
+cat >"$TMP/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$TMP/bin/systemctl"
+cat >"$TMP/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${CURL_LOG:?}"
+cat "${CURL_BODY:?}"
+exit "${CURL_RC:-0}"
+STUB
+chmod +x "$TMP/bin/curl"
+export CURL_LOG="$TMP/curl.log"
+export QH_METRICS="http://127.0.0.1:59252/metrics-test"
+
+sample() { # runner runner_name state stage value ("-" for no runner_name)
+  local name=""
+  [ "$2" = "-" ] || name=",runner_name=\"$2\""
+  printf 'gitlab_runner_jobs{runner="%s"%s,system_id="s_x",state="%s",stage="%s",executor_stage="docker_run"} %s\n' \
+    "$1" "$name" "$3" "$4" "$5"
+}
+
+fresh_hold() {
+  rm -f "$QH_DIR/hold" "$QH_STATE/concurrent.orig" "$QH_STATE/hold.since" "$QH_DIR/applied" "$QH_DIR/failed"
+  write_config
+  write_flag "$(($(date +%s) + 300))"
+}
+
+leak_line() { printf '%s\n' "$1" | grep '^leak: ' || true; }
+
+# 1: two runners, running samples summed per runner, other states ignored
+{
+  echo '# HELP gitlab_runner_jobs The current number of running jobs.'
+  echo '# TYPE gitlab_runner_jobs gauge'
+  echo 'gitlab_runner_concurrent 4'
+  sample abc123 big running build_script 1
+  sample def456 light running build_script 1
+  sample def456 light running after_script 1
+  sample def456 light success build_script 5
+  sample def456 light success after_script 3
+  echo 'gitlab_runner_limit 0'
+} >"$TMP/body-two"
+fresh_hold
+: >"$CURL_LOG"
+out=$(CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 2 job(s) on other lanes (big=1 light=2) for job=999" "leak: two runners, running samples summed, other states ignored"
+applied_n=$(printf '%s\n' "$out" | grep -n 'HOLD applied' | head -n1 | cut -d: -f1 || true)
+leak_n=$(printf '%s\n' "$out" | grep -n '^leak: ' | head -n1 | cut -d: -f1 || true)
+if [ -n "$applied_n" ] && [ -n "$leak_n" ] && [ "$applied_n" -lt "$leak_n" ]; then
+  echo "ok - leak: the leak line comes after the HOLD applied line"
+else
+  echo "FAIL - leak: the leak line comes after the HOLD applied line: applied at [$applied_n], leak at [$leak_n]"; fail=1
+fi
+
+# 10: how curl is called
+curl_args=$(cat "$CURL_LOG")
+case "$curl_args" in
+  *"--max-time 3"*) echo "ok - leak: curl is called with --max-time 3" ;;
+  *) echo "FAIL - leak: curl is called with --max-time 3: got [$curl_args]"; fail=1 ;;
+esac
+case "$curl_args" in
+  *"$QH_METRICS"*) echo "ok - leak: curl is called with the QH_METRICS url" ;;
+  *) echo "FAIL - leak: curl is called with the QH_METRICS url: got [$curl_args]"; fail=1 ;;
+esac
+
+# 2: only the holding job running
+sample abc123 big running build_script 1 >"$TMP/body-self"
+fresh_hold
+out=$(CURL_BODY="$TMP/body-self" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 0 job(s) on other lanes (big=1) for job=999" "leak: only the holding job running gives 0"
+
+# 3: runner metrics but no running samples
+{
+  echo 'gitlab_runner_concurrent 4'
+  sample abc123 big success build_script 7
+  sample def456 light success build_script 2
+} >"$TMP/body-norunning"
+fresh_hold
+out=$(CURL_BODY="$TMP/body-norunning" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 0 job(s) on other lanes (none) for job=999" "leak: no running samples gives 0 and none"
+
+# 4: idle runner exports no gitlab_runner_jobs samples at all
+printf 'gitlab_runner_concurrent 1\ngitlab_runner_limit 0\n' >"$TMP/body-idle"
+fresh_hold
+out=$(CURL_BODY="$TMP/body-idle" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 0 job(s) on other lanes (none) for job=999" "leak: an idle runner is a true 0, not a failure"
+
+# 5: not a metrics body
+printf '<!doctype html>\n<html><head><title>Not found</title></head><body><h1>404</h1></body></html>\n' >"$TMP/body-html"
+fresh_hold
+out=$(CURL_BODY="$TMP/body-html" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: unknown (metrics unavailable: no runner metrics in the body)" "leak: an HTML body is reported as no runner metrics"
+
+# 6: no runner_name label falls back to the runner token
+sample abc123 - running build_script 1 >"$TMP/body-noname"
+fresh_hold
+out=$(CURL_BODY="$TMP/body-noname" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 0 job(s) on other lanes (abc123=1) for job=999" "leak: a runner with no runner_name is shown by its token"
+
+# 7: curl fails; the hold is unaffected
+fresh_hold
+rc=0
+out=$(CURL_RC=7 CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null) || rc=$?
+check "$(leak_line "$out")" "leak: unknown (metrics unavailable: curl exited 7)" "leak: a curl failure is reported with its exit code"
+check "$rc" "0" "leak: a curl failure leaves the exit status 0"
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "leak: a curl failure still applies the hold"
+[ -f "$QH_DIR/applied" ] && echo "ok - leak: a curl failure still writes applied" || { echo "FAIL - leak: a curl failure still writes applied"; fail=1; }
+
+# 8: curl not installed. PATH holds only the systemctl stub and symlinks to
+# the tools the script may need, each resolved to its real file; curl is
+# deliberately not among them.
+mkdir -p "$TMP/bin-nocurl"
+cp "$TMP/bin/systemctl" "$TMP/bin-nocurl/systemctl"
+for tool in bash sh env sed grep cut cat date mkdir printf rm awk sort head tail tr dirname basename mv cp wc mktemp ln chmod touch stat readlink sleep tee id uniq xargs; do
+  p=$(command -v "$tool" || true)
+  case "$p" in
+    /*) ln -sf "$p" "$TMP/bin-nocurl/$tool" ;;
+  esac
+done
+fresh_hold
+rc=0
+out=$(PATH="$TMP/bin-nocurl" CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null) || rc=$?
+check "$(leak_line "$out")" "leak: unknown (metrics unavailable: curl not installed)" "leak: missing curl is reported as not installed"
+check "$rc" "0" "leak: missing curl leaves the exit status 0"
+check "$(grep '^concurrent = ' "$CONFIG")" "concurrent = 1" "leak: missing curl still applies the hold"
+[ -f "$QH_DIR/applied" ] && echo "ok - leak: missing curl still writes applied" || { echo "FAIL - leak: missing curl still writes applied"; fail=1; }
+
+# 9: later runs while held also print the line; release and expiry do not
+fresh_hold
+CURL_BODY="$TMP/body-two" "$SCRIPT" >/dev/null 2>&1
+out=$(CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 2 job(s) on other lanes (big=1 light=2) for job=999" "leak: an idempotent re-run while held prints the line"
+rm -f "$QH_DIR/applied"
+out=$(CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "leak: 2 job(s) on other lanes (big=1 light=2) for job=999" "leak: a re-marked hold prints the line"
+rm -f "$QH_DIR/hold"
+out=$(CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "" "leak: a release run prints no leak line"
+fresh_hold
+CURL_BODY="$TMP/body-two" "$SCRIPT" >/dev/null 2>&1
+write_flag "$(($(date +%s) - 10))"
+out=$(CURL_BODY="$TMP/body-two" "$SCRIPT" 2>/dev/null)
+check "$(leak_line "$out")" "" "leak: an expiry run prints no leak line"
+
 exit $fail
