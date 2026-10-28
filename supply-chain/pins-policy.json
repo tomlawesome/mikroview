@@ -368,6 +368,30 @@
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
+    },
+    {
+      "name": "Docker-in-Docker daemon (CI service on the docker runner, #1457)",
+      "reference": "${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-dind@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659",
+      "shipped": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/docker-library/docker",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-10-23",
+      "reviewBy": "2026-12-23"
+    },
+    {
+      "name": "Docker CLI (job image for the Docker-in-Docker jobs, #1457)",
+      "reference": "${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-cli@sha256:be132a9f282288de4afaf63379dff75711fda0147c6b72a9df44e51841402144",
+      "shipped": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/docker-library/docker",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-10-23",
+      "reviewBy": "2026-12-23"
     }
   ]
 }
