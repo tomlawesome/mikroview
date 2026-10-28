@@ -21,7 +21,7 @@ was tried both ways). A package inside the band is done; effort goes to
 packages below 70%, each of which carries its reason in the yml.
 
 Measure the way `test:go` does or the numbers are wrong in both directions:
-the `golang:1.27.1` image, `scripts/fetch-upgrade-fixtures.sh` run first,
+the `golang:1.27.3` image, `scripts/fetch-upgrade-fixtures.sh` run first,
 and the test run itself as a non-root user (uid 10001) — root bypasses the
 Unix permission bits some tests deliberately violate to prove a refusal.
 `supply-chain/coverage-floors.yml`'s header has the exact commands.
