@@ -6,6 +6,9 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## TestKeyedLimiterReportsWhatItSuppressed: count = 2, want 7 (internal/logging)
+- 2026-10-28 · 028699f5 (chore/1440-go1.27.3-advisories) · pipeline 3101 / test:go · `handshake_test.go:122: count = 2, want 7`. The test opens a 1 ms window, makes six calls and sleeps 2 ms; on a busy runner the six calls straddled the window's end, so the limiter had already reset. The previous pipeline on the same test code (3097) passed it, and `-race -count=30` passes locally.
+
 ## live-change-password: the account menu does not open (5 s) under WebKit
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 1/4 · `openAccountMenu` timed out waiting for `.account .menu` (`live-change-password.mjs:110`), after every password check had passed. Because the scenario restores the admin password only at its end, the next 16 scenarios in the shard could not sign in: that cascade is #1420, a defect, not a flake. A third WebKit run of shard 1/4 on the same commit passed 28/28. Host load ~8.
