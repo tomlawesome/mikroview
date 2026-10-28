@@ -213,7 +213,7 @@
     },
     {
       "name": "Go toolchain (CI build/test image)",
-      "reference": "golang:1.27.1",
+      "reference": "golang:1.27.3",
       "shipped": false,
       "license": "BSD-3-Clause",
       "source": "https://github.com/docker-library/golang",
@@ -225,7 +225,7 @@
     },
     {
       "name": "Go toolchain (Dockerfile build stage)",
-      "reference": "golang:1.27.1-alpine",
+      "reference": "golang:1.27.3-alpine",
       "shipped": false,
       "license": "BSD-3-Clause",
       "source": "https://github.com/docker-library/golang",
@@ -299,7 +299,7 @@
     },
     {
       "name": "gosec static analysis scanner",
-      "reference": "ghcr.io/securego/gosec:2.29.0",
+      "reference": "ghcr.io/securego/gosec:2.30.0",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/securego/gosec",

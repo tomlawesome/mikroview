@@ -25,8 +25,8 @@ FROM node:26-bookworm
 # truth for this version; the tarball is fetched rather than layered from
 # golang:1.27 because that image is Debian-based too and stacking two
 # distributions to save one download is a worse trade than it looks.
-ARG GO_VERSION=1.27.1
-ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 RUN set -eux; \
     curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c -; \
