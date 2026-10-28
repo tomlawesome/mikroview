@@ -261,7 +261,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### github.com/go-jose/go-jose/v4 v4.1.5
+### github.com/go-jose/go-jose/v4 v4.1.6
 
 <!-- LICENSE -->
 
