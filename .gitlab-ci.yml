@@ -503,6 +503,23 @@ lint:changed-paths-guard:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - python3 scripts/ci-changed-paths-guard.py --git
 
+# #1459: reads docs/flakes.md and goes red on a malformed sighting or a
+# flake at its third sighting with no issue link in its heading. Runs on
+# every MR and dev pipeline, outside the docs-only lane, because the log is
+# itself a docs/ file. alpine:3.24 is already in supply-chain/pins-policy.json
+# and has the sh and awk the script needs. No --quarantined yet: the
+# "Scenarios exit 1 without a result" heading (#1458) is a whole-job host
+# flake no scenario skip can quarantine, so the check would stay red on it.
+# scripts/quarantine.txt is the adapter run-scenarios.sh already reads.
+lint:flake-check:
+  stage: lint
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  <<: *dev_or_mr
+  script:
+    - sh scripts/ci/flake-check.sh docs/flakes.md
+
 # #1068: both suites here test a script the pipeline itself leans on --
 # ci-changed-paths-guard.py decides whether a job is skipped, and
 # ci-reuse-gate.js decides whether one is reused -- yet nothing ran
