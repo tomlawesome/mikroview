@@ -507,10 +507,11 @@ lint:changed-paths-guard:
 # flake at its third sighting with no issue link in its heading. Runs on
 # every MR and dev pipeline, outside the docs-only lane, because the log is
 # itself a docs/ file. alpine:3.24 is already in supply-chain/pins-policy.json
-# and has the sh and awk the script needs. No --quarantined yet: the
-# "Scenarios exit 1 without a result" heading (#1458) is a whole-job host
-# flake no scenario skip can quarantine, so the check would stay red on it.
-# scripts/quarantine.txt is the adapter run-scenarios.sh already reads.
+# and has the sh and awk the script needs. --quarantined reads
+# scripts/quarantine.txt, the same file run-scenarios.sh skips, so the two
+# cannot drift. The "Scenarios exit 1 without a result" heading (#1458) is
+# tagged (host) in the log: a whole-job host flake no scenario skip can
+# quarantine, so the check wants an agent-infra issue link there instead.
 lint:flake-check:
   stage: lint
   tags: [light]
@@ -518,7 +519,7 @@ lint:flake-check:
   needs: []
   <<: *dev_or_mr
   script:
-    - sh scripts/ci/flake-check.sh docs/flakes.md
+    - sh scripts/ci/flake-check.sh --quarantined scripts/quarantine.txt docs/flakes.md
 
 # #1068: both suites here test a script the pipeline itself leans on --
 # ci-changed-paths-guard.py decides whether a job is skipped, and
@@ -1295,6 +1296,45 @@ gate:scenarios:webkit:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
     MV_BROWSER: webkit
+
+# #1459: the scenarios listed in scripts/quarantine.txt are skipped by every
+# gate:scenarios shard above; this job runs just those, so a quarantined
+# flake keeps being exercised and its docs/flakes.md log can still grow
+# sightings. Never blocks: allow_failure is on, and a red run here is a
+# sighting to log, not a reason to hold a merge. Same lane, image, cache and
+# rules as a Chromium shard, but no `parallel` (the list is short) and no
+# reuse-gate evidence (a pass here proves nothing a merge may lean on), so it
+# is written out rather than merged from the shard anchor, whose
+# `parallel: 4` and CI_NODE_INDEX script cannot be undone. MV_SHARD=1/1 keeps
+# `make live-check` to the browser scenarios only, as in a shard. An empty
+# list is the normal state once every flake is fixed, so it exits 0 with a
+# message rather than driving a whole instance for nothing.
+gate:scenarios:quarantined:
+  <<: [*dev_or_mr_code, *git_safe]
+  stage: gate
+  tags: [light]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  timeout: 30m
+  allow_failure: true
+  variables:
+    MV_QUARANTINE: only
+    MV_SHARD: "1/1"
+  cache:
+    - *live_check_npm_cache_entry
+  script:
+    - set -o pipefail
+    - |
+      if [ -z "$(scripts/run-scenarios.sh --list)" ]; then
+        echo "gate:scenarios:quarantined: scripts/quarantine.txt lists no scenarios -- nothing to run"
+        exit 0
+      fi
+    - (cd frontend && npm ci)
+    - make live-check 2>&1 | tee gate-quarantined.log
+  artifacts:
+    when: always
+    paths:
+      - gate-quarantined.log
+    expire_in: 1 week
 
 # The four standalone shell checks (scripts/run-live-scripts.sh), once,
 # plus the quiet-host and other plain-bash unit tests (#1003, #1337) --
