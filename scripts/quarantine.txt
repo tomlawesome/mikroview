@@ -3,3 +3,4 @@
 # scripts/ci/flake-check.sh --quarantined reads this same file. A scenario
 # belongs here once its docs/flakes.md heading has a third sighting and an
 # issue; MV_QUARANTINE=only runs just these.
+live-sw-navigation
