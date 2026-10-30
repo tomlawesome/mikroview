@@ -146,7 +146,7 @@ own rather than swelling that entry's count.
 
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 3/4, job 8449 · `goTo("Settings") timed out waiting for card "engineroom"`, `offsetFromDeckTop: 1440` (card mounted, roll never reached it — #1011's shape, the opposite sign to live-memory-slider's), at `live-browser.mjs:385` from `live-settings-doors.mjs:27`; 776's 3/4 (job 8474) passed on the same commit.
 
-## Scenarios exit 1 without a result when two gate stages overlap on the runner — #1458
+## Scenarios exit 1 without a result when two gate stages overlap on the runner (host) — #1458, ai/agent-infra#9
 
 Pipeline 770 (!1003, 237d4d84) had its gate stage running at the same time as
 pipeline 773's on the same host. Five scenarios across three shards died
@@ -221,18 +221,6 @@ each, recorded together because the cause is shared (#831's contention):
 ## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
 
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
-
-## live-connection-states: content does not return to its pre-loss position after the banner clears (#1423)
-
-- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 1/4 · `got -12, expected ~0`, the opposite sign from the first sighting. A third WebKit run of shard 1/4 on the same commit passed 28/28. Second sighting.
-- 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.
-- 2026-09-24 · 8216621a (dev) · remote gate on mikroview-runner, 4 shards ·
-  `FAIL content returns to its pre-loss position once the banner clears --
-  got -12, expected ~0`; every other check in the scenario passed. Reproduced
-  alone under WebKit 3/3 clean (each printing `got 0, expected ~0`) and under
-  Chromium 2/2 clean. Not reproduced in isolation -- consistent with the
-  scroll-settle assertion racing the four-shard host contention this scenario
-  family is prone to (AGENTS.md's "the CPU is not [safe]").
 
 ## frontend state.svelte.test.ts: "costs about the same to append" (#1304 E2) timing test
 
