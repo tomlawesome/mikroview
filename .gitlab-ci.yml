@@ -20,6 +20,14 @@
 # Tool versions pinned below were verified current as of this session (Aug 2026)
 # in gitlab-ci-plan/01-tool-research.md — re-check before bumping blindly.
 
+include:
+  - project: ai/agent-infra
+    ref: catchup-check/v1
+    file: scripts/catchup-check/ci-template.yml
+  - project: ai/agent-infra
+    ref: batch-intake/v1
+    file: scripts/batch-intake/ci-template.yml
+
 stages:
   - lint
   - test
@@ -44,6 +52,9 @@ default:
 
 variables:
   GOFLAGS: "-mod=readonly"
+  # Fallback for the catch-up and batch-intake MR pipelines: their snippet
+  # workflow rules win first, so the MR rung below never sets this for them.
+  NPM_CACHE_POLICY: "pull"
 
 # #1091: the only thing this workflow:rules block exists for is to set
 # NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
@@ -52,6 +63,8 @@ variables:
 # which pipelines run changes here, only a variable they carry.
 workflow:
   rules:
+    - !reference [.catchup-check, workflow_rules]
+    - !reference [.batch-intake, workflow_rules]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       variables:
         NPM_CACHE_POLICY: "pull"
@@ -70,6 +83,7 @@ workflow:
 # "run pipeline" should mean.
 .dev_or_mr: &dev_or_mr
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
     - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
@@ -231,6 +245,7 @@ workflow:
 # on-demand CHR/Renovate runs still select themselves out (#951).
 .dev_or_mr_code: &dev_or_mr_code
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
     - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
@@ -254,6 +269,7 @@ workflow:
 # merged in from .dev_or_mr_code, which is why this block exists at all.
 .dev_or_mr_code_frontend: &dev_or_mr_code_frontend
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
     - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
@@ -291,6 +307,23 @@ workflow:
 # The check below exists because the Go wrapper swallows git's actual message.
 # If git is still unusable, fail here with the real error rather than three
 # stages later with a riddle.
+# Batch intake (ai/agent-infra#114, decision 60a): heavy jobs skip an MR into
+# batch-a/batch-b; the full pipeline runs once, on batch to dev.
+.dev_or_mr_heavy: &dev_or_mr_heavy
+  rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.dev_or_mr, rules]
+
+.dev_or_mr_code_heavy: &dev_or_mr_code_heavy
+  rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.dev_or_mr_code, rules]
+
+.dev_or_mr_code_frontend_heavy: &dev_or_mr_code_frontend_heavy
+  rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.dev_or_mr_code_frontend, rules]
+
 .git_safe: &git_safe
   before_script:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
@@ -428,6 +461,7 @@ policy:promotion-hop:
   # documentation-only merge request into main is still a merge request
   # into main, and still has to come from preview.
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   script:
     - 'echo "MR !$CI_MERGE_REQUEST_IID: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -> $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"'
@@ -459,6 +493,7 @@ policy:release-surfaces:
   needs: []
   interruptible: false
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   # GIT_DEPTH 0, as gitleaks and semgrep: check 6 needs `git describe` and
   # `git merge-base --is-ancestor` to see every tag and commit, not the
@@ -620,7 +655,7 @@ test:go:
   # migrate_cli_test.go, internal/api/route_docs_test.go,
   # internal/config/env_docs_test.go and problem_docs_test.go). A prose
   # edit can fail this job for real, so it runs for prose.
-  <<: *dev_or_mr
+  <<: *dev_or_mr_heavy
   # #1304 item E8: shared with test:postgres below, so a fixture already
   # fetched by either job on an earlier pipeline is not fetched again --
   # see upgrade_fixtures_cache_entry above. fetch-upgrade-fixtures.sh
@@ -674,7 +709,7 @@ test:frontend:
   stage: test
   tags: [light]
   image: node:26-alpine
-  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  <<: [*dev_or_mr_code_frontend_heavy, *npm_cache]
   # The other half of #684. lint:frontend above proves the frontend compiles;
   # nothing here proved it behaves, so this lane had the same hole GitHub did
   # and 542 real assertions gated nothing on either. jsdom, so no browser and
@@ -706,6 +741,8 @@ test:build-checks:
   # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
   # so it keeps .dev_or_mr's plain rules rather than the ladder.
   rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
     # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
@@ -750,7 +787,7 @@ test:postgres:
   stage: test
   tags: [light]
   image: golang:1.27.3
-  <<: *dev_or_mr_code
+  <<: *dev_or_mr_code_heavy
   # #1304 item E8: shared with test:go above -- see
   # upgrade_fixtures_cache_entry and the comment on test:go's cache.
   cache:
@@ -920,7 +957,7 @@ test:postgres:
 test:container:
   extends: .dind
   stage: test
-  <<: *dev_or_mr_code
+  <<: *dev_or_mr_code_heavy
   variables:
     APP: mikroview-test-$CI_JOB_ID
   script:
@@ -983,7 +1020,7 @@ test:container:
 test:install-line:
   extends: .dind
   stage: test
-  <<: *dev_or_mr_code
+  <<: *dev_or_mr_code_heavy
   variables:
     APP: mikroview-install-$CI_JOB_ID
     IMG: mikroview-install-image-$CI_JOB_ID
@@ -1086,7 +1123,7 @@ gate:image:
   # gate:scripts and perf:promotion all name the per-branch tag it
   # publishes. Skipping it to save nothing would risk a promotion finding
   # no tag to pull.
-  <<: *dev_or_mr
+  <<: *dev_or_mr_heavy
   needs: []
   # #952: pushes to the registry -- never cut mid-write.
   interruptible: false
@@ -1266,7 +1303,7 @@ gate:image:
     expire_in: 1 week
 
 gate:scenarios:
-  <<: [*dev_or_mr_code, *git_safe, *gate_scenarios_shard]
+  <<: [*dev_or_mr_code_heavy, *git_safe, *gate_scenarios_shard]
 
 # #1306: dev -> preview also runs the scenario suite under Firefox and
 # WebKit, not only Chromium -- owner ruling 2026-09-20. The live-check
@@ -1286,6 +1323,7 @@ gate:scenarios:
 gate:scenarios:firefox:
   <<: [*git_safe, *gate_scenarios_shard]
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
     MV_BROWSER: firefox
@@ -1293,6 +1331,7 @@ gate:scenarios:firefox:
 gate:scenarios:webkit:
   <<: [*git_safe, *gate_scenarios_shard]
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
     MV_BROWSER: webkit
@@ -1310,7 +1349,7 @@ gate:scenarios:webkit:
 # list is the normal state once every flake is fixed, so it exits 0 with a
 # message rather than driving a whole instance for nothing.
 gate:scenarios:quarantined:
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code_heavy, *git_safe]
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
@@ -1344,7 +1383,7 @@ gate:scripts:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code_heavy, *git_safe]
   timeout: 30m
   # #1304 item E7: same live-check-user npm cache gate:scenarios' shards
   # share -- see live_check_npm_cache_entry above.
@@ -1446,6 +1485,7 @@ perf:promotion:
   # promotion merge request is diffed against the preview tip and so
   # carries every commit since the last promotion.
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
       changes: *code_paths
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
@@ -1734,7 +1774,7 @@ security:fuzz:
   stage: security
   tags: [light]
   image: golang:1.27.3
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code_heavy, *git_safe]
   timeout: 15m
   script:
     - go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
@@ -2132,6 +2172,7 @@ check:upgrade-fixture-recorder:
   stage: test
   needs: []
   rules:
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
     APP: mikroview-upgrade-check-$CI_JOB_ID
