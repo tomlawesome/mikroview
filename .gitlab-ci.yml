@@ -27,6 +27,9 @@ include:
   - project: ai/agent-infra
     ref: 063b5b95a96b139b0a858bb009466456a19e5674  # batch-intake/v1
     file: scripts/batch-intake/ci-template.yml
+  - project: ai/agent-infra
+    ref: 1dca70057bd93f68ded22c6b159f315c987c1663  # dev-landing/v1
+    file: scripts/dev-landing/ci-template.yml
 
 stages:
   - lint
@@ -63,6 +66,7 @@ variables:
 # which pipelines run changes here, only a variable they carry.
 workflow:
   rules:
+    - !reference [.dev-landing, workflow_rules]
     - !reference [.catchup-check, workflow_rules]
     - !reference [.batch-intake, workflow_rules]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -83,6 +87,7 @@ workflow:
 # "run pipeline" should mean.
 .dev_or_mr: &dev_or_mr
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
@@ -245,6 +250,7 @@ workflow:
 # on-demand CHR/Renovate runs still select themselves out (#951).
 .dev_or_mr_code: &dev_or_mr_code
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
@@ -269,6 +275,7 @@ workflow:
 # merged in from .dev_or_mr_code, which is why this block exists at all.
 .dev_or_mr_code_frontend: &dev_or_mr_code_frontend
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
@@ -461,6 +468,7 @@ policy:promotion-hop:
   # documentation-only merge request into main is still a merge request
   # into main, and still has to come from preview.
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   script:
@@ -493,6 +501,7 @@ policy:release-surfaces:
   needs: []
   interruptible: false
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   # GIT_DEPTH 0, as gitleaks and semgrep: check 6 needs `git describe` and
@@ -741,6 +750,7 @@ test:build-checks:
   # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
   # so it keeps .dev_or_mr's plain rules rather than the ladder.
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.batch-intake, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -1323,6 +1333,7 @@ gate:scenarios:
 gate:scenarios:firefox:
   <<: [*git_safe, *gate_scenarios_shard]
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
@@ -1331,6 +1342,7 @@ gate:scenarios:firefox:
 gate:scenarios:webkit:
   <<: [*git_safe, *gate_scenarios_shard]
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
@@ -1485,6 +1497,7 @@ perf:promotion:
   # promotion merge request is diffed against the preview tip and so
   # carries every commit since the last promotion.
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
       changes: *code_paths
@@ -1884,7 +1897,21 @@ security:gitleaks:
   # code -- a token in a README example, a key in a migration guide -- and
   # this job scans the whole tree, so a docs-only diff is exactly the case
   # it has to keep covering.
-  <<: *dev_or_mr
+  #
+  # A fast check (ai/agent-infra#113): it is one of the few jobs that runs on
+  # the push to dev, with the 5 minute timeout from .dev-landing-check. Its
+  # own rules otherwise stay .dev_or_mr's, minus that anchor's dev-landing
+  # skip, which would switch it off on that push.
+  extends: .dev-landing-check
+  rules:
+    - !reference [.dev-landing-check, rules]
+    - !reference [.catchup-check, job_rule]
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
   variables:
     # The whole history, not GitLab's shallow default. This job reported
     # 28 leaks that are not leaks, and the depth is why: `.gitleaksignore`
@@ -2172,6 +2199,7 @@ check:upgrade-fixture-recorder:
   stage: test
   needs: []
   rules:
+    - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
@@ -2273,7 +2301,11 @@ check:upgrade-fixture-recorded:
   tags: [light]
   image: alpine:3.24
   needs: []
+  # A fast history check (ai/agent-infra#113): runs on the push to dev with
+  # the 5 minute timeout.
+  extends: .dev-landing-check
   rules:
+    - !reference [.dev-landing-check, rules]
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
   variables:
     GIT_DEPTH: 0
