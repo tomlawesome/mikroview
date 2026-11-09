@@ -51,6 +51,7 @@ var Rows = []Row{
 	{From: "7.24.4", To: "7.24.4", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.4, 2026-09-22", Note: ""},
 	{From: "7.24.5", To: "7.24.5", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.5, 2026-10-05", Note: ""},
 	{From: "7.25", To: "7.25", Dialect: "a", VerifiedBy: "exercised on CHR 7.25, 2026-10-26", Note: ""},
+	{From: "7.25.1", To: "7.25.1", Dialect: "a", VerifiedBy: "exercised on CHR 7.25.1, 2026-11-09", Note: ""},
 }
 
 // RowFor returns the row whose [From, To] range contains version, and
