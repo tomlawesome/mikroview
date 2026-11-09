@@ -1610,7 +1610,7 @@ perf:promotion:
 security:semgrep:
   stage: security
   tags: [light]
-  image: semgrep/semgrep:1.177.0
+  image: semgrep/semgrep:1.183.0
   <<: *dev_or_mr_code
   variables:
     # The whole history, as gitleaks below. On a merge request the scan
@@ -1951,7 +1951,7 @@ security:trivy-fs:
   stage: security
   tags: [light]
   image:
-    name: aquasec/trivy:0.74.0
+    name: aquasec/trivy:0.76.1
     entrypoint: [""]
   <<: *dev_or_mr_code
   variables:
