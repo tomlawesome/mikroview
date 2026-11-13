@@ -33,7 +33,8 @@ curl -fsSL https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.
 ```
 
 It pulls the image. It starts one container with two named volumes (your
-data, and the app folder) and two ports. It prints the address to open.
+data, and the app folder) and three ports (syslog, HTTPS and the
+router-backup drop box). It prints the address to open.
 Running it again is the upgrade line: same volumes, latest image. The
 script is short enough to read before you run it —
 [`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
@@ -51,8 +52,8 @@ certificate on first visit, as any self-hosted admin interface does;
 [docs/configuration.md](docs/configuration.md#tls) covers bringing your
 own.
 
-`latest` is the most recent release; each release is also tagged
-`v<version>` if you would rather pin one (`sh -s -- v0.6.0`). The
+`latest` is the most recent release. To pin one instead, pass its tag:
+`sh -s -- v<version>`. The
 no-script `docker run` form, the full Compose file, image tags and where
 your data lives are in [docs/install.md](docs/install.md).
 

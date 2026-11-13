@@ -929,6 +929,14 @@
   // its box overlaps anything already in `occupied` -- another placed
   // label, or a neighbouring carrier's own curve. Pushes its own final
   // box into `occupied` before returning, so later candidates see it.
+  //
+  // A label that is still overlapping once the lifting stops folds:
+  // null, drawn nowhere (#1430). Two near-busiest carriers squeezed
+  // together by assignX both start within a line of the band head, so
+  // neither can lift, and the old code then drew the second across the
+  // first -- two unreadable labels where the foot rule (portLabels
+  // below, #700) already says what to do with a crowded band: the
+  // heaviest keeps its label and the rest fold.
   function placeLabel(
     occupied: OccupiedBox[],
     x: number,
@@ -937,21 +945,23 @@
     lo: number,
     hi: number,
     minY: number,
-  ): { tx: number; ty: number; anchor: LabelAnchor } {
+  ): { tx: number; ty: number; anchor: LabelAnchor } | null {
     const { tx, anchor } = clampLabelX(x, w, lo, hi)
     const x1 = anchor === 'middle' ? tx - w / 2 : anchor === 'end' ? tx - w : tx
     const x2 = x1 + w
     const boxAt = (cy: number): OccupiedBox => ({ x1, x2, y1: cy - LABEL_ASCENT, y2: cy + LABEL_DESCENT })
+    const blocked = (cy: number) => occupied.some((o) => boxesOverlap(boxAt(cy), o))
     let ty = y
     let guard = 0
-    while (guard++ < LABEL_LIFT_MAX && ty - LABEL_LIFT >= minY && occupied.some((o) => boxesOverlap(boxAt(ty), o)))
-      ty -= LABEL_LIFT
+    while (guard++ < LABEL_LIFT_MAX && ty - LABEL_LIFT >= minY && blocked(ty)) ty -= LABEL_LIFT
+    if (blocked(ty)) return null
     occupied.push(boxAt(ty))
     return { tx, ty, anchor }
   }
 
   // Peak labels: one per active carrier, tallest placed first so a
-  // shorter neighbour's label is the one that lifts clear.
+  // shorter neighbour's label is the one that lifts clear -- or, with
+  // no room left to lift into, the one that folds (#1430).
   const peakLabels = $derived.by(() => {
     const cands: { x: number; y: number; text: string; lane: Lane; h: number; slot: BandSlot }[] = []
     const occupiedByBand = new Map<string, OccupiedBox[]>()
@@ -976,8 +986,8 @@
       const occupied = occupiedByBand.get(c.slot.band.key)!
       const lo = c.slot.bx + LABEL_MARGIN
       const hi = c.slot.bx + bandW - LABEL_MARGIN
-      const { tx, ty, anchor } = placeLabel(occupied, c.x, c.y, w, lo, hi, SPEC_TOP + 12)
-      placed.push({ x: tx, y: ty, anchor, text: c.text, lane: c.lane })
+      const spot = placeLabel(occupied, c.x, c.y, w, lo, hi, SPEC_TOP + 12)
+      if (spot) placed.push({ x: spot.tx, y: spot.ty, anchor: spot.anchor, text: c.text, lane: c.lane })
     }
     return placed
   })
