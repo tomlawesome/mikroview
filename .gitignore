@@ -50,3 +50,7 @@
 # The checksum-verified cosign the signing job installs (#1309,
 # scripts/ensure-cosign.sh). A downloaded binary, never committed.
 .mv-cosign/
+
+# Coverage counts from the real program, written when MIKROVIEW_COVERDIR
+# points here (#1451; CI's test:go and test:postgres). Run data, not content.
+/.coverdata/

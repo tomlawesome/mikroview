@@ -20,7 +20,7 @@
 // stop the push -- asked at the new location rather than rewritten
 // around it.
 
-import { session, check, done, goTo } from './live-browser.mjs'
+import { session, check, done, goTo, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -81,6 +81,8 @@ check(
 const DEVICE = known[0]
 await page.click(`${deviceSeg} button[data-device-id="${DEVICE}"]`)
 
+// Minting asks for the admin's own password (#1202).
+await page.fill(`${DOOR} .pform input[aria-label="your password"]`, adminPassword)
 await page.click(`${DOOR} .pform button:has-text("mint it")`)
 await page.waitForSelector(`${DOOR} .reveal code`)
 const token = (await page.textContent(`${DOOR} .reveal code`))?.trim() ?? ''
@@ -140,6 +142,7 @@ await page.click(`${DOOR} .ogfoot .olink`)
 await page.waitForSelector(`${DOOR} .pform`)
 await page.fill(`${DOOR} .pform input[aria-label="key name"]`, 'ui-readonly')
 // read-only is the segment's own default -- left untouched here on purpose.
+await page.fill(`${DOOR} .pform input[aria-label="your password"]`, adminPassword)
 await page.click(`${DOOR} .pform button:has-text("mint it")`)
 
 await page.waitForSelector(`${DOOR} .reveal code`)

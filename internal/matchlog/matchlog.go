@@ -335,7 +335,7 @@ type Store interface {
 }
 
 // newID returns a random 32-character hex string. Unlike
-// internal/auth's newID, this only needs to be unique within one store,
+// gauntlet's newID, this only needs to be unique within one store,
 // not unguessable -- nothing here is a bearer credential -- but the same
 // crypto/rand source is reused rather than inventing a second generator
 // for no reason.

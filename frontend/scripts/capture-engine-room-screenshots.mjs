@@ -219,6 +219,15 @@ async function signedInPage(scheme) {
     data: { code: totpCode(secret) },
   })
   if (!confirm.ok()) throw new Error(`jenny's TOTP confirm failed (${confirm.status()})`)
+  // The first factor is held until its recovery codes are confirmed (#1202).
+  if ((await confirm.json().catch(() => ({}))).pendingConfirmation === true) {
+    const codes = await jpage.request.fetch(`${URL_BASE}/api/auth/recovery-codes/confirm`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      data: {},
+    })
+    if (!codes.ok()) throw new Error(`jenny's recovery codes confirm failed (${codes.status()})`)
+  }
   console.log(`gave "${EXTRA_USER}" an authenticator app for the capture`)
 
   await jctx.close()

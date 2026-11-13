@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/droplist"
 )
@@ -163,9 +164,9 @@ func TestDroplistAddUnknownFlagRefused(t *testing.T) {
 // alone would look for it.
 func TestDroplistWriteRoutesAreAdminOnly(t *testing.T) {
 	s, ts, admin := droplistTestServer(t)
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 	user := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/droplist below
 
 	if resp, err := user.Get(ts.URL + "/api/droplist"); err != nil {
@@ -234,7 +235,7 @@ func TestDroplistAddNoWarningOnceOwnRangesAreKnown(t *testing.T) {
 		t.Fatal("admin account not found")
 	}
 	enrolIngestTestDevice(t, s, "router-1")
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestDroplistPullKeyBlastRadiusIsTheFeedAndNothingElse(t *testing.T) {
 	if !ok {
 		t.Fatal("admin account not found")
 	}
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -446,7 +447,7 @@ func TestDroplistPullKeyRevokeLeavesIngestWorking(t *testing.T) {
 		t.Fatal("admin account not found")
 	}
 	enrolIngestTestDevice(t, s, "router-1")
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -525,7 +526,7 @@ func TestDroplistPullKeyMintTwiceRotates(t *testing.T) {
 		t.Errorf("the second key does not work: status = %d, want 200", secondPull.StatusCode)
 	}
 
-	if got := len(s.Tokens.ByKind(auth.TokenKindDroplistPull)); got != 1 {
+	if got := len(s.Tokens.ByKind(TokenKindDroplistPull)); got != 1 {
 		t.Errorf("ByKind(droplist-pull) = %d tokens, want exactly 1 after rotating", got)
 	}
 }
@@ -551,7 +552,7 @@ func TestDroplistKeyMintConcurrentRequestsLeaveExactlyOneKey(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := len(s.Tokens.ByKind(auth.TokenKindDroplistPull)); got != 1 {
+	if got := len(s.Tokens.ByKind(TokenKindDroplistPull)); got != 1 {
 		t.Errorf("ByKind(droplist-pull) = %d tokens after %d concurrent mints, want exactly 1", got, n)
 	}
 }
@@ -705,7 +706,7 @@ func TestDroplistListRoutersReportsHeldAgainstPushedSnapshot(t *testing.T) {
 		t.Fatal("admin account not found")
 	}
 	enrolIngestTestDevice(t, s, "router-1")
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}

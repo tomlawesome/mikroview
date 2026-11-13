@@ -29,6 +29,13 @@ past the checkout onto whichever repository is above it -- which either
 fails the build or stamps someone else's commit into your binary (#357,
 golang/go#58218, fixed in Go 1.27).
 
+Authentication is the gauntlet Go library (`github.com/tomlawesome/gauntlet`,
+pinned in `go.mod`, #1202). Set `GOPRIVATE=github.com/tomlawesome/gauntlet` for
+any Go command that might fetch it (`go get`, `go mod download`, `go mod
+tidy`). That sends the fetch straight to GitHub and skips the checksum
+database; resolving it through the public Go proxy would publish the version
+permanently. `.gitlab-ci.yml` sets the same variable for every job.
+
 Feed it fixture syslog lines without a real router. Since #189 there is
 no plaintext listener -- the only one is RouterOS's own
 `remote-protocol=tls` on 6514 -- so this has to speak TLS, which `nc`
@@ -50,8 +57,9 @@ see `../.claude/skills/live-check/SKILL.md`.
 - New behavior needs a test that would fail without it.
 - A bug fix should include a regression test reproducing the bug where
   practical.
-- Anything touching `internal/auth` or `internal/api/auth.go` should be
-  run with `-race` locally — the CI security job does this too, but
+- Anything touching the authentication wiring (`gauntlet_wiring.go`,
+  `internal/api/gauntlet.go`, `storage.go`) should be run with `-race`
+  locally — the CI security job does this too, but
   catching it locally is faster.
 - Go coverage is gated per package by a ratchet — see
   [docs/testing.md](testing.md).

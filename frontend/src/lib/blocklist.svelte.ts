@@ -15,6 +15,11 @@
 // (wizard.svelte.ts's `token`, same reasoning). Inside the wizard's
 // first-run tail the wizard's own token is reused when it is for the
 // same router.
+//
+// #1202: minting a token asks for the admin's own password (a token
+// outlives the session that minted it), so nothing is minted on open:
+// the block renders without its push part until the page has been given
+// the password (mintToken), then renders again with it.
 
 import {
   createToken,
@@ -47,7 +52,20 @@ class BlocklistState {
   showUndoAll = $state(false)
   copied = $state(false)
 
-  private tokens = new Map<string, string>()
+  // Reactive, so the page's password prompt goes away once a token is held.
+  private tokens = $state<Record<string, string>>({})
+  // Set while mintToken is in flight, and to its refusal's words after.
+  // #1202 U14: kept per router -- a mint still running for router A must
+  // not hold router B's prompt, and A's answer (error or token) belongs to
+  // A alone. minting and tokenError read the router on screen.
+  private mintingFor = $state<Record<string, boolean>>({})
+  private tokenErrors = $state<Record<string, string | null>>({})
+  get minting(): boolean {
+    return this.mintingFor[this.device] === true
+  }
+  get tokenError(): string | null {
+    return this.tokenErrors[this.device] ?? null
+  }
   private seq = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   // inWizard: the body is on the wizard's tail stage, so the wizard's
@@ -73,6 +91,7 @@ class BlocklistState {
       this.data = null
       this.block = null
       this.choices = {}
+      this.clearErrors(device)
     }
     this.device = device
     this.copied = false
@@ -87,7 +106,6 @@ class BlocklistState {
       this.error = e instanceof Error ? e.message : String(e)
       return
     }
-    await this.ensureToken()
     await this.render()
   }
 
@@ -98,6 +116,7 @@ class BlocklistState {
   async peek(device: string): Promise<void> {
     if (!device) return
     if (device !== this.device || !this.data) {
+      if (device !== this.device) this.clearErrors(device)
       this.device = device
       this.block = null
       try {
@@ -152,7 +171,7 @@ class BlocklistState {
 
   get token(): string {
     if (this.inWizard && wizardState.token && wizardState.tokenDevice === this.device) return wizardState.token
-    return this.tokens.get(this.device) ?? ''
+    return this.tokens[this.device] ?? ''
   }
 
   // address is where part 1's push posts to: the wizard's own answer
@@ -162,18 +181,46 @@ class BlocklistState {
     return wizardState.address || (typeof window !== 'undefined' ? window.location.host : '')
   }
 
-  // ensureToken mints this page session's token for the router, once.
-  private async ensureToken(): Promise<void> {
-    if (this.token || this.data?.standing !== 'ok') return
+  // mintToken mints this page session's token for the router, once, with
+  // the admin's password, and renders the block again with it. Without a
+  // token the block comes back without its push part, and says so
+  // (blocked: no-token).
+  async mintToken(password: string): Promise<void> {
+    if (!password || this.minting || this.token || this.data?.standing !== 'ok') return
     const device = this.device
+    this.mintingFor[device] = true
+    this.tokenErrors[device] = null
     try {
-      const result = await createToken(`blocklist-${device}`, 'ingest', device)
-      if (typeof result === 'string' || !result.value) return
-      this.tokens.set(device, result.value)
+      const result = await createToken(`blocklist-${device}`, 'ingest', device, password)
+      if (typeof result === 'string') {
+        this.tokenErrors[device] = result
+        return
+      }
+      if (!result.value) {
+        // The server answered the mint but left the value out: nothing to
+        // build the push with, and the person must hear it, not see the
+        // prompt quietly empty.
+        this.tokenErrors[device] = 'The server did not send the key’s value — try again.'
+        return
+      }
+      this.tokens[device] = result.value
     } catch {
-      // Without a token the block comes back without its push part,
-      // and says so (blocked: no-token).
+      this.tokenErrors[device] = 'Could not mint the key — try again.'
+      return
+    } finally {
+      this.mintingFor[device] = false
     }
+    // Only the router on screen is drawn again: A's token is held for A,
+    // and A's answer arriving while B is open changes nothing on B.
+    if (this.device === device) await this.render()
+  }
+
+  // The last failure belongs to the router it happened on: opening
+  // another router must not show it there.
+  private clearErrors(device = this.device) {
+    this.error = null
+    this.blockError = null
+    this.tokenErrors[device] = null
   }
 
   // render asks the server for the block the current clicks describe.
@@ -228,7 +275,9 @@ class BlocklistState {
     this.undoOpen = ''
     this.showUndoAll = false
     this.copied = false
-    this.tokens.clear()
+    this.tokens = {}
+    this.mintingFor = {}
+    this.tokenErrors = {}
     this.seq = 0
     if (this.timer) clearTimeout(this.timer)
     this.timer = null

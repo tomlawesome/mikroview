@@ -49,7 +49,7 @@ const maxInFlightDevices = 32
 //
 // The device count above is not a memory bound on its own: 32 devices
 // each delivering MaxFileBytes is half a gigabyte of buffers, which OOMs
-// any memory-limited container -- the same failure internal/auth bounds
+// any memory-limited container -- the same failure gauntlet bounds
 // its Argon2id calls against. A real backup measured ~460KB (#394), so
 // 64MiB is well over a hundred routers pushing at once and only refuses
 // the shapes nobody legitimate produces.

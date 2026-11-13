@@ -33,7 +33,7 @@
 //     live-city-stops and live-city-walls all declare with this same
 //     range and name, and no sixth lane is ever created.
 
-import { session, check, done, feedRaw, waitForFlag } from './live-browser.mjs'
+import { session, check, done, feedRaw, waitForFlag, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // The lane is shared with this file's neighbours on purpose (see the
@@ -55,7 +55,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-marks', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-marks', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

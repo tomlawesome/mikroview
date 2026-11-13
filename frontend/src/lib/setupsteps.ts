@@ -104,7 +104,7 @@ export function deviceStanza(sourceIp: string, name: string): string {
 
 // tlsHostsBlock is caStep's own pasteBlock (#1365): the whole resulting
 // tls.hosts list, not just the address that is missing -- an operator
-// told only "add 198.51.100.15" has to go and remember what else was
+// told only "add 192.0.2.15" has to go and remember what else was
 // already in that list, and a block that only ever adds is safer than
 // one that could be pasted over something wider. Never drops an
 // existing entry, and never lists the missing address twice if it is

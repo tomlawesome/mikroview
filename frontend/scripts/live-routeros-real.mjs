@@ -25,7 +25,7 @@
 import { execFileSync } from 'child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, tokenMint } from './live-browser.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const URL_BASE = process.env.MV_URL
@@ -257,11 +257,11 @@ check(
 const device = (await api('GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports the device the router's events arrive from (${device})`)
 
-const token = await api('POST', '/api/tokens', {
+const token = await api('POST', '/api/tokens', tokenMint({
   name: 'live-routeros-real',
   kind: 'ingest',
   device,
-})
+}))
 check(token.status === 201, `an ingest token scoped to that device is issued (${token.status})`)
 
 // The router does the pushing, over TLS it verifies against the CA it

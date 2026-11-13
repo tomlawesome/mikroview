@@ -16,7 +16,7 @@ for (const d of ['w-console', 'x-blueprint', 'y-analyzer']) {
   page.on('dialog', x => x.accept())
   const shot = n => page.screenshot({ path: path.join(here, 'shots', `${d}-${n}.png`) })
   const url = 'file://' + path.join(here, d + '.html')
-  const fill = async () => { await page.fill('[data-field=name]', 'rb5009'); await page.fill('[data-field=addr]', '198.51.100.1'); await page.fill('[data-field=pass]', 'correct horse') }
+  const fill = async () => { await page.fill('[data-field=name]', 'rb5009'); await page.fill('[data-field=addr]', '192.0.2.1'); await page.fill('[data-field=pass]', 'correct horse') }
   await page.goto(url); await page.waitForTimeout(500); await shot('01-tell')
   await fill(); await page.selectOption('#speed', '12'); await page.waitForTimeout(200); await shot('02-tell-filled')
   await page.click('[data-act=go-paste]'); await page.waitForTimeout(500); await shot('03-paste')

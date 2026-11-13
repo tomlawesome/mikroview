@@ -115,6 +115,7 @@ testing-and-ci skill (owner, 2026-09-08).
 ## live-topography-trace-list: a keyboard re-trace lands on no row
 
 - 2026-09-14 · 4a4655b2 (feature/wizard-upgrade-safety) · pipeline 1101, `gate:scenarios 4/4` · `the list stays open across a keyboard re-trace` and `the second row is now the traced one (-1)` -- `onIndex` came back `-1`, so the re-trace selected nothing rather than the wrong thing. The branch touches no topography code at all; `dev` passed the same scenario at e4296ef3 (pipeline 1100) an hour earlier, and the same branch passed it at bef16483 (pipeline 1102) with only banner-text and wizard changes in between.
+- 2026-10-11 · 5423a1c7 (feat/1202-gauntlet, manual `scripts/gate-remote.sh --shards 4`) · shard 4/4 · the same two checks, `onIndex` `-1` again. The branch's changes since 91584d9d, which passed this scenario on the same host hours earlier, touch no topography code (auth fixes, gauntlet v0.4.2, live-script helpers).
 
 ## live-topography-port-trace: waitForSelector(.note-t) times out (10 s) after other scenarios
 
@@ -224,6 +225,7 @@ each, recorded together because the cause is shared (#831's contention):
 
 ## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
 
+- 2026-10-11 · b00a5bd5 (feat/1202-gauntlet, #1451) · local full `go test ./... -race` in a fresh clone of the branch, coverage switch off · the same `Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`; the test's setup logged at 08:43:59, a second before a minute boundary, as the diagnosis below predicts. Re-ran 3/3 alone, unchanged code: passed. The branch's change there touches only internal/api's routeroscommands test. Second sighting.
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
 
 ## frontend state.svelte.test.ts: "costs about the same to append" (#1304 E2) timing test

@@ -29,7 +29,7 @@
 // shadow this scenario's own labels exactly as it once shadowed
 // live-token-copy.mjs's (see that file's HOST_IP comment).
 
-import { session, feedRaw, feedSyslog as syslog, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog as syslog, check, done, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-inline-editing'
@@ -67,7 +67,7 @@ for (let i = 0; i < 40 && !DEVICE; i++) {
 }
 check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: RULE, kind: 'ingest', device: DEVICE })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: RULE, kind: 'ingest', device: DEVICE }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 
 async function pushLeases(records) {

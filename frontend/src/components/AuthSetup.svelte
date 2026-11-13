@@ -70,7 +70,12 @@
       : "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes the admin.",
   )
 
-  async function createAdmin(setupCode: string, username: string, password: string): Promise<string | null> {
+  async function createAdmin(
+    setupCode: string,
+    username: string,
+    password: string,
+    forgetPassword: () => void,
+  ): Promise<string | null> {
     const err = await register(username, password, setupCode)
     if (err) return err
 
@@ -85,9 +90,15 @@
       // register() against an account that is already made. Treated the
       // same as startSSOLink() answering with an error string: the
       // confirmation screen below, with a working way in.
+      //
+      // #1202 U10: the link needs the caller's own password; the one just
+      // chosen is handed over (no second prompt). The form's copy is
+      // emptied as the call is made, and nothing here keeps it after.
       let result: { url: string } | string
       try {
-        result = await startSSOLink()
+        const call = startSSOLink(password)
+        forgetPassword()
+        result = await call
       } catch (err) {
         result = err instanceof Error ? err.message : String(err)
       }

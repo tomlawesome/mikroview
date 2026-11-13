@@ -30,8 +30,8 @@ once, reuse everywhere**; **check everything we can, and say so**.
 
 ## The data story
 
-Unchanged from round 3: the instance answers on `198.51.100.15:8080`;
-the router is `rb5009` at `198.51.100.1`, RouterOS **7.16.2**; its
+Unchanged from round 3: the instance answers on `192.0.2.15:8080`;
+the router is `rb5009` at `192.0.2.1`, RouterOS **7.16.2**; its
 other address is `203.0.113.1`. Clock: the same afternoon, 14:02
 onwards. Every scene is this one router on this one instance.
 
@@ -63,8 +63,8 @@ The address field that today sits above every step is gone from the
 steps. In its place, under the header on every step and on the ledger,
 one line in the quiet secondary colour:
 
-> Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at
-> 198.51.100.1 · **Change…**
+> Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at
+> 192.0.2.1 · **Change…**
 
 **Change…** reopens the first screen with the values filled in. Saving
 a change re-prints every affected block and marks each one **Paste
@@ -106,13 +106,13 @@ Open, it has two short lists and nothing else:
 **What MikroView checked** — one line per check, a tick or a cross,
 each cross followed by the fix in the same breath:
 
-- ✓ The certificate covers 198.51.100.15.
-- ✓ The log port is open for 198.51.100.1 until 14:17.
+- ✓ The certificate covers 192.0.2.15.
+- ✓ The log port is open for 192.0.2.1 until 14:17.
 - ✗ Lines are arriving from **203.0.113.1** and being refused. If
   that is rb5009, its logs leave from that address, not the one you
   told me → **Use 203.0.113.1 instead** (one button; it changes the
   router's own address and re-mints).
-- ✗ The block above was printed for 198.51.100.15:8080, but the
+- ✗ The block above was printed for 192.0.2.15:8080, but the
   address has changed since → **Paste again** (re-prints).
 
 **Only you can check** — questions, each with one plain sentence:
@@ -167,8 +167,8 @@ with the #1344 warning above the block.
   router".** One paste: the certificate fetch and import, then the
   logging action and rule, then the enrol line — the second half cannot
   succeed before the first, and both go in the same terminal. The
-  receipt is two lines: *certificate fetched by 198.51.100.1 · 14:02*
-  and *enrol line arrived from 198.51.100.1 · 14:03*; the Wait shows
+  receipt is two lines: *certificate fetched by 192.0.2.1 · 14:02*
+  and *enrol line arrived from 192.0.2.1 · 14:03*; the Wait shows
   whichever has not arrived, so diagnosis loses nothing. The "Nothing
   yet?" checks cover both halves.
 - **Register the router → the finish pane's primary.** It records
@@ -201,7 +201,7 @@ experience." The app's own dark voice stays; the weight comes out:
   640px measure, left-aligned, with generous vertical space between
   moves. The step list slims to a quiet rail: number-in-ring, title,
   and a receipt sub-line of at most one short line ("14:02 ·
-  198.51.100.1"); full receipts live on the finish pane.
+  192.0.2.1"); full receipts live on the finish pane.
 - **One box at a time.** No move has more than one bordered box open:
   the block, or the drawer, or the undo panel. Everything else is type
   on the background — no boxed notes, no boxed hints.

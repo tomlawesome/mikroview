@@ -151,11 +151,18 @@ describe('Builder', () => {
     expect(card('Spamhaus DROP').querySelector('.factsrow b')?.textContent).toBe('1,692')
   })
 
-  it('mints one ingest token for this router and sends it with the block request', async () => {
+  // #1202: a token needs the admin's password, so opening the page no
+  // longer mints one; the block is first built without the push part, and
+  // again with the token once the password is typed.
+  it('mints one ingest token for this router once the password is typed and sends it with the block request', async () => {
     await openOn(builder())
-    expect(createToken).toHaveBeenCalledTimes(1)
-    expect(createToken).toHaveBeenCalledWith('blocklist-rb5009', 'ingest', 'rb5009')
-    expect(vi.mocked(fetchBlocklistCommands).mock.calls[0][0]).toMatchObject({ device: 'rb5009', token: 'tok-1' })
+    expect(createToken).not.toHaveBeenCalled()
+    const field = await screen.findByLabelText(/password/i)
+    await fireEvent.input(field, { target: { value: 'hunter2' } })
+    await fireEvent.keyDown(field, { key: 'Enter' })
+    await waitFor(() => expect(createToken).toHaveBeenCalledTimes(1))
+    expect(createToken).toHaveBeenCalledWith('blocklist-rb5009', 'ingest', 'rb5009', 'hunter2')
+    await waitFor(() => expect(vi.mocked(fetchBlocklistCommands).mock.lastCall?.[0]).toMatchObject({ device: 'rb5009', token: 'tok-1' }))
     await blocklistState.load('rb5009', false)
     expect(createToken).toHaveBeenCalledTimes(1)
   })

@@ -27,10 +27,12 @@ Per-package percentages are computed by attributing each block in the Go
 coverage profile to the directory of its source file (the package), and
 summing statement counts weighted the same way `go test`'s own per-package
 summary line does: a package's coverage is (statements with count > 0) /
-(statements). It matches `go test`'s own "coverage: X% of statements"
-lines for the same profile because `go test`'s default -coverpkg only
-instruments the package under test, so nothing in the merged profile
-belongs to any package other than the one whose tests produced it.
+(statements). Every line counts, so each block must appear once: CI's
+profile is the unit-test profile merged with the real program's counts
+(#1451) by scripts/merge-coverprofiles.py, which writes each block once
+with its counts added. A package therefore reads higher here than `go
+test`'s own "coverage: X% of statements" line, by what only the running
+binary covers.
 
 Rules enforced, each one a `problems` entry below:
   - a package below its floor: coverage regressed, or a floor was set wrong.

@@ -4,7 +4,7 @@
 // configuration backups into (#394).
 //
 // Login: username is the device name, password is that device's ingest
-// token, checked against the same hash internal/auth's token store
+// token, checked against the same hash the token store (gauntlet's)
 // already keeps -- RouterOS's fetch has no key-based auth option
 // (measured, #394 note 10510). A login can write only inside its own
 // device's area, and can do nothing else: no listing, reading, deleting,
@@ -29,7 +29,8 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/logging"
 )
@@ -39,13 +40,13 @@ import (
 // so this package never decides where key material lives on disk.
 type Server struct {
 	Vault   *backupvault.Vault
-	Tokens  *auth.TokenStore
+	Tokens  *gauntlet.TokenStore
 	HostKey ssh.Signer
 	log     *slog.Logger
 }
 
 // New builds a Server. It does not listen until ListenAndServe is called.
-func New(vault *backupvault.Vault, tokens *auth.TokenStore, hostKey ssh.Signer) *Server {
+func New(vault *backupvault.Vault, tokens *gauntlet.TokenStore, hostKey ssh.Signer) *Server {
 	return &Server{Vault: vault, Tokens: tokens, HostKey: hostKey, log: logging.New("backupsftp")}
 }
 
@@ -75,7 +76,7 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, password []byte) (*ssh.Perm
 		s.log.Warn(fmt.Sprintf("refused an SFTP login from %s: no retention key configured -- the drop box is closed", conn.RemoteAddr()))
 		return nil, fmt.Errorf("backups are not accepted on this deployment")
 	}
-	tok, ok := s.Tokens.Authenticate(string(password), auth.TokenKindIngest, time.Now())
+	tok, ok := s.Tokens.Authenticate(string(password), gauntlet.TokenKindIngest, time.Now())
 	if !ok || tok.Device == "" || tok.Device != device {
 		s.log.Warn(fmt.Sprintf("refused an SFTP login for %q from %s: not a valid ingest token for that device", device, conn.RemoteAddr()))
 		return nil, fmt.Errorf("authentication failed")

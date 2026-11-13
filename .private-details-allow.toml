@@ -1,0 +1,8 @@
+# Values the shared private-details check (ai/agent-infra#32) allows on
+# purpose, each for the named rules only. Never list commits here.
+
+[[allowlists]]
+description = "the drop-list's test range: it refuses every reserved and documentation range by design, so its tests need an ordinary public /24 (see internal/droplist/validate_test.go)"
+targetRules = ["ip-address"]
+regexTarget = "match"
+regexes = ['''^203\.0\.114\.[0-9]{1,3}$''']

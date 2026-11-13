@@ -583,6 +583,14 @@ export interface AuthSession {
   // an older server, read as false -- same reasoning as
   // mustChangePassword above.
   mustEnrolSecondFactor?: boolean
+  // #1202, gauntlet's session body. mustEnrolPasskey: an admin held at the
+  // passkey door until one is registered; adminPasskeyRequired: the admin
+  // passkey rule is in force on this deployment; resumable: a timed-out
+  // session could be resumed with the password alone (not used in
+  // v0.7.0). Gauntlet omits them when false; absent reads as false.
+  mustEnrolPasskey?: boolean
+  adminPasskeyRequired?: boolean
+  resumable?: boolean
   ssoAvailable: boolean
   // This session's own start (#677's sessions row: "signed in 4 d") --
   // when this login happened, not when the account was created. Absent
@@ -608,6 +616,8 @@ export interface AuthSession {
     count: number
     status: 'ready' | 'unset' | 'ip' | 'insecure'
     origin?: string
+    // #1202: whether passkey-alone sign-in is on (off in v0.7.0, #1443).
+    signIn?: boolean
   }
 }
 
@@ -633,6 +643,9 @@ export interface UserSummary {
   // server, read as 0 -- same reasoning as hasTOTP above. Never nonzero
   // for an SSO account, same reasoning too.
   passkeyCount?: number
+  // #1202: an admin with no passkey yet, held at the passkey door under
+  // the admin passkey rule. Gauntlet omits it when false; absent reads as false.
+  heldForPasskey?: boolean
 }
 
 // Mirrors internal/api/auth.go's totp enrol response (#1249): the
@@ -686,6 +699,9 @@ export interface ApiToken {
   device?: string
   createdAt: string
   lastUsedAt?: string
+  // #1202: when the token stops working (RFC 3339). Absent on a token
+  // that never expires.
+  expiresAt?: string
   value?: string
 }
 

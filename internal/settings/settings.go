@@ -363,7 +363,7 @@ func (s *Store) ClearGeoKey(source string) error {
 // persistLocked writes the document if persistence is configured. Every
 // caller changes an operator-set value and returns this error rather
 // than swallowing it -- there is no log-and-carry-on variant in this
-// package, unlike internal/auth's.
+// package, unlike gauntlet's.
 func (s *Store) persistLocked() error {
 	if s.backend == nil {
 		return nil

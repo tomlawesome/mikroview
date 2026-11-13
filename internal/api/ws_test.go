@@ -160,7 +160,7 @@ func TestHandleWSClosesOnLogout(t *testing.T) {
 	defer ts.Close()
 
 	client := registerAdmin(t, s, ts)
-	sessionID := sessionIDFromJar(t, client, ts.URL)
+	sessionID := sessionIDFromJar(t, s, client, ts.URL)
 
 	conn := dialWSAs(t, ts, sessionID)
 	defer conn.Close()
@@ -189,15 +189,15 @@ func TestHandleWSClosesOnPasswordChange(t *testing.T) {
 	defer ts.Close()
 
 	admin := registerAdmin(t, s, ts)
-	other := loggedInClient(t, ts.URL, "admin", "password123")
-	otherSessionID := sessionIDFromJar(t, other, ts.URL)
+	other := loggedInClient(t, ts.URL, "admin", fixtureAdminPassword)
+	otherSessionID := sessionIDFromJar(t, s, other, ts.URL)
 
 	conn := dialWSAs(t, ts, otherSessionID)
 	defer conn.Close()
 	assertWSAlive(t, s, conn, 1)
 
 	resp := postJSON(t, admin, ts.URL+"/api/auth/password", changePasswordRequest{
-		CurrentPassword: "password123",
+		CurrentPassword: fixtureAdminPassword,
 		NewPassword:     "a-brand-new-password",
 	})
 	resp.Body.Close()
@@ -219,30 +219,23 @@ func TestHandleWSClosesOnAccountDeletion(t *testing.T) {
 
 	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{
-		Username: "viewer", Password: "password456", Role: "user",
+		Username: "viewer", Password: fixtureUserPassword, Role: "user",
 	}).Body.Close()
 	viewer, ok := s.Auth.ByUsername("viewer")
 	if !ok {
 		t.Fatal("the account under test was not created")
 	}
 
-	viewerClient := loggedInClient(t, ts.URL, "viewer", "password456")
+	viewerClient := loggedInClient(t, ts.URL, "viewer", fixtureUserPassword)
 	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/ws below
-	viewerSessionID := sessionIDFromJar(t, viewerClient, ts.URL)
+	viewerSessionID := sessionIDFromJar(t, s, viewerClient, ts.URL)
 
 	conn := dialWSAs(t, ts, viewerSessionID)
 	defer conn.Close()
 	assertWSAlive(t, s, conn, 1)
 
-	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+viewer.ID, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(csrfHeaderName, csrfHeaderValue)
-	resp, err := admin.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// gauntlet asks the admin for their password to delete an account.
+	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+viewer.ID, map[string]string{"password": fixtureAdminPassword})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("delete user returned %d, want 200", resp.StatusCode)
@@ -262,7 +255,7 @@ func TestHandleWSStaysOpenForAValidSession(t *testing.T) {
 	defer ts.Close()
 
 	client := registerAdmin(t, s, ts)
-	sessionID := sessionIDFromJar(t, client, ts.URL)
+	sessionID := sessionIDFromJar(t, s, client, ts.URL)
 
 	conn := dialWSAs(t, ts, sessionID)
 	defer conn.Close()

@@ -62,10 +62,10 @@ func decodeRouterRow(t *testing.T, resp *http.Response, want int) routerBackupRo
 
 func TestKeepControlsAreAdminOnly(t *testing.T) {
 	s, ts, admin, gen := vaultLockFixture(t)
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	user := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before the keep routes below
 
 	body := routerBackupKeepRequest{Comment: "before the 7.16 upgrade"}

@@ -24,6 +24,7 @@ import {
   beginPasskeyLogin,
   beginPasskeyRegistration,
   finishPasskeyRegistration,
+  PASSKEY_STEP_EXPIRED,
   submitPasskeyLoginAssertion,
   type PasskeyRegistrationFinish,
 } from './api'
@@ -106,6 +107,23 @@ export async function loginWithPasskey(): Promise<string | null> {
   if (!passkeysSupported()) {
     return "This browser can't use a passkey -- use another way in below."
   }
+  // #1202 U11: a #step-expired answering the assertion means only the
+  // passkey ceremony lapsed; the pending login still holds, so the
+  // passkey step starts again on its own (begin -> prompt -> finish)
+  // without sending the person back to the password form. A begin
+  // answering PENDING_LOGIN_EXPIRED is the pending login being gone, and
+  // is returned as it is. Bounded, so a server that keeps answering
+  // step-expired ends in PASSKEY_STEP_EXPIRED's words instead of looping.
+  let result: string | null = PASSKEY_STEP_EXPIRED
+  for (let attempt = 0; attempt < MAX_PASSKEY_LOGIN_ATTEMPTS && result === PASSKEY_STEP_EXPIRED; attempt++) {
+    result = await passkeyLoginCeremony()
+  }
+  return result
+}
+
+const MAX_PASSKEY_LOGIN_ATTEMPTS = 3
+
+async function passkeyLoginCeremony(): Promise<string | null> {
   const begin = await beginPasskeyLogin()
   if (typeof begin === 'string') return begin
 

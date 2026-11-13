@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/ingest"
@@ -39,7 +40,7 @@ func deviceTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 // issue #1291: the admin's own password, re-proving identity at the
 // moment of minting, and the one address the token may be redeemed
 // from. testAdminPassword is what setUpAdmin registers the admin with.
-const testAdminPassword = "password123"
+const testAdminPassword = fixtureAdminPassword
 
 func mintBody(addr string) deviceEnrolmentRequest {
 	return deviceEnrolmentRequest{Password: testAdminPassword, ExpectedAddress: addr}
@@ -132,10 +133,10 @@ func TestDeviceCreateReportsAFailedSaveAndChangesNothing(t *testing.T) {
 func TestDeviceDeleteRequiresAdmin(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "viewer")
 
 	resp := deleteNoBody(t, viewerClient, ts.URL+"/api/devices/hap-ax3")
@@ -226,11 +227,11 @@ func TestDeviceDeleteRevokesItsIngestTokenAndSaysSoInTheAudit(t *testing.T) {
 	if !ok {
 		t.Fatal("the admin account was not created")
 	}
-	raw, tok, err := s.Tokens.Create("setup-hap-ax3", auth.TokenKindIngest, "hap-ax3", adminUser, time.Now())
+	raw, tok, err := s.Tokens.Create("setup-hap-ax3", gauntlet.TokenKindIngest, "hap-ax3", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
-	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); !valid {
+	if _, valid := s.Tokens.Authenticate(raw, gauntlet.TokenKindIngest, time.Now()); !valid {
 		t.Fatal("the minted ingest token does not authenticate before delete")
 	}
 
@@ -240,10 +241,10 @@ func TestDeviceDeleteRevokesItsIngestTokenAndSaysSoInTheAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 204", resp.StatusCode)
 	}
 
-	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); valid {
+	if _, valid := s.Tokens.Authenticate(raw, gauntlet.TokenKindIngest, time.Now()); valid {
 		t.Error("the device's ingest token still authenticates after it was forgotten")
 	}
-	for _, other := range s.Tokens.ByKind(auth.TokenKindIngest) {
+	for _, other := range s.Tokens.ByKind(gauntlet.TokenKindIngest) {
 		if other.ID == tok.ID {
 			t.Errorf("the deleted device's token %q is still listed", other.ID)
 		}
@@ -271,14 +272,14 @@ func TestDeviceDeleteRevokesItsIngestTokenAndSaysSoInTheAudit(t *testing.T) {
 // it under Tokens instead, and the audit line says the same.
 func TestDeviceDeleteSaysSoWhenItsTokenCannotBeRevoked(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
-	budget := &recoveryCodesSaveBudgetBackend{left: 1} // Create saves once; Revoke's save fails
-	tokens, err := auth.OpenTokenStoreWithBackend(budget)
+	budget := &saveBudgetBackend{left: 1} // Create saves once; Revoke's save fails
+	tokens, err := gauntlet.OpenTokenStore(budget, gauntlet.TokenOptions{Kinds: TokenKinds})
 	if err != nil {
-		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+		t.Fatalf("OpenTokenStore: %v", err)
 	}
 	s.Tokens = tokens
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
-	raw, _, err := s.Tokens.Create("setup-hap-ax3", auth.TokenKindIngest, "hap-ax3", nil, time.Now())
+	raw, _, err := s.Tokens.Create("setup-hap-ax3", gauntlet.TokenKindIngest, "hap-ax3", nil, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -292,7 +293,7 @@ func TestDeviceDeleteSaysSoWhenItsTokenCannotBeRevoked(t *testing.T) {
 	if !strings.Contains(string(body), "Tokens") {
 		t.Errorf("body = %q, want it to send the operator to Tokens to revoke it", body)
 	}
-	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); !valid {
+	if _, valid := s.Tokens.Authenticate(raw, gauntlet.TokenKindIngest, time.Now()); !valid {
 		t.Error("the token stopped authenticating, but its revoke was never saved")
 	}
 	var detail string
@@ -633,11 +634,11 @@ func TestDeviceRegisterRequiresAdmin(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
 	postJSON(t, admin, ts.URL+"/api/auth/users",
-		createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+		createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewer := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewer, ts.URL+"/api/auth/login",
-		credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+		credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/devices/.../registration below
 
 	resp := postJSON(t, viewer, ts.URL+"/api/devices/hap-ax3/registration",
@@ -705,8 +706,16 @@ func TestDeviceEnrolmentRebindRefusesAnAddressNeverTurnedAway(t *testing.T) {
 // password ever being checked. The vault-unlock gate already keys its
 // own bucket separately (vaultUnlockLimiterKey); this does the same.
 func TestDeviceEnrolmentMintDoesNotStarveTheAdminsLogin(t *testing.T) {
-	s, ts, admin := deviceTestServer(t)
-	s.LoginLimiter = auth.NewLoginLimiter(3, time.Minute)
+	// The tight limiter goes in before the gate is built over it, so the
+	// sign-in below and the mint's re-check share one limiter, as they do
+	// in the server -- in separate budgets.
+	s := newAuthTestServer(t)
+	s.Devices = device.NewRegistry(nil)
+	s.LoginLimiter = mustLimiter(t, 3, time.Minute)
+	mustGate(t, s)
+	ts := httptest.NewServer(s.Routes())
+	t.Cleanup(ts.Close)
+	admin := setUpAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
 
 	// The admin fat-fingers their password until the mint stops even
