@@ -825,6 +825,13 @@ func enrol(t *testing.T, a *app, c *client, pass string) (string, []string) {
 	if e.Secret == "" {
 		t.Fatalf("totp/enrol returned no secret: %s", r.Body)
 	}
+	// The confirm code is the previous step's, which leaves the current
+	// and next steps unused for the sign-ins that follow (the replay guard
+	// refuses any step at or below the last one accepted). The server
+	// checks one step either side of its own, so a step boundary passing
+	// between making the code and the server reading it would leave the
+	// code two steps old and refused. Start clear of the boundary.
+	awayFromStepEdge(a)
 	r = c.post("/api/auth/totp/confirm", map[string]string{"code": totpCode(t, e.Secret, a.serverNow().Add(-30*time.Second))})
 	wantStatus(t, "totp/confirm", r, 200)
 	var cf struct {
@@ -839,6 +846,19 @@ func enrol(t *testing.T, a *app, c *client, pass string) (string, []string) {
 	r = c.post("/api/auth/recovery-codes/confirm", map[string]any{})
 	wantStatus(t, "recovery-codes/confirm", r, 200)
 	return e.Secret, cf.RecoveryCodes
+}
+
+// awayFromStepEdge waits, if the server's clock is within stepMargin of
+// the end of its 30-second authenticator-code step, until the next step
+// has begun, so a code made now stays inside the server's window for
+// at least stepMargin.
+func awayFromStepEdge(a *app) {
+	const step, stepMargin = 30 * time.Second, 5 * time.Second
+	now := a.serverNow()
+	left := step - time.Duration(now.UnixNano()%int64(step))
+	if left < stepMargin {
+		time.Sleep(left + 100*time.Millisecond)
+	}
 }
 
 // bootstrap starts an instance, creates an admin and gives it an
