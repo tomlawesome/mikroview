@@ -792,6 +792,75 @@ describe('a long port label stays inside its own band, not clipped at the rig ed
   })
 })
 
+// #1430: the v0.7.0 release capture of `ether1 · input` drew :445 SMB
+// and :23 Telnet on top of each other. Both carriers were near the
+// band's busiest, so both tips sat within a line of the band head, and
+// a far-off third carrier (assignX maps ports onto [10, 90] by number)
+// squeezed their x together. placeLabel lifts a label clear only while
+// there is headroom above it; with none, it drew the label where it
+// was, overlapping. The rule now is the foot's own (#700): the tallest
+// peak keeps its label and a label with no room folds.
+function crowdedTopEvents(now: number) {
+  const at = (dstPort: number, n: number, ageMs: number) =>
+    Array.from({ length: n }, () =>
+      makeEvent({
+        chain: 'input',
+        inInterface: 'ether1',
+        dstPort,
+        time: new Date(now - ageMs).toISOString(),
+      }),
+    )
+  // :445 and :23 both near the band's nowMax (tips at the top of the
+  // spectrum); :51820 active only earlier in the window, so it is a
+  // carrier for assignX's port range but draws no needle now.
+  return [...at(445, 40, 1000), ...at(23, 38, 1000), ...at(51820, 1, 10 * 60 * 1000)]
+}
+
+function peakLabelBoxes(container: HTMLElement) {
+  // CHAR_W_10, LABEL_ASCENT and LABEL_DESCENT in Fall.svelte: the rig's
+  // own measured label metrics (#1114), reproduced here so the test
+  // measures the same box placeLabel reasons about.
+  const CHAR_W_10 = 6.5
+  return [...container.querySelectorAll('text.plab:not(.carrier-label)')].map((el) => {
+    const text = el.textContent ?? ''
+    const x = Number(el.getAttribute('x'))
+    const y = Number(el.getAttribute('y'))
+    const w = text.length * CHAR_W_10
+    const anchor = el.getAttribute('text-anchor')
+    const x1 = anchor === 'end' ? x - w : anchor === 'start' ? x : x - w / 2
+    return { text, x1, x2: x1 + w, y1: y - 9, y2: y + 3 }
+  })
+}
+
+describe('a peak label with no headroom folds rather than overlapping (#1430)', () => {
+  it('never draws two peak labels across each other, and keeps the tallest one', async () => {
+    const { container } = await renderFall({
+      boundaries: [boundary({ key: 'input|ether1|', chain: 'input', inInterface: 'ether1', outInterface: '', label: 'ether1 · input' })],
+      events: crowdedTopEvents(Date.now()),
+    })
+    const boxes = peakLabelBoxes(container)
+    expect(boxes.map((b) => b.text)).toContain(':445 SMB')
+    for (let a = 0; a < boxes.length; a++) {
+      for (let b = a + 1; b < boxes.length; b++) {
+        const p = boxes[a]
+        const q = boxes[b]
+        const overlaps = p.x1 < q.x2 && q.x1 < p.x2 && p.y1 < q.y2 && q.y1 < p.y2
+        expect(overlaps, `${p.text} is drawn across ${q.text}`).toBe(false)
+      }
+    }
+  })
+
+  it('still lifts a label clear when there is room, rather than folding it', async () => {
+    // The #1254 fixture: NTP is small, so it has the whole spectrum's
+    // height to lift through, and must still be placed.
+    const { container } = await renderFall({
+      boundaries: [spectrumBandBoundary],
+      events: spectrumBandEvents(Date.now()),
+    })
+    expect(peakLabelBoxes(container).map((b) => b.text)).toContain(':123 NTP')
+  })
+})
+
 // The band sizing policy (#722): an ideal width, elastic within limits,
 // and pages beyond them. The ResizeObserver stub above means `.rig`
 // always reports a 0 clientWidth under jsdom, so every case here runs
