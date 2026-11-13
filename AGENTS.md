@@ -366,6 +366,11 @@ dependencies rule asks for, written on the issue. Attribution terms still bind d
 is fetched rather than shipped — Spamhaus DROP requires credit, and its
 date and copyright text must travel with the data.
 
+The licence gate (`security:licence-policy`) also looks inside shipped
+packages: vendored packages face the same licence rules, and bundled
+assets, embedded files and inlined third-party code need a reviewed
+`bundled-assets:` entry in `supply-chain/licence-policy.yml` (#1432).
+
 ## Pin to the latest version
 
 The Go toolchain, npm packages, Docker base images and GitHub Actions are
