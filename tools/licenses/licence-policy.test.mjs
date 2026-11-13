@@ -452,3 +452,44 @@ describe("Go modules: vendored code and embedded assets", () => {
     assert.equal(passing.status, 0, passing.output);
   });
 });
+
+describe("loadPolicy bundled-assets licence check", () => {
+  function loadText(lines) {
+    const dir = scratchDir();
+    const policyPath = join(dir, "policy.yml");
+    writeFileSync(policyPath, lines.join("\n") + "\n", "utf8");
+    return loadPolicy(policyPath);
+  }
+  const ENTRY = "  - pkg:npm/qrcode@1.5.4 lib/core/qrcode.js";
+
+  it("throws, naming the entry, when a bundled-assets licence is not allowed", () => {
+    assert.throws(
+      () => loadText(["allow-licenses:", "  - MIT", "bundled-assets:", `${ENTRY} GPL-3.0`]),
+      (err) => err instanceof Error && /pkg:npm\/qrcode@1\.5\.4/u.test(err.message) && /lib\/core\/qrcode\.js/u.test(err.message),
+    );
+  });
+
+  it("throws when an AND expression has a disallowed part", () => {
+    assert.throws(
+      () => loadText(["allow-licenses:", "  - MIT", "bundled-assets:", `${ENTRY} MIT AND GPL-3.0`]),
+      /qrcode/u,
+    );
+  });
+
+  it("loads when an OR expression has one allowed part", () => {
+    const policy = loadText(["allow-licenses:", "  - MIT", "bundled-assets:", `${ENTRY} MIT OR GPL-3.0`]);
+    assert.equal(policy.assetReviews.length, 1);
+  });
+
+  it("loads an allowed entry when allow-licenses comes after bundled-assets", () => {
+    const policy = loadText(["bundled-assets:", `${ENTRY} MIT`, "allow-licenses:", "  - MIT"]);
+    assert.equal(policy.assetReviews.length, 1);
+  });
+
+  it("throws for a disallowed entry even when allow-licenses comes after bundled-assets", () => {
+    assert.throws(
+      () => loadText(["bundled-assets:", `${ENTRY} GPL-3.0`, "allow-licenses:", "  - MIT"]),
+      /qrcode/u,
+    );
+  });
+});
