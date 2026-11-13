@@ -118,13 +118,13 @@ func TestRouterBackupSwitchRequiresAdmin(t *testing.T) {
 
 	// TestRouterBackupsListNonAdminForbidden's own viewer-account recipe:
 	// a second account, role viewer, signed in on its own client.
-	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", map[string]string{"username": "viewer1", "password": "password123", "role": "viewer"})
+	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", map[string]string{"username": "viewer1", "password": fixtureAdminPassword, "role": "viewer"})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("creating the viewer account: status = %d", resp.StatusCode)
 	}
 	viewer := &http.Client{Jar: mustCookieJar(t)}
-	loginResp := postJSON(t, viewer, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer1", Password: "password123"})
+	loginResp := postJSON(t, viewer, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer1", Password: fixtureAdminPassword})
 	loginResp.Body.Close()
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("viewer login status = %d", loginResp.StatusCode)

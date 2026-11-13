@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -20,12 +21,12 @@ import (
 // refuses to mint anything unpersisted -- see Persisted -- so this needs a
 // real, if throwaway, backend the same way internal/auth's own
 // eachAuthBackend "file" case does), and a memory-only audit log.
-func newOrphanSweepFixtures(t *testing.T) (*device.Registry, *auth.TokenStore, *audit.Store) {
+func newOrphanSweepFixtures(t *testing.T) (*device.Registry, *gauntlet.TokenStore, *audit.Store) {
 	t.Helper()
 	devices := device.NewRegistry(nil)
-	tokens, err := auth.OpenTokenStoreWithBackend(persist.NewFileBackend(filepath.Join(t.TempDir(), "tokens.json")))
+	tokens, err := gauntlet.OpenTokenStore(persist.NewFileBackend(filepath.Join(t.TempDir(), "tokens.json")), gauntlet.TokenOptions{Kinds: TokenKinds})
 	if err != nil {
-		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+		t.Fatalf("OpenTokenStore: %v", err)
 	}
 	auditStore, err := audit.OpenWithBackend(nil)
 	if err != nil {
@@ -40,9 +41,9 @@ func newOrphanSweepFixtures(t *testing.T) (*device.Registry, *auth.TokenStore, *
 // entry stamped with the real clock (audit.Store.Record has no such
 // parameter -- see TestRevokeOrphanedIngestTokensSkipsATokenCreatedAfterRemoval
 // for why that is what drives the ordering in these tests instead).
-func mustCreateIngestToken(t *testing.T, tokens *auth.TokenStore, deviceID string, createdAt time.Time) *auth.Token {
+func mustCreateIngestToken(t *testing.T, tokens *gauntlet.TokenStore, deviceID string, createdAt time.Time) *gauntlet.Token {
 	t.Helper()
-	_, tok, err := tokens.Create("push token", auth.TokenKindIngest, deviceID, nil, createdAt)
+	_, tok, err := tokens.Create("push token", gauntlet.TokenKindIngest, deviceID, nil, createdAt)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -50,7 +51,7 @@ func mustCreateIngestToken(t *testing.T, tokens *auth.TokenStore, deviceID strin
 }
 
 // tokenStillExists reports whether id is still a live token in tokens.
-func tokenStillExists(tokens *auth.TokenStore, id string) bool {
+func tokenStillExists(tokens *gauntlet.TokenStore, id string) bool {
 	for _, tok := range tokens.List() {
 		if tok.ID == id {
 			return true
@@ -138,14 +139,14 @@ func TestRevokeOrphanedIngestTokensSkipsADeviceBackInTheRegistry(t *testing.T) {
 
 // TestIsRevocationCandidateSkipsANonIngestToken covers (d): only ingest
 // tokens are ever scoped to a device, so no other kind is ever a
-// candidate. auth.TokenStore.Create refuses to mint a non-ingest token
+// candidate. gauntlet.TokenStore.Create refuses to mint a non-ingest token
 // that carries a Device at all (ErrTokenDeviceNotAllowed), so this
 // exercises isRevocationCandidate directly against a hand-built Token --
 // the only way to ask the question, and also the defensive case: an old
 // store file predating that rule must not be trusted to have obeyed it.
 func TestIsRevocationCandidateSkipsANonIngestToken(t *testing.T) {
 	devices, _, _ := newOrphanSweepFixtures(t)
-	tok := auth.Token{ID: "t1", Kind: auth.TokenKindAPI, Device: "router-1", CreatedAt: time.Now()}
+	tok := gauntlet.Token{ID: "t1", Kind: gauntlet.TokenKindAPI, Device: "router-1", CreatedAt: time.Now()}
 
 	if isRevocationCandidate(tok, devices) {
 		t.Fatalf("a non-ingest token must never be a revocation candidate: %+v", tok)
@@ -159,7 +160,7 @@ func TestIsRevocationCandidateSkipsANonIngestToken(t *testing.T) {
 // the non-ingest case above, for the same reason.
 func TestIsRevocationCandidateSkipsATokenWithNoDevice(t *testing.T) {
 	devices, _, _ := newOrphanSweepFixtures(t)
-	tok := auth.Token{ID: "t1", Kind: auth.TokenKindIngest, Device: "", CreatedAt: time.Now()}
+	tok := gauntlet.Token{ID: "t1", Kind: gauntlet.TokenKindIngest, Device: "", CreatedAt: time.Now()}
 
 	if isRevocationCandidate(tok, devices) {
 		t.Fatalf("an ingest token with no device must never be a revocation candidate: %+v", tok)

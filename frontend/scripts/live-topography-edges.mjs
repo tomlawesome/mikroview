@@ -18,7 +18,7 @@
 // and lanes fan at the waist card instead of running up the corridor
 // side by side.
 
-import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog as syslog, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
@@ -58,7 +58,7 @@ syslog(30, 'topo-edges-traffic')
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-edges', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-edges', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value

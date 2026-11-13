@@ -44,6 +44,10 @@ default:
 
 variables:
   GOFLAGS: "-mod=readonly"
+  # #1202: gauntlet is fetched straight from GitHub, never through the public
+  # Go proxy or checksum database (resolving it there would publish the
+  # version permanently). GOPRIVATE also sets GONOSUMDB.
+  GOPRIVATE: "github.com/tomlawesome/gauntlet"
 
 # #1091: the only thing this workflow:rules block exists for is to set
 # NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
@@ -369,7 +373,7 @@ workflow:
 # fetches; a fixed key (not lockfile- or go.mod-keyed) because nothing in
 # the repo names which fixture versions exist -- the registry does, and
 # the script itself decides what is missing. Both jobs run as root in an
-# unmodified golang:1.27.3 container, so there is no cross-uid risk here.
+# unmodified golang:1.27.4 container, so there is no cross-uid risk here.
 .upgrade_fixtures_cache_entry: &upgrade_fixtures_cache_entry
   key: upgrade-fixtures
   paths:
@@ -406,6 +410,23 @@ workflow:
 # before it passed -- never in `after_script`, which runs whatever the job
 # did, including a failure before this line.
 .reuse_evidence: &reuse_evidence node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
+
+# #1451: coverage of the real program, merged into the unit-test profile.
+# test:go and test:postgres run tests with MIKROVIEW_COVERDIR set, so every
+# binary those tests start is built with -cover and writes its counts
+# there (internal/authe2e's coverDir); this turns them into a text profile
+# (Go's documented method, https://go.dev/doc/build-cover) and merges it
+# with coverage-unit.out into coverage.out, each block once, covered if
+# either side covered it. No counts at all means the switch broke: fail,
+# rather than measure the unit tests alone and call it the whole figure.
+.merge_program_coverage: &merge_program_coverage |
+  covdir="$CI_PROJECT_DIR/.coverdata/go"
+  if ! ls "$covdir"/covcounters.* >/dev/null 2>&1; then
+    echo "no coverage counts from the real program in $covdir (#1451)"
+    exit 1
+  fi
+  go tool covdata textfmt -i="$covdir" -o=coverage-program.out
+  python3 scripts/merge-coverprofiles.py coverage.out coverage-unit.out coverage-program.out
 
 # ---------------------------------------------------------------------------
 # POLICY — the three-lane promotion order, dev -> preview -> main, with no
@@ -548,11 +569,12 @@ lint:script-tests:
     - bash scripts/ci-reuse-gate.test.sh
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
+    - bash scripts/merge-coverprofiles.test.sh
 
 lint:go:
   stage: lint
   tags: [light]
-  image: golang:1.27.3
+  image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go build ./...
@@ -614,7 +636,7 @@ lint:supply-chain-pins:
 test:go:
   stage: test
   # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
-  image: golang:1.27.3
+  image: golang:1.27.4
   # Not gated by #1038, and must not be: five tests read
   # docs/configuration.md and assert on its contents (ca_docs_test.go,
   # migrate_cli_test.go, internal/api/route_docs_test.go,
@@ -655,10 +677,20 @@ test:go:
     # 430-600s under -race on the shared runner before #1392 cut its
     # password-hashing cost; the timeout is here to catch a hang, not to
     # time the suite.
-    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -timeout 20m -coverprofile=coverage.out"
+    #
+    # #1451: MIKROVIEW_COVERDIR makes every test that starts the real
+    # program (internal/authe2e's binary, internal/api's `go run` of
+    # scripts/routeroscommands) build it with -cover and leave its counts
+    # there; covdata turns them into a text profile, and the merge adds
+    # them to the unit-test profile block by block, so coverage.out counts
+    # code run from outside as well as code called directly. Unset (a
+    # plain local `go test`), nothing changes.
+    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test MIKROVIEW_COVERDIR='$CI_PROJECT_DIR/.coverdata/go' go test ./... -race -timeout 20m -coverprofile=coverage-unit.out"
+    - *merge_program_coverage
     # #1333: the ratchet against supply-chain/coverage-floors.yml. Runs as
-    # root (back from `su` above), which is fine -- coverage.out is
-    # ci-test-owned but world-readable, and nothing below writes to it.
+    # root (back from `su` above), which is fine -- the profiles are
+    # ci-test-owned but world-readable, and the merge writes coverage.out
+    # beside them as root (after_script hands everything back).
     - python3 scripts/coverage-floor.py coverage.out
   # The runner reuses its build directory between pipelines, so leaving the
   # checkout owned by ci-test hands the next pipeline's root-run jobs a
@@ -668,6 +700,8 @@ test:go:
   artifacts:
     paths:
       - coverage.out
+      - coverage-unit.out
+      - coverage-program.out
     expire_in: 1 week
 
 test:frontend:
@@ -726,8 +760,8 @@ test:build-checks:
     - *go_toolchain_cache_entry
   script:
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.3.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - (cd frontend && npm ci && npm run build)
     - node frontend/scripts/check-bundle-budget.mjs
@@ -749,7 +783,7 @@ test:build-checks:
 test:postgres:
   stage: test
   tags: [light]
-  image: golang:1.27.3
+  image: golang:1.27.4
   <<: *dev_or_mr_code
   # #1304 item E8: shared with test:go above -- see
   # upgrade_fixtures_cache_entry and the comment on test:go's cache.
@@ -812,7 +846,23 @@ test:postgres:
     # Postgres-backed statements (see supply-chain/coverage-floors.yml's
     # header), and this run, with MIKROVIEW_TEST_POSTGRES set above, is a
     # strict superset of what test:go covers for them.
-    - go test -race -count=1 -coverprofile=coverage-postgres.out ./internal/persist/... ./internal/matchlog/...
+    - go test -race -count=1 -coverprofile=coverage-unit.out ./internal/persist/... ./internal/matchlog/...
+    # internal/authe2e's Postgres tests (#1202): the real binary against
+    # this job's database. They skip without MIKROVIEW_TEST_POSTGRES, so
+    # until now they ran nowhere in CI. Only those tests, by -run, not the
+    # whole package: test:go already runs the rest, and the whole package
+    # took about 4.6 minutes here without -race against about 2 with it
+    # for these alone. 'Postgres|TokensRow' matches every test in the
+    # package that opens the database (newPG); a new one has to carry
+    # one of those words to run here. Its own line, so -run does not
+    # filter the two packages above. No -coverprofile of its own: these
+    # test the binary from outside, so what they cover is the binary's run
+    # (#1451, MIKROVIEW_COVERDIR as in test:go), merged into
+    # coverage-postgres.out below -- only persist's and matchlog's share
+    # of it is checked here.
+    - MIKROVIEW_COVERDIR="$CI_PROJECT_DIR/.coverdata/go" go test -race -count=1 -run 'Postgres|TokensRow' ./internal/authe2e/...
+    - *merge_program_coverage
+    - mv coverage.out coverage-postgres.out
     # The ratchet against postgres-floors: in supply-chain/coverage-floors.yml
     # -- the same mechanism test:go's coverage-floor.py call uses, scoped to
     # just the two packages this job measures.
@@ -822,6 +872,8 @@ test:postgres:
     paths:
       - ci-reuse-evidence/
       - coverage-postgres.out
+      - coverage-unit.out
+      - coverage-program.out
     expire_in: 1 week
 
 # Docker-in-Docker for every job that needs a Docker daemon (#1457,
@@ -931,10 +983,23 @@ test:container:
     - *reuse_gate
     - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
     - docker build --tag "$APP" .
+    # From v0.7.0 the server refuses to start without a key (#1202, ruling
+    # 2), so the job makes a throwaway one the way install.sh does: in a
+    # volume, written by a helper container, mounted read-only. A volume
+    # rather than a bind mount because this socket is the host's daemon,
+    # which cannot see the job's own filesystem.
+    - docker volume create "$APP-etc" >/dev/null
+    - >-
+      docker run --rm -v "$APP-etc:/etc/mikroview" alpine:3.24 sh -c
+      'mkdir -p /etc/mikroview/keys &&
+      head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key &&
+      chown 1000:1000 /etc/mikroview/keys/history.key &&
+      chmod 600 /etc/mikroview/keys/history.key'
     - >-
       docker run --detach --name "$APP"
       --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
       --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
+      -v "$APP-etc:/etc/mikroview:ro"
       --cap-drop ALL --security-opt no-new-privileges
       --pids-limit 64 --memory 128m --cpus 0.5
       "$APP"
@@ -1668,8 +1733,8 @@ security:gosec:
     # need.
     - apk add --no-cache curl
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.3.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
@@ -1695,7 +1760,7 @@ security:gosec:
 security:govulncheck:
   stage: security
   tags: [light]
-  image: golang:1.27.3
+  image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
@@ -1733,7 +1798,7 @@ security:govulncheck:
 security:fuzz:
   stage: security
   tags: [light]
-  image: golang:1.27.3
+  image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
   timeout: 15m
   script:
@@ -1817,8 +1882,8 @@ security:licence-policy:
   script:
     - node --test tools/licenses/licence-policy.test.mjs
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.3.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     # `go install` drops the binary in $(go env GOPATH)/bin, which the node
     # image does not have on PATH; pipeline 287 failed with "command not
@@ -2272,7 +2337,7 @@ check:upgrade-fixture-recorded:
 
 chr-exercise:run:
   stage: chr-exercise
-  image: golang:1.27.3
+  image: golang:1.27.4
   # #952: this job pushes chr/last-run.json to the chr-reports branch on
   # every run (scripts/chr-report.sh) and, on a fully clean exercise, also
   # pushes a branch and opens a merge request

@@ -4,10 +4,23 @@ package persist
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
+
+// ErrPlaintextDocument is the refusal of a document that parses as JSON
+// but is not sealed (#1202, ruling 19). Every store file MikroView v0.7.0
+// writes is sealed, and there is no sealing in place: a plaintext one
+// was written by a release that ran without a key, or put there by
+// something else -- and anyone who can write the data directory, key or
+// no key, could otherwise plant an accounts document of their own. It is
+// never read and never rewritten.
+var ErrPlaintextDocument = errors.New("the file holds a plaintext document where a sealed one belongs -- it was written without a key before v0.7.0, " +
+	"and MikroView does not seal plaintext in place: restore a sealed copy from a backup taken with the key mounted, " +
+	"or move it aside and start fresh")
 
 // EncryptedFileBackend wraps FileBackend so every document a file-backed
 // store writes is ciphertext under the operator's retention key (#853) --
@@ -68,6 +81,11 @@ func (b *EncryptedFileBackend) Describe() string { return b.inner.Describe() }
 
 func (b *EncryptedFileBackend) Close() error { return b.inner.Close() }
 
+// ProtectedAtRest implements gauntlet's persist.AtRest: the file holds
+// ciphertext only, so gauntlet's store accepts this backend without
+// Options.AllowPlaintextAtRest (#1202).
+func (b *EncryptedFileBackend) ProtectedAtRest() bool { return true }
+
 // Load reads the file and decrypts it. A document that fails to decrypt
 // -- the wrong key, or a file altered or written by something else -- is
 // a real error, not a missing-document case: treating it as absent would
@@ -80,6 +98,22 @@ func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 	if err != nil || !snap.Exists {
 		return snap, err
 	}
+	// Both tests, not just the JSON one: a sealed envelope begins with
+	// its magic, which no JSON document can, so either alone would do
+	// today -- but which rule decides is the security property here, and
+	// it is written out rather than left to that coincidence.
+	if !retention.HasSealMagic(snap.Payload) && json.Valid(snap.Payload) {
+		// Named, so a caller can say what it means in its own words
+		// (setup-only mode does). Never read, never rewritten (#1202,
+		// ruling 19).
+		return Snapshot{}, fmt.Errorf("persist: %s: %w", b.inner.path, ErrPlaintextDocument)
+	}
+	return b.unseal(snap)
+}
+
+// unseal opens the sealed document snap holds, with this backend's path
+// bound, and hands back the plaintext under the same version.
+func (b *EncryptedFileBackend) unseal(snap Snapshot) (Snapshot, error) {
 	plain, err := b.key.Open(retention.StateStoreKeyInfo, b.aad, snap.Payload)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("persist: %s: %w", b.inner.path, err)
@@ -113,4 +147,67 @@ func (b *EncryptedFileBackend) Version(ctx context.Context) (version int64, exis
 		return 0, false, err
 	}
 	return snap.Version, snap.Exists, nil
+}
+
+// RefusePlaintextRows wraps an auth store's Postgres backend, below
+// gauntlet's persist.Encrypt, so a row that holds a plaintext document
+// is refused with ErrPlaintextDocument -- the same refusal, in the same
+// words, as a plaintext file (#1202, ruling 19). gauntlet refuses that
+// row too (without EncryptOptions.MigratePlaintext, which mikroview never
+// sets), but with an error of its own that cannot be told apart from
+// any other failure to open, so the operator would not learn what the
+// row is or what to do about it. The row is never read as a document
+// and never rewritten.
+//
+// A row is plaintext when it is JSON but neither envelope gauntlet
+// writes: not the binary form (its magic is not JSON) and not the text
+// form, an object with a "sealed" member. Anything else -- a damaged
+// envelope, a row sealed under another key or label -- passes through
+// for gauntlet to refuse as it always has.
+func RefusePlaintextRows(inner Backend) Backend {
+	return &plaintextRowGuard{inner: inner}
+}
+
+type plaintextRowGuard struct{ inner Backend }
+
+func (g *plaintextRowGuard) Load(ctx context.Context) (Snapshot, error) {
+	snap, err := g.inner.Load(ctx)
+	if err != nil || !snap.Exists {
+		return snap, err
+	}
+	if isPlaintextDocument(snap.Payload) {
+		return Snapshot{}, fmt.Errorf("persist: %s: %w", g.inner.Describe(), ErrPlaintextDocument)
+	}
+	return snap, nil
+}
+
+func (g *plaintextRowGuard) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	return g.inner.Save(ctx, payload, expect)
+}
+
+func (g *plaintextRowGuard) Close() error     { return g.inner.Close() }
+func (g *plaintextRowGuard) Describe() string { return g.inner.Describe() }
+
+// Version passes the inner backend's through, so a store polling for
+// staleness keeps its cheap check; a backend without one is read whole,
+// as a caller with no VersionReader would.
+func (g *plaintextRowGuard) Version(ctx context.Context) (int64, bool, error) {
+	if vr, ok := g.inner.(VersionReader); ok {
+		return vr.Version(ctx)
+	}
+	snap, err := g.inner.Load(ctx)
+	return snap.Version, snap.Exists, err
+}
+
+// isPlaintextDocument is RefusePlaintextRows' test; see there.
+func isPlaintextDocument(payload []byte) bool {
+	if retention.HasSealMagic(payload) || !json.Valid(payload) {
+		return false
+	}
+	var head map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &head); err != nil {
+		return true // JSON, but not an object: a bare token list, say
+	}
+	_, sealed := head["sealed"]
+	return !sealed
 }

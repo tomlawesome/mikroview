@@ -100,16 +100,9 @@ func (s *Server) handleRouterBackupSwitchUpdate(w http.ResponseWriter, r *http.R
 			writeUnauthorized(w, "sign in first")
 			return
 		}
-		key := passwordRecheckLimiterKey(user.Username)
-		if !s.LoginLimiter.Reserve(key, now) {
-			http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		if !s.recheckPassword(w, r, user, req.Password, "incorrect password") {
 			return
 		}
-		if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
-			writeUnauthorized(w, "incorrect password")
-			return
-		}
-		s.LoginLimiter.Release(key, now)
 
 		if err := s.RouterBackupSwitch.Start(); err != nil {
 			http.Error(w, fmt.Sprintf("the drop box could not be opened: %v", err), http.StatusConflict)

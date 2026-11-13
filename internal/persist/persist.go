@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package persist is the storage boundary the six persisted stores sit
-// on: accounts/tokens (internal/auth), flags, entities, the MAC
+// on: accounts/tokens (gauntlet's stores, #1202), flags, entities, the MAC
 // registry, rule usage, and detector settings.
 //
 // Each store keeps its whole dataset in memory and serves reads from
@@ -32,7 +32,8 @@ package persist
 
 import (
 	"context"
-	"errors"
+
+	gpersist "github.com/tomlawesome/gauntlet/persist"
 )
 
 // ErrConflict is returned by Save when the stored version is not the one
@@ -43,23 +44,29 @@ import (
 // exactly the situation that used to cause a silent lost update against
 // the file backend (the server persisting over a change a CLI command
 // had just made). Callers must not treat it as fatal.
-var ErrConflict = errors.New("persist: store was modified by someone else")
+//
+// It is gauntlet's own sentinel (#1202): gauntlet's stores compare
+// against gpersist.ErrConflict, and every store here compares against
+// this one, so the two must be the same value.
+var ErrConflict = gpersist.ErrConflict
 
 // Snapshot is one store's persisted document plus the token needed to
-// write it back safely.
-type Snapshot struct {
-	// Payload is the store's serialized state, exactly as the store
-	// marshalled it -- this package never inspects or rewrites it.
-	Payload []byte
-	// Version is what Save must be given to accept the next write. Zero
-	// means "nothing stored yet", which is the value to pass when
-	// creating a store's first document.
-	Version int64
-	// Exists distinguishes "stored, and happens to be empty" from "never
-	// stored". Auto-migration depends on the difference: an existing
-	// empty document must not be overwritten from a stale JSON file.
-	Exists bool
-}
+// write it back safely. It is gauntlet's type (#1202), so this package's
+// backends satisfy gauntlet's persist.Backend with no adapter. The fields
+// are Payload, Version and Exists, as documented on the gauntlet type;
+// "Exists" matters here because auto-migration must not overwrite an
+// existing empty document from a stale JSON file.
+type Snapshot = gpersist.Snapshot
+
+// Every backend here satisfies gauntlet's persist.Backend as it is, and
+// the encrypted file backend its AtRest (#1202). A compile-time check, so
+// a signature drift fails the build rather than a gauntlet store at start.
+var (
+	_ gpersist.Backend = (*FileBackend)(nil)
+	_ gpersist.Backend = (*EncryptedFileBackend)(nil)
+	_ gpersist.Backend = (*PostgresBackend)(nil)
+	_ gpersist.AtRest  = (*EncryptedFileBackend)(nil)
+)
 
 // Backend is where one store's document lives.
 //
@@ -94,7 +101,7 @@ type Backend interface {
 // version without transferring the document.
 //
 // It exists for callers that poll for staleness far more often than the
-// document actually changes -- internal/auth does this on every
+// document actually changes -- the accounts store does this on every
 // authenticated request, so a live server would otherwise pull the whole
 // accounts document over the wire per request just to compare an
 // integer. Callers must treat its absence as normal and fall back to

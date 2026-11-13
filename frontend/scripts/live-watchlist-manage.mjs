@@ -19,7 +19,7 @@
 // learn (item 4) -> permit one place, then fence the rest -> edit its
 // name (item 5) -> remove it (item 5, round 28's arm/confirm gesture).
 
-import { session, feedRaw, feedPortScan, check, done, goTo, waitForFlag } from './live-browser.mjs'
+import { session, feedRaw, feedPortScan, check, done, goTo, waitForFlag, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -57,7 +57,7 @@ feedPortScan(20, SCAN_IP)
 // behind, rather than assuming a clean slate.
 const device = (await api(page, 'GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports a device (${device})`)
-const coverageToken = await api(page, 'POST', '/api/tokens', { name: 'manage-coverage', kind: 'ingest', device })
+const coverageToken = await api(page, 'POST', '/api/tokens', tokenMint({ name: 'manage-coverage', kind: 'ingest', device }))
 check(coverageToken.status === 201, `an ingest token is issued (${coverageToken.status})`)
 const pushedCoverage = await fetch(`${URL_BASE}/api/ingest/routeros`, {
   method: 'POST',

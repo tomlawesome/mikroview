@@ -20,8 +20,15 @@ class TokensState {
     this.list = await fetchTokens()
   }
 
-  async create(name: string, kind: 'api' | 'ingest', device?: string): Promise<string | null> {
-    const result = await createToken(name, kind, device)
+  // password is the calling admin's own (#1202): a token outlives the
+  // session that minted it, so every mint re-asks for it.
+  async create(
+    name: string,
+    kind: 'api' | 'ingest',
+    device: string | undefined,
+    password: string,
+  ): Promise<string | null> {
+    const result = await createToken(name, kind, device, password)
     if (typeof result === 'string') return result
     this.justCreated = result
     await this.refresh()

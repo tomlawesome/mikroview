@@ -1388,8 +1388,11 @@ def ingest_push(base_url, token, kind, records, page=1, pages=1, src_ip=None):
 def cmd_push(args):
     api = API(args.url, args.user, args.password)
     for router in FILTER_RULES:
+        # Minting re-checks the admin's own password, and an ingest token
+        # says it never expires (#1202).
         tok = api.post("/api/tokens", json={"name": f"{router}-ingest-seed", "kind": "ingest",
-                                             "device": router}).json()["value"]
+                                             "device": router, "expiresAt": "never",
+                                             "password": args.password}).json()["value"]
         src = ROUTERS[router]["src"]
         filt = [{k: v for k, v in r.items() if k != "fires"} for r in FILTER_RULES[router]]
         ack = ingest_push(args.url, tok, "filter-rule", filt, src_ip=src)

@@ -46,6 +46,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"auth":            {"auth", "storePath"},
 		"tokens":          {"auth", "tokensStorePath"},
 		"recovery_keys":   {"auth", "recoveryKeysPath"},
+		"signins":         {"auth", "signInsStorePath"},
 		"flags":           {"flags", "storePath"},
 		"rule_usage":      {"flags", "ruleUsageStorePath"},
 		"entities":        {"entities", "storePath"},

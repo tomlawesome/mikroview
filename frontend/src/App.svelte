@@ -388,7 +388,9 @@
        (#1249) -- both are sessions that can reach one route and nothing
        else, so every scene below would be a wall of 403s. -->
   <AuthLogin />
-{:else if authState.state === 'must-enrol-factor'}
+{:else if authState.state === 'must-enrol-factor' || authState.state === 'must-enrol-passkey'}
+  <!-- #1202: 'must-enrol-passkey' is the same door for an admin, with
+       passkey-only wording (AuthEnrolFactor reads authState.state). -->
   <!-- #1336: the forced-enrolment door (round 61's ratified "two
        keys") -- the same kind of one-route session as the two above
        (only the four enrolment routes answer), but its own component

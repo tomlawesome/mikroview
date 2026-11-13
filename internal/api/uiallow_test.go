@@ -312,16 +312,16 @@ func uiAllowCapTestAddr(i int) string {
 // and the symptom would be a router that quietly stopped pushing, not
 // an error anyone reads.
 func TestUIAllowExemptsEveryRouterFacingRoute(t *testing.T) {
-	source, err := os.ReadFile("auth.go")
+	source, err := os.ReadFile("gauntlet.go")
 	if err != nil {
-		t.Fatalf("reading auth.go: %v", err)
+		t.Fatalf("reading gauntlet.go: %v", err)
 	}
 
 	var registered []string
 	for _, fn := range []string{"ingestRoutes", "droplistPullRoutes"} {
 		body := regexp.MustCompile(`(?s)func \(s \*Server\) ` + fn + `\(\) http\.Handler \{(.*?)\n\}`).FindSubmatch(source)
 		if body == nil {
-			t.Fatalf("found no %s function in auth.go -- this test is not looking where it thinks it is", fn)
+			t.Fatalf("found no %s function in gauntlet.go -- this test is not looking where it thinks it is", fn)
 		}
 		for _, m := range regexp.MustCompile(`mux\.HandleFunc\("[A-Z]+ (/[^"]+)"`).FindAllSubmatch(body[1], -1) {
 			registered = append(registered, string(m[1]))
@@ -346,14 +346,27 @@ func TestUIAllowExemptsEveryRouterFacingRoute(t *testing.T) {
 
 // TestUIAllowExemptPathsMatchesEscapedPath (#1390): uiAllowExemptPaths
 // must be checked against the escaped path, not the decoded one -- the
-// same fix requireAuth's own path-membership checks got for #1389
-// (escapedPathProbeMux, reused here, is defined in
-// requireauth_escapedpath_test.go). next -- ultimately the same
+// same fix the auth gate's own path-membership checks got for #1389.
+// next -- ultimately the same
 // *http.ServeMux main.go builds -- dispatches on the escaped path
 // (net/http's wildcard-pattern matching works on request-line bytes, not
 // the decoded string), so a request whose escaped and decoded forms
 // differ has to be classified by the string it is dispatched by, not the
 // one it merely decodes to.
+// escapedPathProbeMux registers one catch-all, single-segment wildcard
+// route, the shape #1389 turns on: net/http's pattern matching for
+// `{x}` works on the request's *escaped* path, so a single path segment
+// can carry a literal "%2F" that decodes to a "/" without ever splitting
+// the match. hit is set iff this handler actually runs.
+func escapedPathProbeMux(hit *atomic.Bool) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/{x}", func(w http.ResponseWriter, r *http.Request) {
+		hit.Store(true)
+		w.WriteHeader(http.StatusTeapot) // a status no real route ever returns
+	})
+	return mux
+}
+
 func TestUIAllowExemptPathsMatchesEscapedPath(t *testing.T) {
 	// A range that does not include loopback: httptest.NewServer's real
 	// TCP connection makes the caller's own peer address loopback, so

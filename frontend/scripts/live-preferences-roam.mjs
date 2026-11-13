@@ -13,7 +13,7 @@
 // The backend half of #1283 is GET/PATCH /api/me/preferences
 // (internal/api/preferences.go).
 
-import { session, check, done, goTo, openAccountMenu, completeSecondFactor, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, completeSecondFactor, enrolFactorAndSignIn, removePerson } from './live-browser.mjs'
 
 const ADMIN_USER = process.env.MV_USER
 const ADMIN_PASS = process.env.MV_PASS
@@ -140,10 +140,7 @@ await page.click(`${BOX} .fpmenu .fprow:has-text("${PRESET_NAME}") .fpx`)
 await page.keyboard.press('Escape')
 
 await goTo(page, 'Settings')
-const remove = page.locator(`${PEOPLE} .prow:has-text("${PEER_USER}") .remove`)
-await remove.click()
-await remove.click()
-await page.waitForSelector(`${PEOPLE} .prow:has-text("${PEER_USER}")`, { state: 'detached' })
+await removePerson(page, PEER_USER)
 // safe: waitForSelector above throws on timeout
 check(true, `the peer account "${PEER_USER}" is removed again`)
 

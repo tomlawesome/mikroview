@@ -422,7 +422,7 @@ func (ds *deviceState) rebuildIdentityLocked() {
 //
 // device scopes the answer, and that scoping is the point. This used to
 // iterate every device that had ever pushed and return the first match,
-// which broke the guarantee internal/auth/token.go states in its own
+// which broke the guarantee gauntlet's token.go states in its own
 // words -- that an ingest token is scoped to one router precisely
 // because "one compromised router could report state for every other
 // device in the deployment" -- and that internal/api/ingest.go repeats:

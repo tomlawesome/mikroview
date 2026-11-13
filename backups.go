@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backupsftp"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -48,10 +49,10 @@ func backupVaultDirectory(cfg config.Config) string {
 // useful superset when a token has since been revoked but the registry
 // row has not. Order does not matter: rebuildFromDisk tries every
 // candidate against every directory.
-func recoveryCandidates(tokens *auth.TokenStore, devices *device.Registry) []string {
+func recoveryCandidates(tokens *gauntlet.TokenStore, devices *device.Registry) []string {
 	var names []string
 	if tokens != nil {
-		for _, tok := range tokens.ByKind(auth.TokenKindIngest) {
+		for _, tok := range tokens.ByKind(gauntlet.TokenKindIngest) {
 			if tok.Device != "" {
 				names = append(names, tok.Device)
 			}
@@ -89,7 +90,7 @@ func recoveryCandidates(tokens *auth.TokenStore, devices *device.Registry) []str
 // configured-but-broken case; the caller (main.go) carries it into
 // api.SetupInstance so every hop that currently reads Vault.Enabled()
 // to decide what to tell the operator can also ask this.
-func openRouterBackupVault(log *slog.Logger, cfg config.Config, tokens *auth.TokenStore, devices *device.Registry) (v *backupvault.Vault, keyUnreadable bool) {
+func openRouterBackupVault(log *slog.Logger, cfg config.Config, tokens *gauntlet.TokenStore, devices *device.Registry) (v *backupvault.Vault, keyUnreadable bool) {
 	key, err := retention.LoadKey(cfg.History.KeyFile)
 	switch {
 	case err == retention.ErrNoKey:
@@ -135,7 +136,7 @@ type backupRuntime struct {
 	log         *slog.Logger
 	ctx         context.Context
 	vault       *backupvault.Vault
-	tokens      *auth.TokenStore
+	tokens      *gauntlet.TokenStore
 	set         *settings.Store
 	hostKeyPath string
 	addr        string
@@ -158,7 +159,7 @@ type backupRuntime struct {
 // never opens Settings still sees why the drop box came up open. Never
 // consulted again after that: a leftover value in an old config.yaml is
 // harmless, and a fresh install has none, so it starts closed.
-func newBackupRuntime(ctx context.Context, log *slog.Logger, cfg config.Config, set *settings.Store, vault *backupvault.Vault, tokens *auth.TokenStore) *backupRuntime {
+func newBackupRuntime(ctx context.Context, log *slog.Logger, cfg config.Config, set *settings.Store, vault *backupvault.Vault, tokens *gauntlet.TokenStore) *backupRuntime {
 	r := &backupRuntime{
 		log:         log,
 		ctx:         ctx,

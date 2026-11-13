@@ -22,7 +22,7 @@
 // and a standalone run -- the third suite run failed exactly here, on
 // an inherited table that drew no coverage edges at all.
 
-import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog as syslog, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -41,7 +41,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-coverage', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-coverage', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

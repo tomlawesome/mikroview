@@ -4,6 +4,7 @@ package api
 
 import (
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -58,9 +59,27 @@ func runRouterosCommandsCmd(t *testing.T, step, address, syslogPort string) stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("go", "run", "./scripts/routeroscommands",
+	args := []string{"run"}
+	// #1451: with MIKROVIEW_COVERDIR set (CI's test:go), the command is
+	// built for coverage and its counts land there, merged later into the
+	// profile coverage-floor.py reads -- as internal/authe2e does for the
+	// mikroview binary (its coverDir). Unset, `go run` is unchanged.
+	var env []string
+	if dir := os.Getenv("MIKROVIEW_COVERDIR"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			t.Fatalf("MIKROVIEW_COVERDIR must be an absolute path, got %q", dir)
+		}
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/tomlawesome/mikroview/...")
+		env = append(os.Environ(), "GOCOVERDIR="+dir)
+	}
+	args = append(args, "./scripts/routeroscommands",
 		"-dialect", "a", "-step", step, "-address", address, "-syslog-port", syslogPort)
+	cmd := exec.Command("go", args...)
 	cmd.Dir = repoRoot
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go run ./scripts/routeroscommands -step=%s: %v\n%s", step, err, out)

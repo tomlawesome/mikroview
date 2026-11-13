@@ -9,7 +9,7 @@
 // request came back 401" is exercised only by running it -- and this
 // project's history is that those layers are where the defects live.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -20,7 +20,7 @@ const { page } = await session()
 async function createToken(body) {
   const res = await page.request.post(`${URL_BASE}/api/tokens`, {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-    data: body,
+    data: tokenMint(body),
   })
   return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
 }
@@ -32,6 +32,30 @@ const ingest = await createToken({ name: 'live-ingest', kind: 'ingest', device: 
 check(ingest.status === 201, `an ingest token is issued when scoped to a device (${ingest.status})`)
 check(ingest.body?.device === 'live-router', 'the issued ingest token reports its device scope')
 check(ingest.body?.kind === 'ingest', 'the issued ingest token reports its kind')
+
+// The gauntlet contract (#1202): the value starts gnt_, an ingest token
+// asked for no expiry and has none, and an API token with no expiry
+// asked gets the server's one year.
+check(/^gnt_/.test(api.body?.value ?? ''), 'the issued API token value starts gnt_')
+check(/^gnt_/.test(ingest.body?.value ?? ''), 'the issued ingest token value starts gnt_')
+check(!ingest.body?.expiresAt, 'an ingest token sent expiresAt "never" reports no expiry')
+{
+  const ms = Date.parse(api.body?.expiresAt ?? '') - Date.now()
+  const day = 24 * 3600 * 1000
+  check(ms > 360 * day && ms < 370 * day, `an API token sent no expiry expires about a year ahead (${Math.round(ms / day)} days)`)
+}
+
+// Minting re-checks the admin's password: a body without one is refused.
+// Sent raw rather than through tokenMint, which would add it. One
+// refusal only -- it counts against the admin's re-check budget, and the
+// next successful mint releases it.
+{
+  const res = await page.request.post(`${URL_BASE}/api/tokens`, {
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    data: { name: 'live-no-password', kind: 'api' },
+  })
+  check(res.status() === 401 || res.status() === 400, `a token request with no password is refused (${res.status()})`)
+}
 
 const unscoped = await createToken({ name: 'live-unscoped', kind: 'ingest' })
 check(unscoped.status === 400, `an unscoped ingest token is refused (${unscoped.status})`)

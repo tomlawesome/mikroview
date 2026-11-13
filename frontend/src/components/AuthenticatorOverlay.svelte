@@ -19,8 +19,9 @@
   // Structure and styling deliberately mirror ChangePasswordOverlay,
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { trapFocus } from '../lib/focusTrap'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
@@ -47,7 +48,22 @@
   let password = $state('')
   let error = $state<string | null>(null)
   let busy = $state(false)
+  // #1202 U13: after the codes screen's call fails or sends the person
+  // back to the status screen, focus is put inside the dialog again (a
+  // disabled or removed button drops it to the page body).
+  let modalEl = $state<HTMLElement | undefined>(undefined)
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstControl = () =>
+    modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
   let codesCopied = $state(false)
+  // #1202: gauntlet holds a first factor, with its codes, until
+  // confirmRecoveryCodes says they were saved. False when the app went live at once,
+  // where "I have saved these" only closes.
+  let pendingConfirmation = $state(false)
 
   // #1253: turning the authenticator app off leaves this account with no
   // second factor at all iff it has no passkeys either -- the only other
@@ -78,6 +94,7 @@
     error = null
     busy = false
     codesCopied = false
+    pendingConfirmation = false
   }
 
   // Reachable from the header X, Escape and the backdrop -- everywhere
@@ -91,6 +108,22 @@
   function close() {
     open = false
     resetFields()
+  }
+
+  // #1202: a setup that gauntlet no longer holds (the secret or the held
+  // factor ran out, or nothing is waiting to be confirmed) leaves nothing
+  // to finish. Back to the status screen, which carries the way to begin
+  // again, with the words saying so -- never a screen with no exit.
+  function startAgain(message: string) {
+    resetFields()
+    error = message
+  }
+
+  // A 409 carries gauntlet's own words (nothing is waiting to be
+  // confirmed); the step-expired answer is already a full sentence.
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -148,11 +181,19 @@
     // Same reasoning as startEnrol above.
     try {
       const result = await confirmTOTP(code)
+      if (result === STEP_EXPIRED) {
+        // #1202: the scanned secret ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         error = result
         return
       }
-      authState.hasTOTP = true
+      // A held factor is not on yet: finish() below turns it on by
+      // confirming, then re-reads the session.
+      pendingConfirmation = result.pendingConfirmation === true
+      if (!pendingConfirmation) authState.hasTOTP = true
       // #1250: recovery codes are shared with passkeys and minted once, by
       // whichever factor activates first. A passkey already on this
       // account means confirmTOTP just turned the factor on with nothing
@@ -179,9 +220,38 @@
     codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
   }
 
-  function finish() {
-    // The codes have been shown once and acknowledged -- nothing left to
-    // do here but the same field reset every other close path takes.
+  async function finish() {
+    // The codes have been shown once and acknowledged. A held factor
+    // (#1202) goes live only when the server is told so: that call comes
+    // first, and the session is read again so the menu shows the factor
+    // on. If the hold is gone the person goes back to the status screen
+    // with "start again"; if the session is gone they are signed out; any
+    // other failure stays on this screen with the button usable, so
+    // pressing it again is the retry. Otherwise nothing is left to do but
+    // the same field reset every other close path takes.
+    if (pendingConfirmation) {
+      error = null
+      busy = true
+      try {
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
+          void focusWhenReady(firstControl)
+          return
+        }
+        await authState.check()
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        void focusWhenReady(() => saveButton)
+        return
+      } finally {
+        busy = false
+      }
+    }
     close()
   }
 
@@ -229,13 +299,18 @@
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" use:trapFocus>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" bind:this={modalEl} use:trapFocus>
       <div class="modal-header">
         <span class="title">Authenticator app</span>
         {#if step !== 'codes'}
           <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
+
+      <!-- #1202 U13: one live region for the status and codes screens,
+           outside the step blocks so it is in the page before any message
+           and survives the move from the codes screen back to status. -->
+      <p class="error live" role="status" aria-live="polite">{step === 'status' || step === 'codes' ? (error ?? '') : ''}</p>
 
       {#if step === 'status'}
         <div class="body">
@@ -250,7 +325,6 @@
               or similar) as a second step at sign-in, alongside your password.
             </p>
           {/if}
-          {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={close} disabled={busy}>Close</button>
@@ -311,8 +385,8 @@
           </label>
 
           <p class="muted">
-            Confirming turns this on and signs out everywhere else this account is currently
-            signed in. You'll stay signed in here.
+            When the setup is finished, this account is signed out everywhere else. You'll stay
+            signed in here.
           </p>
 
           {#if error}<p class="error">{error}</p>{/if}
@@ -339,16 +413,24 @@
           <div class="copyrow">
             <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
           </div>
-          <p class="muted">
-            Every other session this account was signed in on has been ended.
-          </p>
+          <!-- #1202: sessions end when the factor is confirmed, not before. -->
+          {#if pendingConfirmation}
+            <p class="muted">
+              Nothing is switched on until you press the button below. Then this account is
+              signed out everywhere else.
+            </p>
+          {:else}
+            <p class="muted">
+              Every other session this account was signed in on has been ended.
+            </p>
+          {/if}
           <!-- #1250: the two overlays' one cross-reference line -- codes
                are shared, so whichever second factor is added later
                reuses these rather than minting its own. -->
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finish}>I have saved these</button>
+          <button type="button" class="confirm" bind:this={saveButton} onclick={finish} disabled={busy}>I have saved these</button>
         </div>
       {/if}
 
@@ -483,6 +565,15 @@
   .error {
     color: var(--reject);
     font-size: 12px;
+  }
+
+  .error.live {
+    margin: 0;
+    padding: 10px 16px 0;
+  }
+
+  .error.live:empty {
+    display: none;
   }
 
   .warning {

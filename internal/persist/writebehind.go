@@ -224,6 +224,13 @@ func OpenWriteBehind(ctx context.Context, b Backend, name string, opts WriteBehi
 	return w, existed, nil
 }
 
+// ProtectedAtRest implements gauntlet's persist.AtRest by forwarding the
+// inner backend's answer, false when it gives none (#1202).
+func (w *WriteBehind) ProtectedAtRest() bool {
+	ar, ok := w.backend.(interface{ ProtectedAtRest() bool })
+	return ok && ar.ProtectedAtRest()
+}
+
 // MarkDirty records payload as the latest snapshot to persist and wakes
 // the writer goroutine -- never blocks on the backend, never blocks at
 // all beyond a small internal mutex. Safe to call while the caller holds

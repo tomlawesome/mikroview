@@ -313,7 +313,7 @@ func decodeRecords[T recordValidator](raw json.RawMessage) ([]T, error) {
 // internal/entities.validateEntityText applies to admin-typed text, to
 // text a router pushed instead: valid UTF-8, no control or Unicode
 // format characters (the bidi-override class used in real-world spoofing
-// attacks -- see internal/auth.ValidateUsername for the CVE references
+// attacks -- see gauntlet.ValidateUsername for the CVE references
 // entities.validateEntityText carries), and a bounded length. This data
 // ends up in the same places admin-typed labels do -- the UI, the audit
 // trail, exported CSVs -- so it is held to the same rule.

@@ -19,7 +19,7 @@
 // six-quiet-hours path and its undo are covered by the Go tests, which
 // can move the clock.
 
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -47,7 +47,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-decommission', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-decommission', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

@@ -55,14 +55,14 @@ var upgrader = websocket.Upgrader{
 // attached to cross-site requests regardless of CORS/fetch-origin rules
 // -- SameSite=Lax alone isn't a guaranteed defence for a WebSocket
 // upgrade specifically, so this check is required, not redundant with
-// requireAuth's cookie check: same-origin is what actually stops a
+// the gate's cookie check: same-origin is what actually stops a
 // malicious page opening a WS connection with a victim's cookie and
 // streaming every firewall event out of it.
 //
 // This used to open with `if s.Auth.Count() == 0 { return true }`,
 // justified as "mikroview's default, fully-open, trusted-LAN
 // deployment" -- a deployment shape that no longer exists. It was also
-// unreachable: /api/ws is not in bootstrapExemptPaths, so requireAuth
+// unreachable: /api/ws is not on the gate's bootstrap list, so the gate
 // returns 503 before handleWS runs while Count()==0.
 //
 // Unreachable is not the same as harmless, and this codebase has
@@ -70,7 +70,7 @@ var upgrader = websocket.Upgrader{
 // comment records deleting a callerIsAdminOrOpen bypass that was
 // likewise unreachable, because it "read as 'anonymous callers are
 // admins under some condition', and would have become live again the
-// moment requireAuth was loosened." Identical reasoning, so it goes the
+// moment the auth gate was loosened." Identical reasoning, so it goes the
 // same way. See #282.
 func (s *Server) checkOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
@@ -115,7 +115,7 @@ func closeRevoked(conn *websocket.Conn) {
 // whichever comes first) into a single WS frame. The frontend applies
 // filters client-side — see docs/configuration.md for the rationale.
 //
-// requireAuth only authenticates once, at the HTTP upgrade -- the request
+// The gate only authenticates once, at the HTTP upgrade -- the request
 // that carries the session cookie is otherwise never looked at again for
 // the socket's whole lifetime. Left alone, that means logout, a password
 // change ("sign out everywhere"), and account deletion all revoke the
@@ -125,10 +125,15 @@ func closeRevoked(conn *websocket.Conn) {
 //
 // The fix piggybacks on the ping/pong keepalive that already exists for a
 // different reason (detecting a dead TCP peer): every pingTicker.C tick,
-// before sending the ping, re-run r through sessionUser -- the same
-// cookie-lookup/Validate/PasswordChangedAt check requireAuth uses on every
-// ordinary request. A closed-over *http.Request stays valid for this the
-// whole time; nothing about it changes across the connection's life. If
+// before sending the ping, ask the gate whether it would still admit r
+// (Gate.StillSignedIn): Protect's own decision -- the session, its
+// account, the session cutoff, the role and the doors -- made without
+// touching anything. The re-check is traffic the server generates for
+// itself, not the person, so it must not slide the session's idle
+// expiry: an open tab with nobody at it idles out at the idle limit
+// like any other (#1448, NIST SP 800-63B section 7.2). A closed-over
+// *http.Request stays valid for this the whole time; nothing about it
+// changes across the connection's life. If
 // the session no longer checks out, the socket sends a real close frame
 // (so the browser's onclose fires and its reconnect logic runs, landing
 // back on the login screen once the next reconnect attempt 401s) and
@@ -139,9 +144,9 @@ func closeRevoked(conn *websocket.Conn) {
 // it reuses the one piece of code that already knows every invalidation
 // rule instead of duplicating them on a second, push-driven path that
 // could drift from the request-time one; it needs no new state anywhere
-// (no connection registry keyed by session, no wiring from
-// internal/auth back out to internal/hub or internal/api); and it costs
-// one map lookup plus one Auth.Get every 30s per open socket. The
+// (no connection registry keyed by session, no wiring from the account
+// stores back out to internal/hub or internal/api); and it costs
+// one session lookup plus one account lookup every 30s per open socket. The
 // trade-off is bounded latency instead of instant revocation -- worst
 // case one wsPingInterval plus however long the write takes, not the
 // wsPongTimeout window (that only bounds a *dead* peer going unnoticed,
@@ -243,7 +248,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// already answers, and there's no reason to spend a write on
 			// a socket that's about to be closed anyway. See the doc
 			// comment above for why this is the revalidation point.
-			if _, ok := s.sessionUser(r, time.Now()); !ok {
+			if s.Gate.StillSignedIn(r) != nil {
 				closeRevoked(conn)
 				// The reader goroutine returns when the peer's answering
 				// close frame (or anything else fatal) arrives, so waiting

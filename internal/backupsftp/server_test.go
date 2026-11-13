@@ -17,7 +17,8 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
@@ -39,9 +40,10 @@ func testHostKey(t *testing.T) ssh.Signer {
 	return signer
 }
 
-func testTokens(t *testing.T) *auth.TokenStore {
+func testTokens(t *testing.T) *gauntlet.TokenStore {
 	t.Helper()
-	ts, err := auth.OpenTokenStoreWithBackend(persist.NewFileBackend(filepath.Join(t.TempDir(), "tokens.json")))
+	ts, err := gauntlet.OpenTokenStore(persist.NewFileBackend(filepath.Join(t.TempDir(), "tokens.json")),
+		gauntlet.TokenOptions{Kinds: []gauntlet.TokenKind{gauntlet.TokenKindAPI, gauntlet.TokenKindIngest}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func testKey(t *testing.T) *retention.Key {
 type harness struct {
 	addr   string
 	vault  *backupvault.Vault
-	tokens *auth.TokenStore
+	tokens *gauntlet.TokenStore
 }
 
 func newHarness(t *testing.T, key *retention.Key) *harness {
@@ -116,7 +118,7 @@ func newHarness(t *testing.T, key *retention.Key) *harness {
 
 func (h *harness) mintIngestToken(t *testing.T, device string) string {
 	t.Helper()
-	raw, _, err := h.tokens.Create("test", auth.TokenKindIngest, device, nil, time.Now())
+	raw, _, err := h.tokens.Create("test", gauntlet.TokenKindIngest, device, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

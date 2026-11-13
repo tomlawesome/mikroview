@@ -14,9 +14,7 @@ import (
 // entityRequest is the wire shape for both POST (create/update) and
 // DELETE (identify which record to remove) -- Label/Tags are simply
 // ignored by the delete handler, which only needs Type/Key to identify
-// the record. One shared struct rather than two nearly-identical ones,
-// same reasoning credentialsRequest is reused across register/login in
-// auth.go.
+// the record. One shared struct rather than two nearly-identical ones.
 type entityRequest struct {
 	Type  string   `json:"type"`
 	Key   string   `json:"key"`
@@ -55,8 +53,8 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 	// Upsert conflates create and replace, so which status is right
 	// depends on which it was -- and every sibling "this created a new
 	// thing" handler here (handleWatchlistEntriesCreate,
-	// handleTokensCreate, handleAuthRegister, handleAuthCreateUser,
-	// handleSuggestionsAccept) answers 201. Always answering 200 was
+	// handleSuggestionsAccept, and gauntlet's token and account
+	// creation) answers 201. Always answering 200 was
 	// defensible but unexplained, and left a caller unable to tell a
 	// create from an overwrite (#267 finding 19).
 	existed := s.Entities.Exists(req.Type, req.Key)

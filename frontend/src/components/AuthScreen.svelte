@@ -102,7 +102,15 @@
     factorOnly?: boolean
     onSubmitFactor?: (code: string) => Promise<string | null>
     setupCode?: boolean
-    onSubmitSetup?: (setupCode: string, username: string, password: string) => Promise<string | null>
+    // forgetPassword empties both password fields; a caller that has
+    // spent the password (AuthSetup, handing it to the SSO link) calls it
+    // so the form keeps no copy a moment longer than it must (#1202 U10).
+    onSubmitSetup?: (
+      setupCode: string,
+      username: string,
+      password: string,
+      forgetPassword: () => void,
+    ) => Promise<string | null>
     onLoginWithPasskey?: () => Promise<string | null>
   } = $props()
 
@@ -221,7 +229,11 @@
     }
 
     submitting = true
-    const result = setupCode ? await onSubmitSetup?.(code, username, password) : await onsubmit?.(username, password)
+    const forgetPassword = () => {
+      password = ''
+      passwordConfirm = ''
+    }
+    const result = setupCode ? await onSubmitSetup?.(code, username, password, forgetPassword) : await onsubmit?.(username, password)
     submitting = false
     if (result) error = result
   }

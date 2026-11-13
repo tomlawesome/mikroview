@@ -20,7 +20,7 @@ signatures**, one made by the GitLab tag pipeline with a held key and one
 made keyless on GitHub by hand, and a digest is only good if **both**
 verify -- treat either one missing as a reason not to trust it.
 SECURITY.md has both commands. If you'd rather run it yourself instead of
-fetching a script:
+fetching a script, make the key first (next section), then:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
@@ -32,12 +32,62 @@ docker run -d --name mikroview --restart unless-stopped \
 ```
 
 This is the one `docker run` `install.sh` shows you before running, but not
-the two throwaway helper-container runs (#1357) it makes ahead of it to give
-a fresh install a history-encryption key. Running the line above yourself
-skips that: on-disk event history (on by default -- see
-[docs/configuration.md](configuration.md#on-disk-event-history-on-by-default))
-stays memory-only until you mount `keys/history.key` in `mikroview-etc`
-yourself, the same way Compose installs do below.
+the two throwaway helper-container runs it makes ahead of it to give a fresh
+install a key. Running the line above yourself skips that, and **MikroView
+refuses to start without a key** ([CFG-0083](configuration.md#cfg-0083)).
+Make it first, as below.
+
+### The key: make it once, before the first start
+
+MikroView seals its accounts, API tokens, recovery keys and sign-in history
+under one key, so that a copy of the data folder or a backup is unreadable
+without it. (It also seals the on-disk event history, which is on by
+default -- see
+[docs/configuration.md](configuration.md#on-disk-event-history-on-by-default).)
+There is no unencrypted mode, so there is no start without a key. For the
+named volume the `docker run` line above uses, one command makes it:
+
+```sh
+docker run --rm -v mikroview-etc:/etc/mikroview alpine sh -c '
+  set -e
+  mkdir -p /etc/mikroview/keys
+  head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key
+  chown 1000:1000 /etc/mikroview/keys/history.key
+  chmod 600 /etc/mikroview/keys/history.key
+'
+```
+
+What each part does, so you are not pasting something you do not
+understand:
+
+- `docker run --rm -v mikroview-etc:/etc/mikroview alpine` starts a
+  throwaway container that is deleted when it finishes, with the
+  `mikroview-etc` volume mounted for writing. MikroView's own container
+  mounts that volume read-only, so something else has to put the key in.
+  Doing it in a helper container means the key is created inside the
+  volume and never appears on your command line or screen.
+- `mkdir -p .../keys` makes the folder MikroView looks in.
+- `head -c 32 /dev/urandom | base64 > .../history.key` takes 32 random
+  bytes from the operating system and writes them out as text. MikroView
+  needs at least 32 bytes.
+- `chown 1000:1000` hands the file to the account MikroView runs as. Without
+  it MikroView cannot read the file and stops with `permission denied`.
+- `chmod 600` makes the file readable by that account only.
+
+**Keep a copy of the key somewhere safe, apart from your data** (a password
+manager, or an encrypted backup). Without it nothing MikroView sealed can be
+read -- not the event history, and not the accounts either -- and there is no
+way to recover a lost key. To copy it out of the volume into the current
+folder, then move that copy where you keep secrets:
+
+```sh
+docker run --rm -v mikroview-etc:/from:ro -v "$PWD:/to" alpine \
+    cp /from/keys/history.key /to/history.key
+```
+
+Never put the key inside the data volume, and never commit it to anything.
+`install.sh` does all of the above for you on a fresh install, and leaves a
+key that is already there alone.
 
 The `mikroview-etc` volume is the app folder #1243 introduced: an empty
 folder is fine, and dropping a config file or
@@ -148,20 +198,29 @@ Create the `mikroview` folder next to the compose file first, with your config i
 ```
 mikroview/
   config.yaml                   optional -- defaults run without it
-  keys/history.key              optional -- history encryption on when present
+  keys/history.key              required -- MikroView does not start without it (make it first, below)
   certs/tls.crt, certs/tls.key  optional -- your own certificate instead of the self-signed one
   data/                         MikroView's store; created for you
 ```
 
-The bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try there. **The Compose form is no different**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and an empty folder starts on defaults just as the `docker run` above does. Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
+The README's quickstart runs on defaults with named volumes and no folder of your own, and `install.sh` makes the key for you, so there is nothing to set up for a first try there. **The Compose form is no different about the config**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and a folder with no `config.yaml` starts on defaults just as the `docker run` above does. What it cannot start without is the key (next). Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
 
-**Compose does not run `install.sh`, so nothing mints `keys/history.key` for you here.** On-disk event history is on by default (#1357), but with no key mounted it stays memory-only and MikroView says so once at startup -- nothing refuses to start over it. Put one there yourself before your first `up` if you want history on from the start:
+**Compose does not run `install.sh`, so nothing mints `keys/history.key` for you here -- and MikroView refuses to start without it** ([CFG-0083](configuration.md#cfg-0083)). It seals the accounts, API tokens, recovery keys and sign-in history under this key (and the on-disk event history, which is on by default). Make it once, before your first `up`, from the folder that holds the compose file:
 
 ```sh
 mkdir -p mikroview/keys
 head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
 sudo chown 1000:1000 mikroview/keys/history.key && chmod 600 mikroview/keys/history.key
 ```
+
+Why each line:
+
+- `mkdir -p mikroview/keys` makes the `keys` folder inside the app folder. The compose file mounts the whole `mikroview/` folder at `/etc/mikroview`, and MikroView looks for `keys/history.key` there with nothing else set.
+- `head -c 32 /dev/urandom | base64 > ...` writes 32 random bytes, as text, to the key file. The key stays on this machine; nothing prints it. MikroView needs at least 32 bytes.
+- `sudo chown 1000:1000 ...` hands the file to the account the container runs as (uid `1000`). If you skip it and the file is yours but not uid 1000's, MikroView cannot read it and stops with `permission denied`. If your own account is uid 1000 (the first account on most Linux hosts) it already is, and `sudo` is harmless.
+- `chmod 600 ...` lets only that account read it.
+
+**Keep a copy of the key somewhere safe, apart from `mikroview/data`** (a password manager, or an encrypted backup). Without the key the sealed accounts cannot be read, and a lost key cannot be recovered. Do not put it inside `mikroview/data`: a key kept beside the files it protects protects nothing.
 
 See [docs/configuration.md](configuration.md#on-disk-event-history-on-by-default) for what the encryption does and doesn't protect against.
 

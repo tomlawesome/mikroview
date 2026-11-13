@@ -186,6 +186,80 @@ each affected account, then start again. An install where nobody has
 registered a passkey is unaffected. See "Public URL" in
 docs/configuration.md.
 
+## Upgrading to 0.7.0: mount a key first, and take a copy
+
+0.7.0 moves sign-in onto the gauntlet library (#1202) and stamps the
+data **schema 4**. Your accounts, API tokens and recovery keys are read
+where they are; nothing is copied or converted. Two things are on you
+before you start the new build.
+
+**1. Mount a key.** From 0.7.0 MikroView seals its accounts, API tokens,
+recovery keys and sign-in history under `history.keyFile`, and **refuses
+to start without one** ([CFG-0083](configuration.md#cfg-0083)). It stops
+before writing anything, so a missing key costs you a failed start and
+nothing else. If you installed with `install.sh`, you already have one
+(and running it again keeps it). If you installed with Compose, or by hand,
+you may not -- before 0.7.0 a key was optional. Make one first, following
+[docs/install.md](install.md#the-key-make-it-once-before-the-first-start),
+and keep a copy of it somewhere safe, apart from the data: a lost key
+cannot be recovered, and without it the sealed accounts cannot be read.
+This applies on Postgres too.
+
+**The key has to be in place before you upgrade.** 0.7.0 does not seal
+plaintext data in place. An install that ran without a key has its
+accounts, tokens, recovery-key digests and drop list in the clear, and
+0.7.0 refuses to start on any of them: the account stores on files or on
+Postgres, the drop list as a file, including when this start would move
+it onto Postgres. It says the data was written without a key before
+v0.7.0, leaves it exactly as it is and prints no setup code. Restore a
+sealed copy (one taken while a key was mounted), or move the plaintext
+file aside and start fresh, which means creating the admin account again.
+A drop list that is already in Postgres is left as it is: like every
+store there apart from the account stores, it is not sealed. The schema
+moves to 4 only once every one of those stores has opened sealed and
+every file has moved onto Postgres, so a refused start, or one where a
+file did not move, leaves it at 3 and the release you came from can
+still read the data. If the schema stamp itself cannot be written, 0.7.0
+refuses to start rather than run without it.
+
+**2. Take a copy of your data.** Stop MikroView, then copy the data
+directory (or run `pg_dump` for Postgres). MikroView does not take one
+for you. This is the only way back, for the reason in "Going back"
+below. For a bind mount:
+
+```sh
+cp -a mikroview/data mikroview-data-before-0.7.0
+```
+
+or for a named volume:
+
+```sh
+docker run --rm -v mikroview-data:/from:ro -v "$PWD:/to" alpine \
+    cp -a /from /to/mikroview-data-before-0.7.0
+```
+
+The copy holds your accounts exactly as they are now, readable without the
+key, so keep it as private as the data directory itself and delete it once
+you are sure you will not go back.
+
+**What you will notice afterwards:**
+
+- Everyone signs in again at least once a day, and after an hour idle.
+  Sessions are now 1 hour idle and 24 hours in total at most; a longer
+  `sessionTTL` or `sessionMaxLifetime` in your config is cut down to
+  those, with no warning.
+- With `publicUrl` set to an https domain name and no `auth.adminPasskey`
+  set, an admin who has no passkey is held at a passkey enrolment screen
+  at their next request.
+- New API tokens expire after a year; making any token asks for the
+  admin's password. Scripts that read errors from `/api/auth/*` or
+  `/api/tokens` meet Problem Details instead of plain text, and a reverse
+  proxy that adds basic auth to MikroView breaks sign-in. The
+  [CHANGELOG](../CHANGELOG.md) has the full list.
+- MikroView now fetches a list of common passwords from GitHub about once
+  a day; see [Choosing a
+  password](configuration.md#choosing-a-password-what-is-refused-and-the-password-list-fetch).
+
 ## What happens at start
 
 1. MikroView reads the schema version its data was last written by.
@@ -194,6 +268,11 @@ docs/configuration.md.
    MikroView on data a newer one wrote — it **refuses to start** and
    says so: which version wrote the data, and that you need that build
    or a newer one. It never writes an older shape over newer data.
+   On Postgres, builds from 0.7.0 on refuse the same way when the
+   `schema_version` table holds a migration they do not contain; they
+   name the stored and the known versions and say to run the newer
+   release or restore the copy you took before upgrading. Nothing is
+   migrated or written, and no setup code is printed.
 3. If the data is older, it runs each pending migration in order, one at
    a time, stamping the schema version after each one lands. A
    migration writes a new document beside the old and swaps it in only
@@ -218,9 +297,11 @@ install from before this existed. Nothing to do: MikroView stamps it on
 the next start.
 
 On Postgres it is the `schema_version` table, as it has always been. The
-migration numbers are the same list for both, so "schema 3" means the
+migration numbers are the same list for both, so "schema 4" means the
 same thing either way, even though some migrations only have work to do
-on one of them.
+on one of them. Schema 4 (0.7.0, "accounts and tokens on gauntlet") has no
+data change of its own: it is a stamp, written once the auth stores and the
+drop list have been sealed.
 
 `-backup` and `-restore` (see docs/configuration.md, "Backing up and
 restoring") carry `schema.json` along with every other store, so a
@@ -235,7 +316,7 @@ of your install:
 
 ```
 schema │ the data in /var/lib/mikroview is at schema version 4, but this build of MikroView
-         only knows schema version 3 -- it was last written by MikroView v0.6.0, so you need
+         only knows schema version 3 -- it was last written by MikroView v0.7.0, so you need
          that build or a newer one. Refusing to start rather than writing: an older build
          would overwrite newer data in shapes it does not understand, and there is no way
          back from that
@@ -320,7 +401,17 @@ the build that wrote it, and an older build will refuse it. If a new
 build has a problem, the fix is a newer build. If you want the option of
 returning to the old version anyway, take your own copy of the data
 directory (or a `pg_dump`) before you upgrade; MikroView does not take
-one for you.
+one for you. Going back means stopping MikroView, putting that copy back
+and starting the old version on it.
+
+The refusal is on both backends from 0.7.0. On files it has always been
+the schema number in `schema.json`. On Postgres it is new in 0.7.0: earlier
+builds skipped a migration they did not know and ran on. That is why a
+0.6 build started against a 0.7.0 database is **not** stopped by a version
+check. It is stopped only because it cannot read the tokens row, which
+0.7.0 seals, and fails to start. Do not rely on that accident -- restore
+your copy instead. Every build from 0.7.0 on refuses a database newer than
+itself.
 
 ## How this is tested
 

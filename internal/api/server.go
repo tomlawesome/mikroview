@@ -11,8 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+	"github.com/tomlawesome/gauntlet/gate"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
@@ -29,7 +31,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/netclass"
-	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -263,8 +264,8 @@ type Server struct {
 	// Always non-nil (internal/prefs.Open("") returns a usable, empty,
 	// unpersisted store), same always-usable convention as Droplist
 	// above. GET/PATCH /api/me/preferences (preferences.go) are the only
-	// routes that touch it; handleAuthDeleteUser clears a user's record
-	// when the account itself is deleted.
+	// routes that touch it; deleting an account clears its record (the
+	// follow-up gateRoutes runs after gauntlet's delete).
 	Prefs *prefs.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
@@ -355,28 +356,22 @@ type Server struct {
 	// no setup.
 	editor editorState
 
-	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
-	// always non-nil (internal/auth.Open("") returns a usable, empty,
-	// unpersisted store) -- mikroview stays fully open as long as it has
-	// zero users, exactly like every other request path today.
-	Auth         *auth.Store
-	Sessions     *auth.SessionStore
-	LoginLimiter *auth.LoginLimiter
+	// Auth, Sessions, Tokens and LoginLimiter are gauntlet's stores
+	// (#1202), the same ones Gate is built over: mikroview's own handlers
+	// read them for a password re-check, a session's own account, or a
+	// device's tokens. Never nil once main has wired them.
+	Auth         *gauntlet.Store
+	Sessions     *gauntlet.SessionStore
+	LoginLimiter *gauntlet.LoginLimiter
+	// SecureCookie is auth.secureCookie, set by NewGate. gate owns the
+	// session cookie; this is kept only to name it (sessionCookie), for
+	// the handlers that look the session up again -- the WebSocket's
+	// per-ping re-check and the router-backup vault's per-session unlock.
 	SecureCookie bool
-
-	// RelyingParty is #1250's WebAuthn configuration (webauthn.go, wave 1
-	// slice C), computed once at boot from the validated `publicUrl`
-	// setting -- nil on a Server built without one (every pre-#1250 test,
-	// and any deployment path that never wires one up), which every
-	// passkey handler (passkey.go) treats the same as
-	// PasskeyStatusUnset: the same nil-means-disabled convention Vault/
-	// NetClass/Reputation already use elsewhere on this struct. Never nil
-	// once wired up in main.go, even when passkeys are unavailable --
-	// NewRelyingParty always returns a non-nil *RelyingParty, carrying
-	// *why* they're unavailable in its Status field, which is what lets
-	// GET /api/auth/session and the login response explain the reason
-	// instead of just omitting the feature.
-	RelyingParty *RelyingParty
+	// Gate is gauntlet's HTTP layer in front of every route here (see
+	// gauntlet.go): built by NewGate, required by Routes and
+	// SetupOnlyRoutes.
+	Gate *gate.Gate
 
 	// TrustedProxies/ClientIPHeader control how the login rate limiter
 	// attributes a request to a source address when mikroview sits behind
@@ -397,11 +392,10 @@ type Server struct {
 	// from the browser.
 	UIAllow []netip.Prefix
 
-	// Tokens holds read-only API and ingest bearer tokens (issues #101,
-	// #186) -- always non-nil (internal/auth.OpenTokenStore("") returns a
-	// usable, empty, unpersisted store), same nil-never convention as
-	// Auth above.
-	Tokens *auth.TokenStore
+	// Tokens holds the API, ingest and droplist-pull bearer tokens
+	// (issues #101, #186, #1224) -- gauntlet's token store, opened with
+	// TokenKinds. Never nil once main has wired it.
+	Tokens *gauntlet.TokenStore
 	// Vault is the router-backup store (#394) -- nil in tests that do
 	// not exercise it and on any instance built without one, same
 	// nil-means-disabled convention as History/NetClass above. The SFTP
@@ -426,13 +420,13 @@ type Server struct {
 	// optional passphrase open (#956, routerbackupslock.go).
 	vaultUnlock vaultUnlockState
 	// IngestLimiter bounds how often one ingest token may call POST
-	// /api/ingest/routeros (issue #186 step 3). Reuses auth.LoginLimiter
+	// /api/ingest/routeros (issue #186 step 3). Reuses gauntlet's LoginLimiter
 	// rather than a second rate-limiting primitive -- see handleIngest
 	// RouterOS's doc comment for the threshold/window reasoning. Keyed by
 	// token ID, never the raw token value, the same never-store-the-
 	// secret convention LoginLimiter itself follows by keying on
 	// username/IP rather than a password.
-	IngestLimiter *auth.LoginLimiter
+	IngestLimiter *gauntlet.LoginLimiter
 	// RouterState holds each device's most recent pushed state (issue
 	// #186 step 4) -- written by handleIngestRouterOS, read by the
 	// /api/routeros/{device}/... table endpoints. Always non-nil
@@ -461,19 +455,6 @@ type Server struct {
 	// commands from -- the address a router should be pointed at, and
 	// whether the certificate covers it.
 	SetupInstance SetupInstance
-
-	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
-	// set and provider discovery succeeded at startup -- every OIDC
-	// handler checks for nil and 404s, so a misconfigured or absent OIDC
-	// block never affects local auth, the same nil-means-disabled
-	// convention Reputation already uses elsewhere on this struct.
-	OIDC      *oidc.Client
-	OIDCState *oidc.StateCodec
-	// OIDCPolicy restricts which accounts at the issuer may sign in. The
-	// zero value permits everyone the issuer vouches for, which is the
-	// correct answer for a self-hosted IdP and refused at startup for a
-	// multi-tenant one -- see internal/oidc.Policy and main.go.
-	OIDCPolicy oidc.Policy
 
 	// ingestAudit remembers, per (device, kind), when that combination
 	// last produced an audit row and whether it succeeded, so a routine
@@ -788,7 +769,7 @@ func (s *Server) coreRoutes() []route {
 		// The caller's own preferences record (issue #1283): presets,
 		// widgets and layout, held on the server instead of the
 		// browser's localStorage. Open to any signed-in user, same
-		// reasoning as /api/auth/password above -- it acts only on the
+		// reasoning as gauntlet's /api/auth/password -- it acts only on the
 		// session's own account, with no id in the request that could
 		// point it at someone else's.
 		{http.MethodGet, "/api/me/preferences", s.handlePreferencesGet},
@@ -876,7 +857,7 @@ func (s *Server) coreRoutes() []route {
 		// remove routes, and the pull key that lets a router fetch the
 		// generated .rsc feed. The pull route itself
 		// (GET /api/droplist.rsc) is bearer-only and lives on its own
-		// mux -- see droplistPullRoutes in auth.go -- deliberately absent
+		// mux -- see droplistPullRoutes in gauntlet.go -- deliberately absent
 		// from this session-gated table.
 		{http.MethodGet, "/api/droplist", s.handleDroplistList},
 		{http.MethodPost, "/api/droplist", s.handleDroplistCreate},
@@ -893,78 +874,10 @@ func (s *Server) coreRoutes() []route {
 		{http.MethodGet, "/api/blocklist/builder", s.handleBlocklistBuilder},
 		{http.MethodPost, "/api/blocklist/builder/commands", s.handleBlocklistCommands},
 
-		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
-		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
-		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
-		{http.MethodPost, "/api/auth/password", s.handleAuthChangePassword},
-		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
-		{http.MethodPost, "/api/auth/logout-all", s.handleAuthLogoutAll},
-		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
-		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
-		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
-		{http.MethodPost, "/api/auth/users/{id}/reset-password", s.handleAuthResetUserPassword},
-
-		// Authenticator-app second factor (#1249): enrol/confirm/remove
-		// are the account owner's own three steps, login/factor is the
-		// second half of a login handleAuthLogin stopped short of a
-		// session for, and the users/{id}/totp route is the Users
-		// group's admin-clear path for a lost phone. See auth.go's own
-		// "#1249" section, right after handleAuthResetUserPassword, for
-		// all five handlers.
-		{http.MethodPost, "/api/auth/totp/enrol", s.handleTOTPEnrol},
-		{http.MethodPost, "/api/auth/totp/confirm", s.handleTOTPConfirm},
-		{http.MethodDelete, "/api/auth/totp", s.handleTOTPDelete},
-		{http.MethodPost, "/api/auth/login/factor", s.handleAuthLoginFactor},
-		{http.MethodDelete, "/api/auth/users/{id}/totp", s.handleTOTPAdminClear},
-
-		// Recovery codes, regenerated on their own (#1331) -- password-
-		// gated the same way DELETE /api/auth/totp is, and the account
-		// owner's own route: there is no admin equivalent, since an
-		// admin's clear paths (users/{id}/totp, users/{id}/passkeys) drop
-		// the shared codes only as a side effect of clearing every
-		// factor, never mint a fresh set on their own.
-		{http.MethodPost, "/api/auth/recovery-codes", s.handleRecoveryCodesRegenerate},
-
-		// Passkeys (#1250, wave 2 slice D) -- see passkey.go's own header
-		// comment for the shape of each handler. The list/register/
-		// rename/delete four are the account owner's own passkey
-		// management, login/factor/begin is the passkey half of #1249's
-		// second login step (its finish half shares POST
-		// /api/auth/login/factor with the TOTP code path, branching on
-		// the request body), and the users/{id}/passkeys route is the
-		// Users group's admin-clear path, mirroring users/{id}/totp
-		// above it.
-		{http.MethodGet, "/api/auth/passkeys", s.handleAuthPasskeysList},
-		{http.MethodPost, "/api/auth/passkeys/register/begin", s.handleAuthPasskeysRegisterBegin},
-		{http.MethodPost, "/api/auth/passkeys/register/finish", s.handleAuthPasskeysRegisterFinish},
-		{http.MethodPatch, "/api/auth/passkeys/{id}", s.handleAuthPasskeyRename},
-		{http.MethodDelete, "/api/auth/passkeys/{id}", s.handleAuthPasskeyDelete},
-		{http.MethodPost, "/api/auth/login/factor/begin", s.handleAuthLoginFactorBegin},
-		{http.MethodDelete, "/api/auth/users/{id}/passkeys", s.handleAuthPasskeysAdminClear},
-
-		// Admin-only token management (issue #101) -- gated the same way
-		// POST /api/auth/users is (see handleTokensCreate/
-		// handleTokensList/handleTokensRevoke). The tokens themselves
-		// grant access through a completely separate, deliberately
-		// minimal mux -- see requireAuth's bearer-token branch in
-		// auth.go -- not through anything registered here.
-		{http.MethodPost, "/api/tokens", s.handleTokensCreate},
-		{http.MethodGet, "/api/tokens", s.handleTokensList},
-		{http.MethodDelete, "/api/tokens/{id}", s.handleTokensRevoke},
-
-		{http.MethodGet, "/api/auth/oidc/login", s.handleOIDCLogin},
-		{http.MethodPost, "/api/auth/oidc/link", s.handleOIDCLinkStart},
-		{http.MethodGet, "/api/auth/oidc/callback", s.handleOIDCCallback},
+		// Every /api/auth/* and /api/tokens route is gauntlet's (#1202):
+		// Routes mounts the gate's route table beside this one -- see
+		// gauntlet.go.
 	}
-}
-
-// Routes builds the /api/* handler. Static frontend asset serving is
-// mounted separately once the embedded build exists. requireAuth wraps
-// every route except the ones that must work before a session exists
-// (healthz, and the specific auth endpoints that are unauthenticated by
-// nature -- see auth.go's exemptPaths).
-func (s *Server) Routes() http.Handler {
-	return s.requireAuth(s.mux())
 }
 
 // mux is Routes without the authentication gate in front of it.
@@ -974,7 +887,7 @@ func (s *Server) Routes() http.Handler {
 // standing the fixture up with authentication disabled, which is not a
 // state that exists any more. Reaching for the inner mux says what those
 // tests actually mean, and keeps the gate itself covered in one place --
-// auth_test.go and the authzMatrix guard, which both mount Routes.
+// the authzMatrix guard, which mounts Routes, and gauntlet's own suite.
 func (s *Server) mux() http.Handler {
 	mux := http.NewServeMux()
 	for _, r := range s.routes() {

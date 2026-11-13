@@ -8,7 +8,7 @@
 // events). See issue #112.
 //
 // Persistence follows the exact convention already established by
-// internal/flags.Store, internal/auth.Store, and internal/entities.Store:
+// internal/flags.Store, gauntlet.Store, and internal/entities.Store:
 // mutex-protected, optional atomic-write JSON persistence (an empty
 // StorePath keeps everything in-memory only, same as every other optional
 // store in this codebase -- see SECURITY.md).

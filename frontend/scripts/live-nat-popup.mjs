@@ -29,7 +29,7 @@
 // Every line and address below is synthetic, using documentation address
 // space (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
-import { session, check, done, feedRaw, feedSyslog, unfoldStreamFilter } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedSyslog, unfoldStreamFilter, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -84,7 +84,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-nat-popup', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-nat-popup', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value
