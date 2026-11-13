@@ -83,6 +83,7 @@ func TestFirstSecondFactorIsHeldUntilTheRecoveryCodesAreConfirmed(t *testing.T) 
 	r.json(t, &e)
 	u.secret = e.Secret
 
+	awayFromStepEdge(w.a)
 	r = c.post("/api/auth/totp/confirm", map[string]string{"code": totpCode(t, u.secret, w.a.serverNow().Add(-30*time.Second))})
 	wantStatus(t, "totp/confirm", r, 200)
 	var cf struct {
@@ -125,6 +126,7 @@ func TestUnconfirmedFirstFactorIsDeletedAfterTenMinutes(t *testing.T) {
 	wantStatus(t, "totp/enrol", r, 200)
 	var e struct{ Secret string }
 	r.json(t, &e)
+	awayFromStepEdge(w.a)
 	wantStatus(t, "totp/confirm", c.post("/api/auth/totp/confirm", map[string]string{"code": totpCode(t, e.Secret, w.a.serverNow().Add(-30*time.Second))}), 200)
 
 	w.advance(t, 11*time.Minute)

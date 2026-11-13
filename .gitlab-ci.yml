@@ -1763,7 +1763,8 @@ security:gosec:
     entrypoint: [""]
   <<: *dev_or_mr_code
   # The image ships its own Go (1.27.0 in 2.29.0) with GOTOOLCHAIN=local,
-  # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.3)
+  # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.3;
+  # 1.27.4 since #1202)
   # gosec cannot load a single package -- and in SARIF mode it says
   # nothing about why: exit 1, an empty results array, one second of
   # runtime. The fix installs the exact go.mod toolchain over the

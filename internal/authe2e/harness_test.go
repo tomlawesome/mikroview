@@ -780,6 +780,11 @@ type acct struct {
 // code is the authenticator code step steps from the server's now
 // (-1, 0 or +1 are accepted by the server).
 func (a *acct) code(t *testing.T, app *app, step int) string {
+	// A past step is accepted only inside the server's ±1 window; near the
+	// end of a step it can fall out before the request lands.
+	if step < 0 {
+		awayFromStepEdge(app)
+	}
 	return totpCode(t, a.secret, app.serverNow().Add(time.Duration(step)*30*time.Second))
 }
 
