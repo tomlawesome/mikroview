@@ -246,5 +246,5 @@ floors:
 # Postgres 18): persist 85.3% (85.0% unit tests alone), matchlog 84.1%
 # (81.8%). Both within five points of their floors, so neither moved.
 postgres-floors:
-  internal/persist: 79
+  internal/persist: 84
   internal/matchlog: 79
