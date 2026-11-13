@@ -84,7 +84,7 @@ arrives, and the slips flip green — and the deck runs dry on the ledger:
 
 ## The data story
 
-MikroView at `198.51.100.15:8080`; `rb5009` at `198.51.100.1`, other
+MikroView at `192.0.2.15:8080`; `rb5009` at `192.0.2.1`, other
 address `203.0.113.1`; Copy at 14:02:50, certificate 14:02:58, enrol
 14:03:04, first push 14:03:21, backup 14:03:22, token good until 14:17.
 RouterOS **7.24.4** read from the push (7.25.1 in the ahead-of-review

@@ -107,7 +107,7 @@ function render(s) {
   parts.push({ id: 'cert', cls: after(1) && idx < 1 ? 'dim' : '', mark: proof('cert', 'fetch') || null, h: '# 1 · Trust the certificate', lines: secs.cert.lines.map(esc),
     sub: s.stage === 'done' ? undoSub('cert', s) : '' });
   // 2 logs — the address
-  const addrShown = hot(1) ? inline('addr', s, '198.51.100.1') : slot(s.addr, 'address');
+  const addrShown = hot(1) ? inline('addr', s, '192.0.2.1') : slot(s.addr, 'address');
   const logsLines = secs.logs.lines.map(l => esc(l).replace(esc(MV.from()), s.addr || s.useOther ? esc(MV.from()) : `<span class="slot">‹address›</span>`));
   if (hot(1)) logsLines[0] = logsLines[0].replace(/src-address=.*$/, 'src-address=' + addrShown + '<span class="caret"></span>');
   parts.push({ id: 'logs', cls: stateOf(1), mark: proof('enrol', 'enrol line') || (s.addr ? { cls: 'chosen', text: 'from ' + esc(MV.from()) } : null), h: `# 2 · Send logs, from ${s.addr && !hot(1) ? esc(MV.from()) : 'this address'}`, lines: logsLines, ask: hot(1) ? askCard(Q[1], s) : '',

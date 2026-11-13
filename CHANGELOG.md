@@ -688,7 +688,7 @@ rewritten.
   onto the old one.
 
 - **The blocked certificate step now shows the exact `tls.hosts` line to
-  paste** (#1365). It used to say "add 192.168.13.15 to tls.hosts in
+  paste** (#1365). It used to say "add 192.0.2.15 to tls.hosts in
   config.yaml and restart" without ever showing the syntax. The step now
   prints a copyable `hosts: [...]` line carrying every host already
   configured plus the missing one, so pasting it can only add coverage —

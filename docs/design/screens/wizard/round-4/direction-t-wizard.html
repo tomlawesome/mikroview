@@ -250,7 +250,7 @@
 
         <div class="field">
           <label>Address the router reaches MikroView on <span class="tag req">Required</span></label>
-          <input type="text" aria-label="Address the router reaches MikroView on" value="198.51.100.15:8080">
+          <input type="text" aria-label="Address the router reaches MikroView on" value="192.0.2.15:8080">
           <p class="help">The router has to reach this address — a proxy, a second interface or a mapped port all change it.</p>
         </div>
 
@@ -315,7 +315,7 @@
 
         <div class="field">
           <label>Address the router reaches MikroView on <span class="tag req">Required</span></label>
-          <input type="text" aria-label="Address the router reaches MikroView on" value="198.51.100.15:8080">
+          <input type="text" aria-label="Address the router reaches MikroView on" value="192.0.2.15:8080">
           <p class="help">The router has to reach this address — a proxy, a second interface or a mapped port all change it.</p>
         </div>
 
@@ -327,7 +327,7 @@
 
         <div class="field">
           <label>The router's own address <span class="tag req">Required</span></label>
-          <input type="text" aria-label="The router's own address" value="198.51.100.1">
+          <input type="text" aria-label="The router's own address" value="192.0.2.1">
           <p class="help">MikroView opens the log port for this address only, until the router's first line arrives.</p>
         </div>
 
@@ -362,7 +362,7 @@
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="wbody">
         <div class="rail">
           <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
@@ -377,7 +377,7 @@
               <div class="mh">1 · Paste</div>
               <p class="lead">Fetch MikroView's certificate, then point this router's logging here and mark the run as <b>rb5009</b>'s:</p>
               <div class="foldbox">
-                <div class="firstline">/tool fetch url="https://198.51.100.15:8080/ca.crt" check-certificate=no dst-path=mikroview-ca.crt</div>
+                <div class="firstline">/tool fetch url="https://192.0.2.15:8080/ca.crt" check-certificate=no dst-path=mikroview-ca.crt</div>
                 <button type="button" class="moreline" aria-label="Show all 5 lines of this command">… 4 more lines</button>
               </div>
               <p class="caption">Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal) · creates the mikroview logging action and its rule, then logs the enrol line</p>
@@ -410,7 +410,7 @@
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="wbody">
         <div class="rail">
           <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
@@ -449,11 +449,11 @@
 
 <!-- ================= T5 : CONNECT · WAIT, DRAWER OPEN ================= -->
 <section class="scene" id="t5">
-  <div class="scene-tag">t5 — Connect the router · Wait, drawer open — the two lists of §4, with the 203.0.113.1 cross</div>
+  <div class="scene-tag">t5 — Connect the router · Wait, drawer open — the two lists of §4, with the 198.51.100.200 cross</div>
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="wbody">
         <div class="rail">
           <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
@@ -473,9 +473,9 @@
                 <div class="drawer-body open" id="t5-drawer">
                   <div class="drawer-h">What MikroView checked</div>
                   <ul class="checklist">
-                    <li class="ok"><span class="cs">✓</span><span>The certificate covers 198.51.100.15.</span></li>
-                    <li class="ok"><span class="cs">✓</span><span>The log port is open for 198.51.100.1 until 14:17.</span></li>
-                    <li class="bad"><span class="cs">✗</span><span>Lines are arriving from <b>203.0.113.1</b> and being refused. If that is rb5009, its logs leave from that address, not the one you told me → <button type="button" class="linkbtn fix" aria-label="Use 203.0.113.1 instead of 198.51.100.1">Use 203.0.113.1 instead</button></span></li>
+                    <li class="ok"><span class="cs">✓</span><span>The certificate covers 192.0.2.15.</span></li>
+                    <li class="ok"><span class="cs">✓</span><span>The log port is open for 192.0.2.1 until 14:17.</span></li>
+                    <li class="bad"><span class="cs">✗</span><span>Lines are arriving from <b>198.51.100.200</b> and being refused. If that is rb5009, its logs leave from that address, not the one you told me → <button type="button" class="linkbtn fix" aria-label="Use 198.51.100.200 instead of 192.0.2.1">Use 198.51.100.200 instead</button></span></li>
                   </ul>
                   <div class="drawer-h">Only you can check</div>
                   <ul class="qlist">
@@ -509,10 +509,10 @@
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="wbody">
         <div class="rail">
-          <div class="rl on"><span class="ring">✓</span><span><span class="rlt">Connect the router</span><span class="rlsub">14:03 · 198.51.100.1</span></span></div>
+          <div class="rl on"><span class="ring">✓</span><span><span class="rlt">Connect the router</span><span class="rlsub">14:03 · 192.0.2.1</span></span></div>
           <div class="rl"><span class="ring">2</span><span><span class="rlt">Tag firewall rules</span></span></div>
           <div class="rl"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
           <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
@@ -524,8 +524,8 @@
             <div class="move-done"><span class="tick">✓</span><span>Waited</span><time>62s</time></div>
             <div class="move-open receipt-anim">
               <div class="mh">3 · Receipt</div>
-              <div class="receiptline"><span class="tick">✓</span><span>Certificate fetched by 198.51.100.1.</span><time>14:02:58</time></div>
-              <div class="receiptline"><span class="tick">✓</span><span>Enrol line arrived from 198.51.100.1.</span><time>14:03:04</time></div>
+              <div class="receiptline"><span class="tick">✓</span><span>Certificate fetched by 192.0.2.1.</span><time>14:02:58</time></div>
+              <div class="receiptline"><span class="tick">✓</span><span>Enrol line arrived from 192.0.2.1.</span><time>14:03:04</time></div>
               <div class="undoopen">
                 <button type="button" class="linkbtn" aria-expanded="true" aria-controls="t6-undo" aria-label="Undo this step">Undo this step…</button>
                 <div class="undopanel" id="t6-undo">
@@ -565,10 +565,10 @@
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Step 3 of 4</span><h3>Push router state</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="wbody">
         <div class="rail">
-          <div class="rl done"><span class="ring">✓</span><span><span class="rlt">Connect the router</span><span class="rlsub">14:03 · 198.51.100.1</span></span></div>
+          <div class="rl done"><span class="ring">✓</span><span><span class="rlt">Connect the router</span><span class="rlsub">14:03 · 192.0.2.1</span></span></div>
           <div class="rl done"><span class="ring">✓</span><span><span class="rlt">Tag firewall rules</span><span class="rlsub">14:04 · 3 rules</span></span></div>
           <div class="rl on"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
           <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
@@ -586,7 +586,7 @@
   :set ruleRecs (\$ruleRecs, {\$rec})
 }
 :local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$ruleRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local alRecs [:toarray \"\"]
 :foreach i,v in=[/ip/firewall/address-list print as-value] do={
@@ -594,7 +594,7 @@
   :set alRecs (\$alRecs, {\$rec})
 }
 :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$alRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$alPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$alPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local leaseRecs [:toarray \"\"]
 :foreach i,v in=[/ip/dhcp-server/lease print as-value] do={
@@ -602,7 +602,7 @@
   :set leaseRecs (\$leaseRecs, {\$rec})
 }
 :local leasePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$leaseRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local arpRecs [:toarray \"\"]
 :foreach i,v in=[/ip/arp print as-value] do={
@@ -610,7 +610,7 @@
   :set arpRecs (\$arpRecs, {\$rec})
 }
 :local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$arpRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local addrRecs [:toarray \"\"]
 :foreach i,v in=[/ip/address print as-value] do={
@@ -618,7 +618,7 @@
   :set addrRecs (\$addrRecs, {\$rec})
 }
 :local addrPayload [:serialize to=json value={\"kind\"=\"ip-address\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$addrRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$addrPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$addrPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local logRecs [:toarray \"\"]
 :foreach i,v in=[/system/logging/action print as-value] do={
@@ -634,13 +634,13 @@
   }
 }
 :local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$logRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none" } else={ /system script set [find name=mv-push] policy=read,test source=":local ruleRecs [:toarray \"\"]
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none" } else={ /system script set [find name=mv-push] policy=read,test source=":local ruleRecs [:toarray \"\"]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
   :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"dstPort\"=(\$v->\"dst-port\"); \"protocol\"=(\$v->\"protocol\"); \"log\"=(\$v->\"log\"); \"dstAddress\"=(\$v->\"dst-address\"); \"srcAddress\"=(\$v->\"src-address\"); \"connectionState\"=(\$v->\"connection-state\"); \"inInterface\"=(\$v->\"in-interface\"); \"outInterface\"=(\$v->\"out-interface\"); \"disabled\"=(\$v->\"disabled\"); \"packets\"=(\$v->\"packets\"); \"bytes\"=(\$v->\"bytes\")}
   :set ruleRecs (\$ruleRecs, {\$rec})
 }
 :local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$ruleRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local alRecs [:toarray \"\"]
 :foreach i,v in=[/ip/firewall/address-list print as-value] do={
@@ -648,7 +648,7 @@
   :set alRecs (\$alRecs, {\$rec})
 }
 :local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$alRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$alPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$alPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local leaseRecs [:toarray \"\"]
 :foreach i,v in=[/ip/dhcp-server/lease print as-value] do={
@@ -656,7 +656,7 @@
   :set leaseRecs (\$leaseRecs, {\$rec})
 }
 :local leasePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$leaseRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local arpRecs [:toarray \"\"]
 :foreach i,v in=[/ip/arp print as-value] do={
@@ -664,7 +664,7 @@
   :set arpRecs (\$arpRecs, {\$rec})
 }
 :local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$arpRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local addrRecs [:toarray \"\"]
 :foreach i,v in=[/ip/address print as-value] do={
@@ -672,7 +672,7 @@
   :set addrRecs (\$addrRecs, {\$rec})
 }
 :local addrPayload [:serialize to=json value={\"kind\"=\"ip-address\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$addrRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$addrPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$addrPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local logRecs [:toarray \"\"]
 :foreach i,v in=[/system/logging/action print as-value] do={
@@ -688,7 +688,7 @@
   }
 }
 :local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$logRecs}]
-/tool fetch url=\"https://198.51.100.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none" }
+/tool fetch url=\"https://192.0.2.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none" }
 :if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
 /system script run mv-push</div>
                 <button type="button" class="lessline" aria-label="Show fewer lines of this command">Show fewer lines ▴</button>
@@ -723,7 +723,7 @@
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Setup</span><h3>Where setup stands</h3><button type="button" class="x" aria-label="Close setup">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="amber">You told me 7.16.2; rb5009 reports 7.24.4. Upgrade warnings were re-checked — 1 applies to Connect the router · <button type="button" class="linkbtn" aria-label="Show the upgrade warning on Connect the router">Show</button></div>
       <div class="wbody">
         <div class="wmain full col" style="max-width:720px">
@@ -765,7 +765,7 @@
   <div class="stage">
     <div class="wiz">
       <div class="whead"><span class="step">Step 1 of 3</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
-      <div class="told">Told: RouterOS 7.16.2 · MikroView at 198.51.100.15:8080 · rb5009 at 198.51.100.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.0.2.15:8080 · rb5009 at 192.0.2.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
       <div class="wbody">
         <div class="rail">
           <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
@@ -779,7 +779,7 @@
               <div class="mh">1 · Paste</div>
               <p class="lead">Fetch MikroView's certificate, then point this router's logging here and mark the run as <b>rb5009</b>'s:</p>
               <div class="foldbox">
-                <div class="firstline">/tool fetch url="https://198.51.100.15:8080/ca.crt" check-certificate=no dst-path=mikroview-ca.crt</div>
+                <div class="firstline">/tool fetch url="https://192.0.2.15:8080/ca.crt" check-certificate=no dst-path=mikroview-ca.crt</div>
                 <button type="button" class="moreline" aria-label="Show all 5 lines of this command">… 4 more lines</button>
               </div>
               <p class="caption">Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal) · creates the mikroview logging action and its rule, then logs the enrol line</p>

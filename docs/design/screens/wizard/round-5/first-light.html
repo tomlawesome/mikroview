@@ -254,7 +254,7 @@ h1 small { display: block; font-size: 13px; font-weight: 500; letter-spacing: 0.
           <circle class="node-mv" r="30"/>
           <circle class="node-mv-core" r="7"><animate attributeName="r" values="6;8;6" dur="2.6s" repeatCount="indefinite"/></circle>
           <text class="lbl big" x="0" y="66" text-anchor="middle">MikroView</text>
-          <text class="lbl mono" x="0" y="86" text-anchor="middle" id="mv-addr">198.51.100.15:8080</text>
+          <text class="lbl mono" x="0" y="86" text-anchor="middle" id="mv-addr">192.0.2.15:8080</text>
           <g id="mv-counter" class="hidden">
             <text class="counter" x="0" y="-62" text-anchor="middle" id="lines">0</text>
             <text class="counter-l" x="0" y="-46" text-anchor="middle">log lines received</text>
@@ -306,8 +306,8 @@ h1 small { display: block; font-size: 13px; font-weight: 500; letter-spacing: 0.
 
 <script>
 /* ----------------------------------------------------------------------
-   One data story (rounds 3-5): MikroView at 198.51.100.15:8080; the
-   router rb5009 at 198.51.100.1, other address 203.0.113.1; the
+   One data story (rounds 3-5): MikroView at 192.0.2.15:8080; the
+   router rb5009 at 192.0.2.1, other address 198.51.100.200; the
    afternoon from 14:02. The router reports RouterOS 7.24.4 (7.25.1 in
    the ahead-of-review scenario). Nothing here is asked that the router
    can tell us.
@@ -321,19 +321,19 @@ const el = (tag, attrs = {}, kids = []) => {
 };
 
 const story = {
-  mv: '198.51.100.15:8080',
+  mv: '192.0.2.15:8080',
   tokenUntil: '14:17',
   cert: '14:02:58', enrol: '14:03:04', push: '14:03:21', backup: '14:03:22', tagged: '14:05:02',
   rules: 47, alreadyLog: 3, lists: 12, leases: 31, peers: 3,
   ifaces: [
-    { n: 'ether1', d: 'WAN · 198.51.100.140', wan: true },
+    { n: 'ether1', d: 'WAN · 198.51.100.201', wan: true },
     { n: 'bridge', d: 'LAN · 31 leases' },
     { n: 'wg0', d: 'WireGuard · 3 peers' },
   ],
   suggestions: [
     { chain: 'forward', action: 'drop', comment: 'drop everything else', why: 'the last rule on forward — every packet the LAN sends that nothing above allowed', prefix: 'fwd-drop' },
     { chain: 'input', action: 'drop', comment: 'drop from WAN', why: 'the internet knocking on the router itself', prefix: 'wan-in' },
-    { chain: 'forward', action: 'accept', comment: 'port-forward 443 → 198.51.100.40', why: 'an accept that crosses the boundary inbound — the one worth watching', prefix: 'nat' },
+    { chain: 'forward', action: 'accept', comment: 'port-forward 443 → 192.0.2.40', why: 'an accept that crosses the boundary inbound — the one worth watching', prefix: 'nat' },
     { chain: 'forward', action: 'drop', comment: 'guest → LAN', why: 'guest wifi reaching for the LAN', prefix: 'guest-lan' },
     { chain: 'input', action: 'drop', comment: 'wg0 → input', why: 'a VPN peer touching the router, not the LAN', prefix: 'wg-in' },
   ],
@@ -354,7 +354,7 @@ const pasteBlock = () => {
   const b = state.backup ? '\n:if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup start-time=03:00:00 interval=1d policy=read,test,sensitive,ftp on-event="/system script run mv-backup" }' : '';
   return `/tool fetch url="https://${story.mv}/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
 /certificate import file-name=mikroview-ca.crt passphrase=""
-/system logging action add name=mikroview target=remote remote=198.51.100.15 remote-port=6514 remote-protocol=tcp remote-log-format=syslog src-address=${state.useOther ? '203.0.113.1' : (state.addr || '198.51.100.1')}
+/system logging action add name=mikroview target=remote remote=192.0.2.15 remote-port=6514 remote-protocol=tcp remote-log-format=syslog src-address=${state.useOther ? '198.51.100.200' : (state.addr || '192.0.2.1')}
 /system logging add topics=firewall action=mikroview
 /system logging add topics=info,!firewall action=mikroview
 :if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=":local ruleRecs [:toarray \\"\\"]
@@ -401,7 +401,7 @@ function particles(on) {
 }
 function paintCanvas() {
   $('#router-name').textContent = state.name || 'your router';
-  $('#router-addr').textContent = state.useOther ? '203.0.113.1' : state.addr;
+  $('#router-addr').textContent = state.useOther ? '198.51.100.200' : state.addr;
   const body = $('#router-body');
   body.classList.toggle('named', !!state.name);
   const has = k => state.evidence.some(e => e.k === k);
@@ -447,8 +447,8 @@ function startRouter() {
     add({ k: 'push', t: story.push, h: `First push from ${state.name}`, sub: 'push' });
     if (state.backup) later(1000, () => add({ k: 'backup', t: story.backup, h: 'Nightly backup scheduled', sub: 'next run 03:00 · lands in MikroView\'s drop box' }));
   };
-  const enrol = () => { add({ k: 'enrol', t: story.enrol, h: `Enrol line arrived from ${state.useOther ? '203.0.113.1' : state.addr}`, sub: 'The log stream is open. Everything the router logs now lands here.' }); flash(); tickLines(); later(9000, push); };
-  const cert = () => { add({ k: 'cert', t: story.cert, h: `Certificate fetched by ${state.useOther ? '203.0.113.1' : state.addr}`, sub: 'The router trusts MikroView.' }); later(5000, enrol); };
+  const enrol = () => { add({ k: 'enrol', t: story.enrol, h: `Enrol line arrived from ${state.useOther ? '198.51.100.200' : state.addr}`, sub: 'The log stream is open. Everything the router logs now lands here.' }); flash(); tickLines(); later(9000, push); };
+  const cert = () => { add({ k: 'cert', t: story.cert, h: `Certificate fetched by ${state.useOther ? '198.51.100.200' : state.addr}`, sub: 'The router trusts MikroView.' }); later(5000, enrol); };
   if (sc === 'wrongaddr' && !state.useOther) {
     later(4000, () => add({ k: 'cert', t: story.cert, h: `Certificate fetched by ${state.addr}`, sub: 'The router trusts MikroView.' }));
     later(9000, () => { state.refused = true; state.drawer = true; render(); });
@@ -465,7 +465,7 @@ function renderChrome() {
   const names = ['Connect', 'Tune logging', 'Done'];
   const cur = rails[state.stage];
   $('#rail').innerHTML = names.map((n, i) => `<span class="${i < cur ? 'done' : i === cur ? 'now' : ''}">${n}</span>`).join('<span class="dot">·</span>');
-  $('#context').innerHTML = (state.stage !== 'tell' && state.name) ? `${state.name} at ${state.useOther ? '203.0.113.1' : state.addr} → MikroView at ${story.mv} · <button type="button" class="chg" data-act="change">Change…</button>` : '';
+  $('#context').innerHTML = (state.stage !== 'tell' && state.name) ? `${state.name} at ${state.useOther ? '198.51.100.200' : state.addr} → MikroView at ${story.mv} · <button type="button" class="chg" data-act="change">Change…</button>` : '';
 }
 function render() {
   renderChrome(); paintCanvas();
@@ -520,7 +520,7 @@ const views = {
     const has = k => state.evidence.some(e => e.k === k);
     const rows = state.evidence.map(e => `<li class="${e.k}"><span class="mk">✓</span><span>${e.h}${e.sub === 'push' ? pushSub() : `<span class="sub">${e.sub}</span>`}</span><span class="t">${e.t}</span></li>`).join('');
     const waiting = !has('push') ? `<li class="wait"><span class="mk"><span class="pulse"></span></span><span>${!has('cert') ? `Waiting for ${state.name} to fetch the certificate…` : !has('enrol') ? 'Waiting for the enrol line…' : 'Waiting for the first push — the script runs as soon as it is saved…'}</span><span class="t"></span></li>` : '';
-    const refused = state.refused && !state.useOther ? `<li class="bad"><span class="mk">✗</span><span>Lines are arriving from <code>203.0.113.1</code> and being refused.<span class="sub">If that is ${state.name}, its logs leave from that address, not the one you told me. <button type="button" class="link" data-act="use-other">Use 203.0.113.1 instead</button></span></span><span class="t">now</span></li>` : '';
+    const refused = state.refused && !state.useOther ? `<li class="bad"><span class="mk">✗</span><span>Lines are arriving from <code>198.51.100.200</code> and being refused.<span class="sub">If that is ${state.name}, its logs leave from that address, not the one you told me. <button type="button" class="link" data-act="use-other">Use 198.51.100.200 instead</button></span></span><span class="t">now</span></li>` : '';
     const done = has('push');
     return `
     <div class="view">
@@ -580,9 +580,9 @@ const drawer = () => `
   <div class="drawer">
     <h4>What MikroView checked</h4>
     <ul>
-      <li class="ok"><span class="m">✓</span><span>The certificate covers <code>198.51.100.15</code>.</span></li>
+      <li class="ok"><span class="m">✓</span><span>The certificate covers <code>192.0.2.15</code>.</span></li>
       <li class="ok"><span class="m">✓</span><span>The log port is open for <code>${state.addr}</code> until ${story.tokenUntil}.</span></li>
-      ${state.refused ? `<li class="cross"><span class="m">✗</span><span>Lines are arriving from <code>203.0.113.1</code> and being refused — see above.</span></li>` : `<li class="ok"><span class="m">✓</span><span>No other address is knocking.</span></li>`}
+      ${state.refused ? `<li class="cross"><span class="m">✗</span><span>Lines are arriving from <code>198.51.100.200</code> and being refused — see above.</span></li>` : `<li class="ok"><span class="m">✓</span><span>No other address is knocking.</span></li>`}
     </ul>
     <h4>Only you can check</h4>
     <ul>
@@ -632,7 +632,7 @@ function act(a, d = {}) {
     case 'copy': if (state.copied) break; state.copied = true; render(); later(1600, () => { state.stage = 'watch'; render(); startRouter(); }); break;
     case 'back-tell': state.stage = 'tell'; state.copied = false; render(); break;
     case 'drawer': state.drawer = true; render(); break;
-    case 'use-other': state.useOther = true; state.refused = false; state.drawer = false; render(); later(1500, () => { add({ k: 'enrol', t: story.enrol, h: 'Enrol line arrived from 203.0.113.1', sub: 'The log stream is open. Everything the router logs now lands here.' }); flash(); tickLines(); later(7000, () => { state.version = '7.24.4'; state.standing = 'reviewed'; add({ k: 'push', t: story.push, h: `First push from ${state.name}`, sub: 'push' }); if (state.backup) later(1000, () => add({ k: 'backup', t: story.backup, h: 'Nightly backup scheduled', sub: 'next run 03:00 · lands in MikroView\'s drop box' })); }); }); break;
+    case 'use-other': state.useOther = true; state.refused = false; state.drawer = false; render(); later(1500, () => { add({ k: 'enrol', t: story.enrol, h: 'Enrol line arrived from 198.51.100.200', sub: 'The log stream is open. Everything the router logs now lands here.' }); flash(); tickLines(); later(7000, () => { state.version = '7.24.4'; state.standing = 'reviewed'; add({ k: 'push', t: story.push, h: `First push from ${state.name}`, sub: 'push' }); if (state.backup) later(1000, () => add({ k: 'backup', t: story.backup, h: 'Nightly backup scheduled', sub: 'next run 03:00 · lands in MikroView\'s drop box' })); }); }); break;
     case 'reroll': alert('Prototype: a new token would be minted and the paste rewritten; the old one dies.'); break;
     case 'warn': state.showWarning = !state.showWarning; render(); break;
     case 'to-tune': state.stage = 'tune'; render(); break;
@@ -658,7 +658,7 @@ $('#scenario').addEventListener('change', restart);
 document.querySelector('.leave').addEventListener('click', () => alert('Prototype: closes setup. Where setup stands reopens it from the router\'s page.'));
 
 // A prefilled walk-through for the prototype: ?demo puts the story's values in.
-if (location.search.includes('demo')) Object.assign(state, { name: 'rb5009', addr: '198.51.100.1', pass: 'correct horse' });
+if (location.search.includes('demo')) Object.assign(state, { name: 'rb5009', addr: '192.0.2.1', pass: 'correct horse' });
 render();
 </script>
 </body>

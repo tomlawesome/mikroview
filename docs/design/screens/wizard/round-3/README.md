@@ -24,9 +24,9 @@ No verdicts recorded yet — the owner has not seen this round.
 ## The story
 
 One fictional deployment throughout: the instance answers on
-`198.51.100.15:8080`, the router is named `rb5009`, declared in
-config.yaml at `sourceIp: 198.51.100.1`. Where a source-address split is
-shown, the undeclared address arriving instead is `203.0.113.1`.
+`192.0.2.15:8080`, the router is named `rb5009`, declared in
+config.yaml at `sourceIp: 192.0.2.1`. Where a source-address split is
+shown, the undeclared address arriving instead is `198.51.100.200`.
 
 ## How this was built
 
@@ -65,16 +65,16 @@ which is which.
 | Scenario | Step / state | What the fixture (or the script) does |
 |---|---|---|
 | `fresh-install` | ca waiting, name quiet, rules waiting, push/backup no-token, register error, finish (nothing done) | Nothing set anywhere: no address answered, no devices, no marks. Auto-launch opens the wizard on pane 1 by itself (the record's own rule: a fresh admin session with no router and no marks opens it unasked). |
-| `ca-blocked` | ca blocked | Address already saved as the story's `198.51.100.15:8080`, but `tls.hosts` still reads `["localhost","127.0.0.1"]` — the certificate doesn't cover it. |
-| `source-split` | syslog partial (source-address split) | rb5009 declared at `198.51.100.1`, configured, silent; `203.0.113.1` streams instead, undeclared (#442). |
+| `ca-blocked` | ca blocked | Address already saved as the story's `192.0.2.15:8080`, but `tls.hosts` still reads `["localhost","127.0.0.1"]` — the certificate doesn't cover it. |
+| `source-split` | syslog partial (source-address split) | rb5009 declared at `192.0.2.1`, configured, silent; `198.51.100.200` streams instead, undeclared (#442). |
 | `rules-partial-undecoded` | rules partial | 15234 events, 0 decoded — rules log without the letter convention at all. |
 | `rules-partial-some` | rules partial | 15234 events, 6031 decoded — some rules tagged, some not. |
 | `mostly-done` | ca/syslog/rules/push/backup done; name/register stay quiet; finish (mostly done) | A full "day two" story: rb5009 enrolled, pushing, backed up (2 generations), registered — all as server-side fact. Opened plainly from the account menu, so `ledgerDevice` is empty this walk; see the note below on why name/register still read quiet here. |
 | `backup-blocked` | backup blocked | `router-backups.enabled: false` — no retention key mounted, so the step mints one in-browser rather than describing one twice (#1133). |
 | `lost-router` | backup, lost router | Same as `mostly-done`, but rb5009's backup row carries `missed: 6`. Reached only through Settings ▸ router backups' "is it gone?" link (EngineRoom.svelte/RouterBackups.svelte) — this is the one door into that shape; Run setup… never offers it. |
-| `walkthrough` | name done; syslog waiting → token fresh; push with-token → no-address; backup with-token; register done | One continuous session: name "rb5009" (creates it live), mint its enrolment token for `198.51.100.1`, let push/backup auto-mint their shared ingest token once a router is known, clear and restore the address field for the no-address shot, then register. |
+| `walkthrough` | name done; syslog waiting → token fresh; push with-token → no-address; backup with-token; register done | One continuous session: name "rb5009" (creates it live), mint its enrolment token for `192.0.2.1`, let push/backup auto-mint their shared ingest token once a router is known, clear and restore the address field for the no-address shot, then register. |
 | `walkthrough-expired-token` | syslog, token expired | Same walk, but the fixture's mint endpoint always returns an `expiresAt` already in the past, so "Reroll to mint another" shows on the very next render. |
-| `walkthrough-refused` | syslog, refused senders | Same walk; the fixture's `/api/devices/refused` always reports `203.0.113.1` refused since the mint. |
+| `walkthrough-refused` | syslog, refused senders | Same walk; the fixture's `/api/devices/refused` always reports `198.51.100.200` refused since the mint. |
 
 ## Re-running it
 
@@ -127,4 +127,4 @@ docker run -d --name mikroview-design-host -p 8307:80 \
   nginx:alpine
 ```
 
-<http://198.51.100.30:8307/screens/wizard/round-3/index.html>
+<http://198.51.100.201:8307/screens/wizard/round-3/index.html>
