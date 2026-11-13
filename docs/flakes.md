@@ -6,6 +6,9 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## TestKeyedLimiterReportsWhatItSuppressed: count = 2, want 7 (internal/logging)
+- 2026-10-28 · 028699f5 (chore/1440-go1.27.3-advisories) · pipeline 3101 / test:go · `handshake_test.go:122: count = 2, want 7`. The test opens a 1 ms window, makes six calls and sleeps 2 ms; on a busy runner the six calls straddled the window's end, so the limiter had already reset. The previous pipeline on the same test code (3097) passed it, and `-race -count=30` passes locally.
+
 ## live-change-password: the account menu does not open (5 s) under WebKit
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 1/4 · `openAccountMenu` timed out waiting for `.account .menu` (`live-change-password.mjs:110`), after every password check had passed. Because the scenario restores the admin password only at its end, the next 16 scenarios in the shard could not sign in: that cascade is #1420, a defect, not a flake. A third WebKit run of shard 1/4 on the same commit passed 28/28. Host load ~8.
@@ -43,7 +46,11 @@ testing-and-ci skill (owner, 2026-09-08).
 
 ## coverage-floor: internal/baseline's coverage drops under full-suite load
 
-- 2026-09-27 · dee367fa (fix/1290-postgres-coverage, local `go test ./... -coverprofile`, no -race, host busy with other agents) · `internal/baseline: got 88.6%, floor 90%`; `go test ./internal/baseline/...` alone read 90.7% three times running. Coverage that moves with load means a timing-dependent path in its tests; the ratchet can go red on it.
+- 2026-09-27 · dee367fa · fix/1290-postgres-coverage, local `go test ./... -coverprofile`, no -race, host busy with other agents · `internal/baseline: got 88.6%, floor 90%`; `go test ./internal/baseline/...` alone read 90.7% three times running. Coverage that moves with load means a timing-dependent path in its tests; the ratchet can go red on it.
+
+## coverage-floor: internal/seen coverage drops under its 85% floor
+
+- 2026-10-28 · 140706aa · pipeline 3113 / test:go (job 40945) · internal/seen read 85.0%, under its 85% floor, on a branch that changed only .gitlab-ci.yml and supply-chain/pins-policy.json; rerun job 41154 read 85.5%. First sighting.
 
 ## TestTheUnlockSweepSurvivesAPanicInOneTick: the sweeper never ran again after a tick panicked
 
@@ -140,7 +147,7 @@ own rather than swelling that entry's count.
 
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 3/4, job 8449 · `goTo("Settings") timed out waiting for card "engineroom"`, `offsetFromDeckTop: 1440` (card mounted, roll never reached it — #1011's shape, the opposite sign to live-memory-slider's), at `live-browser.mjs:385` from `live-settings-doors.mjs:27`; 776's 3/4 (job 8474) passed on the same commit.
 
-## Scenarios exit 1 without a result when two gate stages overlap on the runner
+## Scenarios exit 1 without a result when two gate stages overlap on the runner (host) — #1458, ai/agent-infra#9
 
 Pipeline 770 (!1003, 237d4d84) had its gate stage running at the same time as
 pipeline 773's on the same host. Five scenarios across three shards died
@@ -164,17 +171,7 @@ each, recorded together because the cause is shared (#831's contention):
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
-- 2026-09-09 · 4f17d079 (work/460-ui, local, standalone) · `goTo("Stream") timed out waiting for card "live"`, `offsetFromDeckTop: -105` (card mounted, the roll overshot it — #1011's shape) at `live-browser.mjs:444` from the scenario's own `session()` call, before a single check ran; the same command on the same tree passed immediately after, and three further standalone runs passed. Same family as the `live-rule-regex` and `live-settings-doors` entries above: `goTo` never settles, on a host with other work on it.
-
-## live-learning-window: a detector's rendered line lags its own API count of sources
-
-- 2026-09-10 · 55a84437 (dev) · pipeline 864, gate:scenarios 2/4, job 9998 · three `FAIL`s of the shape `activity_spike's rendered line matches the state its own API data describes -- got "Baselines established (69 sources)", want "... (80 sources)"` (also low_slow_scan 69/80, off_hours_activity 68/80): the page's line was read while the feed was still adding sources, so the API answered later than the render did; pipeline 865, same commit, passed the shard.
-
-- 2026-09-23 · 17542c5e (feature/m19-second-factor, remote gate `MV_GATE_WAIT=1 make live-check-remote`, chromium, 4 shards) · three `FAIL`s of the same shape, this time counting up rather than settled: `activity_spike ... got "Learning -- nearest source 2 of 5 samples (0 of 63 sources ready)", want "... (0 of 80 sources ready)"` (also low_slow_scan 0/62, off_hours_activity 0/62). Same cause as the sighting above -- the rendered line was read while the feed was still adding sources -- so the shortfall is 62/63 of 80 rather than a wrong number. Not re-run at this commit: the same suite's previous full run, unsharded on the workstation the evening before, did not fail this scenario, and the four other failures in this run are all the forced-enrolment door and unrelated to it. Second sighting.
-
-- 2026-09-25 · pipeline 1645 (chore/release-0.6.1, !1095) · gate:scenarios 3/4, job 23047 · same shape again: `got "... (0 of 72 sources ready)", want "... (0 of 80 sources ready)"`, also 71/80. Retried as job 23093. Third sighting -- filed as #1346.
-
-**Fixed in #1346:** the scenario now polls `/api/definitions` until every baseline-backed detector's `keys` count is stable across two consecutive reads before opening the bench, instead of reading the page once against whatever the API happened to say a moment later. Kept here so the symptom is findable.
+- 2026-09-09 · 4f17d079 · work/460-ui, local, standalone · `goTo("Stream") timed out waiting for card "live"`, `offsetFromDeckTop: -105` (card mounted, the roll overshot it — #1011's shape) at `live-browser.mjs:444` from the scenario's own `session()` call, before a single check ran; the same command on the same tree passed immediately after, and three further standalone runs passed. Same family as the `live-rule-regex` and `live-settings-doors` entries above: `goTo` never settles, on a host with other work on it.
 
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
@@ -200,7 +197,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
 
 - 2026-09-19 · df4ba9af (fix/v060-audit, local `python3 -m unittest scripts.seed_demo_test`) · full-file run, this the only failure · `AssertionError: 2 != 1` on `len(cam_beacon_lines)`. `lines_for_round40`'s DNS-beacon block (`scripts/seed-demo.py` ~1169) fires deterministically off `elapsed // CAM_BEACON_SECONDS`, but an earlier, unrelated block in the same function can independently emit a second line matching the test's own filter (cam-porch's mac plus `r40-iot-srv-dns`): it calls `random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])` for a random `iot`-zone host, so whenever that random pick lands on cam-porch and `r40-iot-srv-dns` together, the count goes to 2. **Root cause confirmed, not just suspected:** the test seeds nothing and reads the shared `random` module, which Python seeds from OS entropy fresh in every process -- `CamBeaconTests` run completely alone (`python3 -m unittest scripts.seed_demo_test.CamBeaconTests`, nothing else in the process) still failed 2 of 20 runs, so this has nothing to do with test order or other tests' random draws; it is a roughly 1-in-10 chance on any given process regardless of what else runs. (An earlier note here blamed #1272's new tests shifting shared state -- ruled out by this isolation run; kept as a correction rather than deleted per this file's own header about superseded reasoning.)
-- 2026-09-20 · 8f2c1f54 (agent/v061-lows-scripts worktree, local `python3 -m unittest scripts.seed_demo_test`) · same `2 != 1`, about one full run in three or four. Second sighting; the cause above is confirmed, so the fix went in with this sighting rather than waiting for a third: `CamBeaconTests.setUp` now calls `random.seed(40)`, so the unrelated iot->dns roll lands the same way every run (25 of 25 runs green after). The beacon itself is cadence-driven, so seeding changes nothing about what the test proves.
+- 2026-09-20 · 8f2c1f54 · agent/v061-lows-scripts worktree, local `python3 -m unittest scripts.seed_demo_test` · same `2 != 1`, about one full run in three or four. Second sighting; the cause above is confirmed, so the fix went in with this sighting rather than waiting for a third: `CamBeaconTests.setUp` now calls `random.seed(40)`, so the unrelated iot->dns roll lands the same way every run (25 of 25 runs green after). The beacon itself is cadence-driven, so seeding changes nothing about what the test proves.
 
 ## security:trivy-fs: the vulnerability database will not download
 
@@ -227,30 +224,18 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-10-11 · b00a5bd5 (feat/1202-gauntlet, #1451) · local full `go test ./... -race` in a fresh clone of the branch, coverage switch off · the same `Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`; the test's setup logged at 08:43:59, a second before a minute boundary, as the diagnosis below predicts. Re-ran 3/3 alone, unchanged code: passed. The branch's change there touches only internal/api's routeroscommands test. Second sighting.
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
 
-## live-connection-states: content does not return to its pre-loss position after the banner clears (#1423)
-
-- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 1/4 · `got -12, expected ~0`, the opposite sign from the first sighting. A third WebKit run of shard 1/4 on the same commit passed 28/28. Second sighting.
-- 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.
-- 2026-09-24 · 8216621a (dev) · remote gate on mikroview-runner, 4 shards ·
-  `FAIL content returns to its pre-loss position once the banner clears --
-  got -12, expected ~0`; every other check in the scenario passed. Reproduced
-  alone under WebKit 3/3 clean (each printing `got 0, expected ~0`) and under
-  Chromium 2/2 clean. Not reproduced in isolation -- consistent with the
-  scroll-settle assertion racing the four-shard host contention this scenario
-  family is prone to (AGENTS.md's "the CPU is not [safe]").
-
 ## frontend state.svelte.test.ts: "costs about the same to append" (#1304 E2) timing test
 
-- 2026-09-26 · 18eb8dad (fix/1362-enrol-403, local `npx vitest run`, this host under nine parallel agents) · the append-cost comparison failed in the full run and passed alone on the same commit. The branch touches api.ts and auth state, not the store the test measures. Like the syslog ratio test, it compares elapsed time, so it reads host load. First sighting.
+- 2026-09-26 · 18eb8dad · fix/1362-enrol-403, local `npx vitest run`, this host under nine parallel agents · the append-cost comparison failed in the full run and passed alone on the same commit. The branch touches api.ts and auth state, not the store the test measures. Like the syslog ratio test, it compares elapsed time, so it reads host load. First sighting.
 
 ## frontend LiveTable.svelte.test.ts: "keeps the flat stripes when events arrive during a round trip through group mode" (#1308)
 
-- 2026-09-30 · fe8d1919 + local test edits (feature/1374-wizard, local `npm test -- --coverage`, host shared with other agents' vitest runs) · timed out at 30s twice under coverage; passed on the same code without coverage locally and in CI with coverage (pipeline 1838, test:frontend). The branch does not touch LiveTable. First sighting.
-- 2026-10-01 · 09363519 + local edits (review/1386-journey, local `npm test -- --coverage`, host shared with a live-env build and a Playwright capture at the same time) · timed out at 30s again under coverage; passed alone on the same code (70/70). The branch does not touch LiveTable. Second sighting.
+- 2026-09-30 · fe8d1919 + local test edits · feature/1374-wizard, local `npm test -- --coverage`, host shared with other agents' vitest runs · timed out at 30s twice under coverage; passed on the same code without coverage locally and in CI with coverage (pipeline 1838, test:frontend). The branch does not touch LiveTable. First sighting.
+- 2026-10-01 · 09363519 + local edits · review/1386-journey, local `npm test -- --coverage`, host shared with a live-env build and a Playwright capture at the same time · timed out at 30s again under coverage; passed alone on the same code (70/70). The branch does not touch LiveTable. Second sighting.
 
 ## frontend: City.svelte.test.ts and perf-compare.test.mjs time out together under full-suite load
 
-- 2026-10-01 · e46f7cf5 base, local lockfile-only change (chore/deps-2026-10-01, local `npm test -- --coverage`, jsdom bumped to 30.1.1 in frontend/package-lock.json, no source change) · three failures in one run: `scripts/perf-compare.test.mjs`'s shared `@testing-library/svelte` `beforeEach` hook hit its 10s timeout, and two `City: brightness by baseline` tests (`throbs the arrived-at building's own outline...`, `writes \`expected\` through the register...`) hit the 20s test timeout. `npx vitest run src/components/City.svelte.test.ts scripts/perf-compare.test.mjs` alone passed all 115 immediately after, and a full second `npm test -- --coverage` run passed all 3558 tests clean. The commit touches only frontend/package-lock.json and THIRD-PARTY-NOTICES.md, neither of which City.svelte, perf-compare.ts or testing-library's setup read. First sighting.
+- 2026-10-01 · e46f7cf5 base, local lockfile-only change · chore/deps-2026-10-01, local `npm test -- --coverage`, jsdom bumped to 30.1.1 in frontend/package-lock.json, no source change · three failures in one run: `scripts/perf-compare.test.mjs`'s shared `@testing-library/svelte` `beforeEach` hook hit its 10s timeout, and two `City: brightness by baseline` tests (`throbs the arrived-at building's own outline...`, `writes \`expected\` through the register...`) hit the 20s test timeout. `npx vitest run src/components/City.svelte.test.ts scripts/perf-compare.test.mjs` alone passed all 115 immediately after, and a full second `npm test -- --coverage` run passed all 3558 tests clean. The commit touches only frontend/package-lock.json and THIRD-PARTY-NOTICES.md, neither of which City.svelte, perf-compare.ts or testing-library's setup read. First sighting.
 
 ## live-city-declared: the zones stop does not redraw the declared lane
 

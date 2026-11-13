@@ -16,7 +16,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- backend build ----------------------------------------------------------
-FROM golang:1.27.2-alpine AS backend
+FROM golang:1.27.3-alpine AS backend
 WORKDIR /src
 # #1202: fetch gauntlet straight from GitHub, never via the public Go proxy
 # or checksum database (that would publish the version permanently).

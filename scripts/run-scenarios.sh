@@ -55,8 +55,27 @@ trap 'stop 2' INT
 # The scenarios this run drives, in filename order, one per line. The
 # exclusions live here rather than in the loop so the shard planner below
 # and the loop agree on what a scenario is.
+#
+# Quarantine (flake log, #1459): scripts/quarantine.txt names one scenario
+# per line (`live-<thing>`, no directory or .mjs; `#` comments allowed).
+# The default run leaves those out; MV_QUARANTINE=only runs just those, for
+# a non-blocking job. scripts/ci/flake-check.sh --quarantined reads the same
+# file, so what is skipped and what is checked cannot drift apart.
+quarantine_names() {
+  [ -f scripts/quarantine.txt ] || return 0
+  grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' scripts/quarantine.txt \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true
+}
 scenarios() {
+  quarantined=$(quarantine_names)
   for scenario in frontend/scripts/live-*.mjs; do
+    name=${scenario##*/}
+    name=${name%.mjs}
+    if printf '%s\n' "$quarantined" | grep -qxF -- "$name"; then
+      [ "${MV_QUARANTINE:-}" = "only" ] || continue
+    else
+      [ "${MV_QUARANTINE:-}" != "only" ] || continue
+    fi
     case "$scenario" in
       # The shared helper every scenario imports, not a scenario itself.
       *live-browser.mjs) continue ;;
