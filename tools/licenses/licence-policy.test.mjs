@@ -327,7 +327,7 @@ describe("bundled assets in shipped npm packages", () => {
     const dir = scratchDir();
     const { status, output } = runGate(dir, {
       npm: fontPackage(dir),
-      policyLines: [...BASE_POLICY, "bundled-assets:", "  - pkg:npm/fontpkg@1.0.0 fonts/ OFL-1.1"],
+      policyLines: [...BASE_POLICY, "bundled-assets:", "  - pkg:npm/fontpkg@1.0.0 fonts/ MIT"],
     });
     assert.equal(status, 0, output);
     assert.match(output, /2 bundled file\(s\) passed by recorded review/u);
@@ -337,7 +337,7 @@ describe("bundled assets in shipped npm packages", () => {
     const dir = scratchDir();
     const { status, output } = runGate(dir, {
       npm: fontPackage(dir, "1.1.0"),
-      policyLines: [...BASE_POLICY, "bundled-assets:", "  - pkg:npm/fontpkg@1.0.0 fonts/ OFL-1.1"],
+      policyLines: [...BASE_POLICY, "bundled-assets:", "  - pkg:npm/fontpkg@1.0.0 fonts/ MIT"],
     });
     assert.equal(status, 1, output);
     assert.match(output, /pkg:npm\/fontpkg@1\.1\.0 fonts\/ \(2 file\(s\)/u);
@@ -350,7 +350,7 @@ describe("bundled assets in shipped npm packages", () => {
       policyLines: [
         ...BASE_POLICY,
         "bundled-assets:",
-        "  - pkg:npm/fontpkg@1.0.0 fonts/ OFL-1.1",
+        "  - pkg:npm/fontpkg@1.0.0 fonts/ MIT",
         "  - pkg:npm/fontpkg@1.0.0 images/ MIT",
       ],
     });
@@ -391,7 +391,7 @@ describe("other projects' code inlined into a shipped npm package", () => {
     const npm = bannerPackage(dir, "/*! otherlib v4.2 | (c) 2015 Other Corp | Apache-2.0 */");
     const { status, output } = runGate(dir, {
       npm,
-      policyLines: [...BASE_POLICY, "bundled-assets:", "  - pkg:npm/bundler@3.0.0 dist/bundle.js Apache-2.0"],
+      policyLines: [...BASE_POLICY, "bundled-assets:", "  - pkg:npm/bundler@3.0.0 dist/bundle.js MIT"],
     });
     assert.equal(status, 0, output);
   });

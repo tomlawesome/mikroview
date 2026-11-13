@@ -151,6 +151,16 @@ export function loadPolicy(policyPath) {
     }
     throw new Error(`unrecognised line in licence policy ${policyPath}: ${rawLine}`);
   }
+  // A review records what a person read; it cannot admit a licence the
+  // policy itself does not allow. Checked after the whole file is read,
+  // so the order of allow-licenses and bundled-assets does not matter.
+  for (const review of assetReviews) {
+    if (!isLicenceAllowed(review.licence, allowLicences)) {
+      throw new Error(
+        `bundled-assets entry ${review.purl} ${review.prefix} names licence "${review.licence}", which allow-licenses in ${policyPath} does not permit`,
+      );
+    }
+  }
   return { allowLicences, allowExactExceptions, assetReviews };
 }
 
