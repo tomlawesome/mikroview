@@ -1736,14 +1736,7 @@ security:gosec:
     - test -f .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.3.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
     - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.3.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
-    # #1453: the image's gosec 2.29.0 is built with x/tools v0.49.0, which
-    # cannot read Go 1.27.2's export data, so it analyses nothing ("type
-    # errors" on every package). Until a gosec release ships the fix
-    # (securego/gosec#1771), build the same gosec against x/tools v0.50.0
-    # from the pinned tools/gosec module and run that. Delete this step and
-    # tools/gosec/ then, and go back to the image's own binary.
-    - (cd tools/gosec && go build -o /usr/local/bin/gosec-1453 github.com/securego/gosec/v2/cmd/gosec)
-    - gosec-1453 -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
+    - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
     when: always
     paths:
