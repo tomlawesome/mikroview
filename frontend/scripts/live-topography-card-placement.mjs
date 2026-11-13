@@ -23,7 +23,7 @@
 // it is asserted as the browser draws it: points sampled along the
 // highlighted path, none of which may fall inside the card.
 
-import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog as syslog, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -42,7 +42,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-card-placement', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-card-placement', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

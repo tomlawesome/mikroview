@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserSummary } from './types'
 
 vi.mock('./api', () => ({
+  USER_DELETED_TOKENS_REMAIN: 'deleted, tokens remain',
   clearUserPasskeys: vi.fn(),
   clearUserTOTP: vi.fn(),
   createUser: vi.fn(),
@@ -71,7 +72,7 @@ describe('UsersState.remove', () => {
     usersState.list = [user(), user({ id: 'id-2', username: 'carol' })]
     vi.mocked(deleteUser).mockResolvedValue(null)
 
-    const result = await usersState.remove('id-1')
+    const result = await usersState.remove('id-1', 'hunter2')
 
     expect(result).toBeNull()
     expect(usersState.list.map((u) => u.id)).toEqual(['id-2'])
@@ -84,7 +85,7 @@ describe('UsersState.remove', () => {
     usersState.list = [user({ id: 'id-1', username: 'alice', role: 'admin' })]
     vi.mocked(deleteUser).mockResolvedValue('the admin account cannot be deleted')
 
-    const result = await usersState.remove('id-1')
+    const result = await usersState.remove('id-1', 'hunter2')
 
     expect(result).toBe('the admin account cannot be deleted')
     expect(usersState.list).toHaveLength(1)
@@ -106,10 +107,10 @@ describe('UsersState.resetPassword', () => {
     vi.mocked(resetUserPassword).mockResolvedValue(issued)
     vi.mocked(fetchUsers).mockResolvedValue([user()])
 
-    const result = await usersState.resetPassword('id-1')
+    const result = await usersState.resetPassword('id-1', 'hunter2')
 
     expect(result).toEqual(issued)
-    expect(resetUserPassword).toHaveBeenCalledWith('id-1')
+    expect(resetUserPassword).toHaveBeenCalledWith('id-1', 'hunter2')
     expect(fetchUsers).toHaveBeenCalled()
   })
 
@@ -117,7 +118,7 @@ describe('UsersState.resetPassword', () => {
     vi.mocked(resetUserPassword).mockResolvedValue(issued)
     vi.mocked(fetchUsers).mockResolvedValue([user()])
 
-    await usersState.resetPassword('id-1')
+    await usersState.resetPassword('id-1', 'hunter2')
 
     expect(JSON.stringify(usersState)).not.toContain(issued.code)
   })
@@ -127,7 +128,7 @@ describe('UsersState.resetPassword', () => {
       'this account signs in through your identity provider',
     )
 
-    const result = await usersState.resetPassword('id-1')
+    const result = await usersState.resetPassword('id-1', 'hunter2')
 
     expect(result).toBe('this account signs in through your identity provider')
     expect(fetchUsers).not.toHaveBeenCalled()
@@ -142,10 +143,10 @@ describe('UsersState.clearFactor', () => {
     vi.mocked(clearUserTOTP).mockResolvedValue(null)
     vi.mocked(fetchUsers).mockResolvedValue([user({ hasTOTP: false })])
 
-    const result = await usersState.clearFactor('id-1')
+    const result = await usersState.clearFactor('id-1', 'hunter2')
 
     expect(result).toBeNull()
-    expect(clearUserTOTP).toHaveBeenCalledWith('id-1')
+    expect(clearUserTOTP).toHaveBeenCalledWith('id-1', 'hunter2')
     expect(fetchUsers).toHaveBeenCalled()
     expect(usersState.list[0].hasTOTP).toBe(false)
   })
@@ -153,7 +154,7 @@ describe('UsersState.clearFactor', () => {
   it('surfaces a refusal and does not refresh', async () => {
     vi.mocked(clearUserTOTP).mockResolvedValue('cannot clear your own factor here')
 
-    const result = await usersState.clearFactor('id-1')
+    const result = await usersState.clearFactor('id-1', 'hunter2')
 
     expect(result).toBe('cannot clear your own factor here')
     expect(fetchUsers).not.toHaveBeenCalled()
@@ -167,10 +168,10 @@ describe('UsersState.clearPasskeys', () => {
     vi.mocked(clearUserPasskeys).mockResolvedValue(null)
     vi.mocked(fetchUsers).mockResolvedValue([user({ passkeyCount: 0 })])
 
-    const result = await usersState.clearPasskeys('id-1')
+    const result = await usersState.clearPasskeys('id-1', 'hunter2')
 
     expect(result).toBeNull()
-    expect(clearUserPasskeys).toHaveBeenCalledWith('id-1')
+    expect(clearUserPasskeys).toHaveBeenCalledWith('id-1', 'hunter2')
     expect(fetchUsers).toHaveBeenCalled()
     expect(usersState.list[0].passkeyCount).toBe(0)
   })
@@ -178,7 +179,7 @@ describe('UsersState.clearPasskeys', () => {
   it('surfaces a refusal and does not refresh', async () => {
     vi.mocked(clearUserPasskeys).mockResolvedValue('cannot clear your own passkeys here')
 
-    const result = await usersState.clearPasskeys('id-1')
+    const result = await usersState.clearPasskeys('id-1', 'hunter2')
 
     expect(result).toBe('cannot clear your own passkeys here')
     expect(fetchUsers).not.toHaveBeenCalled()

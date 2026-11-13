@@ -13,7 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/prefs"
 )
 
@@ -230,10 +231,10 @@ func TestPreferencesAreIsolatedPerUser(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 	admin := registerAdmin(t, s, ts)
-	if _, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now()); err != nil {
+	if _, err := s.Auth.CreateUser("operator", fixtureUserPassword, gauntlet.RoleUser, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	other := loggedInClient(t, ts.URL, "operator", "password456")
+	other := loggedInClient(t, ts.URL, "operator", fixtureUserPassword)
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/me/preferences below
 
 	patchJSON(t, admin, ts.URL+"/api/me/preferences", map[string]any{
@@ -279,11 +280,11 @@ func TestPreferencesGetReturnsCallersOwnUserID(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 	admin := registerAdmin(t, s, ts)
-	operator, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now())
+	operator, err := s.Auth.CreateUser("operator", fixtureUserPassword, gauntlet.RoleUser, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := loggedInClient(t, ts.URL, "operator", "password456")
+	other := loggedInClient(t, ts.URL, "operator", fixtureUserPassword)
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/me/preferences below
 
 	adminResp, err := admin.Get(ts.URL + "/api/me/preferences")
@@ -322,11 +323,11 @@ func TestDeletingUserRemovesPreferences(t *testing.T) {
 	defer ts.Close()
 	admin := registerAdmin(t, s, ts)
 
-	operator, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now())
+	operator, err := s.Auth.CreateUser("operator", fixtureUserPassword, gauntlet.RoleUser, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := loggedInClient(t, ts.URL, "operator", "password456")
+	other := loggedInClient(t, ts.URL, "operator", fixtureUserPassword)
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/me/preferences below
 	patchJSON(t, other, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"who": "operator"},
@@ -336,15 +337,8 @@ func TestDeletingUserRemovesPreferences(t *testing.T) {
 		t.Fatal("setup: the operator's preferences were never stored")
 	}
 
-	del, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+operator.ID, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	del.Header.Set(csrfHeaderName, csrfHeaderValue)
-	delResp, err := admin.Do(del)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// gauntlet asks the admin for their password to delete an account.
+	delResp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+operator.ID, map[string]string{"password": fixtureAdminPassword})
 	defer delResp.Body.Close()
 	if delResp.StatusCode != http.StatusOK {
 		t.Fatalf("deleting the user returned %d, want 200", delResp.StatusCode)

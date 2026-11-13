@@ -66,10 +66,10 @@ func lockStatus(t *testing.T, client *http.Client, ts *httptest.Server) vaultLoc
 
 func TestVaultLockControlsAreAdminOnly(t *testing.T) {
 	s, ts, admin, _ := vaultLockFixture(t)
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	user := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before the vault-lock controls below
 
 	// Every control, removal included: taking the passphrase off is the
@@ -141,16 +141,17 @@ func TestSetPassphraseThenLockRefusesTheDownloadUntilUnlocked(t *testing.T) {
 func TestAnotherSessionOfTheSameAdminStillSeesALockedVault(t *testing.T) {
 	_, ts, admin, gen := vaultLockFixture(t)
 
-	// mikroview holds one admin account (auth.ErrSingleAdmin), so "another
-	// admin" is another sign-in by the same person -- a second browser, or
-	// the phone in their pocket. That is the case worth pinning: the
-	// unlock belongs to the session that made it, not to the account.
+	// "Another admin" here is another sign-in by the same admin -- a
+	// second browser, or the phone in their pocket. Gauntlet allows
+	// several admin accounts, but this is the case worth pinning: the
+	// unlock belongs to the session that made it, not to the account, so
+	// even the same account's other session sees the vault locked.
 	// loggedInClient (not a bare login) because admin already holds a
 	// confirmed factor (vaultLockFixture's setUpAdmin) -- #1249 means the
 	// password alone only reaches the pending-login step now, and
 	// loggedInClient completes it from the fixture's own remembered
 	// secret.
-	second := loggedInClient(t, ts.URL, "admin", "password123")
+	second := loggedInClient(t, ts.URL, "admin", fixtureAdminPassword)
 
 	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
 
@@ -332,7 +333,7 @@ func TestSigningOutEverywhereDropsTheVaultKey(t *testing.T) {
 	s, ts, admin, _ := vaultLockFixture(t)
 	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
 
-	resp := postJSON(t, admin, ts.URL+"/api/auth/logout-all", nil)
+	resp := postJSON(t, admin, ts.URL+"/api/auth/logout-all", map[string]string{"password": fixtureAdminPassword})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sign out everywhere = %d, want 200", resp.StatusCode)
@@ -349,7 +350,7 @@ func TestSigningOutEverywhereDropsTheVaultKey(t *testing.T) {
 // removing somebody else's account (#1124).
 func TestDeletingTheAccountHoldingTheVaultUnlockDropsTheKey(t *testing.T) {
 	s, ts, admin, _ := vaultLockFixture(t)
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 	list, err := admin.Get(ts.URL + "/api/auth/users")
 	if err != nil {
 		t.Fatal(err)
@@ -372,7 +373,7 @@ func TestDeletingTheAccountHoldingTheVaultUnlockDropsTheKey(t *testing.T) {
 
 	// The admin who set the passphrase holds the unlock; the account
 	// being deleted has nothing to do with it.
-	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, nil)
+	resp := deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, map[string]string{"password": fixtureAdminPassword})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("deleting the user = %d, want 200", resp.StatusCode)
@@ -385,7 +386,7 @@ func TestDeletingTheAccountHoldingTheVaultUnlockDropsTheKey(t *testing.T) {
 	// controls can claim an unlock and only an admin can reach them, so
 	// the holder is put in place directly -- what matters here is the
 	// deletion's rule, not how the unlock was made.
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "keyholder", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "keyholder", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 	list, err = admin.Get(ts.URL + "/api/auth/users")
 	if err != nil {
 		t.Fatal(err)
@@ -406,7 +407,7 @@ func TestDeletingTheAccountHoldingTheVaultUnlockDropsTheKey(t *testing.T) {
 	}
 	s.vaultUnlock.claim("a-session-of-theirs", id, time.Now())
 
-	resp = deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, nil)
+	resp = deleteJSON(t, admin, ts.URL+"/api/auth/users/"+id, map[string]string{"password": fixtureAdminPassword})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("deleting the account holding the unlock = %d, want 200", resp.StatusCode)
@@ -427,8 +428,8 @@ func TestChangingAPasswordDropsAnotherSessionsVaultKey(t *testing.T) {
 	// loggedInClient, not a bare login -- see
 	// TestAnotherSessionOfTheSameAdminStillSeesALockedVault's own comment
 	// on why.
-	second := loggedInClient(t, ts.URL, "admin", "password123")
-	resp := postJSON(t, second, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password123", NewPassword: "password789"})
+	second := loggedInClient(t, ts.URL, "admin", fixtureAdminPassword)
+	resp := postJSON(t, second, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: fixtureAdminPassword, NewPassword: fixtureOtherPassword})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("changing the password = %d, want 200", resp.StatusCode)
@@ -563,14 +564,14 @@ func TestUnlockingAVaultWithNoPassphraseIsNotAuditedAsAGuess(t *testing.T) {
 
 func TestAUserRoleAccountCannotDropTheAdminsVaultUnlock(t *testing.T) {
 	s, ts, admin, gen := vaultLockFixture(t)
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
 
 	user := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/auth/password and /api/auth/logout-all below
 
-	changed := postJSON(t, user, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password456", NewPassword: "password789"})
+	changed := postJSON(t, user, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: fixtureUserPassword, NewPassword: fixtureOtherPassword})
 	changed.Body.Close()
 	if changed.StatusCode != http.StatusOK {
 		t.Fatalf("the user changing their own password = %d, want 200", changed.StatusCode)
@@ -579,7 +580,7 @@ func TestAUserRoleAccountCannotDropTheAdminsVaultUnlock(t *testing.T) {
 		t.Fatal("a user-role account changing its own password dropped the admin's vault unlock")
 	}
 
-	everywhere := postJSON(t, user, ts.URL+"/api/auth/logout-all", nil)
+	everywhere := postJSON(t, user, ts.URL+"/api/auth/logout-all", map[string]string{"password": fixtureOtherPassword})
 	everywhere.Body.Close()
 	if everywhere.StatusCode != http.StatusOK {
 		t.Fatalf("the user signing out everywhere = %d, want 200", everywhere.StatusCode)

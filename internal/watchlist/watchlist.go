@@ -357,7 +357,7 @@ func (r AddressListRef) Empty() bool { return r.Device == "" || r.List == "" }
 //
 // A local interface rather than an import of internal/routerstate, the
 // same dependency-direction reasoning internal/syslog uses for its
-// certificate source and internal/oidc for its config. It also keeps
+// certificate source and gauntlet/oidc for its config. It also keeps
 // matching testable without standing up a router-state store.
 type AddressListMembership interface {
 	InAddressList(device, list, ip string) bool

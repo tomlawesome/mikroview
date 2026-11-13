@@ -21,7 +21,7 @@
 // without asking for anything extra -- confirmed by GET /api/router-backups
 // below, whose own `enabled` field is the honest answer either way.
 
-import { session, check, done, goTo } from './live-browser.mjs'
+import { session, check, done, goTo, tokenMint } from './live-browser.mjs'
 import crypto from 'node:crypto'
 
 const URL_BASE = process.env.MV_URL
@@ -66,7 +66,7 @@ if (!preflight.body?.enabled) {
 // --- issue an ingest token and deliver one backup pair, the way a -------
 // --- router's own push script does (internal/api/ingestbackup.go) -------
 
-const tokenRes = await api('POST', '/api/tokens', { name: 'mv1126-kept-backups', kind: 'ingest', device: DEVICE })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: 'mv1126-kept-backups', kind: 'ingest', device: DEVICE }))
 check(tokenRes.status === 201, `an ingest token is issued for ${DEVICE} (${tokenRes.status})`)
 const token = tokenRes.body?.value
 

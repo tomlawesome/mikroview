@@ -361,7 +361,7 @@ func evictOldest[V any](m map[string]V, cap int, stamp func(V) time.Time) {
 // Marks live here, beside the evidence they qualify -- but unlike that
 // evidence they are persisted, through the same optional atomic-write
 // backend every sibling store uses (internal/audit, internal/flags,
-// internal/auth, internal/entities).
+// gauntlet, internal/entities).
 //
 // The two halves are treated differently because they are different
 // kinds of thing. An observation is a fact about this process: what

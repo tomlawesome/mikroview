@@ -599,13 +599,20 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 
-  // A wrong password (or a spent re-check budget) answers 401 with this
-  // exact plain body -- returned as text, shown in the form, rather than
+  // A wrong password (or a spent re-check budget) answers 401 with a
+  // #invalid-credentials problem -- returned as text, shown in the form, rather than
   // thrown as the "session is gone" case below.
   it('enrolTOTP returns the incorrect-password refusal as text, not thrown', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => INCORRECT_PASSWORD })))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ type: 'https://example.invalid/errors.md#invalid-credentials', title: 'invalid-credentials', status: 401, detail: 'incorrect password' }), { status: 401, headers: { 'Content-Type': 'application/problem+json' } })))
     const result = await enrolTOTP('wrong')
     expect(result).toBe(INCORRECT_PASSWORD)
+  })
+
+  // Plain text is no longer matched: the words alone do not make a wrong
+  // password, so an untyped 401 is the session being gone.
+  it('enrolTOTP throws an untyped 401 whose body reads "incorrect password"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    await expect(enrolTOTP('wrong')).rejects.toMatchObject({ status: 401 })
   })
 
   it('enrolTOTP returns the too-many-attempts refusal as text', async () => {
@@ -790,15 +797,15 @@ describe('submitLoginFactor and clearUserTOTP (#1249)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ code: 'a1b2-c3d4-e5f6-g7h8' })
   })
 
-  it('clearUserTOTP sends no body, identifying the target by URL', async () => {
+  it('clearUserTOTP identifies the target by URL and sends the admin password in the body (#1202 U8)', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await clearUserTOTP('u-42')
+    const result = await clearUserTOTP('u-42', 'hunter2')
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/totp')
     expect(init?.method).toBe('DELETE')
-    expect(init?.body).toBeUndefined()
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 })
 
@@ -835,13 +842,20 @@ describe('the passkey calls (#1250)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 
-  // A wrong password (or a spent re-check budget) answers 401 with this
-  // exact plain body -- returned as text, not thrown, the one exception
+  // A wrong password (or a spent re-check budget) answers 401 with a
+  // #invalid-credentials problem -- returned as text, not thrown, the one exception
   // to the 401-means-session-gone rule below.
   it('beginPasskeyRegistration returns the incorrect-password refusal as text, not thrown', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => INCORRECT_PASSWORD })))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ type: 'https://example.invalid/errors.md#invalid-credentials', title: 'invalid-credentials', status: 401, detail: 'incorrect password' }), { status: 401, headers: { 'Content-Type': 'application/problem+json' } })))
     const result = await beginPasskeyRegistration('wrong')
     expect(result).toBe(INCORRECT_PASSWORD)
+  })
+
+  // Plain text is no longer matched: the words alone do not make a wrong
+  // password, so an untyped 401 is the session being gone.
+  it('beginPasskeyRegistration throws an untyped 401 whose body reads "incorrect password"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    await expect(beginPasskeyRegistration('wrong')).rejects.toMatchObject({ status: 401 })
   })
 
   // An SSO-only account has no password to check -- refused with 409,
@@ -940,15 +954,15 @@ describe('the passkey calls (#1250)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ assertion: { id: 'c1' } })
   })
 
-  it('clearUserPasskeys sends no body, identifying the target by URL', async () => {
+  it('clearUserPasskeys identifies the target by URL and sends the admin password in the body (#1202 U8)', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await clearUserPasskeys('u-42')
+    const result = await clearUserPasskeys('u-42', 'hunter2')
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/passkeys')
     expect(init?.method).toBe('DELETE')
-    expect(init?.body).toBeUndefined()
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 })
 
@@ -977,7 +991,7 @@ describe('the forced-auth-gate 403 (#1362)', () => {
       return {
         ok: false,
         status: 403,
-        headers: { get: (name: string) => (name === 'X-Mikroview-Auth-Gate' ? gate : null) },
+        headers: { get: (name: string) => (name === 'X-Auth-Gate' ? gate : null) },
         text: async () => 'this account has no second factor -- enrol one before going any further',
       }
     })

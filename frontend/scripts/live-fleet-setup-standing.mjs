@@ -30,7 +30,7 @@
 // to the address it was just enrolled at, since a push from anywhere
 // else is exactly what #1281 now refuses.
 
-import { session, check, done, enrolDevice, goTo, launchBrowser, pushFrom, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, enrolDevice, goTo, launchBrowser, pushFrom, enrolFactorAndSignIn, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // PortOf(cfg.Listen.SyslogTLS) is what the instance's own wizard would
@@ -62,7 +62,7 @@ async function api(method, path_, body) {
 }
 
 async function issueIngestToken(device, name) {
-  const res = await api('POST', '/api/tokens', { name, kind: 'ingest', device })
+  const res = await api('POST', '/api/tokens', tokenMint({ name, kind: 'ingest', device }))
   check(res.status === 201, `an ingest token is issued for ${device} (${res.status})`)
   return res.body?.value
 }

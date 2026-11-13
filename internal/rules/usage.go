@@ -11,7 +11,7 @@
 // that outlives both a restart and the retention window. This package
 // exists to give that data an unbounded-time, persisted home, using the
 // same convention as every other small persisted store in this codebase
-// (internal/flags, internal/auth, internal/detect's SettingsStore): a
+// (internal/flags, gauntlet, internal/detect's SettingsStore): a
 // mutex-guarded map plus an atomic JSON write, not a database.
 package rules
 

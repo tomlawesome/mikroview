@@ -17,7 +17,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -25,18 +24,14 @@ import (
 // set answers, with a 503.
 const SetupOnlyMessage = "MikroView is in setup-only mode: fix the config and restart"
 
-// setupOnlyRoutes is setup-only mode's whole route table: the health
-// check, every /api/auth/* route (sign-in, including SSO when its own
-// settings validated), and the config editor. Every one of these is a
-// row of authzMatrix at the same pattern, and enforces the same access
-// there -- TestSetupOnlyRoutesAreInTheAuthorizationMatrix holds that.
+// setupOnlyRoutes is setup-only mode's own route table: the health
+// check and the config editor. Every /api/auth/* route -- sign-in,
+// including SSO when its own settings validated -- is gauntlet's and is
+// mounted beside it by SetupOnlyRoutes. Every one of these is a row of
+// authzMatrix at the same pattern, and enforces the same access there --
+// TestSetupOnlyRoutesAreInTheAuthorizationMatrix holds that.
 func (s *Server) setupOnlyRoutes() []route {
 	rs := []route{{http.MethodGet, "/api/healthz", s.handleSetupOnlyHealthz}}
-	for _, r := range s.apiRoutes() {
-		if strings.HasPrefix(r.path, "/api/auth/") {
-			rs = append(rs, r)
-		}
-	}
 	return append(rs, s.configEditorRoutes()...)
 }
 
@@ -44,15 +39,21 @@ func (s *Server) setupOnlyRoutes() []route {
 // refusal sits in front of authentication, so every other route answers
 // 503 to everyone, signed in or not: the question "why is nothing
 // working" gets its answer before "who are you".
+//
+// No bearer-token mux is registered: nothing a token reaches runs here,
+// so gate refuses every token as it would one of a kind it was never
+// told about.
 func (s *Server) SetupOnlyRoutes() http.Handler {
 	inner := http.NewServeMux()
 	for _, r := range s.setupOnlyRoutes() {
 		inner.HandleFunc(r.method+" "+r.path, r.handler)
 	}
-	gated := s.requireAuth(inner)
+	inner.Handle("/api/auth/", s.gateRoutes(s.Gate.Routes()))
+	gated := s.Gate.Protect(withCaller(inner))
 
 	outer := http.NewServeMux()
-	seen := map[string]bool{}
+	seen := map[string]bool{"/api/auth/": true}
+	outer.Handle("/api/auth/", gated)
 	for _, r := range s.setupOnlyRoutes() {
 		if !seen[r.path] {
 			seen[r.path] = true

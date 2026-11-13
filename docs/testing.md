@@ -13,7 +13,10 @@ below its floor, and also fails more than 5 points *above* it: sitting on
 unlocked headroom means the floor is stale, and the fix is to raise it in
 the same change, never to leave the gap sitting there. Floors only ever go
 up — never lowered to make a change pass; a change that would need that
-needs more tests instead.
+needs more tests instead. The one exception: a Go toolchain change that
+alters how coverage is counted re-measures the affected floors in the same
+merge request, with before/after numbers in the commit (owner, 2026-10-10,
+#1440).
 
 The owner's band is 70–85% statement coverage (Go measures statements, not
 branches — a 100% package means every line ran, not that every condition

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,10 +76,10 @@ func TestAuditRequiresAdminNotJustAnyUser(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := registerAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/audit below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/audit")
@@ -100,7 +101,7 @@ func TestCreateUserRecordsAuditEntry(t *testing.T) {
 	defer ts.Close()
 	admin := registerAdmin(t, s, ts)
 
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	res := fetchAudit(t, admin, ts)
 	var found *audit.Entry
@@ -115,7 +116,9 @@ func TestCreateUserRecordsAuditEntry(t *testing.T) {
 	if found.Actor != "admin" {
 		t.Errorf("expected the audit entry's actor to be the admin who created the account, got %q", found.Actor)
 	}
-	if found.Detail != "role=user" {
+	// gauntlet's record (#1202): the role, then where the request came
+	// from.
+	if !strings.HasPrefix(found.Detail, "role=user") {
 		t.Errorf("expected the audit entry's detail to record the assigned role, got %q", found.Detail)
 	}
 }
@@ -182,7 +185,7 @@ func TestTokenCreateAndRevokeRecordAuditEntries(t *testing.T) {
 	defer ts.Close()
 	admin := registerAdmin(t, s, ts)
 
-	createResp := postJSON(t, admin, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"})
+	createResp := postJSON(t, admin, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage", Password: fixtureAdminPassword})
 	var created tokenResponse
 	json.NewDecoder(createResp.Body).Decode(&created)
 	createResp.Body.Close()

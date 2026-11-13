@@ -75,9 +75,9 @@ var etDefaults = routeros.BlocklistChoice{Key: "et", Direction: "both", Log: tru
 func TestBlocklistRoutesAreAdminOnly(t *testing.T) {
 	s, ts, admin := blocklistTestServer(t, "7.24.4")
 	for _, role := range []string{"user", "viewer"} {
-		postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: role + "1", Password: "password456", Role: role}).Body.Close()
+		postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: role + "1", Password: fixtureUserPassword, Role: role}).Body.Close()
 		c := &http.Client{Jar: mustCookieJar(t)}
-		postJSON(t, c, ts.URL+"/api/auth/login", credentialsRequest{Username: role + "1", Password: "password456"}).Body.Close()
+		postJSON(t, c, ts.URL+"/api/auth/login", credentialsRequest{Username: role + "1", Password: fixtureUserPassword}).Body.Close()
 		seedFactor(t, s, ts, role+"1")
 		if code, _ := getBuilder(t, c, ts.URL+"/api/blocklist/builder?device=rb5009"); code != http.StatusForbidden {
 			t.Errorf("GET as %s: %d, want 403", role, code)

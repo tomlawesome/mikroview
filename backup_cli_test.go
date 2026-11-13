@@ -12,10 +12,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
+
+// openAccountsAt opens an accounts file the way the server opens it
+// (#1202): sealed under a key, and anything else -- a plaintext JSON
+// document included (ruling 19, no sealing in place) -- refused. The key
+// is a fixed test one, so a file sealed under it opens again under it.
+func openAccountsAt(t *testing.T, path string) (*gauntlet.Store, error) {
+	t.Helper()
+	key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, key), quietStoreOptions())
+}
 
 // TestRestoreOverwritesACorruptStoreDocument is issue #378's other
 // Done-when: fail-closed on an unreadable-but-present document must not
@@ -23,12 +38,12 @@ import (
 // -restore is dispatched (main.go's os.Args[1] == "-restore" branch)
 // before openStorage or any store's OpenWithBackend ever runs, and
 // writes each store's file directly (os.WriteFile + os.Rename) rather
-// than going through auth.OpenWithBackend/persist.Open -- so a document
+// than going through a store's open -- so a document
 // that would make mustOpenStore refuse a normal boot must still be a
 // document -restore can replace.
 //
 // This pins that behaviour end to end: an accounts file already
-// corrupted on disk (auth.Open on it fails, exactly as mustOpenStore
+// corrupted on disk (opening it fails, exactly as mustOpenStore
 // would refuse to boot on it) is successfully overwritten by
 // `mikroview -restore <file> --force`, and the result is a store that
 // opens cleanly afterwards.
@@ -42,10 +57,19 @@ func TestRestoreOverwritesACorruptStoreDocument(t *testing.T) {
 	}
 	// Confirms the premise: this file really is the "refuses to boot"
 	// case the rest of #378 is about.
-	if _, err := auth.Open(authPath); err == nil {
-		t.Fatal("test setup: expected the corrupt accounts file to fail auth.Open")
+	if _, err := openAccountsAt(t, authPath); err == nil {
+		t.Fatal("test setup: expected the corrupt accounts file to fail to open")
 	}
 
+	// #1202 review R26 (ruling 19): the restore runs with the key mounted,
+	// as every install does since v0.7.0, so the accounts file it writes
+	// is sealed under it -- a plaintext accounts file would be refused on
+	// the next open, there being no sealing in place.
+	keyPath := filepath.Join(dir, "history.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", retention.MinKeyBytes)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MIKROVIEW_HISTORY_KEY_FILE", keyPath)
 	t.Setenv("MIKROVIEW_CONFIG", "")
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
 	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
@@ -64,30 +88,18 @@ func TestRestoreOverwritesACorruptStoreDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// backup.Write's own envelope encoding re-indents the nested raw
-	// JSON (whitespace only), so compare the parsed shape rather than
-	// raw bytes -- what matters here is that the corrupt content is
-	// gone and the restored document is what was backed up.
 	if strings.Contains(string(got), "not valid json") {
 		t.Errorf("accounts file after restore still contains the corrupt content: %q", got)
 	}
-	var gotFile, wantFile struct {
-		Users []struct{} `json:"users"`
-	}
-	if err := json.Unmarshal(got, &gotFile); err != nil {
-		t.Fatalf("accounts file after restore is not valid JSON: %v (%q)", err, got)
-	}
-	if err := json.Unmarshal(restored, &wantFile); err != nil {
-		t.Fatal(err)
-	}
-	if len(gotFile.Users) != len(wantFile.Users) {
-		t.Errorf("accounts file after restore has %d users, want %d", len(gotFile.Users), len(wantFile.Users))
+	if json.Valid(got) {
+		t.Errorf("the restored accounts file is plaintext JSON although a key is mounted: %q", got)
 	}
 
-	// The whole point of the remedy: the store opens cleanly now.
-	s, err := auth.Open(authPath)
+	// The whole point of the remedy: the store opens cleanly now, sealed,
+	// as the server would open it.
+	s, err := openAccountsAt(t, authPath)
 	if err != nil {
-		t.Fatalf("auth.Open after restore: %v", err)
+		t.Fatalf("opening the accounts after restore: %v", err)
 	}
 	if s.Count() != 0 {
 		t.Errorf("expected the restored (empty) accounts store, got %d accounts", s.Count())

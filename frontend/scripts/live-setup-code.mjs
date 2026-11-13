@@ -33,7 +33,9 @@ const SERVER_LOG = path.join(process.env.MV_DIR || '', 'server.log')
 
 // The screen's copy, from the design's "States and copy" table.
 const EMPTY_LINE = "Enter the setup code from MikroView's log."
-const WRONG_LINE = "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one"
+// A wrong code is a Problem Details 401 (#invalid-credentials) from
+// gauntlet since #1202; the screen shows its `detail` as it comes.
+const WRONG_LINE = "invalid setup code -- the current one is in the server's log"
 
 /** The newest setup code in the server's log, or '' if it printed none. */
 function setupCodeFromLog() {
@@ -111,9 +113,9 @@ await page.getByRole('textbox', { name: 'account' }).fill(USER)
 await page.getByLabel('password', { exact: true }).fill(PASS)
 await page.getByLabel('confirm password').fill(PASS)
 await page.click('button[type="submit"]')
-const wrongError = page.locator('.error', { hasText: "that setup code didn't match" })
+const wrongError = page.locator('.error', { hasText: 'invalid setup code' })
 await wrongError.waitFor({ timeout: 10000 }).catch(() => {})
-check((await wrongError.textContent())?.trim() === WRONG_LINE, "a wrong code shows the server's refusal, the design's copy")
+check((await wrongError.textContent())?.trim() === WRONG_LINE, "a wrong code shows the server's refusal, as it words it")
 check((await codeField.inputValue()) === wrong, 'the typed code stays in the field so a typo can be fixed')
 check((await sessionState()).setupRequired === true, 'a wrong code created no account')
 

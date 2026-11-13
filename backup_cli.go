@@ -61,6 +61,9 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"auth", cfg.Auth.StorePath},
 		{"tokens", cfg.Auth.TokensStorePath},
 		{"recovery_keys", cfg.Auth.RecoveryKeysPath},
+		// The sign-in history (#1202): who signed in from where, kept
+		// with the accounts it describes.
+		{"signins", cfg.Auth.SignInsStorePath},
 		{"flags", cfg.Flags.StorePath},
 		{"rule_usage", cfg.Flags.RuleUsageStorePath},
 		{"entities", cfg.Entities.StorePath},

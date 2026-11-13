@@ -59,7 +59,7 @@
 // nothing but this binary's shipped catalogue and the count below starts
 // from zero by construction rather than by cleanup.
 
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -100,7 +100,7 @@ check(strays.length === 0, `the instance starts with no watches from earlier sce
 const device = ((await api('GET', '/api/devices')).body?.devices ?? []).find((d) => d.id === 'live-router')?.id
 check(!!device, `the harness's own router is in the registry (${device})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: 'broken-ring', kind: 'ingest', device })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: 'broken-ring', kind: 'ingest', device }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 const token = tokenRes.body?.value
 

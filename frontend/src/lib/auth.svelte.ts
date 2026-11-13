@@ -156,11 +156,17 @@ function clearSessionState() {
 // door rather than falling out of it. 'must-change-password' wins when
 // both hold, matching requireAuth's own gate order: a session owing
 // both is sent to set a password first.
+// 'must-enrol-passkey' (#1202) is gauntlet's third door: an admin with no
+// passkey under the admin passkey rule. Same shape as 'must-enrol-factor',
+// from the session's mustEnrolPasskey, and AuthEnrolFactor draws it with
+// passkey-only wording. Order of the doors: password change, then this
+// one, then the any-factor door.
 export type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"
   | "must-change-password"
+  | "must-enrol-passkey"
   | "must-enrol-factor"
   | "pending-factor"
   | "authenticated";
@@ -249,6 +255,9 @@ class AuthState {
   // Mirrors sessionResponse.mustEnrolSecondFactor (#1336), kept beside
   // `state` for the same reason mustChangePassword above is.
   mustEnrolSecondFactor = $state(false);
+  // Mirrors sessionResponse.mustEnrolPasskey (#1202), kept beside `state`
+  // for the same reason.
+  mustEnrolPasskey = $state(false);
   // #677's sessions row ("this device ... signed in 4 d") -- this
   // session's own IssuedAt, RFC3339, from sessionResponse.signedInSince.
   // Empty while unauthenticated or against an older server.
@@ -355,13 +364,17 @@ class AuthState {
     } else if (session.authenticated) {
       this.mustChangePassword = session.mustChangePassword ?? false;
       this.mustEnrolSecondFactor = session.mustEnrolSecondFactor ?? false;
-      // The password change comes first when both are owed, matching
-      // requireAuth's gate order (see AuthViewState's own comment).
+      this.mustEnrolPasskey = session.mustEnrolPasskey ?? false;
+      // The password change comes first when several are owed, matching
+      // requireAuth's gate order (see AuthViewState's own comment); the
+      // admin's passkey comes before the any-factor door.
       this.state = this.mustChangePassword
         ? "must-change-password"
-        : this.mustEnrolSecondFactor
-          ? "must-enrol-factor"
-          : "authenticated";
+        : this.mustEnrolPasskey
+          ? "must-enrol-passkey"
+          : this.mustEnrolSecondFactor
+            ? "must-enrol-factor"
+            : "authenticated";
       this.username = session.username ?? "";
       this.role = (session.role as "admin" | "user" | "viewer") ?? "";
       // Absent on an older server: treated as "has one", which only
@@ -397,6 +410,7 @@ class AuthState {
       this.ssoConnected = false;
       this.mustChangePassword = false;
       this.mustEnrolSecondFactor = false;
+      this.mustEnrolPasskey = false;
       this.signedInSince = "";
       this.hasTOTP = false;
       this.passkeyCount = 0;
@@ -513,6 +527,7 @@ class AuthState {
     this.role = "";
     this.mustChangePassword = false;
     this.mustEnrolSecondFactor = false;
+    this.mustEnrolPasskey = false;
     this.pendingSecondFactor = [];
     this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
@@ -537,6 +552,7 @@ class AuthState {
     this.role = "";
     this.mustChangePassword = false;
     this.mustEnrolSecondFactor = false;
+    this.mustEnrolPasskey = false;
     this.pendingSecondFactor = [];
     this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
@@ -550,8 +566,11 @@ class AuthState {
   // a fresh session in the same response (see handleAuthLogoutAll) --
   // so this just re-reads the session to pick up the new
   // signedInSince, rather than dropping to 'unauthenticated'.
-  async signOutEverywhere(): Promise<string | null> {
-    const err = await signOutEverywhere();
+  //
+  // #1202 U9: the caller's own password (absent for an SSO-only account)
+  // goes straight to api.ts and is not kept here.
+  async signOutEverywhere(password?: string): Promise<string | null> {
+    const err = await signOutEverywhere(password);
     if (!err) await this.check();
     return err;
   }
@@ -584,6 +603,7 @@ class AuthState {
     return (
       this.state === "authenticated" ||
       this.state === "must-change-password" ||
+      this.state === "must-enrol-passkey" ||
       this.state === "must-enrol-factor"
     );
   }
@@ -595,6 +615,7 @@ class AuthState {
       this.role = "";
       this.mustChangePassword = false;
       this.mustEnrolSecondFactor = false;
+      this.mustEnrolPasskey = false;
       clearSessionState();
       pageReload.now();
     }

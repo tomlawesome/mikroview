@@ -19,7 +19,7 @@
 // the end, so nothing downstream inherits this one's push -- the same
 // discipline live-fall-watch-broken.mjs keeps for the same reason.
 
-import { session, feedSyslog, check, responsive, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, goTo, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const OUT = process.env.FALL_SHOTS || '/tmp/fall1204'
@@ -64,7 +64,7 @@ for (let i = 0; i < 40 && !device; i++) {
 }
 check(!!device, `the instance reports the device events arrive from (${device})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: 'fall-composition', kind: 'ingest', device })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: 'fall-composition', kind: 'ingest', device }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 const token = tokenRes.body?.value
 
