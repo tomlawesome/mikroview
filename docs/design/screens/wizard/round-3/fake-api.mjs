@@ -22,7 +22,7 @@
 //
 // One fictional data story throughout: instance 192.0.2.15:8080,
 // router "rb5009" with declared sourceIp 192.0.2.1, and an
-// undeclared address 203.0.113.1 arriving instead (the source-address
+// undeclared address 198.51.100.1 arriving instead (the source-address
 // split, #442).
 
 import http from 'node:http'
@@ -44,7 +44,7 @@ const STORY = {
   routerId: 'rb5009',
   routerName: 'rb5009',
   declaredIp: '192.0.2.1',
-  arrivingIp: '203.0.113.1',
+  arrivingIp: '198.51.100.1',
 }
 
 function iso(offsetMs = 0) {
@@ -80,7 +80,7 @@ function freshSeed() {
     devices: [],
     unattributed: [],
     refused: [],
-    backups: { enabled: true, keyUnreadable: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, port: '198.51.100.5:47022', lock: LOCK_OPEN, lowSpace: false },
+    backups: { enabled: true, keyUnreadable: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, port: '198.51.100.2:47022', lock: LOCK_OPEN, lowSpace: false },
     tokens: [],
     enrolments: {}, // device id -> { token, expiresAt, mintedAt }
   }
@@ -178,7 +178,7 @@ function mostlyDoneSeed() {
     totalGenerations: 2,
     totalRouters: 1,
     totalBytes: 401_452 + 37_112 + 412_004 + 38_009,
-    port: '198.51.100.5:47022',
+    port: '198.51.100.2:47022',
     lock: LOCK_OPEN,
   }
   return s
@@ -293,8 +293,8 @@ function backupScript(port, device, token) {
     `\n` +
     `  /system backup save name=mv-backup dont-encrypt=yes\n` +
     `  /export hide-sensitive file=mv-export\n` +
-    `  /tool fetch mode=sftp upload=yes address=198.51.100.5 port=${port} user=${device} password="${token}" src-path=mv-backup.backup dst-path=${device}.backup\n` +
-    `  /tool fetch mode=sftp upload=yes address=198.51.100.5 port=${port} user=${device} password="${token}" src-path=mv-export.rsc dst-path=${device}.rsc\n` +
+    `  /tool fetch mode=sftp upload=yes address=198.51.100.2 port=${port} user=${device} password="${token}" src-path=mv-backup.backup dst-path=${device}.backup\n` +
+    `  /tool fetch mode=sftp upload=yes address=198.51.100.2 port=${port} user=${device} password="${token}" src-path=mv-export.rsc dst-path=${device}.rsc\n` +
     `  /file remove mv-backup.backup\n` +
     `  /file remove mv-export.rsc\n`
   return `:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="${source.replace(/"/g, '\\"')}" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="${source.replace(/"/g, '\\"')}" }`

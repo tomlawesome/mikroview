@@ -199,11 +199,11 @@
       <tr>
         <th class="corner">from ↓ <span class="to">to →</span></th>
         <th><span class="d" style="background:#8ea0b5"></span>Internet</th>
-        <th><span class="d" style="background:var(--lan)"></span>LAN<span class="cid">203.0.113.0/24</span></th>
-        <th><span class="d" style="background:var(--srv)"></span>Servers<span class="cid">198.51.100.0/24</span></th>
-        <th><span class="d" style="background:var(--iot)"></span>IoT<span class="cid">198.51.100.0/24</span></th>
-        <th><span class="d" style="background:var(--guest)"></span>Guest<span class="cid">192.0.2.0/24</span></th>
-        <th><span class="d" style="background:#9aa4cf"></span>WG<span class="cid">203.0.113.0/24</span></th>
+        <th><span class="d" style="background:var(--lan)"></span>LAN<span class="cid">198.51.100.1/24</span></th>
+        <th><span class="d" style="background:var(--srv)"></span>Servers<span class="cid">198.51.100.2/24</span></th>
+        <th><span class="d" style="background:var(--iot)"></span>IoT<span class="cid">198.51.100.3/24</span></th>
+        <th><span class="d" style="background:var(--guest)"></span>Guest<span class="cid">198.51.100.4/24</span></th>
+        <th><span class="d" style="background:#9aa4cf"></span>WG<span class="cid">198.51.100.5/24</span></th>
       </tr>
       <tr>
         <th><span class="d" style="background:#8ea0b5"></span>Internet</th>
@@ -275,8 +275,8 @@
   <div class="ticker">
     <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
     <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop · cell iot→lan</span></div>
-    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-alex → 192.0.2.206 :443 quic · cell lan→internet</span></div>
-    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>198.51.100.34 DE → rb5009 :8291 · cell internet→rtr</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-alex → 198.51.100.6 :443 quic · cell lan→internet</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>198.51.100.7 DE → rb5009 :8291 · cell internet→rtr</span></div>
   </div>
 </section>
 
@@ -297,8 +297,8 @@
   </div>
   <div class="livewrap">
     <div class="filterbar">
-      <div class="ff"><label>Source — name, IP or CIDR</label><input value="198.51.100.0/24"></div>
-      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="203.0.113.0/24"></div>
+      <div class="ff"><label>Source — name, IP or CIDR</label><input value="198.51.100.3/24"></div>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="198.51.100.1/24"></div>
       <div class="ff"><label>Chain</label><select><option>forward</option></select></div>
       <div class="ff"><label>Port — number or service</label><input></div>
       <div class="ff"><label>Rule</label><input></div>
@@ -308,24 +308,24 @@
       <thead><tr><th>time</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
       <tbody>
         <tr><td class="t2">14:02:11.482</td><td><span class="act2 drop">DROP</span></td>
-          <td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td>
-          <td><span class="host">nas</span><span class="ip">198.51.100.10</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">198.51.100.8</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">198.51.100.9</span></td>
           <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
         <tr><td class="t2">14:01:58.104</td><td><span class="act2 drop">DROP</span></td>
-          <td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td>
-          <td><span class="host">nas</span><span class="ip">198.51.100.10</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">198.51.100.8</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">198.51.100.9</span></td>
           <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
         <tr><td class="t2">14:01:43.771</td><td><span class="act2 drop">DROP</span></td>
-          <td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td>
-          <td><span class="host">alex-desktop</span><span class="ip">203.0.113.21</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">198.51.100.8</span></td><td class="arrow">→</td>
+          <td><span class="host">alex-desktop</span><span class="ip">198.51.100.10</span></td>
           <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
         <tr><td class="t2">14:01:29.310</td><td><span class="act2 drop">DROP</span></td>
-          <td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td>
-          <td><span class="host">nas</span><span class="ip">198.51.100.10</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">198.51.100.8</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">198.51.100.9</span></td>
           <td>tcp/139 <span class="cc">netbios</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
         <tr><td class="t2">14:01:12.089</td><td><span class="act2 drop">DROP</span></td>
-          <td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td>
-          <td><span class="host">nas</span><span class="ip">198.51.100.10</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">198.51.100.8</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">198.51.100.9</span></td>
           <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
       </tbody>
     </table>
@@ -334,7 +334,7 @@
   <div class="ticker">
     <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ everything, unfiltered</span></div>
     <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · cell iot→lan</span></div>
-    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>198.51.100.34 DE → rb5009 :8291 · cell internet→rtr</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>198.51.100.7 DE → rb5009 :8291 · cell internet→rtr</span></div>
   </div>
 </section>
 
@@ -384,7 +384,7 @@
   <div class="ticker">
     <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
     <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · cell iot→lan</span></div>
-    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-alex → 192.0.2.206 :443 quic · cell lan→internet</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-alex → 198.51.100.6 :443 quic · cell lan→internet</span></div>
   </div>
 </section>
 

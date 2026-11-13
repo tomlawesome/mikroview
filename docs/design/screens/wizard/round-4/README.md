@@ -32,7 +32,7 @@ once, reuse everywhere**; **check everything we can, and say so**.
 
 Unchanged from round 3: the instance answers on `192.0.2.15:8080`;
 the router is `rb5009` at `192.0.2.1`, RouterOS **7.16.2**; its
-other address is `203.0.113.1`. Clock: the same afternoon, 14:02
+other address is `198.51.100.1`. Clock: the same afternoon, 14:02
 onwards. Every scene is this one router on this one instance.
 
 ## T — what changes
@@ -108,9 +108,9 @@ each cross followed by the fix in the same breath:
 
 - ✓ The certificate covers 192.0.2.15.
 - ✓ The log port is open for 192.0.2.1 until 14:17.
-- ✗ Lines are arriving from **203.0.113.1** and being refused. If
+- ✗ Lines are arriving from **198.51.100.1** and being refused. If
   that is rb5009, its logs leave from that address, not the one you
-  told me → **Use 203.0.113.1 instead** (one button; it changes the
+  told me → **Use 198.51.100.1 instead** (one button; it changes the
   router's own address and re-mints).
 - ✗ The block above was printed for 192.0.2.15:8080, but the
   address has changed since → **Paste again** (re-prints).
@@ -274,7 +274,7 @@ Both files prove the same nine scenes on the same story; U's are
 | t2 | Before we start, filled | all Required filled, backup switch off; Begin enabled |
 | t3 | Connect the router · Paste | told strip; slim rail of §8 (four rows); move 1 open with the block folded and Copy primary; moves 2–3 dimmed |
 | t4 | Connect the router · Wait | move 1 collapsed to "Copied 14:02"; observation line; drawer closed |
-| t5 | Connect the router · Wait, drawer open | the two lists of §4, with the 203.0.113.1 cross |
+| t5 | Connect the router · Wait, drawer open | the two lists of §4, with the 198.51.100.1 cross |
 | t6 | Connect the router · Receipt, undo open | the two-line receipt; §5's two blocks |
 | t7 | Push · Paste, block expanded | the folded block opened by a click, token inside, one Copy, caption |
 | t8 | Where setup stands | four-row ledger with the §6 amber line; primary **Confirm rb5009 is set up**, secondary Take me to the fall; Start setup again… at the foot |
@@ -300,26 +300,26 @@ every control a real button with a label.
 
 | Scene | File | URL |
 |---|---|---|
-| t1 | `shots/t-t1-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t1-dark.png |
-| t2 | `shots/t-t2-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t2-dark.png |
-| t3 | `shots/t-t3-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t3-dark.png |
-| t4 | `shots/t-t4-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t4-dark.png |
-| t5 | `shots/t-t5-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t5-dark.png |
-| t6 | `shots/t-t6-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t6-dark.png |
-| t7 | `shots/t-t7-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t7-dark.png |
-| t8 | `shots/t-t8-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t8-dark.png |
-| t9 | `shots/t-t9-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/t-t9-dark.png |
-| u1 | `shots/u-u1-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u1-dark.png |
-| u2 | `shots/u-u2-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u2-dark.png |
-| u3 | `shots/u-u3-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u3-dark.png |
-| u4 | `shots/u-u4-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u4-dark.png |
-| u5 | `shots/u-u5-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u5-dark.png |
-| u6 | `shots/u-u6-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u6-dark.png |
-| u7 | `shots/u-u7-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u7-dark.png |
-| u8 | `shots/u-u8-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u8-dark.png |
-| u9 | `shots/u-u9-dark.png` | http://198.51.100.30:8309/screens/wizard/round-4/shots/u-u9-dark.png |
+| t1 | `shots/t-t1-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t1-dark.png |
+| t2 | `shots/t-t2-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t2-dark.png |
+| t3 | `shots/t-t3-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t3-dark.png |
+| t4 | `shots/t-t4-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t4-dark.png |
+| t5 | `shots/t-t5-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t5-dark.png |
+| t6 | `shots/t-t6-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t6-dark.png |
+| t7 | `shots/t-t7-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t7-dark.png |
+| t8 | `shots/t-t8-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t8-dark.png |
+| t9 | `shots/t-t9-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/t-t9-dark.png |
+| u1 | `shots/u-u1-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u1-dark.png |
+| u2 | `shots/u-u2-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u2-dark.png |
+| u3 | `shots/u-u3-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u3-dark.png |
+| u4 | `shots/u-u4-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u4-dark.png |
+| u5 | `shots/u-u5-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u5-dark.png |
+| u6 | `shots/u-u6-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u6-dark.png |
+| u7 | `shots/u-u7-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u7-dark.png |
+| u8 | `shots/u-u8-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u8-dark.png |
+| u9 | `shots/u-u9-dark.png` | http://198.51.100.2:8309/screens/wizard/round-4/shots/u-u9-dark.png |
 
-Index: http://198.51.100.30:8309/screens/wizard/round-4/index.html
+Index: http://198.51.100.2:8309/screens/wizard/round-4/index.html
 
 ## Verdicts
 
