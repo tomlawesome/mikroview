@@ -8,12 +8,12 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
 // LockFileSuffix names the sidecar lock file beside each file store:
-// <store path>.lock. It holds no data; anything that copies or lists a
-// data directory skips it.
+// <store path>.lock. It holds no data; -migrate-data skips it.
 const LockFileSuffix = ".lock"
 
 // lockStore takes an exclusive advisory lock on path's sidecar lock file,
@@ -25,9 +25,11 @@ const LockFileSuffix = ".lock"
 // rename replaces the store file, and a lock on the replaced inode
 // guards nothing. flock, not fcntl: its lock belongs to the open file,
 // so two goroutines of one process exclude each other too.
+var noLockOnce sync.Once
+
 func lockStore(path string) (func(), error) {
 	// #nosec G304 G703 -- the path is this deployment's own configured store path plus a fixed suffix.
-	f, err := os.OpenFile(path+LockFileSuffix, os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(path+LockFileSuffix, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -36,6 +38,18 @@ func lockStore(path string) (func(), error) {
 		if err != syscall.EINTR {
 			break
 		}
+	}
+	if err == syscall.ENOLCK || err == syscall.EOPNOTSUPP || err == syscall.ENOTSUP {
+		// Some filesystems (NFS without a lock daemon, some FUSE mounts)
+		// cannot lock at all. Saving worked there before #1468, so it
+		// still does, unlocked, with one warning rather than every
+		// store refusing to save.
+		noLockOnce.Do(func() {
+			rebindLog.Warn(fmt.Sprintf("the filesystem holding %s cannot lock files (%v); store saves "+
+				"run unlocked, so an offline command run against a live server can lose a save", path, err))
+		})
+		_ = f.Close()
+		return func() {}, nil
 	}
 	if err != nil {
 		f.Close()
