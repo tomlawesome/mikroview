@@ -34,7 +34,7 @@ func TestOpenEmptyPathIsUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(\"\") returned an error: %v", err)
 	}
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "test"}); err != nil {
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4", Label: "test"}); err != nil {
 		t.Fatalf("Upsert on an in-memory-only store returned an error: %v", err)
 	}
 	if len(s.List()) != 1 {
@@ -61,7 +61,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 // against).
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "entities.json")
-	data := `{"entities":[null, {"type":"host","key":"1.2.3.4","label":"router"}, null]}`
+	data := `{"entities":[null, {"type":"host","key":"192.0.2.4","label":"router"}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestOpenSkipsNilArrayElements(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("expected the one real entry to survive, got %d: %+v", len(list), list)
 	}
-	if list[0].Key != "1.2.3.4" || list[0].Label != "router" {
+	if list[0].Key != "192.0.2.4" || list[0].Label != "router" {
 		t.Errorf("expected the real entity's data to be intact, got %+v", list[0])
 	}
 }
@@ -100,7 +100,7 @@ func TestOpenMalformedFileFailsClosed(t *testing.T) {
 
 func TestUpsertRejectsEmptyTypeOrKey(t *testing.T) {
 	s, _ := Open("")
-	if _, err := s.Upsert(Entity{Type: "", Key: "1.2.3.4"}); err != ErrInvalidEntity {
+	if _, err := s.Upsert(Entity{Type: "", Key: "192.0.2.4"}); err != ErrInvalidEntity {
 		t.Errorf("expected ErrInvalidEntity for an empty Type, got %v", err)
 	}
 	if _, err := s.Upsert(Entity{Type: TypeHost, Key: ""}); err != ErrInvalidEntity {
@@ -113,11 +113,11 @@ func TestUpsertRejectsEmptyTypeOrKey(t *testing.T) {
 
 func TestUpsertCreatesNewEntity(t *testing.T) {
 	s, _ := Open("")
-	e, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "core router", Tags: []string{"trusted"}})
+	e, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4", Label: "core router", Tags: []string{"trusted"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Type != TypeHost || e.Key != "1.2.3.4" || e.Label != "core router" {
+	if e.Type != TypeHost || e.Key != "192.0.2.4" || e.Label != "core router" {
 		t.Errorf("unexpected entity returned: %+v", e)
 	}
 
@@ -171,11 +171,11 @@ func TestUpsertDistinguishesTypesWithTheSameKey(t *testing.T) {
 
 func TestDeleteRemovesEntityAndReportsFound(t *testing.T) {
 	s, _ := Open("")
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4"}); err != nil {
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if ok, err := s.Delete(TypeHost, "1.2.3.4"); err != nil || !ok {
+	if ok, err := s.Delete(TypeHost, "192.0.2.4"); err != nil || !ok {
 		t.Errorf("expected Delete on a known entity to return (true, nil), got (%v, %v)", ok, err)
 	}
 	if len(s.List()) != 0 {
@@ -193,8 +193,8 @@ func TestDeleteUnknownIsNoOp(t *testing.T) {
 func TestListOrdersByTypeThenKey(t *testing.T) {
 	s, _ := Open("")
 	s.Upsert(Entity{Type: TypeRule, Key: "r2"})
-	s.Upsert(Entity{Type: TypeHost, Key: "9.9.9.9"})
-	s.Upsert(Entity{Type: TypeHost, Key: "1.1.1.1"})
+	s.Upsert(Entity{Type: TypeHost, Key: "198.51.100.9"})
+	s.Upsert(Entity{Type: TypeHost, Key: "198.51.100.1"})
 	s.Upsert(Entity{Type: TypeRule, Key: "r1"})
 
 	list := s.List()
@@ -202,8 +202,8 @@ func TestListOrdersByTypeThenKey(t *testing.T) {
 		t.Fatalf("expected 4 entities, got %d", len(list))
 	}
 	want := []struct{ typ, key string }{
-		{TypeHost, "1.1.1.1"},
-		{TypeHost, "9.9.9.9"},
+		{TypeHost, "198.51.100.1"},
+		{TypeHost, "198.51.100.9"},
 		{TypeRule, "r1"},
 		{TypeRule, "r2"},
 	}
@@ -256,10 +256,10 @@ func TestDeletePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s1.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4"}); err != nil {
+	if _, err := s1.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4"}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s1.Delete(TypeHost, "1.2.3.4"); err != nil || !ok {
+	if ok, err := s1.Delete(TypeHost, "192.0.2.4"); err != nil || !ok {
 		t.Fatalf("expected Delete to succeed, got (%v, %v)", ok, err)
 	}
 
@@ -430,12 +430,12 @@ func TestCountReflectsStoreSize(t *testing.T) {
 	if s.Count() != 0 {
 		t.Errorf("expected Count()==0 for a fresh store, got %d", s.Count())
 	}
-	s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4"})
+	s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4"})
 	s.Upsert(Entity{Type: TypeRule, Key: "r1"})
 	if s.Count() != 2 {
 		t.Errorf("expected Count()==2, got %d", s.Count())
 	}
-	if _, err := s.Delete(TypeHost, "1.2.3.4"); err != nil {
+	if _, err := s.Delete(TypeHost, "192.0.2.4"); err != nil {
 		t.Fatal(err)
 	}
 	if s.Count() != 1 {
@@ -570,10 +570,10 @@ func TestUpsertLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
 		t.Fatalf("OpenWithBackend: %v", err)
 	}
 
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "core"}); err == nil {
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4", Label: "core"}); err == nil {
 		t.Fatal("Upsert against a backend that cannot save = nil error, want one")
 	}
-	if s.Exists(TypeHost, "1.2.3.4") {
+	if s.Exists(TypeHost, "192.0.2.4") {
 		t.Error("expected the entity to not exist in memory after a failed persist")
 	}
 }
@@ -588,17 +588,17 @@ func TestUpsertRestoresThePreviousEntityWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "original"}); err != nil {
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4", Label: "original"}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Swap in a backend that can no longer save, then try to overwrite
 	// the existing entity's label.
 	s.backend = failingSaveBackend{}
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "changed"}); err == nil {
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4", Label: "changed"}); err == nil {
 		t.Fatal("Upsert against a backend that cannot save = nil error, want one")
 	}
-	if got := s.Label(TypeHost, "1.2.3.4"); got != "original" {
+	if got := s.Label(TypeHost, "192.0.2.4"); got != "original" {
 		t.Errorf("Label after a failed persist = %q, want the previous label restored", got)
 	}
 }
@@ -613,19 +613,19 @@ func TestDeleteLeavesTheEntityInPlaceWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "core"}); err != nil {
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.0.2.4", Label: "core"}); err != nil {
 		t.Fatal(err)
 	}
 
 	s.backend = failingSaveBackend{}
-	deleted, err := s.Delete(TypeHost, "1.2.3.4")
+	deleted, err := s.Delete(TypeHost, "192.0.2.4")
 	if err == nil {
 		t.Fatal("Delete against a backend that cannot save = nil error, want one")
 	}
 	if deleted {
 		t.Error("expected Delete to report false when the removal could not be saved")
 	}
-	if !s.Exists(TypeHost, "1.2.3.4") {
+	if !s.Exists(TypeHost, "192.0.2.4") {
 		t.Error("expected the entity to still exist after a failed persist")
 	}
 }

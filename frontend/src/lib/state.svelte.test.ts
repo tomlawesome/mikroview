@@ -190,7 +190,7 @@ describe('applyFilters srcQuery/dstQuery', () => {
 
 describe('applyFilters srcCountry/dstCountry', () => {
   it('matches a resolved country code', () => {
-    const events = [evt({ id: 1, srcIp: '8.8.8.8', srcCountry: 'US' }), evt({ id: 2, srcIp: '1.1.1.1', srcCountry: 'AU' })]
+    const events = [evt({ id: 1, srcIp: '192.0.2.8', srcCountry: 'US' }), evt({ id: 2, srcIp: '192.0.2.2', srcCountry: 'AU' })]
     expect(applyFilters(events, { ...emptyFilters(), srcCountry: 'US' }).map((e) => e.id)).toEqual([1])
   })
 
@@ -198,7 +198,7 @@ describe('applyFilters srcCountry/dstCountry', () => {
     const events = [
       evt({ id: 1, srcIp: '10.0.0.5' }), // has an address, no country -- unknown
       evt({ id: 2 }), // no source address at all -- not "unknown", not applicable
-      evt({ id: 3, srcIp: '8.8.8.8', srcCountry: 'US' }),
+      evt({ id: 3, srcIp: '192.0.2.8', srcCountry: 'US' }),
     ]
     const got = applyFilters(events, { ...emptyFilters(), srcCountry: 'unknown' })
     expect(got.map((e) => e.id)).toEqual([1])

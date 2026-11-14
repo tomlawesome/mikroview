@@ -37,7 +37,7 @@ func requestFrom(peer string, header string, values ...string) *http.Request {
 func TestClientIPIgnoresForwardingHeadersByDefault(t *testing.T) {
 	s := &Server{} // no TrustedProxies: the out-of-the-box configuration
 
-	for _, spoof := range []string{"1.2.3.4", "9.9.9.9", "203.0.113.77"} {
+	for _, spoof := range []string{"192.0.2.4", "198.51.100.10", "203.0.113.77"} {
 		r := requestFrom("198.51.100.5:44321", "X-Forwarded-For", spoof)
 		if got := s.clientIP(r); got != "198.51.100.5" {
 			t.Errorf("X-Forwarded-For: %s was honoured -- clientIP = %q, want the real peer %q",
@@ -81,7 +81,7 @@ func TestClientIP(t *testing.T) {
 			name:    "untrusted peer's header is ignored even when proxies are configured",
 			trusted: []string{"10.0.0.0/8"},
 			peer:    "203.0.113.50:1234",
-			values:  []string{"1.2.3.4"},
+			values:  []string{"192.0.2.4"},
 			want:    "203.0.113.50",
 		},
 		{
@@ -91,7 +91,7 @@ func TestClientIP(t *testing.T) {
 			name:    "forged entries to the left of the real one are not returned",
 			trusted: []string{"10.0.0.0/8"},
 			peer:    "10.0.0.1:9999",
-			values:  []string{"1.2.3.4, 198.51.100.8, 198.51.100.7"},
+			values:  []string{"192.0.2.4, 198.51.100.8, 198.51.100.7"},
 			want:    "198.51.100.7",
 		},
 		{
@@ -105,7 +105,7 @@ func TestClientIP(t *testing.T) {
 			name:    "multiple header instances are one chain",
 			trusted: []string{"10.0.0.0/8"},
 			peer:    "10.0.0.1:9999",
-			values:  []string{"1.2.3.4", "198.51.100.7, 10.0.0.9"},
+			values:  []string{"192.0.2.4", "198.51.100.7, 10.0.0.9"},
 			want:    "198.51.100.7",
 		},
 		{

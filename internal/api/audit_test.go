@@ -228,7 +228,7 @@ func TestTokenCreateAndRevokeRecordAuditEntries(t *testing.T) {
 // one per flag.
 func TestClearAllDoesNotRecordAPerFlagAuditEntry(t *testing.T) {
 	s := newAuthTestServer(t)
-	s.Flags.Add("port_scan", "1.2.3.4", "d1", time.Now())
+	s.Flags.Add("port_scan", "192.0.2.4", "d1", time.Now())
 	s.Flags.Add("port_scan", "192.0.2.5", "d2", time.Now())
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
@@ -242,7 +242,7 @@ func TestClearAllDoesNotRecordAPerFlagAuditEntry(t *testing.T) {
 		if e.Action == "flag.clear_all" {
 			clearAlls++
 		}
-		if e.Target == "port_scan:1.2.3.4" {
+		if e.Target == "port_scan:192.0.2.4" {
 			t.Errorf("expected no per-flag audit entry from a bulk clear, got %+v", e)
 		}
 	}

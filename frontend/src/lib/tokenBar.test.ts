@@ -111,7 +111,7 @@ describe('the token bar value menus (#1246)', () => {
     // buildFilterChips draws stays a single composite token.
     expect(tokenPatch('source', 'scope:external')).toEqual({ srcScope: 'external' })
     expect(tokenPatch('source', 'country:DE')).toEqual({ srcCountry: 'DE' })
-    expect(tokenPatch('source', 'query:198.51.100.34')).toEqual({ srcQuery: '198.51.100.34' })
+    expect(tokenPatch('source', 'query:192.0.2.34')).toEqual({ srcQuery: '192.0.2.34' })
   })
 
   it('reads destination off its own side, never the source\'s', () => {

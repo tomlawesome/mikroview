@@ -801,7 +801,7 @@ describe('coverage is the material, not a caption (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
     appState.events = [
       event({ inInterface: 'bridge1', srcIp: '192.168.1.50' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }), // resolves wan1 as the WAN boundary
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }), // resolves wan1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -814,7 +814,7 @@ describe('coverage is the material, not a caption (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'Guest' }]
     appState.events = [
       event({ inInterface: 'bridge2', srcIp: '10.0.30.9' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }),
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -894,7 +894,7 @@ describe('a rib is two halves (round 49, #1016)', () => {
   const oneEachWay = (): void => {
     zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'IoT' }]
     appState.events = [
-      event({ inInterface: 'wan1', outInterface: 'bridge2', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', outInterface: 'bridge2', srcIp: '192.0.2.8' }),
       event({ inInterface: 'bridge2', outInterface: 'wan1', srcIp: '10.0.30.9' }),
     ]
     policyState.anyPushed = true
@@ -945,7 +945,7 @@ describe('a rib is two halves (round 49, #1016)', () => {
     policyState.edges = [] // nothing in the table names this pair: unplanned
     appState.events = [
       event({ inInterface: 'bridge2', outInterface: 'wan1', srcIp: '10.0.30.9' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }),
     ]
     const { container } = render(Topography)
     flushSync()
@@ -2133,7 +2133,7 @@ describe('#723: lines are painted before labels in every lens, so a line can nev
     appState.events = [
       event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
       event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -2204,7 +2204,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
   const seenOnBothLanes = () => [
     event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
     event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-    event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+    event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
   ]
 
   // Dark, so that every one of these boundary-directions draws its own
@@ -2281,7 +2281,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
       }))
       appState.events = [
         ...Array.from({ length: 3 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
-        event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+        event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
       ]
       policyState.anyPushed = true
       policyState.edges = [
@@ -2312,7 +2312,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
     }))
     appState.events = [
       ...Array.from({ length: 5 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -3298,7 +3298,7 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '10.0.40.1/24', network: '10.0.40.0', interface: 'bridge4', comment: 'Guest' }]
     appState.events = [
       event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [

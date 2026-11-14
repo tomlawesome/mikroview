@@ -64,7 +64,7 @@ func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"arp","records":[`)                                                                                                                      // truncated mid-array
 	f.Add(`{"kind":"routing-table","page":1,"pages":1,"records":[]}`)                                                                                       // unrecognised kind
 	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[],"extra":1}`)                                                                                       // unknown top-level field
-	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[{"address":"1.1.1.1","mac":"","owner":"admin"}]}`)                                                   // unknown record field
+	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[{"address":"203.0.113.1","mac":"","owner":"admin"}]}`)                                               // unknown record field
 	f.Add(`{"kind":"arp","page":0,"pages":0,"records":[]}`)                                                                                                 // page/pages both zero
 	f.Add(`{"kind":"arp","page":999999999,"pages":1,"records":[]}`)                                                                                         // page far past pages
 	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":1e400,"comment":"","chain":"","action":"","srcAddressList":"","logPrefix":""}]}`) // float overflow

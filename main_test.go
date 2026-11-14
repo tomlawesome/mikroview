@@ -61,7 +61,7 @@ func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MA
 	return st, devices, macRegistry, fs, h, geo, ru
 }
 
-const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60"
+const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60"
 
 // TestIngestRaisesNewDeviceFlagOnceForFirstSighting is the phase-1 wiring
 // contract from issue #103: the first event carrying a given SrcMAC

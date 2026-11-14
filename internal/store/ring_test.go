@@ -17,7 +17,7 @@ func mkEvent(t time.Time, device string, action Action) Event {
 		Protocol:   "TCP",
 		SrcIP:      "192.168.1.50",
 		SrcPort:    1234,
-		DstIP:      "1.2.3.4",
+		DstIP:      "198.51.100.4",
 		DstPort:    443,
 		Chain:      "forward",
 		RuleLabel:  "lan-wan",
@@ -146,13 +146,13 @@ func TestQueryFilters(t *testing.T) {
 
 	accept := mkEvent(now, "core", ActionAccept)
 	accept.Protocol = "TCP"
-	accept.SrcIP, accept.DstIP = "10.0.0.5", "8.8.8.8"
+	accept.SrcIP, accept.DstIP = "10.0.0.5", "192.0.2.8"
 	accept.SrcPort, accept.DstPort = 51234, 443
 	s.Insert(accept)
 
 	drop := mkEvent(now, "branch", ActionDrop)
 	drop.Protocol = "UDP"
-	drop.SrcIP, drop.DstIP = "10.0.0.9", "1.1.1.1"
+	drop.SrcIP, drop.DstIP = "10.0.0.9", "198.51.100.2"
 	drop.SrcPort, drop.DstPort = 5000, 53
 	drop.RuleLabel = "invalid"
 	s.Insert(drop)
@@ -179,7 +179,7 @@ func TestQueryFilters(t *testing.T) {
 	})
 
 	t.Run("by CIDR matching dst", func(t *testing.T) {
-		res := s.Query(Query{IP: "8.8.8.0/24", Limit: 10})
+		res := s.Query(Query{IP: "192.0.2.0/24", Limit: 10})
 		if len(res.Events) != 1 {
 			t.Errorf("got %v", ids(res.Events))
 		}
@@ -250,7 +250,7 @@ func TestQueryFilters(t *testing.T) {
 	})
 
 	t.Run("by dst scope external", func(t *testing.T) {
-		// both events have a public DstIP (8.8.8.8, 1.1.1.1) -- should match both
+		// both events have a public DstIP (192.0.2.8, 198.51.100.2) -- should match both
 		res := s.Query(Query{DstScope: ScopeExternal, Limit: 10})
 		if len(res.Events) != 2 {
 			t.Errorf("expected both events (public DstIP) to match, got %v", ids(res.Events))
@@ -274,9 +274,9 @@ func TestScopeMatches(t *testing.T) {
 	}{
 		{"any always matches, even empty", ScopeAny, "", true},
 		{"internal matches a private IP", ScopeInternal, "192.168.1.1", true},
-		{"internal rejects a public IP", ScopeInternal, "8.8.8.8", false},
+		{"internal rejects a public IP", ScopeInternal, "192.0.2.8", false},
 		{"internal rejects an unparseable address", ScopeInternal, "not-an-ip", false},
-		{"external matches a public IP", ScopeExternal, "8.8.8.8", true},
+		{"external matches a public IP", ScopeExternal, "192.0.2.8", true},
 		{"external rejects a private IP", ScopeExternal, "10.0.0.1", false},
 		{"external rejects an empty address", ScopeExternal, "", false},
 		{"internal matches loopback", ScopeInternal, "127.0.0.1", true},

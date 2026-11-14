@@ -800,7 +800,7 @@ describe('LiveTable squared columns (#644)', () => {
   // the per-side pairing logic renders each side independently.
   it('shows a bare unnamed source dim with an em-dash address, and a named destination bright with its raw address shown', () => {
     const e = makeEvent('bare-source', {
-      srcIp: '198.51.100.34',
+      srcIp: '192.0.2.34',
       srcCountry: 'DE',
       dstIp: '10.0.40.5',
       dstHostName: 'nas',
@@ -815,7 +815,7 @@ describe('LiveTable squared columns (#644)', () => {
     // bare so it renders dim), the country flag (#1200 restored this as
     // an emoji, not the bare "DE" #644 had regressed it to) rides beside
     // it, and the address column repeats nothing.
-    expect(nameCells[0]?.textContent).toContain('198.51.100.34')
+    expect(nameCells[0]?.textContent).toContain('192.0.2.34')
     expect(nameCells[0]?.querySelector('.geo')?.textContent).toBe(countryFlag('DE'))
     expect(nameCells[0]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(true)
     expect(ipCells[0]?.textContent?.trim()).toBe('—')
@@ -984,7 +984,7 @@ describe('LiveTable squared columns (#644)', () => {
   // `!event.srcHostName && event.srcCountry`).
   it('shows the country flag beside a resolved hostname, not only beside a bare address', () => {
     const e = makeEvent('flag-with-hostname-row', {
-      srcIp: '198.51.100.34',
+      srcIp: '192.0.2.34',
       srcHostName: 'known-relay',
       srcCountry: 'DE',
     })

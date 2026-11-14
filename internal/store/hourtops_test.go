@@ -20,7 +20,7 @@ func mkTopEvent(t time.Time, srcIP, srcHostName string, srcPort int, dstPort int
 		SrcIP:       srcIP,
 		SrcHostName: srcHostName,
 		SrcPort:     srcPort,
-		DstIP:       "1.2.3.4",
+		DstIP:       "198.51.100.4",
 		DstPort:     dstPort,
 		Chain:       "forward",
 		Raw:         "raw line",

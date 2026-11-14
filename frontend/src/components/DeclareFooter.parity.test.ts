@@ -127,7 +127,7 @@ function shape(el: Element, depth = 0): string[] {
 /** The 2D map's declare form, open. */
 function flatForm(): Element {
   zonesState.pushed = [{ address: '10.0.40.1/24', network: '10.0.40.0', interface: 'bridge4', comment: 'Guest' }]
-  appState.events = [event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }), event({ id: 2, inInterface: 'ether1', srcIp: '8.8.8.8' })]
+  appState.events = [event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }), event({ id: 2, inInterface: 'ether1', srcIp: '192.0.2.8' })]
   policyState.anyPushed = true
   policyState.edges = [
     { key: 'bridge4|ether1', from: 'bridge4', to: 'ether1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },

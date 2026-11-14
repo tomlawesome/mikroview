@@ -8,7 +8,7 @@ import { cleanup, render, screen } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
-  lookupIp: vi.fn(async () => ({ ip: '1.1.1.1', countryCode: 'US', isp: 'Cloudflare' })),
+  lookupIp: vi.fn(async () => ({ ip: '192.0.2.2', countryCode: 'US', isp: 'Cloudflare' })),
   geoLookup: vi.fn(async () => ({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' })),
 }))
 
@@ -33,11 +33,11 @@ afterEach(() => {
 
 describe('the network owner line (#1352)', () => {
   it('draws "Network · AS… owner" under the country when it is known', async () => {
-    openFor('1.1.1.1')
+    openFor('192.0.2.2')
     await vi.waitFor(() =>
       expect(screen.getByTestId('ip-lookup-owner').textContent?.trim()).toBe('Network · AS13335 Cloudflare, Inc.'),
     )
-    expect(geoLookup).toHaveBeenCalledWith('1.1.1.1')
+    expect(geoLookup).toHaveBeenCalledWith('192.0.2.2')
     // Directly under the country row, not somewhere further down.
     const owner = screen.getByTestId('ip-lookup-owner')
     expect(owner.previousElementSibling?.textContent).toContain('Country')
@@ -45,15 +45,15 @@ describe('the network owner line (#1352)', () => {
 
   it('draws nothing when the source does not know the owner', async () => {
     vi.mocked(geoLookup).mockResolvedValueOnce({ country: 'US', asn: null, asName: null })
-    openFor('1.1.1.1')
+    openFor('192.0.2.2')
     await vi.waitFor(() => expect(screen.getByText('Country')).toBeTruthy())
     flushSync()
     expect(screen.queryByTestId('ip-lookup-owner')).toBeNull()
   })
 
   it('still names the owner when the reputation lookup found nothing', async () => {
-    vi.mocked(lookupIp).mockResolvedValueOnce({ ip: '1.1.1.1' } as never)
-    openFor('1.1.1.1')
+    vi.mocked(lookupIp).mockResolvedValueOnce({ ip: '192.0.2.2' } as never)
+    openFor('192.0.2.2')
     await vi.waitFor(() => expect(screen.getByTestId('ip-lookup-owner')).toBeTruthy())
     expect(screen.queryByText('No intel found for this IP')).toBeNull()
   })

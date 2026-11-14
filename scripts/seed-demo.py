@@ -143,14 +143,14 @@ HOSTS = [
     ("office-hex", "wifi", 66, "aa:bb:cc:02:03:99", None, 1200),
 ]
 
-# Real, geolocatable public addresses (so the country column has data)
-# plus a documentation-range WAN, per the brief: real ones where it
-# matters for country, documentation ranges everywhere else.
+# Five well-known public resolvers, which geolocate (so the country
+# column has some data), and documentation-range (RFC 5737) addresses for
+# every other outside party, the WAN included.
 PUBLIC = ["203.0.113.1", "192.0.2.8", "192.0.2.9", "198.51.100.222", "198.51.100.1",
-          "198.51.100.10", "192.0.2.1", "198.51.100.33", "203.0.113.1",
-          "192.0.2.1", "198.51.100.1", "198.51.100.153", "198.51.100.70",
-          "198.51.100.5", "203.0.113.14", "198.51.100.140"]
-SCANNER_RECURRING = "203.0.113.233"   # fires repeatedly, gaps between -- "intermittent"
+          "198.51.100.11", "198.51.100.1", "198.51.100.33", "198.51.100.2",
+          "198.51.100.3", "198.51.100.4", "198.51.100.153", "198.51.100.70",
+          "198.51.100.5", "198.51.100.14", "198.51.100.140"]
+SCANNER_RECURRING = "198.51.100.233"   # fires repeatedly, gaps between -- "intermittent"
 SCANNER_ONE_OFF = "198.51.100.100"     # fires once, never again -- "stopped"
 
 # Filter rules (kind=filter-rule). `fires` marks whether the feed below

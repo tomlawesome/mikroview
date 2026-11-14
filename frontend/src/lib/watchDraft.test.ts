@@ -61,7 +61,7 @@ describe('watchDraftForFlag (#641)', () => {
     expect(
       watchDraftForFlag(flag({ type: 'distributed_brute_force', target: 'port 445', evidence: { pairs: [pair('192.168.1.10', 445)] } })),
     ).toBeNull()
-    expect(watchDraftForFlag(flag({ type: 'global_spike', target: 'global', evidence: { pairs: [pair('1.2.3.4', 443)] } }))).toBeNull()
+    expect(watchDraftForFlag(flag({ type: 'global_spike', target: 'global', evidence: { pairs: [pair('192.0.2.4', 443)] } }))).toBeNull()
   })
 })
 

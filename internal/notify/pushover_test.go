@@ -61,7 +61,7 @@ func TestPushoverNotifierCapsLongBatches(t *testing.T) {
 
 	batch := make([]flags.Flag, pushoverMaxLines+5)
 	for i := range batch {
-		batch[i] = flags.Flag{Type: flags.TypePortScan, Target: "1.2.3.4", Detail: "detail"}
+		batch[i] = flags.Flag{Type: flags.TypePortScan, Target: "192.0.2.4", Detail: "detail"}
 	}
 	if err := n.Send(batch); err != nil {
 		t.Fatalf("Send returned an error: %v", err)
