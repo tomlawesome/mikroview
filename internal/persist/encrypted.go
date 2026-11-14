@@ -212,7 +212,10 @@ func (b *EncryptedFileBackend) unseal(snap Snapshot) (out Snapshot, legacy bool,
 // rebind re-seals a document opened under the pre-#1450 path binding
 // under the store-name binding, written atomically through the wrapped
 // FileBackend (WriteFileAtomic, with its version check against the bytes
-// just read), and returns it under the new version.
+// just read), and returns it under the new version. That check runs under
+// the store's lock (#1468), so a re-seal racing another process's save is
+// refused with ErrConflict rather than writing the older document back
+// over the newer one.
 func (b *EncryptedFileBackend) rebind(ctx context.Context, snap Snapshot) (Snapshot, error) {
 	version, err := b.Save(ctx, snap.Payload, snap.Version)
 	if err != nil {

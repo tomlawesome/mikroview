@@ -8,7 +8,44 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"syscall"
 )
+
+// LockFileSuffix names the sidecar lock file beside each file store:
+// <store path>.lock. It holds no data; anything that copies or lists a
+// data directory skips it.
+const LockFileSuffix = ".lock"
+
+// lockStore takes an exclusive advisory lock on path's sidecar lock file,
+// blocking until it is free, and returns the function that releases it.
+//
+// #1468: Save's version check and its rename were not atomic across
+// processes, so two writers could both pass the check and one update was
+// lost. The lock is on a sidecar rather than the store file because the
+// rename replaces the store file, and a lock on the replaced inode
+// guards nothing. flock, not fcntl: its lock belongs to the open file,
+// so two goroutines of one process exclude each other too.
+func lockStore(path string) (func(), error) {
+	// #nosec G304 G703 -- the path is this deployment's own configured store path plus a fixed suffix.
+	f, err := os.OpenFile(path+LockFileSuffix, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("persist: locking %s: %w", path+LockFileSuffix, err)
+	}
+	return func() {
+		// Closing the file releases the lock.
+		_ = f.Close()
+	}, nil
+}
 
 // FileBackend is the default, zero-infrastructure backend: one JSON file
 // per store, atomically replaced on write.
@@ -146,6 +183,12 @@ func (b *FileBackend) Save(ctx context.Context, payload []byte, expect int64) (i
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, err
 	}
+	// Held from the version read through the rename (#1468).
+	unlock, err := lockStore(b.path)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 
 	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	current, readErr := os.ReadFile(b.path)

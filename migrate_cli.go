@@ -16,6 +16,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // -migrate-data moves a deployment's data directory from wherever it is
@@ -392,7 +393,7 @@ func scanTree(root string) (int, int64, error) {
 		if err != nil {
 			return fmt.Errorf("reading %s: %v", path, unwrapPathErr(err))
 		}
-		if d.IsDir() {
+		if d.IsDir() || isStoreLockFile(d) {
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -412,6 +413,13 @@ func scanTree(root string) (int, int64, error) {
 		return 0, 0, err
 	}
 	return files, bytes, nil
+}
+
+// isStoreLockFile reports a file store's sidecar lock file (#1468). It
+// holds no data and the server recreates it, so a move neither counts,
+// copies nor verifies it.
+func isStoreLockFile(d fs.DirEntry) bool {
+	return d.Type().IsRegular() && strings.HasSuffix(d.Name(), persist.LockFileSuffix)
 }
 
 // copyTree copies every file under src into dst, returning the SHA-256
@@ -443,6 +451,9 @@ func copyTree(src, dst string) (map[string]string, error) {
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return fmt.Errorf("creating %s: %v", target, unwrapPathErr(err))
 			}
+			return nil
+		}
+		if isStoreLockFile(d) {
 			return nil
 		}
 		sum, err := copyFile(path, target)
@@ -514,7 +525,7 @@ func verifyMigration(plan *migrationPlan, digests map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))
 		}
-		if d.IsDir() {
+		if d.IsDir() || isStoreLockFile(d) {
 			return nil
 		}
 		rel, err := filepath.Rel(plan.Dest, path)
