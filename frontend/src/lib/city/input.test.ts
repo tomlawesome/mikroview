@@ -149,7 +149,7 @@ describe('city input', () => {
   })
 
   it('finds the zone whose CIDR holds an address', () => {
-    const zones = cityInputFrom([device('rb', '1.1.1.1')], [zone('a', '10.0.0.0/24'), zone('b', '10.5.0.0/16')], [], [], [], false, 'rb', null).zones
+    const zones = cityInputFrom([device('rb', '192.0.2.2')], [zone('a', '10.0.0.0/24'), zone('b', '10.5.0.0/16')], [], [], [], false, 'rb', null).zones
     expect(zoneHolding(zones, '10.5.9.9')?.id).toBe('b')
     expect(zoneHolding(zones, '192.168.1.1')).toBeNull()
   })

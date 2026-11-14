@@ -21,7 +21,7 @@ function ev(over: Partial<FirewallEvent> = {}): FirewallEvent {
     action: 'drop',
     ruleLabel: 'input-def',
     chain: 'input',
-    srcIp: '1.2.3.4',
+    srcIp: '192.0.2.4',
     dstIp: '203.0.113.9',
     dstPort: 3389,
     protocol: 'TCP',
@@ -39,7 +39,7 @@ describe('the golden group', () => {
   // Source, destination and port are all part of identity -- any two of
   // the three tells you little, so none of them may be merged across.
   it.each([
-    ['source', { srcIp: '9.9.9.9' }],
+    ['source', { srcIp: '192.0.2.7' }],
     ['destination', { dstIp: '198.51.100.1' }],
     ['port', { dstPort: 5900 }],
     ['protocol', { protocol: 'UDP' }],
@@ -82,10 +82,10 @@ describe('ordering', () => {
   // The count climbs in place; the row does not jump down the screen
   // every time it is hit again.
   it('anchors a group at its first occurrence', () => {
-    const first = ev({ srcIp: '1.1.1.1' })
-    const second = ev({ srcIp: '192.0.2.2' })
-    const groups = groupEvents([first, second, ev({ srcIp: '1.1.1.1' })])
-    expect(groups.map((g) => g.head.srcIp)).toEqual(['1.1.1.1', '192.0.2.2'])
+    const first = ev({ srcIp: '192.0.2.2' })
+    const second = ev({ srcIp: '192.0.2.3' })
+    const groups = groupEvents([first, second, ev({ srcIp: '192.0.2.2' })])
+    expect(groups.map((g) => g.head.srcIp)).toEqual(['192.0.2.2', '192.0.2.3'])
     expect(groups[0].count).toBe(2)
   })
 
@@ -120,7 +120,7 @@ function flag(over: Partial<Flag> = {}): Flag {
   return {
     id: `f${nextId++}`,
     type: 'port_scan',
-    target: '1.2.3.4',
+    target: '192.0.2.4',
     detail: '',
     count: 1,
     firstSeen: '2026-08-13T10:00:00Z',
@@ -133,14 +133,14 @@ function flag(over: Partial<Flag> = {}): Flag {
 describe('the flag marker', () => {
   it('marks sources with an active flag, and not cleared ones', () => {
     const bySource = flagsBySource([
-      flag({ target: '1.2.3.4', cleared: false }),
-      flag({ target: '9.9.9.9', cleared: true }),
+      flag({ target: '192.0.2.4', cleared: false }),
+      flag({ target: '192.0.2.7', cleared: true }),
     ])
-    expect(bySource.has('1.2.3.4')).toBe(true)
-    expect(bySource.has('9.9.9.9')).toBe(false)
+    expect(bySource.has('192.0.2.4')).toBe(true)
+    expect(bySource.has('192.0.2.7')).toBe(false)
   })
 
   it('understands a target carrying a port suffix', () => {
-    expect(flagsBySource([flag({ target: '1.2.3.4 -> port 22' })]).has('1.2.3.4')).toBe(true)
+    expect(flagsBySource([flag({ target: '192.0.2.4 -> port 22' })]).has('192.0.2.4')).toBe(true)
   })
 })

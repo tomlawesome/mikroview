@@ -1100,21 +1100,21 @@ describe('the country source calls (#1352)', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const a = await geoLookup('1.1.1.1')
-    const b = await geoLookup('1.1.1.1')
+    const a = await geoLookup('192.0.2.2')
+    const b = await geoLookup('192.0.2.2')
     expect(a).toEqual({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' })
     expect(b).toBe(a)
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/geo/lookup?ip=1.1.1.1')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/geo/lookup?ip=192.0.2.2')
   })
 
   it('geoLookup keeps no failure, so the next ask tries again', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => '' })))
-    expect(await geoLookup('1.1.1.1')).toBeNull()
+    expect(await geoLookup('192.0.2.2')).toBeNull()
 
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ country: null, asn: null, asName: null }) }))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await geoLookup('1.1.1.1')).toEqual({ country: null, asn: null, asName: null })
+    expect(await geoLookup('192.0.2.2')).toEqual({ country: null, asn: null, asName: null })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

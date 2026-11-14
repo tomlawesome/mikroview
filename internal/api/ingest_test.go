@@ -297,7 +297,7 @@ func TestIngestRouteRejectsAnInvalidPayload(t *testing.T) {
 	}{
 		{"unknown kind", `{"kind":"routing-table","page":1,"pages":1,"records":[]}`},
 		{"unknown top-level field", `{"kind":"arp","page":1,"pages":1,"records":[],"extra":1}`},
-		{"unknown record field", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"1.1.1.1","mac":"","owner":"admin"}]}`},
+		{"unknown record field", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.1","mac":"","owner":"admin"}]}`},
 		{"malformed JSON", `{not json`},
 		{"empty body", ``},
 	}

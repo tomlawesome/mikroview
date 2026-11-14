@@ -286,8 +286,8 @@ func TestMatchingPrefersMACOverIP(t *testing.T) {
 	now := time.Now()
 
 	// Same MAC, IP changes between two matches (a DHCP renewal).
-	tuple1 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.10"}, DestIP: "1.2.3.4", Port: 443}
-	tuple2 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.99"}, DestIP: "1.2.3.4", Port: 443}
+	tuple1 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.10"}, DestIP: "192.0.2.4", Port: 443}
+	tuple2 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.99"}, DestIP: "192.0.2.4", Port: 443}
 	if err := s.Append("e", tuple1, testEvent("x"), now); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestMatchingPrefersMACOverIP(t *testing.T) {
 func TestIPFallbackWhenNoMACKnown(t *testing.T) {
 	s := mustOpen(t, 10)
 	now := time.Now()
-	tuple := Tuple{Source: Identity{IP: "192.168.1.10"}, DestIP: "1.2.3.4", Port: 443}
+	tuple := Tuple{Source: Identity{IP: "192.168.1.10"}, DestIP: "192.0.2.4", Port: 443}
 
 	if err := s.Append("e", tuple, testEvent("x"), now); err != nil {
 		t.Fatal(err)

@@ -61,7 +61,7 @@ func TestParsedFieldsAreLengthCapped(t *testing.T) {
 	long := strings.Repeat("a", 40000)
 	line := "A|" + long + "|forward: in:" + long + " out:" + long +
 		", connection-state:new src-mac " + long +
-		", proto " + long + ", 1.2.3.4:80->198.51.100.8:443, len 60"
+		", proto " + long + ", 198.51.100.4:80->198.51.100.8:443, len 60"
 
 	p := Parse(line)
 	assertFieldsClamped(t, p, line)
@@ -99,7 +99,7 @@ func TestFlagsFieldIsClamped(t *testing.T) {
 // TestNormalFieldsAreNotTruncated: the cap must be invisible to real
 // traffic. 256 bytes is far above any legitimate value.
 func TestNormalFieldsAreNotTruncated(t *testing.T) {
-	line := "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60"
+	line := "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->198.51.100.4:443, len 60"
 	p := Parse(line)
 	if p.RuleLabel != "lan-wan" {
 		t.Errorf("RuleLabel = %q, want lan-wan", p.RuleLabel)

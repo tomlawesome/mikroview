@@ -399,7 +399,7 @@ func TestMatchInvertedStructuralNoiseExemptByDefault(t *testing.T) {
 
 	// A genuine unicast destination must still be evaluated normally.
 	e := baseEvent()
-	e.DstIP = "8.8.8.8"
+	e.DstIP = "192.0.2.8"
 	if _, outcome := Match(entry, e); outcome != Observed {
 		t.Errorf("an ordinary unicast destination must still be evaluated, got %v", outcome)
 	}
@@ -427,7 +427,7 @@ func TestIsStructurallyExempt(t *testing.T) {
 		{"255.255.255.255", true}, // limited broadcast
 		{"169.254.1.1", true},     // link-local
 		{"ff02::1", true},         // IPv6 link-local multicast
-		{"8.8.8.8", false},        // ordinary unicast
+		{"192.0.2.8", false},      // ordinary unicast
 		{"10.0.0.5", false},       // ordinary unicast
 		{"192.168.1.255", false},  // subnet broadcast -- not detectable without the mask, see doc comment
 		{"not-an-ip", false},

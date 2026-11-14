@@ -11,9 +11,9 @@ Served from the design host, port 8309:
 
 | | Concept | Open |
 |---|---|---|
-| **W** | **Console** — the router's own lines are the interface | `http://198.51.100.30:8309/screens/wizard/round-6/w-console.html` |
-| **X** | **Blueprint** — the network is drafted; evidence inks it | `http://198.51.100.30:8309/screens/wizard/round-6/x-blueprint.html` |
-| **Y** | **Analyzer** — setup is reading an instrument | `http://198.51.100.30:8309/screens/wizard/round-6/y-analyzer.html` |
+| **W** | **Console** — the router's own lines are the interface | `http://198.51.100.1:8309/screens/wizard/round-6/w-console.html` |
+| **X** | **Blueprint** — the network is drafted; evidence inks it | `http://198.51.100.1:8309/screens/wizard/round-6/x-blueprint.html` |
+| **Y** | **Analyzer** — setup is reading an instrument | `http://198.51.100.1:8309/screens/wizard/round-6/y-analyzer.html` |
 
 Drive each: fill the three fields, Continue, Copy, watch. The dashed
 strip is prototype furniture only: scenario (happy path · router sends
@@ -67,7 +67,7 @@ reads a stream, and setup is watching the channels come up.
 ## The data story
 
 MikroView at `192.0.2.15:8080`; `rb5009` at `192.0.2.1`, other
-address `203.0.113.1`; Copy at 14:02:50, certificate 14:02:58, enrol
+address `198.51.100.2`; Copy at 14:02:50, certificate 14:02:58, enrol
 14:03:04, first push 14:03:21, backup 14:03:22. Times come from a story
 clock, so they read the same at any prototype speed. RouterOS **7.24.4**
 (7.25.1 in the ahead-of-review scenario). 47 filter rules, 3 logging

@@ -208,8 +208,8 @@ func TestHandleEventsFiltering(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
-	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, Protocol: "TCP", SrcIP: "10.0.0.1", DstIP: "8.8.8.8", DstPort: 443})
-	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, Protocol: "UDP", SrcIP: "10.0.0.2", DstIP: "1.1.1.1", DstPort: 53})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, Protocol: "TCP", SrcIP: "10.0.0.1", DstIP: "192.0.2.8", DstPort: 443})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, Protocol: "UDP", SrcIP: "10.0.0.2", DstIP: "192.0.2.1", DstPort: 53})
 
 	resp, err := http.Get(ts.URL + "/api/events?action=drop")
 	if err != nil {
@@ -232,7 +232,7 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
-	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "192.0.2.8"})
 	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, SrcIP: "203.0.113.9", DstIP: "10.0.0.5"})
 
 	resp, err := http.Get(ts.URL + "/api/events?srcScope=internal")
@@ -271,8 +271,8 @@ func TestHandleEventsUntilFiltering(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
-	old := st.Insert(store.Event{Time: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
-	st.Insert(store.Event{Time: now, ReceivedAt: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	old := st.Insert(store.Event{Time: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "192.0.2.8"})
+	st.Insert(store.Event{Time: now, ReceivedAt: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "192.0.2.8"})
 
 	resp, err := http.Get(ts.URL + "/api/events?until=" + url.QueryEscape(old.ReceivedAt.Add(30*time.Second).Format(time.RFC3339)))
 	if err != nil {
@@ -301,9 +301,9 @@ func TestHandleEventsAroundWindow(t *testing.T) {
 	tooEarly := now.Add(-time.Hour)
 	center := now
 	tooLate := now.Add(time.Hour)
-	st.Insert(store.Event{Time: tooEarly, ReceivedAt: tooEarly, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
-	inWindow := st.Insert(store.Event{Time: center, ReceivedAt: center, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
-	st.Insert(store.Event{Time: tooLate, ReceivedAt: tooLate, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: tooEarly, ReceivedAt: tooEarly, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "192.0.2.8"})
+	inWindow := st.Insert(store.Event{Time: center, ReceivedAt: center, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "192.0.2.8"})
+	st.Insert(store.Event{Time: tooLate, ReceivedAt: tooLate, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "192.0.2.8"})
 
 	reqURL := ts.URL + "/api/events?ip=203.0.113.9&around=" + url.QueryEscape(center.Format(time.RFC3339)) + "&window=5m"
 	resp, err := http.Get(reqURL)

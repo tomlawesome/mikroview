@@ -88,7 +88,7 @@ cat >"$PROBE_DIR/hostile.txt" <<'EOF'
 8.0.0.0/7
 224.0.0.1
 evil.example
-1.2.3.4/33
+192.0.2.4/33
 not an address
 ; a comment line
 198.51.100.0/24

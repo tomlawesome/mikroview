@@ -16,7 +16,7 @@ warrived (the first pair landed), wnokey (no key mounted, the step
 cannot be done yet), wlost (the router is gone: the step re-prints
 everything it needs from mikroview, and points at the backups kept).
 
-Data story: mikroview at 198.51.100.5 (round 26's fictional address),
+Data story: mikroview at 198.51.100.1 (round 26's fictional address),
 rb5009 the router, a fictional token. Today is 2 Sep.
 """
 import pathlib
@@ -38,8 +38,8 @@ TOKEN = 'mvt-8f3a2c…c21e'
 SCRIPT = f'''/system script add name=mv-backup policy=read,write,test,sensitive source="
   /system backup save name=mv-backup dont-encrypt=yes
   /export file=mv-backup
-  /tool fetch mode=sftp upload=yes address=198.51.100.5 port=47022 user=rb5009 password=\\"{TOKEN}\\" src-path=mv-backup.backup dst-path=rb5009.backup
-  /tool fetch mode=sftp upload=yes address=198.51.100.5 port=47022 user=rb5009 password=\\"{TOKEN}\\" src-path=mv-backup.rsc dst-path=rb5009.rsc
+  /tool fetch mode=sftp upload=yes address=198.51.100.1 port=47022 user=rb5009 password=\\"{TOKEN}\\" src-path=mv-backup.backup dst-path=rb5009.backup
+  /tool fetch mode=sftp upload=yes address=198.51.100.1 port=47022 user=rb5009 password=\\"{TOKEN}\\" src-path=mv-backup.rsc dst-path=rb5009.rsc
   /file remove mv-backup.backup
   /file remove mv-backup.rsc
 "'''
@@ -47,8 +47,8 @@ SCHED = '''/system scheduler add name=mv-backup interval=1d start-time=03:00:00 
 /system script run mv-backup'''
 
 STEPS = [
-    ('1', 'Trust the certificate', 'fetched 2 Sep 13:41 from 198.51.100.1'),
-    ('2', 'Send logs', 'arrived 2 Sep 13:42 from 198.51.100.1'),
+    ('1', 'Trust the certificate', 'fetched 2 Sep 13:41 from 198.51.100.2'),
+    ('2', 'Send logs', 'arrived 2 Sep 13:42 from 198.51.100.2'),
     ('3', 'Tag firewall rules', '14 rules tagged'),
     ('4', 'Push router state', 'every table has been pushed'),
     ('5', 'Name your router', 'rb5009'),
@@ -78,7 +78,7 @@ BODY = f'''
         <p class="lead" data-w="wnokey">Mikroview keeps a backup only under a key it does not hold in the data directory, and none is mounted. Mount one and this step prints the script; until then the drop box is closed and a push would be refused.</p>
         <p class="lead" data-w="wlost">The router that pushed these is not answering. Everything a replacement needs from this side is here, in the order it needs it: trust the certificate, send logs, then run the backup script again so the new router keeps pushing. Its backups are under Settings.</p>
 
-        <div class="wzcaveat" data-w="rest warrived wlost"><b>Only on a network you trust.</b> RouterOS never checks who it is sending a backup to — anyone on the path between the router and 198.51.100.5 could read the pair, and the token with it. On a LAN you control that is fine; across the internet it is not, and mikroview cannot tell the difference from here.</div>
+        <div class="wzcaveat" data-w="rest warrived wlost"><b>Only on a network you trust.</b> RouterOS never checks who it is sending a backup to — anyone on the path between the router and 198.51.100.1 could read the pair, and the token with it. On a LAN you control that is fine; across the internet it is not, and mikroview cannot tell the difference from here.</div>
 
         <div data-w="rest warrived wlost">
         <p class="note" data-w="rest warrived">The token is shown once. Anyone who can read the script on the router can read it, so it is scoped to that one router and to this drop box.</p>

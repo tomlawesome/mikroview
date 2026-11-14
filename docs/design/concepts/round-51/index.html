@@ -326,10 +326,10 @@ function leader(from, to) {
     '<circle cx="' + from[0] + '" cy="' + from[1] + '" r="3" fill="var(--accent)"/></svg>';
 }
 const CARDS = {
-  l2tpLine: (px) => ({ px: px, w: 292, n: 'l2tp-out', sub: '198.51.100.0/24 · tunnel · up 41 d',
+  l2tpLine: (px) => ({ px: px, w: 292, n: 'l2tp-out', sub: '198.51.100.1/24 · tunnel · up 41 d',
     aria: 'l2tp-out: one line off the baseline today',
     body: '<div class="s"><i class="sw es"></i>rb5009 → l2tp-out · 1701/udp · established</div>' +
-      '<div class="s"><i class="sw nb"></i>laptop-anna → 198.51.100.12 · 445/tcp · <b>off-baseline</b> · first seen 22:04 · 3×</div>',
+      '<div class="s"><i class="sw nb"></i>laptop-anna → 198.51.100.2 · 445/tcp · <b>off-baseline</b> · first seen 22:04 · 3×</div>',
     acts: [['expected', 1], ['rules', 1, 'dim'], ['stream', 1, 'dim']] })
 };
 
@@ -342,26 +342,26 @@ const CARDS = {
 const N2 = {
   internet: { x: 700, y: 68, w: 200, h: 60, name: 'Internet', cidr: 'ether1 · 203.0.113.7', hb: ['◉ 1', '✱ 2'] },
   rb: { x: 700, y: 268, w: 256, h: 68, name: 'rb5009', sub: 'RouterOS 7.20.1 · the waist · 41 rules', router: 1 },
-  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 203.0.113.0/24', hb: ['◉ 1', null], small: 1 },
-  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '203.0.113.0/24', hb: ['◉ 2', '✱ 1'],
+  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 198.51.100.3/24', hb: ['◉ 1', null], small: 1 },
+  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '198.51.100.4/24', hb: ['◉ 2', '✱ 1'],
     hosts: [['alex-desktop', 'live', 'w'], ['phone-alex', 'live'], ['laptop-anna', 'live', 'f'], ['tv-lounge', 'quiet'], ['printer-old', 'intended'],
       ['nuc', 'live'], ['tablet', 'live'], ['ap-hall', 'live'], ['ap-loft', 'live'], ['switch-desk', 'live']], more: 2,
     tally: '12 hosts · 1 quiet · 1 quiet on purpose' },
-  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '198.51.100.0/24', hb: ['◉ 2', null],
+  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '198.51.100.5/24', hb: ['◉ 2', null],
     hosts: [['nas', 'live', 'w'], ['pihole', 'live'], ['unifi', 'live']], tally: '3 hosts' },
-  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '192.0.2.0/24', hb: ['◉ 1 ○', '✱ 3'],
+  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '198.51.100.6/24', hb: ['◉ 1 ○', '✱ 3'],
     hosts: [['cam-porch', 'live', 'f'], ['hue-bridge', 'live'], ['thermostat', 'live'], ['doorbell', 'live', 'f'], ['esp-weather', 'live'], ['plug-kettle', 'live'], ['tv-kitchen', 'live']],
     tally: '7 hosts' },
-  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '198.51.100.0/24',
+  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '198.51.100.7/24',
     hosts: [['guest-e8b2', 'live'], ['guest-1a07', 'quiet'], ['guest-c3d9', 'quiet']], tally: '3 hosts · 2 quiet' },
   /* ---- ROUND 51: the row. Same card as wg0, one zone-gap (52 px)
      to the right each time -- a 240 px pitch for the 188 px card --
      busiest nearest the router. The row runs past round 49's 1400 px
      frame from the second tunnel on, and the frame follows it. ---- */
-  wg1: { x: 1368, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg1 · 192.0.2.0/24', small: 1 },
-  l2tp: { x: 1608, y: 132, w: 188, h: 56, name: 'L2TP', cidr: 'l2tp-out · 198.51.100.0/24', small: 1 },
-  wg2: { x: 1848, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg2 · 192.0.2.0/24', small: 1 },
-  gre: { x: 2088, y: 132, w: 188, h: 56, name: 'GRE', cidr: 'gre-site-b · 203.0.113.0/24', small: 1, quiet: '3 d' }
+  wg1: { x: 1368, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg1 · 198.51.100.8/24', small: 1 },
+  l2tp: { x: 1608, y: 132, w: 188, h: 56, name: 'L2TP', cidr: 'l2tp-out · 198.51.100.1/24', small: 1 },
+  wg2: { x: 1848, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg2 · 198.51.100.9/24', small: 1 },
+  gre: { x: 2088, y: 132, w: 188, h: 56, name: 'GRE', cidr: 'gre-site-b · 198.51.100.10/24', small: 1, quiet: '3 d' }
 };
 /* a rib: [from, to, bezier, width, {cov,k,nb} for from→to, {cov,k,nb} for to→from]
    nb: that direction carries a line off the baseline today; the ring

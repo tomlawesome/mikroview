@@ -25,8 +25,8 @@ Served from the design host, port 8309:
 
 | | Concept | Open |
 |---|---|---|
-| **AD** | **The ledger, refined** — round 7's Z with the fall in it | `http://198.51.100.30:8309/screens/wizard/round-8/ad-ledger.html` |
-| **AC** | **The fall comes alive** — full screen; setup is the fall lighting up | `http://198.51.100.30:8309/screens/wizard/round-8/ac-alive.html` |
+| **AD** | **The ledger, refined** — round 7's Z with the fall in it | `http://198.51.100.1:8309/screens/wizard/round-8/ad-ledger.html` |
+| **AC** | **The fall comes alive** — full screen; setup is the fall lighting up | `http://198.51.100.1:8309/screens/wizard/round-8/ac-alive.html` |
 
 Answer the five questions, Copy, watch. Prototype strip at bottom left:
 scenario (happy path · router sends from another address · RouterOS
@@ -80,7 +80,7 @@ five questions with Z's anatomy. The frame answers each move:
 
 Refused sender and RouterOS-ahead-of-review are the same #1132 box and
 caution line as round 7, in the panel; the chip bar shows "refused ·
-203.0.113.1" in alarm ink.
+198.51.100.2" in alarm ink.
 
 ## The data story
 

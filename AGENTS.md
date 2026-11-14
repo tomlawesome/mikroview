@@ -324,7 +324,7 @@ not:
   `/etc/subuid` and `/etc/subgid` avoids the fight entirely.
 
 Unrelated to MikroView but observed on that host: `gitlab-runner` and
-`alex` are assigned the *same* subordinate range in both files, so the
+the human account are assigned the *same* subordinate range in both files, so the
 isolation between those two accounts' containers is thinner than it
 looks. Reported to the owner; not an agent's to change.
 

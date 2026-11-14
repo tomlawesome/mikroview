@@ -33,10 +33,10 @@ func portsFixture(t *testing.T) *Store {
 	insert(Event{Action: ActionAccept, InInterface: "bridge1", OutInterface: "ether1", Protocol: "tcp",
 		SrcIP: "10.0.10.34", DstIP: "198.51.100.23", DstPort: 22})
 	insert(Event{Action: ActionAccept, InInterface: "bridge1", OutInterface: "ether1", Protocol: "udp",
-		SrcIP: "10.0.10.34", DstIP: "1.1.1.1", DstPort: 53})
+		SrcIP: "10.0.10.34", DstIP: "198.51.100.2", DstPort: 53})
 	// ICMP has no port at all, and must not appear anywhere.
 	insert(Event{Action: ActionAccept, InInterface: "bridge1", OutInterface: "ether1", Protocol: "icmp",
-		SrcIP: "10.0.10.34", DstIP: "1.1.1.1"})
+		SrcIP: "10.0.10.34", DstIP: "198.51.100.2"})
 	return s
 }
 

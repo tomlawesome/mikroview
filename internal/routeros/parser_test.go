@@ -17,27 +17,27 @@ func TestParse(t *testing.T) {
 	}{
 		{
 			name: "RouterOS topic tag literally embedded ahead of the prefix",
-			msg:  "firewall,info A|r21| forward: in:mgnt out:dmz, connection-state:new, proto TCP (SYN), 10.0.0.5:51234->1.2.3.4:443, len 60",
+			msg:  "firewall,info A|r21| forward: in:mgnt out:dmz, connection-state:new, proto TCP (SYN), 10.0.0.5:51234->198.51.100.4:443, len 60",
 			want: Parsed{
 				Action: store.ActionAccept, RuleLabel: "r21", Chain: "forward",
 				InInterface: "mgnt", OutInterface: "dmz",
 				ConnState: "new",
 				Protocol:  "TCP", Flags: "SYN",
 				SrcIP: "10.0.0.5", SrcPort: 51234,
-				DstIP: "1.2.3.4", DstPort: 443,
+				DstIP: "198.51.100.4", DstPort: 443,
 				Length: 60,
 			},
 		},
 		{
 			name: "accept tcp with prefix and src-mac",
-			msg:  "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			msg:  "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->198.51.100.4:443, len 60",
 			want: Parsed{
 				Action: store.ActionAccept, RuleLabel: "lan-wan", Chain: "forward",
 				InInterface: "ether1", OutInterface: "bridge1",
 				ConnState: "new", SrcMAC: "aa:bb:cc:dd:ee:ff",
 				Protocol: "TCP", Flags: "SYN",
 				SrcIP: "192.168.1.50", SrcPort: 51234,
-				DstIP: "1.2.3.4", DstPort: 443,
+				DstIP: "198.51.100.4", DstPort: 443,
 				Length: 60,
 			},
 		},
@@ -56,27 +56,27 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "reject icmp - comma inside parens must not split fields",
-			msg:  "R|no-match|forward: in:ether1 out:bridge1, connection-state:new, proto ICMP (type 8, code 0), 192.168.1.50->8.8.8.8, len 84",
+			msg:  "R|no-match|forward: in:ether1 out:bridge1, connection-state:new, proto ICMP (type 8, code 0), 192.168.1.50->203.0.113.8, len 84",
 			want: Parsed{
 				Action: store.ActionReject, RuleLabel: "no-match", Chain: "forward",
 				InInterface: "ether1", OutInterface: "bridge1",
 				ConnState: "new",
 				Protocol:  "ICMP", Flags: "type 8, code 0",
 				SrcIP: "192.168.1.50", SrcPort: 0,
-				DstIP: "8.8.8.8", DstPort: 0,
+				DstIP: "203.0.113.8", DstPort: 0,
 				Length: 84,
 			},
 		},
 		{
 			name: "no log-prefix at all - unknown action, chain still parsed",
-			msg:  "forward: in:bridge1 out:ether1, connection-state:new src-mac 11:22:33:44:55:66, proto UDP, 192.168.1.20:53212->1.1.1.1:53, len 52",
+			msg:  "forward: in:bridge1 out:ether1, connection-state:new src-mac 11:22:33:44:55:66, proto UDP, 192.168.1.20:53212->203.0.113.1:53, len 52",
 			want: Parsed{
 				Action: store.ActionUnknown, RuleLabel: "", Chain: "forward",
 				InInterface: "bridge1", OutInterface: "ether1",
 				ConnState: "new", SrcMAC: "11:22:33:44:55:66",
 				Protocol: "UDP",
 				SrcIP:    "192.168.1.20", SrcPort: 53212,
-				DstIP: "1.1.1.1", DstPort: 53,
+				DstIP: "203.0.113.1", DstPort: 53,
 				Length: 52,
 			},
 		},
@@ -111,15 +111,15 @@ func TestParse(t *testing.T) {
 			// doesn't assume this shape -- it diffs against the already-
 			// parsed main tuple to find the address that changed.
 			name: "srcnat with parenthesized translated source",
-			msg:  "A|masq|srcnat: in:ether1 out:ether2, proto UDP, 10.0.0.3:51258->1.1.1.1:53, NAT (203.0.113.10:51258->1.1.1.1:53), len 73",
+			msg:  "A|masq|srcnat: in:ether1 out:ether2, proto UDP, 10.0.0.3:51258->203.0.113.1:53, NAT (203.0.113.10:51258->203.0.113.1:53), len 73",
 			want: Parsed{
 				Action: store.ActionAccept, RuleLabel: "masq", Chain: "srcnat",
 				InInterface: "ether1", OutInterface: "ether2",
 				Protocol: "UDP",
 				SrcIP:    "10.0.0.3", SrcPort: 51258,
-				DstIP: "1.1.1.1", DstPort: 53,
+				DstIP: "203.0.113.1", DstPort: 53,
 				NatIP: "203.0.113.10", NatPort: 51258,
-				NatRaw: "(203.0.113.10:51258->1.1.1.1:53)",
+				NatRaw: "(203.0.113.10:51258->203.0.113.1:53)",
 				Length: 73,
 			},
 		},
@@ -179,14 +179,14 @@ func TestParse(t *testing.T) {
 			// the address pair and length should still parse even though
 			// the ICMP detail itself is incomplete.
 			name: "unterminated proto parenthetical still yields later fields",
-			msg:  "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto ICMP (type 8, code 0, 10.0.0.5->1.2.3.4, len 84",
+			msg:  "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto ICMP (type 8, code 0, 10.0.0.5->198.51.100.4, len 84",
 			want: Parsed{
 				Action: store.ActionAccept, RuleLabel: "lan-wan", Chain: "forward",
 				InInterface: "ether1", OutInterface: "bridge1",
 				ConnState: "new",
 				Protocol:  "ICMP", Flags: "type 8",
 				SrcIP:  "10.0.0.5",
-				DstIP:  "1.2.3.4",
+				DstIP:  "198.51.100.4",
 				Length: 84,
 			},
 		},
@@ -448,8 +448,8 @@ func TestActionClassification(t *testing.T) {
 }
 
 func TestSplitTopLevel(t *testing.T) {
-	got := splitTopLevel("proto ICMP (type 8, code 0), 1.1.1.1->192.0.2.2, len 84", ", ")
-	want := []string{"proto ICMP (type 8, code 0)", "1.1.1.1->192.0.2.2", "len 84"}
+	got := splitTopLevel("proto ICMP (type 8, code 0), 203.0.113.1->198.51.100.2, len 84", ", ")
+	want := []string{"proto ICMP (type 8, code 0)", "203.0.113.1->198.51.100.2", "len 84"}
 	if len(got) != len(want) {
 		t.Fatalf("got %d segments, want %d: %v", len(got), len(want), got)
 	}

@@ -30,9 +30,9 @@ Served from the design host, port 8309:
 
 | | Concept | Open |
 |---|---|---|
-| **Z** | **The ledger asks** — the ratified wizard, one question per step | `http://198.51.100.30:8309/screens/wizard/round-7/z-ledger.html` |
-| **AA** | **The block writes itself** — answer inside the script | `http://198.51.100.30:8309/screens/wizard/round-7/aa-block.html` |
-| **AB** | **The sitting** — Entities' dealt cards, Enter / Space | `http://198.51.100.30:8309/screens/wizard/round-7/ab-sitting.html` |
+| **Z** | **The ledger asks** — the ratified wizard, one question per step | `http://198.51.100.1:8309/screens/wizard/round-7/z-ledger.html` |
+| **AA** | **The block writes itself** — answer inside the script | `http://198.51.100.1:8309/screens/wizard/round-7/aa-block.html` |
+| **AB** | **The sitting** — Entities' dealt cards, Enter / Space | `http://198.51.100.1:8309/screens/wizard/round-7/ab-sitting.html` |
 
 Drive each: answer the five questions, Copy, watch. The dashed strip at
 the bottom left is prototype furniture only: scenario (happy path ·
@@ -85,7 +85,7 @@ arrives, and the slips flip green — and the deck runs dry on the ledger:
 ## The data story
 
 MikroView at `192.0.2.15:8080`; `rb5009` at `192.0.2.1`, other
-address `203.0.113.1`; Copy at 14:02:50, certificate 14:02:58, enrol
+address `198.51.100.2`; Copy at 14:02:50, certificate 14:02:58, enrol
 14:03:04, first push 14:03:21, backup 14:03:22, token good until 14:17.
 RouterOS **7.24.4** read from the push (7.25.1 in the ahead-of-review
 scenario, reviewed set 7.24.2). 47 filter rules, 3 logging (`in-ssh`,
