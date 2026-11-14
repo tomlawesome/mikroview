@@ -28,9 +28,12 @@ paths = [
     '''_test\.go$''',
     '''\.test\.ts$''',
     '''\.test\.mjs$''',
-    '''/testdata/''',
-    '''frontend/src/.*fixture''',
+    '''(?:^|/)testdata/''',
+    '''^frontend/src/.*fixture[^/]*$''',
     '''^cmd/demo-history/''',
     '''^scripts/seed-demo\.py$''',
-    '''^(?:frontend/)?scripts/live-[^/]+$''',
+    # live scenarios, and the scripts that build the virtual router's network
+    '''^frontend/scripts/live-[^/]+\.mjs$''',
+    '''^scripts/live-(?:blocklist-chr|container|env|routeros|rule-coverage-probe)\.sh$''',
+    '''^scripts/live-rule-coverage-check\.py$''',
 ]
