@@ -165,7 +165,7 @@ func TestReopenReadsBackEveryRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := allRecords(t, s)
-	recent := collectRecent(t, s)
+	recent := collectAllRecent(t, s)
 	s.Close()
 	if len(before) != 3 {
 		t.Fatalf("before reopen: %d records, want 3", len(before))
@@ -185,13 +185,13 @@ func TestReopenReadsBackEveryRecord(t *testing.T) {
 			t.Errorf("record %d changed across reopen: before %+v after %+v", i, before[i], after[i])
 		}
 	}
-	rAfter := collectRecent(t, s2)
+	rAfter := collectAllRecent(t, s2)
 	if len(rAfter) != len(recent) {
 		t.Errorf("Recent: %d records after reopen, want %d", len(rAfter), len(recent))
 	}
 }
 
-func collectRecent(t *testing.T, s *FileStore) []Record {
+func collectAllRecent(t *testing.T, s *FileStore) []Record {
 	t.Helper()
 	var out []Record
 	err := s.Recent(context.Background(), RecentQuery{Limit: 100}, func(r Record) bool {
