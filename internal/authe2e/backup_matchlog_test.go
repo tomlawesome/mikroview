@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -19,14 +20,18 @@ import (
 // The harness's listener takes no syslog (syslogTls is empty), so there is
 // no practical way to make a running server record a match. The log is
 // written with internal/matchlog's own file store, which is the writer the
-// server uses, so the file is in exactly the format a stopped server leaves.
+// server uses, opened with the install's key (#1470: a keyed server seals
+// the log), so the file is in exactly the format a stopped server leaves.
 
 const matchLogEntryID = "entry-1467"
 
 func writeMatchLog(t *testing.T, a *app, entries int) {
 	t.Helper()
-	l, err := matchlog.Open(a.file("matchlog.jsonl"), 100)
+	key, err := retention.LoadKey(a.key)
 	must(t, err)
+	l, err := matchlog.Open(a.file("matchlog.jsonl"), 100, key)
+	must(t, err)
+	defer l.Close()
 	for i := 0; i < entries; i++ {
 		tup := matchlog.Tuple{Source: matchlog.Identity{MAC: "52:55:0a:00:02:02"}, DestIP: "203.0.113.7", Port: 443 + i}
 		ev := store.Event{ID: uint64(i + 1), SourceIP: "10.0.2.2", Chain: "forward"}

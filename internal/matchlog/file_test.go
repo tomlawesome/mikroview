@@ -21,7 +21,7 @@ func testEvent(raw string) store.Event {
 func mustOpen(t *testing.T, capacity int) *FileStore {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
-	s, err := Open(path, capacity)
+	s, err := Open(path, capacity, testKey(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -44,7 +44,7 @@ func collect(t *testing.T, s *FileStore, q Query) []Record {
 func TestOpenRejectsNonPositiveCapacity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
 	for _, c := range []int{0, -1, -100} {
-		if _, err := Open(path, c); err == nil {
+		if _, err := Open(path, c, testKey(t)); err == nil {
 			t.Errorf("Open(capacity=%d) should have failed, did not", c)
 		}
 	}
@@ -90,7 +90,7 @@ func TestAppendProvisionalRoundTripsThroughQueryAndRestart(t *testing.T) {
 	tuple := Tuple{Source: src, DestIP: "10.0.0.5", Port: 8883}
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 
-	s1, err := Open(path, 10)
+	s1, err := Open(path, 10, testKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestAppendProvisionalRoundTripsThroughQueryAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2, err := Open(path, 10)
+	s2, err := Open(path, 10, testKey(t))
 	if err != nil {
 		t.Fatalf("reopening after restart: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestSurvivesRestart(t *testing.T) {
 	tuple := Tuple{Source: src, DestIP: "10.0.0.5", Port: 8883}
 	t0 := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 
-	s1, err := Open(path, 2)
+	s1, err := Open(path, 2, testKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2, err := Open(path, 2)
+	s2, err := Open(path, 2, testKey(t))
 	if err != nil {
 		t.Fatalf("reopening after restart: %v", err)
 	}
@@ -537,7 +537,7 @@ func TestTornLineIsSkippedNotFatal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
 	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
 
-	s, err := Open(path, 10)
+	s, err := Open(path, 10, testKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +559,7 @@ func TestTornLineIsSkippedNotFatal(t *testing.T) {
 	}
 	f.Close()
 
-	s2, err := Open(path, 10)
+	s2, err := Open(path, 10, testKey(t))
 	if err != nil {
 		t.Fatalf("Open with a torn trailing line should not fail: %v", err)
 	}
