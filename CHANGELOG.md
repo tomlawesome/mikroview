@@ -18,6 +18,18 @@ rewritten.
 
 ### Breaking changes
 
+- **An upgraded keyed install with an existing match log will not start
+  until the old file is moved** (#1470). The watchlist match log is now
+  sealed under `history.keyFile` like every other store; before, a keyed
+  install still wrote it to disk in the clear, whole matched events
+  included. MikroView does not seal a plaintext file in place, so a
+  `matchlog.jsonl` left by an earlier release is refused at start-up with
+  the plaintext-document message. Move it aside and start again; the log
+  starts empty:
+  `mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`.
+  `-backup` and `-restore` now need the key for the match log, and stop
+  with nothing changed without it.
+
 - **Admins need a passkey on an https domain** (#1202, owner ruling 1).
   With `auth.adminPasskey` unset and `publicUrl` an https domain name,
   an admin who has no passkey is held at a passkey enrolment screen on
@@ -220,6 +232,12 @@ rewritten.
   latter straight at Mint the token with a fresh one.
 
 ### Fixed
+
+- **`-backup` works on an install with a match log** (#1452). It read the
+  match log as a sealed document, which it never was, and stopped. It now
+  opens the sealed log with the key and carries its lines as plain JSON
+  lines, as v0.6 did; `-restore` seals them again under the restoring
+  install's key, so a v0.6 backup still restores.
 
 - **The data directory can move to a new path** (#1450). Each sealed
   store file was bound to its own absolute path, so a data directory

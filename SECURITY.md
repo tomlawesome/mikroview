@@ -828,10 +828,26 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   being put back (a rollback) -- the path binding never did either, and
   only a version counter kept outside the file would.
 
+  **The watchlist match log is sealed too** (#1470): every match it
+  records carries the whole matched event -- addresses, MACs and the raw
+  log line -- so it was the one file a keyed install still wrote in the
+  clear. It is an append-only file of AES-256-GCM frames, one per record
+  or update, under a key derived from `history.keyFile` and a per-file
+  salt, each frame bound to the store name and its position: a frame
+  moved, dropped from the middle or copied from another file does not
+  open, and is refused rather than skipped. As for the event history,
+  frames cut off the end, or the whole file replaced with an older genuine
+  copy, are not detected. The `matchlog.jsonl` name is historical. A
+  plaintext match log from an earlier release is refused at start-up like
+  any other plaintext store, never read or sealed in place. `-backup`
+  carries the lines as plain JSON, like every other store, and `-restore`
+  seals them again under the restoring deployment's key.
+
   **A plaintext file is never sealed in place** (#1202, ruling 19). An
   earlier keyless release's plaintext accounts, tokens or recovery-key
-  digests -- on files or in Postgres rows -- and a plaintext drop-list
-  file, including one being moved onto Postgres, are refused at any
+  digests -- on files or in Postgres rows -- a plaintext drop-list
+  file, including one being moved onto Postgres, and a plaintext match
+  log (#1470) are refused at any
   schema and start-up stops, so someone who can write the data folder
   but does not hold the key cannot plant an accounts file of their own
   with an admin they chose. The key has to be in place before upgrading.
