@@ -80,8 +80,8 @@ func TestBackupOfAnOldFormatInstallWritesNothingAndTheNextStartRebinds(t *testin
 	}
 
 	// A stopped server leaves a match log that -backup cannot read as sealed
-	// ("not a sealed document (too short)") whatever the binding -- a
-	// separate matter from #1450 -- so it is cleared to keep this test about
+	// ("not a sealed document (too short)") whatever the binding -- #1467,
+	// a separate matter from #1450 -- so it is cleared to keep this test about
 	// the store files.
 	must(t, os.Remove(ri.w.a.file("matchlog.jsonl")))
 

@@ -171,17 +171,20 @@ func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 			return out, err
 		}
 		rebound, err := b.rebind(ctx, out)
-		if errors.Is(err, ErrConflict) {
-			if attempt == 0 {
-				continue
-			}
-			// Lost the race twice: the document is genuine, so hand it
-			// back; the next save writes it under the store name.
-			rebindLog.Info(fmt.Sprintf("%s, store %q, opened under its old path binding but could not be "+
-				"re-sealed (another writer kept changing it); it will be re-sealed at its next save", b.inner.path, b.store))
-			return out, nil
+		if err == nil {
+			return rebound, nil
 		}
-		return rebound, err
+		if errors.Is(err, ErrConflict) && attempt == 0 {
+			continue
+		}
+		// Re-sealing is a best-effort migration: the document opened, so
+		// hand it back whatever stopped the write (lost the race twice,
+		// full disk, no permission). The file still reads under its old
+		// binding and is re-sealed by a later load. (#1450, note 58486)
+		rebindLog.Warn(fmt.Sprintf("%s, store %q, opened under its old path binding but could not be "+
+			"re-sealed under its store name (%v); it stays readable and a later load re-seals it",
+			b.inner.path, b.store, err))
+		return out, nil
 	}
 }
 
