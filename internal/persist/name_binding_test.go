@@ -278,3 +278,39 @@ func TestOldFormatHelperAgreesWithTheCommittedFixture(t *testing.T) {
 		t.Errorf("payload = %q", snap.Payload)
 	}
 }
+
+// #1450 decision (note 58486): when the re-seal of an old-format file fails
+// for any reason other than a version conflict, Load still returns the
+// document it opened, with no error, and leaves the file as it was.
+//
+// The write is made to fail without a permission trick (a directory chmod
+// does not stop root, which CI runs as): the file's base name is 250 bytes,
+// so it opens, but WriteFileAtomic's temp file, named base+".tmp-*", exceeds
+// the 255-byte name limit and CreateTemp fails with ENAMETOOLONG.
+func TestLegacyFileWhoseReSealFailsStillOpensAndIsLeftUnchanged(t *testing.T) {
+	ctx := context.Background()
+	p := filepath.Join(t.TempDir(), strings.Repeat("f", 245)+".json")
+	body, err := os.ReadFile(filepath.Join("testdata", "sealed-abspath-flags.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePlain(t, p, body)
+	before := readFileBytes(t, p)
+
+	// Guard: the write really is refused here, for a reason other than a
+	// version conflict.
+	if _, err := NewEncryptedFileBackend(p, "flags", testKey(t, 0x07)).Save(ctx, []byte(`{}`), contentVersion(before)); err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("test setup: a save here must fail with a write error, got %v", err)
+	}
+
+	snap, err := NewEncryptedFileBackendForPath(p, legacyLogical, "flags", testKey(t, 0x07)).Load(ctx)
+	if err != nil {
+		t.Fatalf("Load returned an error for a document it opened: %v", err)
+	}
+	if string(snap.Payload) != legacyPayload {
+		t.Errorf("payload = %q, want %q", snap.Payload, legacyPayload)
+	}
+	if !bytes.Equal(before, readFileBytes(t, p)) {
+		t.Error("a failed re-seal changed the file on disk")
+	}
+}
