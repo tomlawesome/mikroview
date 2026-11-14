@@ -188,11 +188,11 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 		// keyless install kept in the clear (#853's 2026-09-18 addendum,
 		// now ended), say -- is refused, never sealed in place (#1202,
 		// ruling 19).
-		return persist.NewEncryptedFileBackend(filePath, s.key), nil
+		return persist.NewEncryptedFileBackend(filePath, name, s.key), nil
 	}
 
 	b := persist.NewPostgresBackend(s.pool, name)
-	if err := s.adopt(ctx, b, filePath); err != nil {
+	if err := s.adopt(ctx, name, b, filePath); err != nil {
 		return nil, err
 	}
 	return b, nil
@@ -202,8 +202,9 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 // that is empty unless this deployment has run on Postgres before. dst
 // is what the store reads and writes through -- the bare row, or for an
 // auth store gauntlet's sealed wrapper -- so the document arrives as the
-// store reads it (#1202 review R2).
-func (s *storage) adopt(ctx context.Context, dst persist.Backend, filePath string) error {
+// store reads it (#1202 review R2). name is the store's own name, which
+// the sealed file is bound to (#1450).
+func (s *storage) adopt(ctx context.Context, name string, dst persist.Backend, filePath string) error {
 
 	// Adoption is a one-time migration, and only the boot that first
 	// moves this deployment onto Postgres is allowed to perform it.
@@ -228,7 +229,7 @@ func (s *storage) adopt(ctx context.Context, dst persist.Backend, filePath strin
 		return nil
 	}
 
-	// The files are sealed under the key, path bound, so each is opened
+	// The files are sealed under the key, bound to the store's name, so each is opened
 	// through its own file backend and its document handed to dst
 	// (#1202 review R2) -- not copied verbatim, which would leave the
 	// row holding an envelope nothing reads. A plaintext file is refused,
@@ -240,7 +241,7 @@ func (s *storage) adopt(ctx context.Context, dst persist.Backend, filePath strin
 	if s.key == nil {
 		res, err = persist.AdoptFile(ctx, filePath, dst)
 	} else {
-		res, err = persist.AdoptSealedFile(ctx, filePath, s.key, dst)
+		res, err = persist.AdoptSealedFile(ctx, filePath, name, s.key, dst)
 	}
 	if err != nil {
 		// Not recorded as adopted, so the next start tries again (R22).
@@ -277,8 +278,9 @@ var errAuthStoreNeedsKey = errors.New("the account stores are kept sealed under 
 // key left -- is refused, on files and on Postgres, whatever the schema:
 // there is no sealing in place (#1202, ruling 19).
 //
-//   - File backend: mikroview's own encrypted file backend, path bound as
-//     every other store's; a plaintext file is ErrPlaintextDocument.
+//   - File backend: mikroview's own encrypted file backend, bound to the
+//     store's name as every other store's (#1450); a plaintext file is
+//     ErrPlaintextDocument.
 //   - Postgres: gauntlet's persist.Encrypt around the row, labelled with
 //     the store's name, never with MigratePlaintext; under it
 //     persist.RefusePlaintextRows, so a plaintext row is refused in the
@@ -300,7 +302,7 @@ func (s *storage) authBackendFor(ctx context.Context, name, filePath string) (gp
 		if filePath == "" {
 			return nil, nil // this store's persistence is switched off
 		}
-		return persist.NewEncryptedFileBackend(filePath, s.key), nil
+		return persist.NewEncryptedFileBackend(filePath, name, s.key), nil
 	}
 	b, err := gpersist.Encrypt(persist.RefusePlaintextRows(persist.NewPostgresBackend(s.pool, name)), s.key.Material(),
 		gpersist.EncryptOptions{Label: name})
@@ -309,7 +311,7 @@ func (s *storage) authBackendFor(ctx context.Context, name, filePath string) (gp
 	}
 	// Adopted through the sealed wrapper, so the file's document is
 	// sealed again under this store's label on the way in.
-	if err := s.adopt(ctx, b, filePath); err != nil {
+	if err := s.adopt(ctx, name, b, filePath); err != nil {
 		return nil, err
 	}
 	if name == authStoreTokens {

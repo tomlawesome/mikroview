@@ -104,11 +104,13 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 			} else {
 				key = freshKey(t)
 			}
-			backend := func(name string) gpersist.Backend {
+			backend := func(file string) gpersist.Backend {
 				// Recordings were made by a container with the default
-				// data directory, which the encrypted files are bound to.
+				// data directory, which the encrypted files are bound to;
+				// the store name is the one the server opens the file
+				// under (storage.go), not the file's name.
 				return persist.NewEncryptedFileBackendForPath(
-					filepath.Join(dataDir, name), config.DefaultDataDir+"/"+name, key)
+					filepath.Join(dataDir, file), config.DefaultDataDir+"/"+file, productionStoreName(t, file), key)
 			}
 			if !m.HistoryKeyEncrypted {
 				// #1202 review R26 (ruling 19): a recording made without a
@@ -133,6 +135,7 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 				apiTokenName:     m.APITokenName,
 				apiTokenKindless: version == "v0.1.0", // #1202 review R12
 				totp:             m.SecondFactorEnrolled,
+				oldFormat:        true, // recorded by a release before #1450
 			})
 		})
 	}
@@ -164,7 +167,9 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 				if _, err := persist.MigrateFileSchema(context.Background(), dir, "upgrade_test"); err != nil {
 					t.Fatalf("MigrateFileSchema: %v", err)
 				}
-				backend := func(path string) gpersist.Backend { return persist.NewEncryptedFileBackend(path, key) }
+				backend := func(path string) gpersist.Backend {
+					return persist.NewEncryptedFileBackend(path, productionStoreName(t, filepath.Base(path)), key)
+				}
 				runPlaintextRefusalChecks(t, plaintextCase{
 					accounts:    func() gpersist.Backend { return backend(usersPath) },
 					tokens:      func() gpersist.Backend { return backend(tokensPath) },
@@ -187,9 +192,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 				tokensPath := filepath.Join(dir, "tokens.json")
 				key := freshKey(t)
 				for path, doc := range map[string][]byte{usersPath: l.accountsJSON, tokensPath: l.tokensJSON} {
-					if _, err := persist.NewEncryptedFileBackend(path, key).Save(context.Background(), doc, 0); err != nil {
-						t.Fatalf("sealing %s as the previous release did: %v", path, err)
-					}
+					sealOldFormat(t, key, path, path, doc) // as the previous release did
 				}
 				sealedUsers := readFile(t, usersPath)
 
@@ -206,7 +209,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 				}
 
 				backend := func(path string) gpersist.Backend {
-					return persist.NewEncryptedFileBackend(path, key)
+					return persist.NewEncryptedFileBackend(path, productionStoreName(t, filepath.Base(path)), key)
 				}
 				runGauntletChecks(t, gauntletCase{
 					accounts:     func() gpersist.Backend { return backend(usersPath) },
@@ -217,6 +220,7 @@ func TestLegacyShapedDocumentsOpenOnGauntlet(t *testing.T) {
 					viewer:       l.viewer,
 					apiTokenName: "upgrade-fixture-token",
 					totp:         withTOTP,
+					oldFormat:    true,
 				})
 
 				// B1.8: all three raw values (32 hex, no prefix) still
@@ -252,11 +256,11 @@ func TestSealedAccountsUnderAnotherKeyFailToOpenOnGauntlet(t *testing.T) {
 	keyA, keyB := freshKey(t), freshKey(t)
 	// Sealed the way the previous release sealed it (#1202 review R26: no
 	// open seals a plaintext file any more).
-	if _, err := persist.NewEncryptedFileBackend(path, keyA).Save(context.Background(), l.accountsJSON, 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(path, "auth", keyA).Save(context.Background(), l.accountsJSON, 0); err != nil {
 		t.Fatalf("sealing the legacy accounts: %v", err)
 	}
 	opts := gauntlet.Options{OnSetupCode: gauntlet.SetupCodeFunc(func(string) {}), ProductName: "MikroView"}
-	first, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, keyA), opts)
+	first, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(path, "auth", keyA), opts)
 	if err != nil {
 		t.Fatalf("first open under the right key: %v", err)
 	}
@@ -266,7 +270,7 @@ func TestSealedAccountsUnderAnotherKeyFailToOpenOnGauntlet(t *testing.T) {
 	before := readFile(t, path)
 
 	var announced bool
-	other := persist.NewEncryptedFileBackend(path, keyB)
+	other := persist.NewEncryptedFileBackend(path, "auth", keyB)
 	st, err := gauntlet.OpenStore(other, gauntlet.Options{
 		OnSetupCode: gauntlet.SetupCodeFunc(func(string) { announced = true }), ProductName: "MikroView",
 	})
@@ -291,7 +295,32 @@ func TestGauntletRefusesMikroviewsPlainFileBackendButOpensTheEncryptedOne(t *tes
 	if _, err := gauntlet.OpenStore(persist.NewFileBackend(filepath.Join(dir, "plain.json")), opts); err == nil {
 		t.Error("gauntlet.OpenStore accepted mikroview's plain file backend; it must be seen as plaintext at rest")
 	}
-	if _, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(filepath.Join(dir, "sealed.json"), freshKey(t)), opts); err != nil {
+	if _, err := gauntlet.OpenStore(persist.NewEncryptedFileBackend(filepath.Join(dir, "sealed.json"), "auth", freshKey(t)), opts); err != nil {
 		t.Errorf("gauntlet.OpenStore refused mikroview's encrypted file backend: %v", err)
 	}
+}
+
+// productionStoreName is the name the server opens a store file under
+// (storage.go: authStoreAccounts and the rest, and the names main.go gives
+// backendFor), which a sealed file is bound to since #1450. A file name is
+// not that name: a test that passes the file name proves nothing about the
+// binding the server uses.
+func productionStoreName(t *testing.T, file string) string {
+	t.Helper()
+	names := map[string]string{
+		"users.json":       "auth",
+		"tokens.json":      "tokens",
+		"recovery.json":    "recovery_keys",
+		"signins.json":     "signins",
+		"flags.json":       "flags",
+		"entities.json":    "entities",
+		"definitions.json": "definitions",
+		"coverage.json":    "coverage",
+		"hosts.json":       "hosts",
+	}
+	n, ok := names[file]
+	if !ok {
+		t.Fatalf("no production store name known for %s", file)
+	}
+	return n
 }

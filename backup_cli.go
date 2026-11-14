@@ -32,11 +32,26 @@ import (
 // JSON, exactly as every mikroview release before #853 did -- including a
 // file that predates the key, or one from a deployment that has since
 // removed it.
-func backupBackendFor(path string, key *retention.Key) persist.Backend {
+//
+// name is the store's name in backedUpStores, which is the name the
+// server opens it under, so a sealed file is opened bound to the same
+// store name the server sealed it with (#1450).
+func backupBackendFor(path, name string, key *retention.Key) persist.Backend {
 	if key == nil {
 		return persist.NewFileBackend(path)
 	}
-	return persist.NewEncryptedFileBackend(path, key)
+	return persist.NewEncryptedFileBackend(path, name, key)
+}
+
+// backupReaderFor is backupBackendFor for runBackup's reads, which never
+// write to the data directory (#1450 S2): a file still sealed under its
+// pre-#1450 path binding is read as it is, not re-sealed -- the server
+// does that at its next start.
+func backupReaderFor(path, name string, key *retention.Key) persist.Backend {
+	if key == nil {
+		return persist.NewFileBackend(path)
+	}
+	return persist.NewEncryptedFileBackend(path, name, key).WithoutRebind()
 }
 
 // backedUpStores is every store the envelope carries, paired with where
@@ -102,7 +117,7 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		// the one a rollback needs. At a fixed place in the data
 		// directory rather than a configured path; see
 		// configSnapshotsPath.
-		{"config_snapshots", configSnapshotsPath(cfg)},
+		{configSnapshotsStore, configSnapshotsPath(cfg)},
 	}
 }
 
@@ -496,7 +511,7 @@ func runBackup(args []string) int {
 		if s.Path == "" {
 			continue
 		}
-		data, _, err := persist.LoadDocument(ctx, backupBackendFor(s.Path, ourKey))
+		data, _, err := persist.LoadDocument(ctx, backupReaderFor(s.Path, s.Name, ourKey))
 		if err != nil {
 			logger.Error(fmt.Sprintf("reading %s (%s): %v", s.Name, s.Path, err))
 			return 1
@@ -877,7 +892,7 @@ func runRestore(args []string) int {
 			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", path, name, err))
 			return 1
 		}
-		backend := backupBackendFor(path, ourKey)
+		backend := backupBackendFor(path, name, ourKey)
 		// The version to overwrite with, read without needing the
 		// existing document to actually decrypt -- see
 		// persist.EncryptedFileBackend.Version's doc comment. Backends

@@ -58,6 +58,11 @@ type gauntletCase struct {
 	apiTokenKindless bool
 	// totp: the manifest says an authenticator app was enrolled.
 	totp bool
+	// oldFormat: the stored documents are sealed the pre-#1450 way, bound
+	// to an absolute path. Opening them re-seals them under the store-name
+	// binding (#1450), so their bytes change on the first open; a document
+	// already under the name binding must not change.
+	oldFormat bool
 }
 
 const roundTripPassword = "a-fresh-long-passphrase-7Qz!"
@@ -145,8 +150,12 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 	if st.Count() != 2 {
 		t.Errorf("Count() = %d, want 2 (the recorded admin and viewer)", st.Count())
 	}
-	if afterAccounts := c.rawAccounts(); !bytes.Equal(beforeAccounts, afterAccounts) {
-		t.Error("an already-sealed accounts document changed on open; it must open as it is")
+	if afterAccounts := c.rawAccounts(); c.oldFormat == bytes.Equal(beforeAccounts, afterAccounts) {
+		if c.oldFormat {
+			t.Error("an old-format accounts document was not re-bound to the store name on open")
+		} else {
+			t.Error("an already-sealed accounts document changed on open; it must open as it is")
+		}
 	}
 
 	// Step 3. Passwords.
@@ -174,8 +183,12 @@ func runGauntletChecks(t *testing.T, c gauntletCase) {
 
 	// Step 5. Tokens.
 	ts := openTokens(t, c.tokens())
-	if !bytes.Equal(beforeTokens, c.rawTokens()) {
-		t.Error("an already-sealed tokens document changed on open; it must open as it is")
+	if c.oldFormat == bytes.Equal(beforeTokens, c.rawTokens()) {
+		if c.oldFormat {
+			t.Error("an old-format tokens document was not re-bound to the store name on open")
+		} else {
+			t.Error("an already-sealed tokens document changed on open; it must open as it is")
+		}
 	}
 	found := false
 	for _, tok := range ts.List() {
@@ -459,4 +472,17 @@ func freshKey(t *testing.T) *retention.Key {
 		t.Fatal(err)
 	}
 	return k
+}
+
+// sealOldFormat writes payload to path the way every release before #1450
+// sealed a store file: the envelope's associated data is the absolute path
+// the file lives at (boundTo), under the state-store key info. Nothing in
+// the product writes this format any more.
+func sealOldFormat(t *testing.T, key *retention.Key, path, boundTo string, payload []byte) {
+	t.Helper()
+	sealed, err := key.Seal(retention.StateStoreKeyInfo, []byte(boundTo), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, sealed)
 }

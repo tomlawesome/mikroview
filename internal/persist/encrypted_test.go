@@ -28,7 +28,7 @@ func testKey(t *testing.T, seed byte) *retention.Key {
 // above believes it wrote plain JSON.
 func TestEncryptedFileBackendWritesNoPlaintextToDisk(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01))
+	b := NewEncryptedFileBackend(path, "flags", testKey(t, 0x01))
 
 	secret := `{"flags":[{"ip":"203.0.113.7","reason":"a very specific marker string"}]}`
 	if _, err := b.Save(context.Background(), []byte(secret), 0); err != nil {
@@ -57,12 +57,12 @@ func TestEncryptedFileBackendWritesNoPlaintextToDisk(t *testing.T) {
 
 func TestEncryptedFileBackendWrongKeyFailsCleanly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	writer := NewEncryptedFileBackend(path, testKey(t, 0x01))
+	writer := NewEncryptedFileBackend(path, "flags", testKey(t, 0x01))
 	if _, err := writer.Save(context.Background(), []byte(`{"n":1}`), 0); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	reader := NewEncryptedFileBackend(path, testKey(t, 0x02))
+	reader := NewEncryptedFileBackend(path, "flags", testKey(t, 0x02))
 	if _, err := reader.Load(context.Background()); err == nil {
 		t.Fatal("Load with the wrong key succeeded, want a clean failure")
 	}
@@ -76,7 +76,7 @@ func TestEncryptedFileBackendRefusesPlaintextOnDisk(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"n":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01))
+	b := NewEncryptedFileBackend(path, "flags", testKey(t, 0x01))
 	if _, err := b.Load(context.Background()); err == nil {
 		t.Fatal("Load of a plaintext file succeeded, want a clean failure -- #853 has no migration path")
 	}
@@ -91,7 +91,7 @@ func TestEncryptedFileBackendVersionWorksWithoutDecrypting(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not a sealed document"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01))
+	b := NewEncryptedFileBackend(path, "flags", testKey(t, 0x01))
 
 	version, exists, err := b.Version(context.Background())
 	if err != nil {
@@ -111,7 +111,7 @@ func TestEncryptedFileBackendVersionWorksWithoutDecrypting(t *testing.T) {
 
 func TestEncryptedFileBackendDescribeNeverLeaksAKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	b := NewEncryptedFileBackend(path, testKey(t, 0x01))
+	b := NewEncryptedFileBackend(path, "flags", testKey(t, 0x01))
 	if got := b.Describe(); !strings.Contains(got, path) {
 		t.Errorf("Describe() = %q, want it to name the path", got)
 	}

@@ -818,6 +818,16 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   written with no key) is refused outright, the same way a corrupted one
   always was, rather than treated as a fresh install.
 
+  **Each file is sealed bound to its store's name, not its path**
+  (#1450), so the data directory can move to a new path and still open,
+  while a genuine file put in another store's place (the tokens file
+  copied over the accounts file, say) is refused, whatever the two files
+  are called. A file sealed before this change, bound to its absolute
+  path, opens once at that path and is re-sealed under its store name.
+  Neither binding stops an older genuine copy of the same store's file
+  being put back (a rollback) -- the path binding never did either, and
+  only a version counter kept outside the file would.
+
   **A plaintext file is never sealed in place** (#1202, ruling 19). An
   earlier keyless release's plaintext accounts, tokens or recovery-key
   digests -- on files or in Postgres rows -- and a plaintext drop-list

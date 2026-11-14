@@ -85,9 +85,9 @@ func AdoptFile(ctx context.Context, filePath string, b Backend) (MigrateResult, 
 
 // AdoptSealedFile is AdoptFile for a file the encrypted file backend
 // wrote (#1202 review R2): the document is opened under key, with the
-// file's path bound as EncryptedFileBackend binds it, and handed to dst
+// store's name bound as EncryptedFileBackend binds it, and handed to dst
 // readable. Copying the bytes verbatim, as AdoptFile does, would put the
-// file backend's envelope -- bound to a path the database row is not --
+// file backend's envelope -- under a binding the database row does not use --
 // where the store expects its document, and nothing could read it.
 //
 // Whether the document is then stored sealed is dst's business: an auth
@@ -103,8 +103,11 @@ func AdoptFile(ctx context.Context, filePath string, b Backend) (MigrateResult, 
 // AdoptFile's three rules hold here too: only an empty dst is written,
 // the source file is never touched, and a file that does not exist is
 // a fresh install. A file that will not open -- the wrong key, damaged,
-// sealed for another path -- fails and writes nothing.
-func AdoptSealedFile(ctx context.Context, src string, key *retention.Key, dst Backend) (MigrateResult, error) {
+// sealed as another store -- fails and writes nothing. storeName is the
+// store's name, which the file is sealed bound to (#1450); a file sealed
+// before #1450, bound to src's path, opens too, and is not re-saved:
+// once adopted it is no longer read.
+func AdoptSealedFile(ctx context.Context, src, storeName string, key *retention.Key, dst Backend) (MigrateResult, error) {
 	res := MigrateResult{FilePath: src}
 	if src == "" || dst == nil {
 		return res, nil
@@ -123,7 +126,7 @@ func AdoptSealedFile(ctx context.Context, src string, key *retention.Key, dst Ba
 
 	// One read, then one decision on those bytes: a second read for the
 	// plaintext case could see a different file.
-	file := NewEncryptedFileBackend(src, key)
+	file := NewEncryptedFileBackend(src, storeName, key)
 	raw, err := file.inner.Load(ctx)
 	if err != nil {
 		return res, fmt.Errorf("persist: reading %s to migrate: %w", src, err)
@@ -134,7 +137,7 @@ func AdoptSealedFile(ctx context.Context, src string, key *retention.Key, dst Ba
 	if !retention.HasSealMagic(raw.Payload) && json.Valid(raw.Payload) {
 		return res, fmt.Errorf("persist: migrating %s: %w", src, ErrPlaintextDocument)
 	}
-	doc, err := file.unseal(raw)
+	doc, _, err := file.unseal(raw)
 	if err != nil {
 		return res, fmt.Errorf("persist: migrating %s: %w", src, err)
 	}

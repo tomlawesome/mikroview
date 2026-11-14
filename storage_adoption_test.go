@@ -327,14 +327,14 @@ func TestAdoptMovesASealedFileIntoAnEmptyStore(t *testing.T) {
 	ctx := context.Background()
 	key := testStorageKey(t)
 	path := filepath.Join(t.TempDir(), "flags.json")
-	if _, err := persist.NewEncryptedFileBackend(path, key).Save(ctx, []byte(`{"a":1}`), 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(path, "flags", key).Save(ctx, []byte(`{"a":1}`), 0); err != nil {
 		t.Fatal(err)
 	}
 	log, buf := logCapture()
 	s := &storage{key: key, log: log}
 	dst := gpersist.NewMemory()
 
-	if err := s.adopt(ctx, dst, path); err != nil {
+	if err := s.adopt(ctx, "flags", dst, path); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
 	snap, _ := dst.Load(ctx)
@@ -358,7 +358,7 @@ func TestAdoptWithoutAKeyCopiesTheFileVerbatim(t *testing.T) {
 	log, _ := logCapture()
 	s := &storage{log: log}
 	dst := gpersist.NewMemory()
-	if err := s.adopt(ctx, dst, path); err != nil {
+	if err := s.adopt(ctx, "flags", dst, path); err != nil {
 		t.Fatal(err)
 	}
 	if snap, _ := dst.Load(ctx); string(snap.Payload) != `{"b":2}` {
@@ -379,7 +379,7 @@ func TestAdoptFailureIsRecordedAndWritesNothing(t *testing.T) {
 	s := &storage{key: testStorageKey(t), log: log}
 	dst := gpersist.NewMemory()
 
-	err := s.adopt(ctx, dst, path)
+	err := s.adopt(ctx, "flags", dst, path)
 	if !errors.Is(err, persist.ErrPlaintextDocument) {
 		t.Fatalf("adopt = %v, want ErrPlaintextDocument", err)
 	}
@@ -408,7 +408,7 @@ func TestAdoptAfterTheMoveReportsLeftoverFilesAndNeverAdoptsThem(t *testing.T) {
 		if _, err := dst.Save(ctx, []byte(`{"new":true}`), 0); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.adopt(ctx, dst, path); err != nil {
+		if err := s.adopt(ctx, "flags", dst, path); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(buf.String(), "left over from before") || strings.Contains(buf.String(), "level=WARN") {
@@ -423,7 +423,7 @@ func TestAdoptAfterTheMoveReportsLeftoverFilesAndNeverAdoptsThem(t *testing.T) {
 		log, buf := logCapture()
 		s := &storage{adoptedBefore: true, log: log, cfg: cfg}
 		dst := gpersist.NewMemory()
-		if err := s.adopt(ctx, dst, path); err != nil {
+		if err := s.adopt(ctx, "flags", dst, path); err != nil {
 			t.Fatal(err)
 		}
 		for _, want := range []string{"level=WARN", "holds data but", "will not be migrated", markerPath(cfg)} {
@@ -444,7 +444,7 @@ func TestAdoptAfterTheMoveReportsLeftoverFilesAndNeverAdoptsThem(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, p := range []string{"", filepath.Join(t.TempDir(), "absent.json"), empty} {
-			if err := s.adopt(ctx, gpersist.NewMemory(), p); err != nil {
+			if err := s.adopt(ctx, "flags", gpersist.NewMemory(), p); err != nil {
 				t.Fatal(err)
 			}
 		}

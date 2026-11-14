@@ -8,7 +8,7 @@ package persist
 //
 // Names the fix must provide, invented here:
 //
-//	AdoptSealedFile(ctx, src string, key *retention.Key, dst Backend) (AdoptResult, error)
+//	AdoptSealedFile(ctx, src, storeName string, key *retention.Key, dst Backend) (AdoptResult, error)
 //	    AdoptFile for a source the encrypted file backend sealed: the
 //	    document is opened with key and handed to dst readable. A source
 //	    that is plain JSON is refused (ErrPlaintextDocument, #1202 review
@@ -56,7 +56,7 @@ func TestAdoptSealedFileHandsAnAuthStoreItsDocumentReadable(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "users.json")
 	fileKey := testKey(t, 0x07)
-	if _, err := NewEncryptedFileBackend(src, fileKey).Save(ctx, plain, 0); err != nil {
+	if _, err := NewEncryptedFileBackend(src, "auth", fileKey).Save(ctx, plain, 0); err != nil {
 		t.Fatal(err)
 	}
 	sealedBytes := readFileBytes(t, src)
@@ -68,7 +68,7 @@ func TestAdoptSealedFileHandsAnAuthStoreItsDocumentReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := AdoptSealedFile(ctx, src, fileKey, dst)
+	res, err := AdoptSealedFile(ctx, src, "auth", fileKey, dst)
 	if err != nil {
 		t.Fatalf("AdoptSealedFile: %v", err)
 	}
@@ -107,12 +107,12 @@ func TestAdoptSealedFileHandsAnOtherStoreItsPlainDocument(t *testing.T) {
 	src := filepath.Join(dir, "droplist.json")
 	fileKey := testKey(t, 0x07)
 	plain := []byte(`{"entries":[{"cidr":"203.0.114.0/24","addedBy":"admin","addedAt":"2026-01-02T03:04:05Z","reason":"test"}]}`)
-	if _, err := NewEncryptedFileBackend(src, fileKey).Save(ctx, plain, 0); err != nil {
+	if _, err := NewEncryptedFileBackend(src, "droplist", fileKey).Save(ctx, plain, 0); err != nil {
 		t.Fatal(err)
 	}
 	dst := NewFileBackend(filepath.Join(dir, "dst.json"))
 
-	res, err := AdoptSealedFile(ctx, src, fileKey, dst)
+	res, err := AdoptSealedFile(ctx, src, "droplist", fileKey, dst)
 	if err != nil {
 		t.Fatalf("AdoptSealedFile: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestAdoptSealedFileKeepsAdoptFilesGuards(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "users.json")
 	fileKey := testKey(t, 0x07)
-	if _, err := NewEncryptedFileBackend(src, fileKey).Save(ctx, []byte(`{"stale":true}`), 0); err != nil {
+	if _, err := NewEncryptedFileBackend(src, "auth", fileKey).Save(ctx, []byte(`{"stale":true}`), 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,7 +144,7 @@ func TestAdoptSealedFileKeepsAdoptFilesGuards(t *testing.T) {
 	if _, err := live.Save(ctx, []byte(`{"live":true}`), 0); err != nil {
 		t.Fatal(err)
 	}
-	res, err := AdoptSealedFile(ctx, src, fileKey, live)
+	res, err := AdoptSealedFile(ctx, src, "auth", fileKey, live)
 	if err != nil || res.Migrated {
 		t.Errorf("over a store with data: migrated = %v, err = %v; want not migrated and no error", res.Migrated, err)
 	}
@@ -153,14 +153,14 @@ func TestAdoptSealedFileKeepsAdoptFilesGuards(t *testing.T) {
 	}
 
 	empty := NewFileBackend(filepath.Join(dir, "empty.json"))
-	if _, err := AdoptSealedFile(ctx, src, testKey(t, 0x08), empty); err == nil {
+	if _, err := AdoptSealedFile(ctx, src, "auth", testKey(t, 0x08), empty); err == nil {
 		t.Error("a wrong key adopted the file")
 	}
 	if got, _ := empty.Load(ctx); got.Exists {
 		t.Errorf("a wrong key still wrote %q to the destination", got.Payload)
 	}
 
-	res, err = AdoptSealedFile(ctx, filepath.Join(dir, "absent.json"), fileKey, empty)
+	res, err = AdoptSealedFile(ctx, filepath.Join(dir, "absent.json"), "auth", fileKey, empty)
 	if err != nil || res.Migrated {
 		t.Errorf("no file: migrated = %v, err = %v; want a fresh install", res.Migrated, err)
 	}
@@ -206,7 +206,7 @@ func TestAdoptSealedFileRefusesAPlaintextSourceAndWritesNothing(t *testing.T) {
 			writePlain(t, src, tc.plain)
 			dst := tc.dst(t, dir)
 
-			res, err := AdoptSealedFile(ctx, src, fileKey, dst)
+			res, err := AdoptSealedFile(ctx, src, tc.name, fileKey, dst)
 			if err == nil {
 				t.Fatalf("a plaintext source was adopted (migrated = %v)", res.Migrated)
 			}
@@ -226,10 +226,10 @@ func TestAdoptSealedFileRefusesAPlaintextSourceAndWritesNothing(t *testing.T) {
 
 			// Paired: the same document sealed by the previous release is adopted.
 			sealedSrc := filepath.Join(dir, "sealed-"+tc.name)
-			if _, err := NewEncryptedFileBackend(sealedSrc, fileKey).Save(ctx, tc.plain, 0); err != nil {
+			if _, err := NewEncryptedFileBackend(sealedSrc, tc.name, fileKey).Save(ctx, tc.plain, 0); err != nil {
 				t.Fatal(err)
 			}
-			res, err = AdoptSealedFile(ctx, sealedSrc, fileKey, dst)
+			res, err = AdoptSealedFile(ctx, sealedSrc, tc.name, fileKey, dst)
 			if err != nil || !res.Migrated {
 				t.Errorf("the sealed source of the same store: migrated = %v, err = %v; want adopted", res.Migrated, err)
 			}

@@ -147,7 +147,7 @@ func newLegacyInstallSealed(t *testing.T) *legacyInstall {
 		t.Fatalf("loading the test key: %v", err)
 	}
 	for name, doc := range map[string][]byte{"users.json": l.accounts, "tokens.json": l.tokenDoc} {
-		b := persist.NewEncryptedFileBackend(filepath.Join(data, name), key)
+		b := persist.NewEncryptedFileBackend(filepath.Join(data, name), storeNameFor(name), key)
 		if _, err := b.Save(context.Background(), doc, 0); err != nil {
 			t.Fatalf("sealing %s as the previous release did: %v", name, err)
 		}

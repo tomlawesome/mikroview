@@ -69,7 +69,7 @@ func TestBackupRestoreRoundTripCarriesConfigSnapshots(t *testing.T) {
 	if got := configSnapshotsPath(cfg); got != snapPath {
 		t.Fatalf("configSnapshotsPath = %s, want %s beside the accounts store", got, snapPath)
 	}
-	store, err := configsnap.Open(context.Background(), persist.NewEncryptedFileBackend(snapPath, key))
+	store, err := configsnap.Open(context.Background(), persist.NewEncryptedFileBackend(snapPath, configSnapshotsStore, key))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestBackupRestoreRoundTripCarriesConfigSnapshots(t *testing.T) {
 	if bytes.Contains(onDisk, []byte(marker)) {
 		t.Fatal("the restored snapshots are in the clear on disk")
 	}
-	restored, err := configsnap.Open(context.Background(), persist.NewEncryptedFileBackend(restoredPath, key))
+	restored, err := configsnap.Open(context.Background(), persist.NewEncryptedFileBackend(restoredPath, configSnapshotsStore, key))
 	if err != nil {
 		t.Fatal(err)
 	}
