@@ -51,6 +51,11 @@ type FrameFormat struct {
 
 const saltBytes = 16
 
+// ErrFrameDidNotOpen is the failure of a whole frame to open: the wrong
+// key, or a file somebody has altered (a frame moved, dropped, copied in
+// or changed). Unlike a short tail it is never passed over silently.
+var ErrFrameDidNotOpen = errors.New("did not open -- wrong key, or the file has been altered")
+
 func (ff FrameFormat) headerBytes() int { return len(ff.Magic) + 1 + saltBytes }
 
 func (ff FrameFormat) aad(seq uint64) []byte {
@@ -350,7 +355,7 @@ func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64
 		}
 		plain, err := aead.Open(nil, frame[:aead.NonceSize()], frame[aead.NonceSize():], format.aad(seq))
 		if err != nil {
-			return fmt.Errorf("retention: %s frame %d did not open -- wrong key, or the file has been altered", filepath.Base(path), seq)
+			return fmt.Errorf("retention: %s frame %d %w", filepath.Base(path), seq, ErrFrameDidNotOpen)
 		}
 		if err := visit(seq, plain); err != nil {
 			return err

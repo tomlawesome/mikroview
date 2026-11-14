@@ -93,8 +93,8 @@ func TestCharacterizationInverted_StructuralNoiseExemption(t *testing.T) {
 // 3. What lands in internal/matchlog: Tuple, Identity, and row shape.
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationMatchlog_FileRowShape pins FileStore's on-disk
-// shape directly (bypassing Record/Query's own reconstruction) --
+// TestCharacterizationMatchlog_FileRowShape pins FileStore's row
+// shape (inside the seal, #1470) directly (bypassing Record/Query's own reconstruction) --
 // parsed generically by JSON key rather than through matchlog's
 // unexported fileLine type, since this file lives in a different
 // package. A "record" line carries every field; a collapsed repeat
@@ -102,7 +102,7 @@ func TestCharacterizationInverted_StructuralNoiseExemption(t *testing.T) {
 // this is the concrete on-disk evidence for that claim.
 func TestCharacterizationMatchlog_FileRowShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
-	ml, err := matchlog.Open(path, 100)
+	ml, err := matchlog.Open(path, 100, matchLogTestKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,9 @@ func TestCharacterizationMatchlog_FileRowShape(t *testing.T) {
 		t.Fatalf("Append (collapse): %v", err)
 	}
 
-	raw, err := os.ReadFile(path)
+	// #1470: the file is sealed, one frame per line; ReadLines returns
+	// the lines inside the seal, which are the row shape pinned here.
+	raw, err := matchlog.ReadLines(path, matchLogTestKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}

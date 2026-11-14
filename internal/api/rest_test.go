@@ -73,7 +73,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
 	// own doc comment), unlike every other store here -- a temp file is
 	// the closest equivalent for a test fixture.
-	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 1000)
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 1000, testRetentionKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
