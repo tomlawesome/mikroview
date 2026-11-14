@@ -193,7 +193,7 @@ describe('the declare form’s footer, on both surfaces (#1031)', () => {
     // The card is 288px wide, which is 262px of content; `Declare`,
     // `cancel`, the checkbox and the gaps between them take about 141
     // of it, leaving room for roughly 19 characters of 10.5px monospace
-    // against the 24 in "as alex · both directions" -- and a longer
+    // against the 25 in "as alex · both directions" -- and a longer
     // username only makes it worse.
     for (const form of [flatForm(), await cityForm()]) {
       const both = form.querySelector('label.both')!
