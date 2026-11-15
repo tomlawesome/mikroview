@@ -212,6 +212,58 @@ func TestPartialTailIsToleratedThenTrimmed(t *testing.T) {
 	}
 }
 
+// A power loss mid-append can leave the file extended with zeros. That is
+// a crash tail: everything before it stays readable and the next open
+// trims it (PROP-S2).
+func TestZeroFilledTailIsToleratedThenTrimmed(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	s := openStore(t, dir, key)
+	at := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
+	s.Append(event(1, at))
+	if err := s.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	s.Close()
+
+	path := filepath.Join(dir, fileNameFor("2026-09-03"))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := os.WriteFile(path, append(append([]byte{}, raw...), make([]byte, 64)...), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, w := collect(t, dir, key, time.Time{})
+	if w.Err != nil {
+		t.Fatalf("zero-filled tail should not be an error: %v", w.Err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want the 1 written before the tail", len(got))
+	}
+
+	s2 := openStore(t, dir, key)
+	s2.Append(event(2, at.Add(time.Minute)))
+	if err := s2.Flush(); err != nil {
+		t.Fatalf("Flush after reopen: %v", err)
+	}
+	got, w = collect(t, dir, key, time.Time{})
+	if w.Err != nil {
+		t.Fatalf("replay after reopen: %v", w.Err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d events after appending past a trimmed tail, want 2", len(got))
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(after); n < 4 || bytes.Equal(after[n-4:], make([]byte, 4)) {
+		t.Errorf("the file still ends in a zero run")
+	}
+}
+
 // Events are filed by their own day, not by the clock at flush time.
 func TestEventsAreFiledByTheirOwnDay(t *testing.T) {
 	dir := t.TempDir()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -443,14 +444,75 @@ func TestReadLinesOfAbsentOrHeaderOnlyLogIsEmpty(t *testing.T) {
 func TestWriteSealedRefusesALineThatIsNotAFileLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
 	good := `{"kind":"record","id":"aa","lastSeen":"2026-08-09T12:00:00Z"}`
-	for _, bad := range []string{"not json", good + "\n{broken"} {
+	overLimit := `{"kind":"record","id":"big","pad":"` + strings.Repeat("x", maxLineBytes) + `"}`
+	if len(overLimit) <= maxLineBytes {
+		t.Fatal("test line is not over the limit")
+	}
+	for _, bad := range []string{`{"kind":"wat","id":"x"}`, good + "\n" + overLimit} {
 		if err := WriteSealed(path, testKey(t), []byte(bad)); err == nil {
-			t.Errorf("WriteSealed accepted %q", bad)
+			t.Errorf("WriteSealed accepted %.60q", bad)
 		}
 		if _, err := os.Stat(path); err == nil {
-			t.Errorf("WriteSealed wrote a file for %q", bad)
+			t.Errorf("WriteSealed wrote a file for %.60q", bad)
 			os.Remove(path)
 		}
+	}
+}
+
+const tornR1 = `{"kind":"record","id":"r1","entryId":"e1","tuple":{"source":{"mac":"` + evMAC + `"},"destIp":"` + evDest + `","port":22},"event":{"raw":"raw-1"},"firstSeen":"2026-08-09T12:00:00Z","lastSeen":"2026-08-09T12:00:00Z"}`
+const tornR2 = `{"kind":"record","id":"r2","entryId":"e1","tuple":{"source":{"mac":"` + evMAC + `"},"destIp":"` + evDest + `","port":23},"event":{"raw":"raw-2"},"firstSeen":"2026-08-09T12:00:01Z","lastSeen":"2026-08-09T12:00:01Z"}`
+const tornFragment = `{"kind":"record","id":"r3","entryId":"e1","tu`
+
+// validateLinesCount calls ValidateLines through reflection so this file
+// compiles whether it returns (skipped, err) or only err; the tests then
+// fail on behaviour rather than on the build.
+func validateLinesCount(t *testing.T, lines []byte) (int, error) {
+	t.Helper()
+	out := reflect.ValueOf(ValidateLines).Call([]reflect.Value{reflect.ValueOf(lines)})
+	var err error
+	if e, ok := out[len(out)-1].Interface().(error); ok {
+		err = e
+	}
+	if len(out) < 2 {
+		t.Errorf("ValidateLines returns no skipped count; want (skipped int, err error)")
+		return 0, err
+	}
+	return int(out[0].Int()), err
+}
+
+// v0.6 skipped a line that did not decode (a torn write); a v0.6 backup
+// carries the raw file, so WriteSealed must leave such a line out rather
+// than refuse the log (v0.7.0 audit, O1-F1).
+func TestWriteSealedLeavesOutATornLineAsV06Did(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines string
+		want  int
+	}{
+		{"torn tail with no newline", tornR1 + "\n" + tornR2 + "\n" + tornFragment, 2},
+		{"torn fragment glued to the next record", tornR1 + "\n" + tornFragment + tornR2 + "\n", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			key := testKey(t)
+			path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+			if err := WriteSealed(path, key, []byte(c.lines)); err != nil {
+				t.Fatalf("WriteSealed refused a torn line v0.6 skipped: %v", err)
+			}
+			s, err := Open(path, 10, key)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer s.Close()
+			got := collect(t, s, Query{Source: Identity{MAC: evMAC}})
+			if len(got) != c.want {
+				t.Errorf("got %d records, want the %d whole ones", len(got), c.want)
+			}
+			skipped, err := validateLinesCount(t, []byte(c.lines))
+			if err != nil || skipped != 1 {
+				t.Errorf("ValidateLines = (%d, %v), want (1, nil)", skipped, err)
+			}
+		})
 	}
 }
 
@@ -483,4 +545,83 @@ func TestCapacityAccountingSurvivesReopen(t *testing.T) {
 	if err := s2.Append("e", secretTuple(1000), secretEvent(), t0.Add(time.Minute)); err != nil {
 		t.Errorf("repeat of an open tuple at capacity: %v, want it collapsed", err)
 	}
+}
+
+// A power loss mid-append can leave a zero-filled tail (the file extended,
+// the bytes not yet on disk). That is a crash tail, not damage (PROP-S2).
+func TestZeroFilledTailIsCutBackAsACrashTail(t *testing.T) {
+	for name, tail := range map[string]int{
+		"four zero bytes":          4,
+		"a frame's worth of zeros": 4 + Format.MaxFrameBytes,
+	} {
+		t.Run(name, func(t *testing.T) {
+			key := testKey(t)
+			path, bounds := writeN(t, key, 3)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Write(make([]byte, tail)); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			lines, err := ReadLines(path, key)
+			if err != nil {
+				t.Fatalf("ReadLines with a zero-filled tail: %v", err)
+			}
+			if n := bytes.Count(lines, []byte("\n")); n != 3 {
+				t.Errorf("ReadLines holds %d lines, want 3", n)
+			}
+			s, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("Open with a zero-filled tail: %v", err)
+			}
+			defer s.Close()
+			if got := allRecords(t, s); len(got) != 3 {
+				t.Fatalf("got %d records, want 3", len(got))
+			}
+			if n := size(t, path); n != bounds[3] {
+				t.Errorf("file is %d bytes after open, want the zeros cut to %d", n, bounds[3])
+			}
+			if err := s.Append(evEnt, secretTuple(2000), secretEvent(), time.Now()); err != nil {
+				t.Fatalf("Append after recovery: %v", err)
+			}
+			s.Close()
+			s2, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer s2.Close()
+			if got := allRecords(t, s2); len(got) != 4 {
+				t.Errorf("got %d records after reopen, want 4", len(got))
+			}
+		})
+	}
+
+	// Guard (passes now): a zero run longer than one frame can be stays damage.
+	t.Run("a zero run longer than a frame can be", func(t *testing.T) {
+		key := testKey(t)
+		path, _ := writeN(t, key, 3)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(make([]byte, 4+Format.MaxFrameBytes+1)); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustRefuse(t, "over-long zero run", path, key)
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Error("the file was changed by a refused open")
+		}
+	})
 }
