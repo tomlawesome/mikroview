@@ -57,7 +57,7 @@ jobs in pipeline order, so a preview push also checks that its commit is still
 `preview`'s head (`git ls-remote`) and fails, publishing nothing, when a newer
 push has superseded it. That is how an older pipeline is kept from rolling
 `:preview` back. Tags skip the check: a tag names one commit for good.
-`latest` is not a GitLab registry tag: it stays GHCR's, moved by GitHub on a
+`latest` is not a GitLab registry tag: it stays GHCR's, moved by GitHub on the highest
 release tag (below).
 
 To check an image in the GitLab registry by hand (registry login needed):
@@ -83,10 +83,13 @@ GitHub builds nothing. `.github/workflows/publish-from-gitlab.yml` (a push to
    the signature and the SBOM attestation, so the GHCR digest is the GitLab
    one: `preview-<short7>`, plus `preview` while the commit is still
    `preview`'s head; or `vX.Y.Z`, then `latest` with
-   `docker buildx imagetools create --prefer-index=false`. Each tag is read
-   back and must resolve to the GitLab digest;
-4. attest provenance and the SBOM on GHCR (`actions/attest`) and verify both
-   with `gh attestation verify`.
+   `docker buildx imagetools create --prefer-index=false` when the tag is the
+   highest `vX.Y.Z` in the repository. Each tag is read back and must resolve
+   to the GitLab digest, and that digest on GHCR must verify with
+   `cosign.pub`;
+4. attest provenance, and the SBOM taken from GitLab's verified attestation,
+   on GHCR (`actions/attest`, in a job that never sees the GitLab token) and
+   verify both with `gh attestation verify`.
 
 `countersign.yml` then verifies the copied key-based signature on the GHCR
 digest and adds the keyless one, as before. If a copy fails, GHCR keeps its

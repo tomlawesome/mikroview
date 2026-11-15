@@ -6,8 +6,8 @@ name: docker
 # two preview publishes and one release have gone through the new path; then
 # it is deleted. Its push and tag triggers are gone in the same commit that
 # added the copying workflows, so GHCR `:preview` and `:latest` are never
-# written by two workflows. Do not dispatch it: a dispatched run would
-# rebuild and publish an image GitLab never tested or signed.
+# written by two workflows. Every job carries a hard `if: false`, so a
+# manual dispatch on preview or a tag cannot build or push anything.
 #
 # Where each old job went:
 #   publish-preview  -> GitLab build:image, test:container, security:*
@@ -31,7 +31,7 @@ permissions:
 jobs:
   publish-preview:
     name: Build + publish preview image
-    if: github.ref_name == 'preview'
+    if: false  # retired (#1472): was github.ref_name == 'preview'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -114,7 +114,7 @@ jobs:
 
   release:
     name: Build, test and publish the release
-    if: github.ref_type == 'tag'
+    if: false  # retired (#1472): was github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -225,7 +225,7 @@ jobs:
 
   promote-to-main:
     name: Promote the tested preview image to latest
-    if: github.ref_name == 'main'
+    if: false  # retired (#1472): was github.ref_name == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: read

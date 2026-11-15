@@ -578,8 +578,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   against that build; then it signs the digest. GitHub builds nothing: it
   verifies GitLab's key-based signature against `cosign.pub` and only then
   copies the same digest to GHCR with `cosign copy`, which brings the
-  signature and the SBOM attestation along. `latest` moves only on a release
-  tag, to that release's digest, re-checked after the move. The provenance
+  signature and the SBOM attestation along. `latest` moves only on the
+  highest release tag, to that release's digest, re-checked after the move. The provenance
   attestation on GHCR records the GitHub workflow that published the digest;
   the build itself is GitLab's, recorded by its signed evidence. See
   [docs/release-signing.md](docs/release-signing.md) and

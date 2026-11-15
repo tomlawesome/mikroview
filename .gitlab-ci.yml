@@ -2394,9 +2394,9 @@ sync:mirror-to-github:
 
 # ---------------------------------------------------------------------------
 # PUBLISH (#1472) -- GitLab builds, signs and publishes the product image;
-# GitHub, later, only copies the digest it is handed (landing step 2-3 of
-# #1472's design; .github/workflows/docker.yml still publishes GHCR until
-# then, untouched by this file).
+# GitHub only copies the signed digest to GHCR (.github/workflows/
+# publish-from-gitlab.yml on preview, release-on-tag.yml on a v* tag;
+# docker.yml no longer builds).
 #
 # Build once, test the built bytes, promote by digest -- orbit's shape
 # (build_image -> record_image -> sign_evidence -> publish_channel):
@@ -2413,8 +2413,8 @@ sync:mirror-to-github:
 #
 # Registry scheme, registry.tomlawson.io/ai/mikroview: sha-<full sha>
 # (kept 7 days by the cleanup policy), preview and vX.Y.Z (kept). No
-# `latest` here: latest is GHCR's, moved on a release tag by GitHub
-# (owner, #1472). Nothing consumable exists before its signature verifies.
+# `latest` here: latest is GHCR's, moved by GitHub on the highest release
+# tag (owner, #1472). Nothing consumable exists before its signature verifies.
 # ---------------------------------------------------------------------------
 
 # #1472 job 5. The needs are the full bar on a publishing ref: every

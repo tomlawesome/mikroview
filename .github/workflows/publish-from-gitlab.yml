@@ -31,6 +31,11 @@ name: Publish the GitLab-tested image to GHCR
 # read_registry scopes: enough to list pipelines, download job artifacts and
 # pull the image. Nothing here can write to GitLab. Nothing is installed but
 # cosign and buildx (no Node setup, no Go, no npm ci): #1435.
+#
+# Three jobs, least privilege: `gitlab` waits, fetches and verifies with
+# read-only permissions; `copy` holds the GitLab token and packages: write to
+# copy; `attest` never sees the GitLab token and attests the SBOM taken out
+# of GitLab's verified attestation, not a separately downloaded file.
 
 on:
   push:
@@ -39,8 +44,11 @@ on:
 
 concurrency:
   group: publish-from-gitlab-${{ github.ref }}
-  # Never cancel: every merge gets its own preview-<short7> tag. Only the
-  # branch head moves `:preview` (checked below).
+  # A running copy is never cancelled mid-write. GitHub keeps at most one
+  # running and only the newest pending run per group: a merge whose run is
+  # still pending when a newer one arrives is dropped, so it may get no
+  # preview-<short7> tag of its own. Only the branch head moves `:preview`
+  # (checked below).
   cancel-in-progress: false
 
 permissions:
@@ -56,15 +64,16 @@ env:
   GITLAB_REGISTRY: registry.tomlawson.io
 
 jobs:
-  publish:
-    name: Copy the tested, signed digest to GHCR
+  gitlab:
+    name: Wait for GitLab and verify its signed digest
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
+    outputs:
+      digest: ${{ steps.evidence.outputs.digest }}
+      source_reference: ${{ steps.evidence.outputs.source_reference }}
+      pipeline_url: ${{ steps.evidence.outputs.pipeline_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +87,53 @@ jobs:
           MV_REF: ${{ github.ref_name }}
           MV_EVIDENCE_DIR: "."
         run: bash scripts/ci/gitlab-await-tested-image.sh
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to the GitLab registry (read only)
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.GITLAB_REGISTRY }}
+          username: ${{ secrets.GITLAB_READ_TOKEN_NAME }}
+          password: ${{ secrets.GITLAB_READ_TOKEN }}
+
+      # The await step checked the evidence at the transport level. This is
+      # the cryptographic check: GitLab's key-based signature and SBOM
+      # attestation on this exact digest must verify with the committed
+      # cosign.pub, or the copy job never runs.
+      - name: Verify GitLab's key-based signature before copying
+        env:
+          SOURCE: ${{ steps.evidence.outputs.source_reference }}
+        run: |
+          cosign verify --key cosign.pub "${SOURCE}" > signature-verification.json
+          cosign verify-attestation --key cosign.pub --type spdxjson "${SOURCE}" > /dev/null
+
+      - name: Upload GitLab evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mikroview-gitlab-evidence
+          path: |
+            gitlab-tested-image.json
+            image.spdx.json
+            signature-verification.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  copy:
+    name: Copy the tested, signed digest to GHCR
+    needs: gitlab
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tags: ${{ steps.copy.outputs.tags }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
@@ -97,34 +153,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The await step checked the evidence at the transport level. This is
-      # the cryptographic check: GitLab's key-based signature and SBOM
-      # attestation on this exact digest must verify with the committed
-      # cosign.pub, or nothing is written to GHCR.
-      - name: Verify GitLab's key-based signature before copying
-        env:
-          SOURCE: ${{ steps.evidence.outputs.source_reference }}
-        run: |
-          cosign verify --key cosign.pub "${SOURCE}" > signature-verification.json
-          cosign verify-attestation --key cosign.pub --type spdxjson "${SOURCE}" > /dev/null
-
       - name: Copy the exact tested digest
         id: copy
         env:
-          SOURCE: ${{ steps.evidence.outputs.source_reference }}
-          DIGEST: ${{ steps.evidence.outputs.digest }}
+          SOURCE: ${{ needs.gitlab.outputs.source_reference }}
+          DIGEST: ${{ needs.gitlab.outputs.digest }}
         run: |
           short="$(printf '%s' "${GITHUB_SHA}" | cut -c1-7)"
           # --force: the second tag of one digest finds its signature already
           # copied, and `preview` already exists.
           cosign copy --force "${SOURCE}" "ghcr.io/tomlawesome/mikroview:preview-${short}"
-          # Every GHCR tag written must resolve to the GitLab digest afterwards.
+          # Every GHCR tag written must resolve to the GitLab digest afterwards,
+          # and that digest on GHCR must carry a signature cosign.pub verifies.
           check() {
             got="$(docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}')"
             if [ "${got}" != "${DIGEST}" ]; then
               echo "::error::$1 resolved to ${got} after the copy, expected ${DIGEST}"
               exit 1
             fi
+            cosign verify --key cosign.pub "ghcr.io/tomlawesome/mikroview@${DIGEST}" > /dev/null
           }
           check "ghcr.io/tomlawesome/mikroview:preview-${short}"
           tags="preview-${short}"
@@ -141,11 +188,51 @@ jobs:
           fi
           printf 'tags=%s\n' "${tags}" >> "${GITHUB_OUTPUT}"
 
+  attest:
+    name: Attest the GHCR digest
+    needs: [gitlab, copy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The SBOM bound to the GHCR digest is the one GitLab signed: the
+      # predicate of the SPDX attestation cosign copy carried over, verified
+      # with cosign.pub. Exactly one such attestation, or the job refuses.
+      - name: Take the SBOM out of GitLab's verified attestation
+        env:
+          DIGEST: ${{ needs.gitlab.outputs.digest }}
+        run: |
+          cosign verify-attestation --key cosign.pub --type spdxjson \
+            "ghcr.io/tomlawesome/mikroview@${DIGEST}" > attestations.jsonl
+          count="$(grep -c . attestations.jsonl)"
+          if [ "${count}" != 1 ]; then
+            echo "::error::expected exactly one verified SPDX attestation on ${DIGEST}, found ${count}"
+            exit 1
+          fi
+          jq -r '.payload' attestations.jsonl | base64 -d | jq -e '.predicate | select(type == "object" and has("spdxVersion"))' > image.spdx.json
+
       - name: Attest published image provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/tomlawesome/mikroview
-          subject-digest: ${{ steps.evidence.outputs.digest }}
+          subject-digest: ${{ needs.gitlab.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
 
@@ -153,7 +240,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/tomlawesome/mikroview
-          subject-digest: ${{ steps.evidence.outputs.digest }}
+          subject-digest: ${{ needs.gitlab.outputs.digest }}
           sbom-path: image.spdx.json
           push-to-registry: true
           create-storage-record: false
@@ -161,7 +248,7 @@ jobs:
       - name: Verify published image attestations
         env:
           GH_TOKEN: ${{ github.token }}
-          DIGEST: ${{ steps.evidence.outputs.digest }}
+          DIGEST: ${{ needs.gitlab.outputs.digest }}
         run: |
           ref="oci://ghcr.io/tomlawesome/mikroview@${DIGEST}"
           gh attestation verify "${ref}" --repo "${GITHUB_REPOSITORY}" \
@@ -176,9 +263,7 @@ jobs:
         with:
           name: mikroview-published-from-gitlab
           path: |
-            gitlab-tested-image.json
             image.spdx.json
-            signature-verification.json
             provenance-verification.json
             sbom-verification.json
           if-no-files-found: warn
@@ -186,10 +271,10 @@ jobs:
 
       - name: Record published image
         env:
-          TAGS: ${{ steps.copy.outputs.tags }}
-          DIGEST: ${{ steps.evidence.outputs.digest }}
-          SOURCE: ${{ steps.evidence.outputs.source_reference }}
-          PIPELINE_URL: ${{ steps.evidence.outputs.pipeline_url }}
+          TAGS: ${{ needs.copy.outputs.tags }}
+          DIGEST: ${{ needs.gitlab.outputs.digest }}
+          SOURCE: ${{ needs.gitlab.outputs.source_reference }}
+          PIPELINE_URL: ${{ needs.gitlab.outputs.pipeline_url }}
         run: |
           {
             printf '## mikroview preview image, copied from GitLab\n\n'

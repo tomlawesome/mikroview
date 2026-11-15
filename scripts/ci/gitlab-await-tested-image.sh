@@ -76,11 +76,30 @@ project="${GITLAB_API_URL%/}/projects/${GITLAB_PROJECT_ID}"
 
 # The token travels in a header file, not on the command line, so it never
 # appears in a process listing or a shell trace.
+# A curl that carries it never follows a redirect (no --location): GitLab
+# answers an artifact download with a redirect to object storage when that is
+# configured, and the token must not travel to that host. Every curl is
+# https-only.
 header_file="$(mktemp)"
-trap 'rm -f "$header_file"' EXIT
+response_headers="$(mktemp)"
+trap 'rm -f "$header_file" "$response_headers"' EXIT
 chmod 600 "$header_file"
 printf 'PRIVATE-TOKEN: %s\n' "$GITLAB_READ_TOKEN" > "$header_file"
-api() { curl --silent --show-error --fail --location --max-time 60 --header @"$header_file" "$@"; }
+api() { curl --silent --show-error --fail --proto =https --max-time 60 --header @"$header_file" "$@"; }
+
+# fetch URL FILE MAX_BYTES: an artifact download, capped in size. A redirect
+# is not followed by the token-carrying curl; its target is fetched by a
+# second curl with no token header (one hop, https only, same cap).
+fetch() {
+  local url="$1" out="$2" cap="$3" redirect
+  redirect="$(api --max-filesize "$cap" --output "$out" --write-out '%{redirect_url}' "$url")" || return 1
+  if [[ -n "$redirect" ]]; then
+    [[ "$redirect" =~ ^https:// ]] || { say "artifact redirect is not https: ${redirect}"; return 1; }
+    curl --silent --show-error --fail --proto =https --max-time 300 --max-filesize "$cap" \
+      --output "$out" "$redirect" || return 1
+  fi
+  [[ -s "$out" ]]
+}
 
 # Reads one value out of the JSON on stdin with node (no jq on every image;
 # node is on GitHub's runners and in the tests). $1 is a JavaScript
@@ -125,8 +144,14 @@ pipeline_url="$(json 'input[0].web_url' <<< "$listing")"
 say "GitLab pipeline ${pipeline_id} succeeded: ${pipeline_url}"
 
 # include_retried is off, so a job retried into success is listed once.
-jobs="$(api "${project}/pipelines/${pipeline_id}/jobs?per_page=100")" ||
+: > "$response_headers"
+jobs="$(api --dump-header "$response_headers" "${project}/pipelines/${pipeline_id}/jobs?per_page=100")" ||
   fail "could not list the jobs of GitLab pipeline ${pipeline_id}"
+# One page of 100 is far more than this pipeline has; a second page means the
+# listing is not what this script expects, so it refuses rather than read half.
+if tr -d '\r' < "$response_headers" | grep -Eiq '^x-next-page:[[:space:]]*[0-9]+'; then
+  fail "pipeline ${pipeline_id} lists more than 100 jobs; refusing to read a partial job list"
+fi
 job_id() {
   json 'input.filter((job) => job.name === arg && job.status === "success").sort((a, b) => a.id - b.id).at(-1)?.id' "$1" <<< "$jobs"
 }
@@ -139,10 +164,11 @@ sbom_job="$(job_id security:trivy-image)"
 mkdir -p "$evidence_dir"
 evidence="${evidence_dir}/gitlab-tested-image.json"
 sbom="${evidence_dir}/image.spdx.json"
-api --output "$evidence" "${project}/jobs/${publish_job}/artifacts/.mv-supply-chain/gitlab-tested-image.json" ||
-  fail "publish:image job ${publish_job} kept no gitlab-tested-image.json artifact"
-api --output "$sbom" "${project}/jobs/${sbom_job}/artifacts/image.spdx.json" ||
-  fail "security:trivy-image job ${sbom_job} kept no image.spdx.json artifact"
+fetch "${project}/jobs/${publish_job}/artifacts/.mv-supply-chain/gitlab-tested-image.json" "$evidence" 65536 ||
+  fail "publish:image job ${publish_job} kept no gitlab-tested-image.json artifact (or it is over 64 KiB)"
+# 16 MiB: a trivy SPDX SBOM of this image is well under 1 MiB.
+fetch "${project}/jobs/${sbom_job}/artifacts/image.spdx.json" "$sbom" 16777216 ||
+  fail "security:trivy-image job ${sbom_job} kept no image.spdx.json artifact (or it is over 16 MiB)"
 
 # The evidence is a handful of short fields; anything large is not it.
 size="$(wc -c < "$evidence")"
