@@ -769,9 +769,9 @@ func TestDroplistKeyCreateAcceptsOptionalAddressAndFillsScheduler(t *testing.T) 
 		t.Errorf("Scheduler does not carry the real minted key: %q", minted.Scheduler)
 	}
 
-	// A genuinely empty body (no request payload at all, as opposed to
-	// postJSON's JSON "null") must still work -- decodeJSONBody's
-	// io.EOF is not a request error.
+	// A body with only the password (no address) still mints: the
+	// address falls back to r.Host. Since #1447 a truly empty body is a
+	// 400, as for enrolment.
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/droplist/key", strings.NewReader(`{"password":"`+fixtureAdminPassword+`"}`))
 	if err != nil {
 		t.Fatal(err)

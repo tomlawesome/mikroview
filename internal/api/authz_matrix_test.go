@@ -209,7 +209,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/droplist/key", accessAdmin,
 		"mints (or rotates) the droplist-pull key a router's own scheduled fetch presents at GET " +
 			"/api/droplist.rsc -- admin-only, mirroring POST /api/tokens: minting a bearer credential is a setup " +
-			"task, not day-to-day product use"},
+			"task, not day-to-day product use. Since #1447 the admin tier is the floor: the admin's password is " +
+			"re-checked too, in the enrolment re-check budget"},
 	{http.MethodDelete, "/api/droplist/key", accessAdmin,
 		"revokes the droplist-pull key -- same tier as minting it"},
 	{http.MethodGet, "/api/blocklist/builder", accessAdmin,

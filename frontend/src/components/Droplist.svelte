@@ -102,6 +102,10 @@
     if (typeof result === 'string') {
       keyError = result
       password = ''
+      // The field was disabled while the request ran, which drops focus:
+      // put the person back in it to try again.
+      await tick()
+      passEl?.focus()
       return
     }
     askingPassword = false
