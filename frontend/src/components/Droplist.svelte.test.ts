@@ -50,6 +50,14 @@ function resp(over: Partial<DroplistResponse> = {}): DroplistResponse {
   }
 }
 
+// #1447: minting asks for the admin's password first, like the wizard's
+// mint step: a field labelled "Your password", Enter to submit.
+async function typePasswordAndSubmit(value = 'correct horse') {
+  const field = screen.getByLabelText('Your password') as HTMLInputElement
+  await fireEvent.input(field, { target: { value } })
+  await fireEvent.keyDown(field, { key: 'Enter' })
+}
+
 const entry = {
   cidr: '203.0.113.0/24',
   addedBy: 'alex',
@@ -183,7 +191,8 @@ describe('the pull key', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'replace key' }))
     expect(mintDroplistKey).not.toHaveBeenCalled()
     await fireEvent.click(screen.getByRole('button', { name: /confirm/ }))
-    expect(mintDroplistKey).toHaveBeenCalled()
+    await typePasswordAndSubmit()
+    await waitFor(() => expect(mintDroplistKey).toHaveBeenCalled())
     expect(onrefresh).toHaveBeenCalled()
   })
 
@@ -208,7 +217,8 @@ describe('the pull key', () => {
     render(Droplist, { props: { resp: resp(), onrefresh } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
-    expect(screen.getByText('the-fresh-key')).toBeTruthy()
+    await typePasswordAndSubmit()
+    await waitFor(() => expect(screen.getByText('the-fresh-key')).toBeTruthy())
     expect(screen.getByText(/\/system scheduler add name=mikroview-drop-pull \.\.\. the-fresh-key/)).toBeTruthy()
     expect(screen.getByText(/shown once/)).toBeTruthy()
     expect(onrefresh).toHaveBeenCalled()
@@ -233,7 +243,26 @@ describe('the pull key', () => {
     render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
-    expect(mintDroplistKey).toHaveBeenCalledWith('operator-saved.example:8443')
+    await typePasswordAndSubmit()
+    await waitFor(() => expect(mintDroplistKey).toHaveBeenCalledWith('operator-saved.example:8443', 'correct horse'))
+  })
+
+  it('asks for the password first: clicking mint key alone calls nothing (#1447)', async () => {
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    expect(screen.getByLabelText('Your password')).toBeTruthy()
+    expect(mintDroplistKey).not.toHaveBeenCalled()
+  })
+
+  it('shows the server error text on a refused mint and reveals no key (#1447)', async () => {
+    vi.mocked(mintDroplistKey).mockResolvedValue('password is incorrect')
+    const onrefresh = vi.fn(async () => {})
+    render(Droplist, { props: { resp: resp(), onrefresh } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    await typePasswordAndSubmit('wrong')
+    await waitFor(() => expect(screen.getByText('password is incorrect')).toBeTruthy())
+    expect(screen.queryByText(/shown once/)).toBeNull()
+    expect(onrefresh).not.toHaveBeenCalled()
   })
 })
 
