@@ -152,6 +152,17 @@ func Open(path string, capacity int, key *retention.Key) (*FileStore, error) {
 	return s, nil
 }
 
+// Check reports, without writing anything, whether the file at path is
+// one Open would accept as a sealed match log: nil for an absent, empty
+// or sealed file, persist.ErrPlaintextDocument (wrapped) for the
+// JSON-lines log an earlier release wrote, another error otherwise. For
+// a caller that will not open the log but has to say what is there --
+// the Postgres backend, which never reads the file.
+func Check(path string) error {
+	_, err := sniff(path)
+	return err
+}
+
 // sniff checks what is at path before anything opens it for writing,
 // and reports its size (-1 when absent). Absent, empty, or starting with
 // Format's magic is fine. A file that starts with '{' (after any

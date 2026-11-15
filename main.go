@@ -1147,14 +1147,32 @@ func main() {
 		// backfill migrator was judged not worth building for what is,
 		// by design, bounded evidence rather than durable account state.
 		// Said plainly rather than left to be discovered as "why is my
-		// match history gone": the old file is untouched, still sealed,
-		// and readable by this build with the key if you revert Postgres,
-		// it just isn't carried forward.
-		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
-			logging.New("matchlog").Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
-				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
-				"the old file is untouched, still sealed, and readable by this build with history.keyFile if you revert postgres.dsnFile",
-				cfg.Watchlist.MatchLogPath, fi.Size()))
+		// match history gone", and in words that fit the file actually
+		// there. A sealed log (written by a v0.7.0 file-backend install)
+		// is untouched and readable again with the key if Postgres is
+		// reverted. A plaintext one (written before v0.7.0) is not read
+		// and not refused -- on Postgres a leftover plaintext file of the
+		// other non-account stores is warned about, not refused, and the
+		// match log follows them -- but it still holds matched events in
+		// the clear, so the warning names it and says how to move it.
+		mlPath := cfg.Watchlist.MatchLogPath
+		if fi, err := os.Stat(mlPath); err == nil && fi.Size() > 0 {
+			mlLog := logging.New("matchlog")
+			switch err := matchlog.Check(mlPath); {
+			case errors.Is(err, persist.ErrPlaintextDocument):
+				mlLog.Warn(fmt.Sprintf("%s (%d bytes) is a plaintext match log written before v0.7.0. This deployment "+
+					"runs on Postgres, so it is not read and not migrated, but it still holds matched events in the clear "+
+					"on the data volume. Move it off the volume or delete it, for example: mv %s %s.pre-0.7",
+					mlPath, fi.Size(), mlPath, mlPath))
+			case err != nil:
+				mlLog.Warn(fmt.Sprintf("%s (%d bytes) is not a match log this build can read (%v). This deployment runs "+
+					"on Postgres, so it is not read and not migrated", mlPath, fi.Size(), err))
+			default:
+				mlLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+					"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
+					"the old file is untouched, sealed, and readable by this build with history.keyFile if you revert postgres.dsnFile",
+					mlPath, fi.Size()))
+			}
 		}
 	} else if persistence.key == nil {
 		// Rule 2 of the #853 amendment (docs/decisions/event-retention.md):

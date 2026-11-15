@@ -5411,9 +5411,14 @@ Three things worth knowing:
   Postgres (the sealed account stores are opened from their files and
   sealed again under their row's own label on the way in); the match log's append-only sealed log doesn't fit that
   path, and it starts empty on Postgres instead — said in the startup
-  log, not left to be discovered as missing history. The old
-  `matchlog.jsonl` is untouched, still sealed, and readable with the key
-  if you revert `postgres.dsnFile`. See [Watchlist](#watchlist-optional).
+  log, not left to be discovered as missing history. A sealed
+  `matchlog.jsonl` (from a v0.7.0 install on the file backend) is
+  untouched, and readable again with the key if you revert
+  `postgres.dsnFile`. A plaintext one, written before v0.7.0, is not read
+  either, but it still holds matched events in the clear; the start-up
+  warning names it, and you should move it off the data volume or delete
+  it, for example with
+  `mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`. See [Watchlist](#watchlist-optional).
 
 ### Watching for schema changes on upgrade
 
