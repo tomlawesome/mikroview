@@ -660,13 +660,14 @@ lint:script-tests:
   needs: []
   <<: *dev_or_mr_code
   script:
-    - apk add --no-cache bash git python3 py3-yaml nodejs >/dev/null
+    - apk add --no-cache bash git python3 py3-yaml nodejs coreutils >/dev/null
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash scripts/ci-changed-paths-guard.test.sh
     - bash scripts/ci-reuse-gate.test.sh
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
     - bash scripts/merge-coverprofiles.test.sh
+    - bash scripts/ci/gitlab-await-tested-image.test.sh
 
 lint:go:
   stage: lint
@@ -723,7 +724,7 @@ lint:supply-chain-pins:
     # #711: every action SHA and image tag CI uses must be in
     # supply-chain/pins-policy.json with its review date. Fails on a pin the
     # policy does not record, or a recorded pin CI no longer uses.
-    - node --test tools/supply-chain/pins-policy.test.mjs
+    - node --test tools/supply-chain/pins-policy.test.mjs tools/supply-chain/github-copy.test.mjs
     - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------
