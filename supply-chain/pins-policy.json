@@ -322,16 +322,16 @@
       "reviewBy": "2026-11-05"
     },
     {
-      "name": "Trivy filesystem/dependency scanner",
-      "reference": "aquasec/trivy:0.76.1",
+      "name": "Trivy vulnerability, image and misconfiguration scanner",
+      "reference": "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/aquasecurity/trivy",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-10",
-      "reviewBy": "2026-11-10"
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "PostgreSQL (integration test service)",

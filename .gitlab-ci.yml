@@ -1061,6 +1061,14 @@ test:container:
   <<: *dev_or_mr_code_heavy
   variables:
     APP: mikroview-test-$CI_JOB_ID
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
+  # The same vulnerability database security:trivy-fs fetches, cached
+  # rather than downloaded on every run (#1462); .dockerignore keeps it
+  # out of the build context.
+  cache:
+    key: trivy-db
+    paths:
+      - .trivy-cache
   script:
     # apk before the reuse gate: this image is Alpine and carries neither
     # Node nor curl by default, and #1066's gate (scripts/ci-reuse-gate.js)
@@ -1103,6 +1111,18 @@ test:container:
           exit 1
         fi
       done
+    # Image scan (#1462): the image built above, for vulnerable OS packages
+    # and Go modules, without building it again. This job's image is the
+    # Docker CLI, so trivy's static binary is copied out of the pinned
+    # Trivy image through the daemon. `docker save` writes the image into
+    # the job's own directory, where trivy reads it with --input; the
+    # daemon is the dind service's, so nothing here touches the runner's.
+    # Before *reuse_evidence, so a reused run stands on a scan that passed.
+    - cid=$(docker create "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb")
+    - docker cp "$cid:/usr/local/bin/trivy" /usr/local/bin/trivy
+    - docker rm "$cid" >/dev/null
+    - docker save "$APP" -o mikroview-image.tar
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --input mikroview-image.tar
     - *reuse_evidence
   artifacts:
     paths:
@@ -2059,19 +2079,32 @@ security:gitleaks:
     max: 2
     when: [runner_system_failure, api_failure]
 
-security:trivy-fs:
+# Shared by the Trivy jobs. Pinned by digest, never by tag (#1462): Trivy's
+# own release channels were hijacked in March 2026 (CVE-2026-33634) by
+# repointing tags. The digest is the multi-arch index of 0.76.2, the same
+# on Docker Hub and GHCR. test:container copies the binary out of this
+# same reference; change both together (supply-chain/pins-policy.json).
+.trivy:
   stage: security
   tags: [light]
   image:
-    name: aquasec/trivy:0.76.1
+    name: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
     entrypoint: [""]
-  <<: *dev_or_mr_code
   variables:
     TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
   cache:
     key: trivy-db
     paths:
       - .trivy-cache
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
+
+security:trivy-fs:
+  extends: .trivy
+  <<: *dev_or_mr_code
   script:
     # Full-severity report kept as the SARIF artifact for visibility only --
     # exit-code 0, never fails the job by itself. --include-dev-deps:
@@ -2096,11 +2129,19 @@ security:trivy-fs:
     paths:
       - trivy-fs.sarif
     expire_in: 1 week
-  # See security:gosec's retry comment above (#950): same artifact-upload
-  # flake, same fix.
-  retry:
-    max: 2
-    when: [runner_system_failure, api_failure]
+
+# Misconfiguration scan (#1462) of the whole checkout: every Dockerfile
+# (Dockerfile, live-check.Dockerfile, scripts/live-routeros*.dockerfile)
+# and deploy/docker-compose.yml. Trivy 0.76 has no compose checks, so it
+# lists the compose file as nothing to scan; it is named here so it is
+# covered the day it gains them. False alarms sit in .trivyignore.yaml,
+# which, unlike .trivyignore, can scope an ignore to one file, so a check
+# waived for a workstation fixture still runs on the shipped Dockerfile.
+security:trivy-config:
+  extends: .trivy
+  <<: *dev_or_mr_code
+  script:
+    - trivy config --ignorefile .trivyignore.yaml --exit-code 1 --severity HIGH,CRITICAL .
 
 # ---------------------------------------------------------------------------
 # SYNC — GitHub is a mirror of dev, preview and main, and of release tags.

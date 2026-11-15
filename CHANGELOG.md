@@ -460,6 +460,13 @@ rewritten.
 
 ### Security
 
+- **CI pins Trivy by digest and now scans the built image and the
+  container config** (#1462). Trivy moves to 0.76.2, pinned by its image
+  digest rather than a tag. test:container scans the image it builds for
+  HIGH and CRITICAL vulnerabilities with a fix available, and
+  security:trivy-config checks the Dockerfiles and the compose file;
+  either fails the pipeline on a finding.
+
 - **Minting the drop-list key asks for your password** (#1447). `POST
   /api/droplist/key` now takes `password` and re-checks it in the same
   per-account budget as router enrolment, so an admin session on its own
