@@ -68,9 +68,16 @@ describe("#1472 job 1: build:image builds once into image.tar", () => {
     assert.match(b, /artifacts:[\s\S]*image\.tar/);
     assert.match(b, /expire_in:\s*1 day/);
   });
-  it("is the only docker build/buildx build in the pipeline", () => {
-    const n = ci.split("\n").filter((l) => !/^\s*#/.test(l) && /docker (buildx )?build\b/.test(l)).length;
-    assert.equal(n, 1, `expected one build, found ${n} docker build lines`);
+  it("the product Dockerfile is built exactly once in the pipeline, by build:image", () => {
+    // Other Dockerfiles (gate:image's live-check.Dockerfile) may still be built.
+    const text = ci.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n").replace(/\\\n\s*/g, " ");
+    const builds = text.split("\n").filter((l) => /docker (buildx )?build\b/.test(l));
+    const product = builds.filter((l) => {
+      const f = l.match(/(?:^|\s)(?:-f|--file)[ =]+(\S+)/);
+      return !f || /^["']?(\.\/)?Dockerfile["']?$/.test(f[1]);
+    });
+    assert.equal(product.length, 1, `expected one product-image build, found ${product.length}`);
+    assert.ok(job("build:image").replace(/\\\n\s*/g, " ").includes(product[0].trim()), "the one product build is not in build:image");
   });
 });
 
