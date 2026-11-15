@@ -489,10 +489,26 @@ describe('a dropped connection is a refusal, not a throw', () => {
 
   it('POST: mintDroplistKey returns the reason as a string', async () => {
     stubDroppedConnection()
-    const result = await mintDroplistKey('203.0.113.9')
+    const result = await mintDroplistKey('203.0.113.9', 'correct horse')
     expect(typeof result).toBe('string')
     expect(result).toContain('connection dropped')
     expect(result).toContain('Failed to fetch')
+  })
+
+  // #1447: the mint re-checks the admin's password, so the body carries it.
+  it('POST: mintDroplistKey sends the password with the address (#1447)', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 201,
+      json: async () => ({ key: 'k', createdAt: '2026-09-14T00:00:00Z', scheduler: 's' }),
+      text: async () => '',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await mintDroplistKey('203.0.113.9', 'correct horse')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/droplist/key')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ address: '203.0.113.9', password: 'correct horse' })
   })
 
   it('DELETE: revokeDroplistKey returns the reason as a string', async () => {
