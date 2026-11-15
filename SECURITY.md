@@ -822,7 +822,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   (#1450), so the data directory can move to a new path and still open,
   while a genuine file put in another store's place (the tokens file
   copied over the accounts file, say) is refused, whatever the two files
-  are called. A file sealed before this change, bound to its absolute
+  are called. A file sealed before this change, bound to its configured
   path, opens once at that path and is re-sealed under its store name.
   Neither binding stops an older genuine copy of the same store's file
   being put back (a rollback) -- the path binding never did either, and

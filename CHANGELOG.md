@@ -242,7 +242,7 @@ rewritten.
   install's key, so a v0.6 backup still restores.
 
 - **The data directory can move to a new path** (#1450). Each sealed
-  store file was bound to its own absolute path, so a data directory
+  store file was bound to its own configured path, so a data directory
   copied or moved to a different path -- a bare-metal install, or a
   config naming a new directory -- was refused at start-up as altered.
   From v0.7.0 every install has a key, so this would have hit everyone.

@@ -4154,7 +4154,7 @@ names the new paths and the same `history.keyFile` key is in place.
 What is still refused at start-up, naming the store: a file not made
 with your key (forged, edited or plaintext), and one store's file put
 in another store's place. A file written by a release before v0.7.0 is
-bound to its old absolute path: start v0.7.0 once at the old path first
+bound to its old configured path: start v0.7.0 once at the old path first
 (each such file is re-sealed the new way when MikroView opens it, and
 the log says so once per file), then move it.
 
