@@ -869,8 +869,31 @@ export async function advanceTestClock(request, advance) {
   return { status: 200, now }
 }
 
-async function freshTotpCode(secret) {
+// The read-check-write of COUNTER_FILE runs under a mkdir lock
+// (`totp-last-counter.lock`, #1466), the same scheme as fresh_totp_code in
+// scripts/seed-demo.py, so the two exclude each other. A lock older than
+// 30 s by its mtime is stale and removed; the value goes in through a temp
+// file and a rename, so a reader never sees half a number.
+async function claimStepLocked(secret) {
+  const lock = `${COUNTER_FILE}.lock`
   for (;;) {
+    try {
+      fs.mkdirSync(lock)
+      break
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 30000) {
+          try { fs.rmdirSync(lock) } catch { /* someone else removed it */ }
+          continue
+        }
+      } catch {
+        continue // released between mkdir and stat
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+  try {
     const counter = Math.floor(serverNowMs() / 1000 / 30)
     let spent = -1
     try {
@@ -878,9 +901,23 @@ async function freshTotpCode(secret) {
     } catch {
       spent = -1
     }
-    if (!Number.isFinite(spent) || counter > spent) {
-      if (COUNTER_FILE) fs.writeFileSync(COUNTER_FILE, String(counter))
-      return totpCode(secret, counter)
+    if (Number.isFinite(spent) && counter <= spent) return null
+    const tmp = `${COUNTER_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+    fs.writeFileSync(tmp, String(counter))
+    fs.renameSync(tmp, COUNTER_FILE)
+    return totpCode(secret, counter)
+  } finally {
+    try { fs.rmdirSync(lock) } catch { /* already gone */ }
+  }
+}
+
+async function freshTotpCode(secret) {
+  for (;;) {
+    if (COUNTER_FILE) {
+      const code = await claimStepLocked(secret)
+      if (code !== null) return code
+    } else {
+      return totpCode(secret, Math.floor(serverNowMs() / 1000 / 30))
     }
     // +1s so the server's clock has certainly crossed the boundary too.
     await new Promise((r) => setTimeout(r, 30000 - (serverNowMs() % 30000) + 1000))

@@ -319,15 +319,19 @@ export function checkShippedPackages({ packages, policyPath }) {
 // File types that carry no licence field of their own and are the usual
 // vehicle for someone else's work. JavaScript is not on the npm list: it is
 // an npm package's own code, and other projects' code inlined into it is
-// found by its licence banner instead (below). It is on the Go list, where
-// an embedded .js file is never the module's own Go code.
+// found by its licence banner instead (below). .json, .txt, .md and .map are
+// off too: in npm packages they are the package's own manifest, docs and
+// source maps. Go has no list: every //go:embed file of a dependency is a
+// finding, whatever its extension, since an embedded file is never the
+// module's own Go code.
 const ASSET_EXTENSIONS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".bmp", ".webp", ".avif", ".tif", ".tiff",
   ".css", ".scss", ".sass", ".less", ".html", ".htm", ".xhtml",
   ".woff", ".woff2", ".ttf", ".otf", ".eot",
   ".mp3", ".wav", ".ogg", ".mp4", ".webm", ".swf",
+  ".wasm", ".bin", ".dat", ".data", ".db", ".mmdb", ".xml",
+  ".gz", ".zip", ".tar", ".tgz",
 ]);
-const GO_EMBED_EXTENSIONS = new Set([...ASSET_EXTENSIONS, ".js", ".mjs", ".cjs"]);
 
 // Directory names Go code is vendored under inside a module.
 const GO_VENDOR_SEGMENTS = new Set(["third_party", "third-party", "thirdparty", "vendor", "_vendor"]);
@@ -592,7 +596,6 @@ function goFindings(goPkgs) {
       }
     }
     for (const embedded of pkg.embedFiles ?? []) {
-      if (!GO_EMBED_EXTENSIONS.has(extname(embedded).toLowerCase())) continue;
       const path = toPosix(relative(pkg.moduleDir, join(pkg.dir, embedded)));
       findings.push({ ...base, path, kind: "embedded asset (no licence field)" });
     }
