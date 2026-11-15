@@ -129,8 +129,10 @@ check "$([ -f "$SRC/users.json" ] && echo 0 || echo 1)" "the source was left who
 # script has never heard of still has to travel -- which is the whole
 # promise, and the one a hand-picked list of filenames cannot check.
 # cfg.yaml and server.log are this script's own, not the deployment's.
-( cd "$SRC" && find . -type f ! -name cfg.yaml ! -name server.log | sort ) > "$DIR/src.list"
-( cd "$DST" && find . -type f ! -name cfg.yaml ! -name server.log | sort ) > "$DIR/dst.list"
+# Store lock files (<store>.lock) hold no data and -migrate-data skips them
+# by design (internal/persist/file.go), so they are not expected to travel.
+( cd "$SRC" && find . -type f ! -name cfg.yaml ! -name server.log ! -name '*.lock' | sort ) > "$DIR/src.list"
+( cd "$DST" && find . -type f ! -name cfg.yaml ! -name server.log ! -name '*.lock' | sort ) > "$DIR/dst.list"
 if diff -q "$DIR/src.list" "$DIR/dst.list" >/dev/null; then
   ok "every file in the source arrived at the destination ($(wc -l < "$DIR/src.list") files)"
 else
