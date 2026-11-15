@@ -92,7 +92,14 @@ describe("#1462 steps 4-7: report-only jobs keep a report as an artifact", () =>
   for (const j of jobs) {
     it(`${j.name} is allow_failure with a when: always artifact and the report-only comment`, () => {
       const t = job(j.name, true);
-      assert.match(t, /^ {2}allow_failure: true\s*$/m, `${j.name} lacks allow_failure: true`);
+      if (j.name === "lint:jscpd") {
+        // A bad registry signature must fail the job: only jscpd's own
+        // duplication exit code (3) is tolerated.
+        assert.doesNotMatch(t, /^ {2}allow_failure: true\s*$/m, "lint:jscpd must not be allow_failure: true");
+        assert.match(section(job(j.name), "allow_failure"), /exit_codes:\s*(\[\s*3\s*\]|\n\s*-\s*3\s*$)/m, "lint:jscpd needs allow_failure: { exit_codes: [3] }");
+      } else {
+        assert.match(t, /^ {2}allow_failure: true\s*$/m, `${j.name} lacks allow_failure: true`);
+      }
       assert.match(t, /# report-only until one pipeline's noise is triaged \(#1462\)/, `${j.name} lacks the report-only comment`);
       const a = section(job(j.name), "artifacts");
       assert.ok(a, `${j.name} has no artifacts entry`);
