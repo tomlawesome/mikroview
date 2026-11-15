@@ -304,3 +304,116 @@ describe("#1472 step 3 countersign.yml: behaviour unchanged, header updated", ()
     assert.match(header, /publish-from-gitlab|release-on-tag/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review round 1 on step 3 (M1-M5, L1-L4).
+// ---------------------------------------------------------------------------
+const isWrite = /cosign copy\b|imagetools create/g;
+const verifyKey = /cosign verify --key cosign\.pub/g;
+const lastIndex = (re, s) => { let m, at = -1; re.lastIndex = 0; while ((m = re.exec(s))) at = m.index; return at; };
+const ciText = readFileSync(join(root, ".gitlab-ci.yml"), "utf8");
+
+describe("review M1: :latest moves only for the highest vX.Y.Z tag", () => {
+  it("reads the remote's tags at run time and sorts them by version before the :latest write", () => {
+    const { doc } = load("release-on-tag.yml");
+    const steps = stepsOf(doc);
+    const lat = steps.findIndex((s) => /imagetools create/.test(runOf(s)) && /mikroview:latest/.test(runOf(s)));
+    assert.ok(lat >= 0, "no :latest write");
+    const before = steps.slice(0, lat + 1).map(runOf).join("\n");
+    assert.match(before, /ls-remote[^\n]*--tags|git (fetch --tags|tag)\b/, "tags are not read from the repository");
+    assert.match(before, /sort -V|--sort=-?v:refname|sort --version-sort/, "tags are not version-sorted");
+  });
+  it("gates the :latest write on this tag being the highest, and says so when it is not", () => {
+    const { doc } = load("release-on-tag.yml");
+    const steps = stepsOf(doc);
+    const lat = steps.findIndex((s) => /imagetools create/.test(runOf(s)) && /mikroview:latest/.test(runOf(s)));
+    assert.ok(lat >= 0, "no :latest write");
+    const t = runOf(steps[lat]);
+    const gated = steps[lat].if || /highest|newest|latest_tag|is_latest/i.test(t.slice(0, t.search(/imagetools create/)));
+    assert.ok(gated, "the :latest write is not conditional on the tag being the highest");
+    assert.match(steps.map(stepText).join("\n"), /::notice::[^\n]*latest[^\n]*(not moved|left|unchanged|skipp)/i, "no notice that :latest was left alone");
+  });
+});
+
+describe("review M3: docker.yml jobs can never run", () => {
+  it("every job carries a hard if: false", () => {
+    const { doc } = load("docker.yml");
+    const jobs = Object.entries(doc.jobs ?? {});
+    assert.ok(jobs.length > 0);
+    for (const [n, j] of jobs) {
+      assert.ok([false, "false", "${{ false }}"].includes(j.if), `docker.yml job ${n} can run on dispatch (if: ${JSON.stringify(j.if)})`);
+    }
+  });
+});
+
+describe("review M4: the attested SBOM is the verified GitLab SBOM", () => {
+  for (const name of NEW) {
+    it(`${name}: sbom-path is taken from verify-attestation output, or compared with it`, () => {
+      const { doc } = load(name);
+      const steps = stepsOf(doc);
+      const at = steps.findIndex((s) => /^actions\/attest@/.test(s.uses ?? "") && s.with?.["sbom-path"]);
+      assert.ok(at >= 0, "no SBOM attest step");
+      const path = steps[at].with["sbom-path"];
+      const before = steps.slice(0, at).map(runOf).join("\n");
+      const va = /verify-attestation[\s\S]*\|[\s\S]*(\.payload|\.predicate|base64 -d)/.test(before) && before.includes(path);
+      const compared = /verify-attestation/.test(before) && /\b(cmp|diff)\b|jq -S[^\n]*(==|!=)/.test(before) && before.includes(path);
+      assert.ok(va || compared, "the SBOM bound to the GHCR digest is the downloaded trivy artifact, not the verified attestation predicate");
+    });
+  }
+});
+
+describe("review L1: each GHCR write is followed by cosign verify --key cosign.pub", () => {
+  for (const name of NEW) {
+    it(`${name}: the last GHCR write is verified against cosign.pub afterwards`, () => {
+      const { doc } = load(name);
+      const run = allRun(doc);
+      const w = lastIndex(isWrite, run);
+      assert.ok(w >= 0, "no GHCR write");
+      const direct = lastIndex(verifyKey, run) > w;
+      const viaHelper = /check\(\)\s*\{[\s\S]*?cosign verify --key cosign\.pub[\s\S]*?\n\s*\}/.test(run) && lastIndex(/\bcheck "/g, run) > w;
+      assert.ok(direct || viaHelper, "nothing verifies the GHCR digest with cosign.pub after the last write");
+    });
+  }
+});
+
+describe("review L3: preview concurrency comment is true", () => {
+  it("does not claim every merge gets its own tag; says only the newest pending run is kept", () => {
+    const { text } = load("publish-from-gitlab.yml");
+    assert.doesNotMatch(text, /every merge gets its own/i);
+    assert.match(text, /only the newest[^\n]*pending|newest pending/i);
+  });
+});
+
+describe("review L4: await and verify run with read-only permissions", () => {
+  for (const name of NEW) {
+    it(`${name}: the await job holds no write permission; the attesting job holds no GitLab token or login`, () => {
+      const { doc } = load(name);
+      const jobs = Object.entries(doc.jobs ?? {});
+      const awaitJob = jobs.find(([, j]) => (j.steps ?? []).some((s) => /gitlab-await-tested-image\.sh/.test(runOf(s))));
+      const attestJob = jobs.find(([, j]) => (j.steps ?? []).some((s) => /^actions\/attest@/.test(s.uses ?? "")));
+      assert.ok(awaitJob && attestJob, "await and attest steps missing");
+      assert.notEqual(awaitJob[0], attestJob[0], "await and attest share one job (one set of write permissions)");
+      const perms = awaitJob[1].permissions ?? doc.permissions ?? {};
+      for (const [k, v] of Object.entries(perms)) assert.notEqual(v, "write", `await job has ${k}: write`);
+      const aj = JSON.stringify(attestJob[1]);
+      assert.doesNotMatch(aj, /GITLAB_READ_TOKEN/, "attest job carries the GitLab token");
+      assert.ok(!(attestJob[1].steps ?? []).some((s) => /docker\/login-action/.test(s.uses ?? "") && /GITLAB_REGISTRY|GITLAB_READ_TOKEN/.test(JSON.stringify(s.with ?? {}))), "attest job logs in to GitLab's registry");
+    });
+  }
+});
+
+describe("review M5: both new test files run in CI", () => {
+  it("the await script's .test.sh is run by a CI job script line", () => {
+    assert.match(ciText, /^\s*- .*scripts\/ci\/gitlab-await-tested-image\.test\.sh/m);
+  });
+  it("github-copy.test.mjs is run by a CI job script line", () => {
+    assert.match(ciText, /^\s*- .*(github-copy\.test\.mjs|tools\/supply-chain\/\*\.test\.mjs)/m);
+  });
+  it("the job that runs the .test.sh has coreutils (busybox date cannot read a UTC timestamp)", () => {
+    const i = ciText.search(/^\s*- .*gitlab-await-tested-image\.test\.sh/m);
+    assert.ok(i >= 0, "not wired");
+    const head = ciText.slice(0, i);
+    const apk = head.slice(head.lastIndexOf("apk add"));
+    assert.match(apk.split("\n")[0], /coreutils/);
+  });
+});

@@ -50,26 +50,59 @@ BIN="$TMP/bin"
 mkdir -p "$BIN"
 cat > "$BIN/curl" <<'STUB'
 #!/usr/bin/env bash
+# Stub curl. Logs argv. Serves $FIX files by URL shape. Checks the pipeline
+# query (sha=, ref=, source=push). Models a redirect (FIX/redirect): an
+# artifact URL answers 302 to another host; the token header must never be
+# sent to that host (logged in $FIX/leak.log), and a curl that follows a
+# redirect (-L/--location) while carrying the token header is a leak too.
 printf '%s\n' "$*" >> "$FIX/curl.log"
-out=""; url=""
+out=""; url=""; hdr=""; follow=0; wout=""; dump=""; incl=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --output|-o) out="$2"; shift 2 ;;
     --header|-H) hdr="$2"; shift 2 ;;
-    --max-time) shift 2 ;;
+    --write-out|-w) wout="$2"; shift 2 ;;
+    --dump-header|-D) dump="$2"; shift 2 ;;
+    --location|-L) follow=1; shift ;;
+    --include|-i) incl=1; shift ;;
+    --max-time|--max-filesize|--proto|--retry|--connect-timeout) shift 2 ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
 done
+has_token=0
+case "$hdr" in @*) grep -q PRIVATE-TOKEN "${hdr#@}" 2>/dev/null && has_token=1 ;; PRIVATE-TOKEN*) has_token=1 ;; esac
+emit() { if [ -n "$out" ]; then cp "$1" "$out"; else cat "$1"; fi; }
 case "$url" in
-  *"/pipelines?"*) src="$FIX/pipelines.json" ;;
-  *"/pipelines/"*"/jobs"*) src="$FIX/jobs.json" ;;
-  *"/artifacts/"*gitlab-tested-image.json) src="$FIX/evidence.json" ;;
-  *"/artifacts/"*image.spdx.json) src="$FIX/sbom.json" ;;
+  *"/pipelines?"*)
+    q="${url#*\?}"
+    for want in "sha=$WANT_SHA" "ref=$WANT_REF" "source=push"; do
+      case "&$q&" in *"&$want&"*) ;; *) echo "stub curl: query lacks $want: $q" >&2; echo BADQUERY >> "$FIX/forbidden.log"; exit 22 ;; esac
+    done
+    n=$(( $(cat "$FIX/pcount" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FIX/pcount"
+    src="$FIX/pipelines.$n.json"; [ -f "$src" ] || src="$FIX/pipelines.json" ;;
+  *"/pipelines/"*"/jobs"*)
+    src="$FIX/jobs.json"
+    [ -n "$dump" ] && [ -f "$FIX/nextpage" ] && printf 'HTTP/2 200\r\nx-next-page: 2\r\n\r\n' > "$dump"
+    if [ "$incl" = 1 ] && [ -f "$FIX/nextpage" ]; then printf 'HTTP/2 200\r\nx-next-page: 2\r\n\r\n'; fi ;;
+  *"/artifacts/"*)
+    case "$url" in *gitlab-tested-image.json) src="$FIX/evidence.json"; blob=blob-evidence ;; *image.spdx.json) src="$FIX/sbom.json"; blob=blob-sbom ;; *) exit 22 ;; esac
+    if [ -f "$FIX/redirect" ]; then
+      if [ "$follow" = 1 ]; then
+        [ "$has_token" = 1 ] && echo "followed a redirect carrying the token: $url" >> "$FIX/leak.log"
+      else
+        [ -n "$dump" ] && printf 'HTTP/2 302\r\nlocation: https://objects.example.test/%s\r\n\r\n' "$blob" > "$dump"
+        [ -n "$out" ] && : > "$out"
+        [ -n "$wout" ] && printf '%s' "${wout//%\{redirect_url\}/https://objects.example.test/$blob}"
+        exit 0
+      fi
+    fi ;;
+  "https://objects.example.test/blob-evidence") [ "$has_token" = 1 ] && echo "token sent to objects host" >> "$FIX/leak.log"; src="$FIX/evidence.json" ;;
+  "https://objects.example.test/blob-sbom") [ "$has_token" = 1 ] && echo "token sent to objects host" >> "$FIX/leak.log"; src="$FIX/sbom.json" ;;
   *) echo "stub curl: unexpected URL $url" >&2; exit 22 ;;
 esac
 [ -f "$src" ] || exit 22
-if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi
+emit "$src"
 STUB
 for t in wget ssh git nc; do
   printf '#!/usr/bin/env bash\necho "%s called: $*" >> "$FIX/forbidden.log"\nexit 99\n' "$t" > "$BIN/$t"
@@ -95,7 +128,7 @@ fixture() {
 run() {
   local d="$1" ref="$2"
   rc=0
-  OUT="$(env -i PATH="$BIN:$NODE_DIR:/usr/bin:/bin" FIX="$d" HOME="$d" \
+  OUT="$(env -i PATH="$BIN:$NODE_DIR:/usr/bin:/bin" FIX="$d" HOME="$d" WANT_SHA="${MV_COMMIT_OVERRIDE:-$SHA}" WANT_REF="$ref" \
     GITLAB_API_URL="https://gitlab.example.test/api/v4" GITLAB_PROJECT_ID=53 \
     GITLAB_READ_TOKEN="$TOKEN" GITLAB_REGISTRY="$REGISTRY" \
     MV_COMMIT="${MV_COMMIT_OVERRIDE:-$SHA}" MV_REF="$ref" MV_WAIT_MINUTES=0 MV_POLL_SECONDS=1 \
@@ -170,5 +203,59 @@ done
 
 # 6. Token never in output even on a failing API call.
 d="$(fixture api-down)"; rm "$d/pipelines.json"; run "$d" preview; refused "$d" "GitLab API failure"
+
+# 7. Evidence age (M5): older than seven days, and in the future.
+d="$(fixture too-old)"
+sed -i "s/\"builtAt\":\"[^\"]*\"/\"builtAt\":\"$(date -u -d '8 days ago' +%Y-%m-%dT%H:%M:%SZ)\"/" "$d/evidence.json"
+run "$d" preview; refused "$d" "evidence built 8 days ago"
+d="$(fixture from-future)"
+sed -i "s/\"builtAt\":\"[^\"]*\"/\"builtAt\":\"$(date -u -d '1 hour' +%Y-%m-%dT%H:%M:%SZ)\"/" "$d/evidence.json"
+run "$d" preview; refused "$d" "evidence built in the future"
+
+# 8. A required job failed first and a retry then succeeded: accepted, and a
+# pipeline that is failed on the first poll but green on the second is waited for.
+d="$(fixture job-retried)"
+node -e 'const f=process.argv[1];const j=JSON.parse(require("fs").readFileSync(f));j.push({id:9,name:"publish:channel",status:"failed"});require("fs").writeFileSync(f,JSON.stringify(j))' "$d/jobs.json"
+run "$d" preview
+check "$rc" "0" "a required job failed once but its retry succeeded: accepted"
+d="$(fixture pipeline-retried)"
+printf '[{"id":77,"status":"failed","web_url":"https://gitlab.example.test/ai/mikroview/-/pipelines/77"}]' > "$d/pipelines.1.json"
+rc=0
+OUT="$(env -i PATH="$BIN:$NODE_DIR:/usr/bin:/bin" FIX="$d" HOME="$d" WANT_SHA="$SHA" WANT_REF=preview \
+  GITLAB_API_URL="https://gitlab.example.test/api/v4" GITLAB_PROJECT_ID=53 GITLAB_READ_TOKEN="$TOKEN" \
+  GITLAB_REGISTRY="$REGISTRY" MV_COMMIT="$SHA" MV_REF=preview MV_WAIT_MINUTES=1 MV_POLL_SECONDS=1 \
+  MV_EVIDENCE_DIR="$d/ev" GITHUB_OUTPUT="$d/gh-output" timeout 60 bash "$SCRIPT" 2>&1)" || rc=$?
+check "$rc" "0" "a failed pipeline retried to green within the wait is accepted"
+
+# 9. Missing artifacts (M5).
+d="$(fixture no-evidence)"; rm "$d/evidence.json"; run "$d" preview; refused "$d" "missing evidence artifact"
+
+# 10. The token never follows a redirect (M2). Every curl uses --proto =https;
+# no curl that carries the token header follows redirects; an artifact answered
+# with a redirect is fetched by a second, token-free curl. Assumed ways to see
+# the redirect: --write-out '%{redirect_url}' or --dump-header.
+d="$(fixture redirect)"; : > "$d/redirect"
+run "$d" preview
+check "$rc" "0" "artifacts behind a redirect are still fetched"
+[ ! -s "$d/leak.log" ] && ok "redirect: the token was never sent past the first hop" || bad "redirect: $(cat "$d/leak.log")"
+[ -s "$d/ev/gitlab-tested-image.json" ] && [ -s "$d/ev/image.spdx.json" ] && ok "redirect: evidence and SBOM saved" || bad "redirect: evidence/SBOM empty"
+d="$(fixture plain)"
+run "$d" preview
+if grep -E -- '--header @' "$d/curl.log" | grep -E -- '(^| )(-L|--location)( |$)' >/dev/null; then bad "a curl carrying the token header uses --location"; else ok "no curl carrying the token header uses --location"; fi
+if [ -s "$d/curl.log" ] && [ "$(grep -vc -- '--proto =https' "$d/curl.log")" = 0 ]; then ok "every curl uses --proto =https"; else bad "some curl lacks --proto =https"; fi
+
+# 11. Size limits (L2): artifact downloads cap their size; the job listing asks
+# for 100 per page and refuses when GitLab reports another page.
+d="$(fixture limits)"; run "$d" preview
+art="$(grep -- '/artifacts/' "$d/curl.log")"
+[ -n "$art" ] && [ "$(printf '%s\n' "$art" | grep -vc -- '--max-filesize')" = 0 ] && ok "every artifact download has --max-filesize" || bad "an artifact download lacks --max-filesize"
+ev_cap="$(printf '%s\n' "$art" | grep 'gitlab-tested-image.json' | sed -n 's/.*--max-filesize \([0-9]*\).*/\1/p' | head -1)"
+sb_cap="$(printf '%s\n' "$art" | grep 'image.spdx.json' | sed -n 's/.*--max-filesize \([0-9]*\).*/\1/p' | head -1)"
+[ -n "$ev_cap" ] && [ "$ev_cap" -le 65536 ] && ok "evidence capped at <= 64 KiB" || bad "evidence cap is '${ev_cap}'"
+[ -n "$sb_cap" ] && [ "$sb_cap" -le 16777216 ] && ok "SBOM capped at <= 16 MiB" || bad "SBOM cap is '${sb_cap}'"
+grep -q 'jobs?per_page=100' "$d/curl.log" && ok "job listing asks for per_page=100" || bad "job listing lacks per_page=100"
+d="$(fixture more-jobs)"; : > "$d/nextpage"
+node -e 'const f=process.argv[1];const j=JSON.parse(require("fs").readFileSync(f));for(let i=0;i<95;i++)j.push({id:100+i,name:"filler"+i,status:"success"});require("fs").writeFileSync(f,JSON.stringify(j))' "$d/jobs.json"
+run "$d" preview; refused "$d" "job listing with a further page (x-next-page)"
 
 exit "$fail"
