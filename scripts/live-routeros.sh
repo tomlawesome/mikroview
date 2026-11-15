@@ -273,8 +273,8 @@ setup() {
 # as one of the shapes it has to tolerate, and this is where that stops
 # being an assumption.
 traffic() {
-  local n="${1:-5}" i
-  for i in $(seq 1 "$n"); do
+  local n="${1:-5}"
+  for _ in $(seq 1 "$n"); do
     timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$INPUT_PORT && printf 'x' >&3" 2>/dev/null || true
     timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$FORWARD_PORT && printf 'x' >&3" 2>/dev/null || true
   done

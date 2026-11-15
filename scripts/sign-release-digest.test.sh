@@ -229,12 +229,12 @@ check "$([ -e "$COSIGN_CALL7" ] || [ -e "$LOGIN_CALLS7" ] && echo touched || ech
 EVIDENCE8="$TMP/evidence-other-repo.json"
 evidence "$EVIDENCE8" "registry.example.test/someone/else@${GOOD_DIGEST}" "$GOOD_DIGEST"
 COSIGN_CALL8="$TMP/cosign-call-8"
-out8="$(run -- \
+run -- \
   MV_SIGNING_DIR="$KEYDIR" \
   MV_EVIDENCE="$EVIDENCE8" \
   STUB_INSPECT_OUTPUT="$(single_platform_output)" \
   STUB_COSIGN_CALL="$COSIGN_CALL8" \
-  2>&1)"
+  >/dev/null 2>&1
 rc=$?
 check "$rc" "1" "evidence for another repository refuses"
 check "$([ -e "$COSIGN_CALL8" ] && echo called || echo not-called)" "not-called" "nothing is signed for another repository's evidence"
@@ -280,12 +280,12 @@ grep -q "not the recorded $GOOD_DIGEST" <<< "$out11" && echo "ok - the refusal n
 # records, is signed; there is no SBOM to attest.
 COSIGN_CALL12="$TMP/cosign-call-12"
 INSPECT_CALLS12="$TMP/inspect-12"
-out12="$(run v9.9.9 -- \
+run v9.9.9 -- \
   MV_SIGNING_DIR="$KEYDIR" \
   STUB_INSPECT_OUTPUT="$(single_platform_output)" \
   STUB_INSPECT_CALLS="$INSPECT_CALLS12" \
   STUB_COSIGN_CALL="$COSIGN_CALL12" \
-  2>&1)"
+  >/dev/null 2>&1
 rc=$?
 check "$rc" "0" "the exercise path exits 0"
 grep -q "imagetools inspect ${REPO}:v9.9.9" "$INSPECT_CALLS12" 2>/dev/null &&

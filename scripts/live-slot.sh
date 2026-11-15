@@ -26,6 +26,7 @@
 #
 # BASH_SOURCE, not $0: this file is sourced, so $0 is the caller and
 # would give the wrong directory for a caller outside scripts/.
+# shellcheck disable=SC2034 # sourced, never run: the MV_* ports are read by the scripts that source this file
 MV_SLOT="$(printf '%s' "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" | cksum | awk '{print $1 % 64}')"
 
 # Six bands, none overlapping, one port per slot in each:

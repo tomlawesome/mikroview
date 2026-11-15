@@ -43,7 +43,7 @@ sed 's/^readonly COSIGN_SHA256=".*"$/readonly COSIGN_SHA256="0000000000000000000
 env PATH=/usr/bin:/bin MV_COSIGN_DIR="$TMP/bad" bash "$TMP/bad-sha.sh" >"$TMP/out3" 2>"$TMP/err3"
 check "$?" "1" "a checksum mismatch refuses"
 grep -q "checksum mismatch" "$TMP/err3" && echo "ok - the refusal says why" || { echo "FAIL - the refusal says why"; fail=1; }
-check "$(ls "$TMP/bad" 2>/dev/null | grep -c '^cosign-[0-9]')" "0" "a mismatched download is not left installed"
+check "$(find "$TMP/bad" -maxdepth 1 -name 'cosign-[0-9]*' 2>/dev/null | wc -l | tr -d ' ')" "0" "a mismatched download is not left installed"
 
 # 4. A corrupted cache entry is not handed back as if it were the pin.
 printf 'not cosign' > "$TMP/cache/cosign-$(sed -n 's/^readonly COSIGN_VERSION="\(.*\)"$/\1/p' "$SCRIPT")"

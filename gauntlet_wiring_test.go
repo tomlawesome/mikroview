@@ -391,7 +391,7 @@ func TestCLIRequireKey(t *testing.T) {
 	if err := os.WriteFile(schemaPath, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	log, buf = logCapture()
+	log, _ = logCapture()
 	if cliRequireKey(log, "-transfer-admin") {
 		t.Error("ran against a data directory a newer build wrote")
 	}
