@@ -71,3 +71,11 @@ bundled-assets:
   # 2009 Kazuhiko Arase ... Licensed under the MIT license". The same
   # comment notes "QR Code" is a registered trademark of DENSO WAVE -- a
   # trademark notice, not a licence term.
+  # gauntlet's common-password list (its ADR 0007): SHA-1 hashes of the
+  # 10,000 most common passwords, built by gauntlet's own monthly pipeline
+  # from the Have I Been Pwned Pwned Passwords range API, which places no
+  # licence terms on its data (attribution voluntary; the file's header
+  # gives it). The compiled file ships under gauntlet's own Apache-2.0
+  # LICENSE. The .sig and the public key that checks it are gauntlet's own.
+  - pkg:golang/github.com/tomlawesome/gauntlet@v0.4.2 blocklist/embedded/top10k.txt Apache-2.0
+  - pkg:golang/github.com/tomlawesome/gauntlet@v0.4.2 blocklist/keys/pwlist-2026.pub Apache-2.0
