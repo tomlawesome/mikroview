@@ -45,3 +45,29 @@ allow-licenses:
 # supply-chain/licence-policy.yml records its sharp/libvips and font
 # exceptions.
 allow-dependencies-licenses: []
+
+# Reviewed bundled content inside what ships (#1432), read by
+# checkBundledContent() in tools/licenses/licence-policy.mjs. A package's
+# declared licence covers its own code, not everything it carries: images,
+# stylesheets, web pages, fonts and media a shipped npm package carries,
+# files a Go module embeds with //go:embed, vendored Go code with no licence
+# file of its own, and shipped npm source carrying another copyright
+# holder's licence banner all have no licence field to check. Each must sit
+# under one of these entries, recorded only after reading the files, with
+# the evidence in a comment beneath it.
+#
+# Format: "<purl> <path-prefix> <licence or finding>", the PURL an exact
+# pkg:npm/<name>@<version> or pkg:golang/<module>@<version> and the prefix
+# relative to that package's or module's root. Keyed by exact version, the
+# way birdcage's python-bundled-assets list is: a version bump stops an
+# entry matching, so the new version's files are read again rather than
+# inheriting this review. An entry matching no shipped file fails the job
+# as stale -- delete it.
+bundled-assets:
+  - pkg:npm/qrcode@1.5.4 lib/core/qrcode.js MIT
+  # Inlined from Kazuhiko Arase's "QRCode for JavaScript" (d-project.com),
+  # modified by Ryan Day, qrcode's own author. The file's header comment
+  # (lib/core/qrcode.js, lines 15-39) states it for both: "Copyright (c)
+  # 2009 Kazuhiko Arase ... Licensed under the MIT license". The same
+  # comment notes "QR Code" is a registered trademark of DENSO WAVE -- a
+  # trademark notice, not a licence term.

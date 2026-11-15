@@ -1097,8 +1097,16 @@
    * is room -- is pushed clear of whatever it would have covered. A
    * label with no text takes no space, so a lens that badges only some
    * of its edges still keeps its indices aligned.
+   *
+   * `floors` are boxes nothing may be pushed down onto (#1430): a plate
+   * that lands on one is lifted clear instead. Same shape as a plate --
+   * a box hanging from its anchor, y-10 to y-10+h.
    */
-  function placeBadges(items: { line: Line; text: string; dy?: number }[], reserved?: PlacedBadge): PlacedBadge[] {
+  function placeBadges(
+    items: { line: Line; text: string; dy?: number }[],
+    reserved?: PlacedBadge,
+    floors: PlacedBadge[] = [],
+  ): PlacedBadge[] {
     const raw = items.map((it, i) => {
       const p = edgeBadgeAt(it.line, i)
       return { x: p.x, y: p.y + (it.dy ?? 0), w: plateW(it.text), text: it.text }
@@ -1135,18 +1143,33 @@
       })
     }
 
+    const covers = (d: PlacedBadge, b: { x: number; y: number; w: number }) =>
+      Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR &&
+      Math.abs(centreOf(d) - centreOf(b)) < ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR
+    // Solve centreOf(b) for b.y: the anchor sits 10 above its box.
+    const below = (d: PlacedBadge) => centreOf(d) + ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR + 10 - PLATE_H / 2
+    const above = (d: PlacedBadge) => centreOf(d) - ((d.h ?? PLATE_H) + PLATE_H) / 2 - PLATE_CLEAR + 10 - PLATE_H / 2
+
     for (const b of raw.filter((b) => b.text !== '' && !inCorridor(b)).sort((a, b) => a.y - b.y)) {
-      // At most one push per already-settled plate: each pass clears one
-      // conflict, and there are finitely many of them.
-      for (let pass = 0; pass < settled.length + 1; pass++) {
-        const hit = settled.find(
-          (d) =>
-            Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR &&
-            Math.abs(centreOf(d) - centreOf(b)) < ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR,
-        )
+      // At most one move per already-settled plate or floor: each pass
+      // clears one conflict, and there are finitely many of them.
+      //
+      // A plate is pushed down past whatever it covers -- until it
+      // reaches a floor (#1430): a lane's own services row, with the
+      // card itself right under it, so there is nowhere further down
+      // that a label could be read. From there it is lifted clear
+      // instead, and keeps lifting past any plate it then meets.
+      let lifting = false
+      for (let pass = 0; pass < settled.length + floors.length + 1; pass++) {
+        const floor = floors.find((f) => covers(f, b))
+        if (floor) {
+          lifting = true
+          b.y = above(floor)
+          continue
+        }
+        const hit = settled.find((d) => covers(d, b))
         if (!hit) break
-        // Solve centreOf(b) for b.y: the anchor sits 10 above its box.
-        b.y = centreOf(hit) + ((hit.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR + 10 - PLATE_H / 2
+        b.y = lifting ? above(hit) : below(hit)
       }
       settled.push({ x: b.x, y: b.y, w: b.w })
     }
@@ -1234,6 +1257,26 @@
       .map(([p]) => p)
       .join(' ')
   }
+
+  // The services row's own baseline (#723 pulled it to a small gap
+  // above the card's top edge at 490) and its 10.5px mono face's width
+  // per character -- BADGE_CH's 9.5px figure scaled to this size.
+  const SVC_BASELINE = 472
+  const SVC_CH = 6.3
+
+  // Each drawn services row as a floor for placeBadges (#1430): the
+  // lane card sits right under it, so a plate pushed down onto the row
+  // has nowhere readable left below and is lifted clear instead. Under a
+  // filter the row is not drawn, but neither are the plates, so the
+  // floors need no lens of their own.
+  const svcFloors = $derived.by((): PlacedBadge[] =>
+    zones.flatMap((z, i) => {
+      const svc = laneServices(z)
+      // The text box, 9 above its baseline to 3 below, in a plate's own
+      // terms (anchor 10 above the box top).
+      return svc ? [{ x: laneX(i, laneCount), y: SVC_BASELINE - 9 + 10, w: svc.length * SVC_CH, h: 12 }] : []
+    }),
+  )
 
   // Volume speaks through weight: 1 event is a hairline, thousands a
   // firm stroke, never a shout.
@@ -1633,6 +1676,7 @@
         ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
       ],
       worstUnplannedCard,
+      svcFloors,
     ),
   )
 
@@ -5713,7 +5757,11 @@
                 }
               }}
             >
-              <text x="-82" y="52" class="n-sub doors-anchor-t"
+              <!-- y=52 hangs the row just under the card. When the card
+                   also draws its aggregate bar (y=34..50 above, #699),
+                   the row would sit across the bar's lower half and its
+                   flag count (#1430), so it drops beneath the bar instead. -->
+              <text x="-82" y={internetAggregate && !filterOn ? 64 : 52} class="n-sub doors-anchor-t"
                 >Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}</text
               >
             </g>
@@ -6116,7 +6164,7 @@
                  to a small, proximate gap and given a leader tick down to
                  the card's own top edge (y=490), the tie every other
                  label on this map already has via its plate or its line. -->
-            <text x={laneX(i, laneCount)} y="472" text-anchor="middle" class="svc-t">{svc}</text>
+            <text x={laneX(i, laneCount)} y={SVC_BASELINE} text-anchor="middle" class="svc-t">{svc}</text>
             <line class="svc-leader" x1={laneX(i, laneCount)} y1="477" x2={laneX(i, laneCount)} y2="489" />
           {/if}
         {/each}
@@ -7888,6 +7936,21 @@
     fill: none;
     stroke-linecap: round;
     opacity: 0.55;
+  }
+
+  /* The tunnel's ghost line to where its traffic goes (#877): round 30's
+     `.rib-ghost` as drawn, a faint dashed hairline in --ink-3, which is
+     this app's --fg-dim (the same #55628a). Without a rule of its own
+     the path took the SVG defaults -- black fill, no stroke -- and the
+     S-curve filled as a solid black band (#1433). The camera's own
+     `.camera.cam-zones .rib-ghost` opacity of 0 still wins over the
+     0.45 here, being the more specific selector. */
+  .rib-ghost {
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 6;
+    opacity: 0.45;
   }
 
   /* --- the ghost lane (#460, round 55) ----------------------------------- */
@@ -10162,10 +10225,20 @@
      it is about. Round 53's own device for that is the mockup's
      `.flat text`: the glyphs are painted over a stroke of the page
      colour, so whatever runs under them passes behind rather than
-     through. Same numbers as the mockup. */
+     through. Same numbers as the mockup.
+
+     Two more take it for the opposite reason (#1430): a lane's port
+     list above its card and the internet card's doors row are crossed
+     by edge curves that are not about them -- the lines are already
+     painted beneath (#723), and the curves run wherever the lanes put
+     them. Neither is a label *of* a line, so #699's plate (.edge-plate
+     above) is not theirs; the halo lets a passing line pass visibly
+     behind the text instead of through it. */
   .trace-note,
   .door-t,
-  .note-t {
+  .note-t,
+  .svc-t,
+  .doors-anchor-t {
     paint-order: stroke;
     stroke: var(--bg);
     stroke-width: 3.4px;

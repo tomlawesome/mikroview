@@ -51,7 +51,7 @@ func newTestRegistryOnStore(t *testing.T) (*Engine, *store.Store, *DefinitionsSt
 	}
 	st := store.New(4096, time.Hour)
 	eng := New(st)
-	ml, err := matchlog.Open(t.TempDir()+"/matchlog.jsonl", 1000)
+	ml, err := matchlog.Open(t.TempDir()+"/matchlog.jsonl", 1000, matchLogTestKey(t))
 	if err != nil {
 		t.Fatalf("matchlog.Open: %v", err)
 	}

@@ -53,13 +53,17 @@ a token's raw value is only ever returned once and there is no
 supported way to recover an earlier one.
 """
 import argparse
+import base64
 import collections
 import concurrent.futures
+import hashlib
+import hmac
 import os
 import random
 import socket
 import ssl
 import stat
+import struct
 import sys
 import time
 
@@ -139,14 +143,14 @@ HOSTS = [
     ("office-hex", "wifi", 66, "aa:bb:cc:02:03:99", None, 1200),
 ]
 
-# Real, geolocatable public addresses (so the country column has data)
-# plus a documentation-range WAN, per the brief: real ones where it
-# matters for country, documentation ranges everywhere else.
+# Five well-known public resolvers, which geolocate (so the country
+# column has some data), and documentation-range (RFC 5737) addresses for
+# every other outside party, the WAN included.
 PUBLIC = ["203.0.113.1", "192.0.2.8", "192.0.2.9", "198.51.100.222", "198.51.100.1",
-          "198.51.100.10", "192.0.2.1", "198.51.100.33", "203.0.113.1",
-          "192.0.2.1", "198.51.100.1", "198.51.100.153", "198.51.100.70",
-          "198.51.100.5", "203.0.113.14", "198.51.100.140"]
-SCANNER_RECURRING = "203.0.113.233"   # fires repeatedly, gaps between -- "intermittent"
+          "198.51.100.11", "198.51.100.1", "198.51.100.33", "198.51.100.2",
+          "198.51.100.3", "198.51.100.4", "198.51.100.153", "198.51.100.70",
+          "198.51.100.5", "198.51.100.14", "198.51.100.140"]
+SCANNER_RECURRING = "198.51.100.233"   # fires repeatedly, gaps between -- "intermittent"
 SCANNER_ONE_OFF = "198.51.100.100"     # fires once, never again -- "stopped"
 
 # Filter rules (kind=filter-rule). `fires` marks whether the feed below
@@ -1311,6 +1315,42 @@ def cmd_feed(args):
 # API-side seeding.
 # ---------------------------------------------------------------------------
 
+def totp_code(secret_b32, counter):
+    """RFC 6238 as internal/auth/totp.go computes it: HMAC-SHA1 of the
+    big-endian 30-second counter, dynamic truncation, six digits."""
+    secret = base64.b32decode(secret_b32.upper() + "=" * (-len(secret_b32) % 8))
+    mac = hmac.new(secret, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = mac[-1] & 0x0F
+    return f"{(struct.unpack('>I', mac[offset:offset + 4])[0] & 0x7FFFFFFF) % 1000000:06d}"
+
+
+def fresh_totp_code():
+    """A code for a time step nobody has spent yet, waiting for the next
+    step if need be. The server refuses a spent step as a replay and
+    counts the refusal against the login limiter, so the last spent step
+    is shared through $MV_DIR/totp-last-counter -- the same file
+    live-env.sh seeds and freshTotpCode in
+    frontend/scripts/live-browser.mjs uses."""
+    secret = os.environ.get("MV_TOTP_SECRET")
+    if not secret:
+        sys.exit('seed-demo: MV_TOTP_SECRET unset -- run: eval "$(scripts/live-env.sh up)"')
+    counter_file = os.path.join(os.environ["MV_DIR"], "totp-last-counter") if os.environ.get("MV_DIR") else None
+    while True:
+        counter = int(time.time() // 30)
+        try:
+            with open(counter_file) as f:
+                spent = int(f.read().strip())
+        except (TypeError, OSError, ValueError):
+            spent = -1
+        if counter > spent:
+            if counter_file:
+                with open(counter_file, "w") as f:
+                    f.write(str(counter))
+            return totp_code(secret, counter)
+        # +1s so the server's clock has certainly crossed the boundary too.
+        time.sleep(30 - time.time() % 30 + 1)
+
+
 class API:
     def __init__(self, base_url, user, password):
         self.base = base_url.rstrip("/")
@@ -1320,6 +1360,14 @@ class API:
                          json={"username": user, "password": password},
                          headers={CSRF_HEADER: CSRF_VALUE})
         r.raise_for_status()
+        # Since #1253 every local account holds a factor, so the password
+        # alone answers {"secondFactor": [...]} rather than a session (#1429).
+        if r.headers.get("Content-Type", "").startswith("application/json") \
+                and "totp" in (r.json() or {}).get("secondFactor", []):
+            r = self.s.post(f"{self.base}/api/auth/login/factor",
+                             json={"code": fresh_totp_code()},
+                             headers={CSRF_HEADER: CSRF_VALUE})
+            r.raise_for_status()
 
     def get(self, path, **kw):
         r = self.s.get(f"{self.base}{path}", **kw)

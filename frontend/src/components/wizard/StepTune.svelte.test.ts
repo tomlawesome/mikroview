@@ -48,16 +48,16 @@ function status(decoded: number): SetupStatus {
       hosts: [],
       syslogPort: '6514',
       syslogEnabled: true,
-      address: '192.168.13.15:8080',
+      address: '192.0.2.15:8080',
       addressCandidates: [],
       backupTransport: 'sftp',
     },
-    sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+    sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
     devices: [
       {
         device: 'rb5009',
         configured: true,
-        sourceIp: '192.168.13.1',
+        sourceIp: '192.0.2.1',
         events: 1204,
         decodedActions: decoded,
         pushedKinds: { 'filter-rule': '2026-09-27T14:03:31Z' },
@@ -73,13 +73,13 @@ function device(): Device {
   return {
     id: 'rb5009',
     name: 'rb5009',
-    sourceIp: '192.168.13.1',
+    sourceIp: '192.0.2.1',
     configured: true,
     firstSeen: '2026-09-27T14:03:04Z',
     lastSeen: '2026-09-27T14:05:00Z',
     eventCount: 1204,
     status: 'live',
-    acceptedIp: '192.168.13.1',
+    acceptedIp: '192.0.2.1',
     enrolledAt: '2026-09-27T14:03:04Z',
   }
 }
@@ -119,7 +119,7 @@ function landOnTune() {
   wizardState.devices = [device()]
   wizardState.status = status(12)
   wizardRun.name = 'rb5009'
-  wizardRun.addr = '192.168.13.1'
+  wizardRun.addr = '192.0.2.1'
   wizardRun.push = true
   wizardRun.backup = false
   wizardRun.copied = true

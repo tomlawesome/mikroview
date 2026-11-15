@@ -35,4 +35,9 @@ describe('About carries the IPinfo and MaxMind credits (#1352)', () => {
     render(AboutOverlay, { props: { open: true } })
     expect(document.body.textContent).not.toMatch(/DB-IP|db-ip/)
   })
+
+  it("the GPL notice names the project's GitHub handle (#1456)", () => {
+    render(AboutOverlay, { props: { open: true } })
+    expect(document.body.textContent).toContain('Copyright © 2026 tomlawesome')
+  })
 })

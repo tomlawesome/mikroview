@@ -83,7 +83,7 @@
       id="f-addr"
       type="text"
       bind:value={wizardRun.addr}
-      placeholder="198.51.100.1"
+      placeholder="192.0.2.1"
       autocomplete="off"
       class:bad={!!problem}
       aria-invalid={problem ? 'true' : 'false'}

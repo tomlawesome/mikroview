@@ -270,3 +270,30 @@ in, through gauntlet's `persist.Encrypt`. Every other store on Postgres is
 still unaffected, for rule 4's reasons. The auth stores are the exception
 because they hold secrets a database dump would otherwise carry, and
 gauntlet seals its stores on every backend (its ADR-0005).
+
+## Addendum, 2026-11-14: the match log is under rule 2 (#1470)
+
+The watchlist match log (`watchlist.matchLogPath`) was the one store a
+keyed install still wrote in the clear: JSON lines, whole matched events
+included. It is now under rule 2 like everything else. It cannot be one
+sealed document rewritten per match, so it uses the day files' framing,
+shared as `retention.FrameLog`: header `MVMLG`, version, per-file salt,
+then one AES-256-GCM frame per line, key derived under
+`mikroview/match-log/v1/`, additional data the store name `match_log`
+and the frame's sequence number. The store name, not the path, so the
+file moves with its data directory (#1450). Rule 3 holds: a plaintext
+log is refused at start-up, never read or sealed in place, and a frame of
+whole length that does not open is refused, never skipped.
+
+The same limit as the day files, said plainly: frames cut off the end
+are indistinguishable from a crash tail and are dropped as one (and a
+zero-filled tail left by a power loss mid-append is cut back as one; a
+header torn by a crash before any frame is written is started again), and the
+whole file replaced by an older valid copy is not detected. An
+append-only file cannot bind "nothing comes after me" without a commit
+record kept elsewhere; the match log is bounded evidence, not account
+state.
+
+`-backup` carries the lines as plain JSON lines (the #853 amendment's
+"the envelope stays plain, readable JSON") and `-restore` seals them under
+the restoring deployment's key (#1452).

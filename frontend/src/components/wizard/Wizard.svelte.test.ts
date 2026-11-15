@@ -64,7 +64,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
       hosts: [],
       syslogPort: '6514',
       syslogEnabled: true,
-      address: '192.168.13.15:8080',
+      address: '192.0.2.15:8080',
       addressCandidates: [],
       backupTransport: 'sftp',
     },
@@ -81,7 +81,7 @@ function device(over: Partial<Device> = {}): Device {
   return {
     id: 'rb5009',
     name: 'rb5009',
-    sourceIp: '192.168.13.1',
+    sourceIp: '192.0.2.1',
     configured: true,
     firstSeen: '2026-09-27T14:03:04Z',
     lastSeen: '2026-09-27T14:05:00Z',
@@ -109,7 +109,7 @@ function rows(): HTMLButtonElement[] {
 // Answer the router form and take Next, the way an operator would.
 async function answerRouter() {
   await fireEvent.input(screen.getByLabelText(/^Name/), { target: { value: 'rb5009' } })
-  await fireEvent.input(screen.getByLabelText(/^Its address/), { target: { value: '192.168.13.1' } })
+  await fireEvent.input(screen.getByLabelText(/^Its address/), { target: { value: '192.0.2.1' } })
   const [pushYes] = screen.getAllByRole('radio', { name: 'Yes' })
   const [, backupNo] = screen.getAllByRole('radio', { name: 'No' })
   await fireEvent.click(pushYes)
@@ -182,7 +182,7 @@ describe('Wizard: the full-screen shell', () => {
     await answerRouter()
     expect(next.disabled).toBe(false)
     expect(row('The router').querySelector('.step-receipt')?.textContent).toBe(
-      'rb5009 · 192.168.13.1 · push yes · backup not now',
+      'rb5009 · 192.0.2.1 · push yes · backup not now',
     )
     expect(row('The router').classList.contains('chosen')).toBe(true)
     await fireEvent.click(next)
@@ -231,17 +231,17 @@ describe('Wizard: the full-screen shell', () => {
     expect(document.querySelector('.bar .chips .att.dec')?.textContent).toBe('rb5009')
 
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z' }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z' }],
     })
     await tick()
     expect(document.querySelector('.bar .chips .att.cert')?.textContent).toMatch(/^cert · /)
     expect(document.querySelector('.ovstrip .ovtick.on')).toBeNull()
 
     wizardState.ledgerDevice = 'rb5009'
-    wizardState.devices = [device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })]
+    wizardState.devices = [device({ acceptedIp: '192.0.2.1', enrolledAt: '2026-09-27T14:03:04Z' })]
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
-      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.168.13.1', events: 69, decodedActions: 12 }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.0.2.1', events: 69, decodedActions: 12 }],
     })
     await tick()
     await waitFor(() => expect(document.querySelector('.bar .chips .att.logs')?.textContent).toMatch(/^logs · /))
@@ -249,7 +249,7 @@ describe('Wizard: the full-screen shell', () => {
     expect(screen.getByText('69 lines')).toBeTruthy()
     expect(screen.getByText(/^live · \d+\/s$/)).toBeTruthy()
     expect(row('The router').classList.contains('done')).toBe(true)
-    expect(row('The router').querySelector('.step-receipt')?.textContent).toMatch(/^rb5009 · enrolled 192\.168\.13\.1 · /)
+    expect(row('The router').querySelector('.step-receipt')?.textContent).toMatch(/^rb5009 · enrolled 192\.0\.2\.1 · /)
   })
 
   // #1397: '+ add a router' is a walk for a router not yet named, so
@@ -304,10 +304,10 @@ describe('Wizard: the full-screen shell', () => {
   // the token for it, not on the ledger its evidence would otherwise
   // place the walk at.
   it('lands Re-enrol… on Mint the token even with the router already sending', async () => {
-    wizardState.devices = [device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })]
+    wizardState.devices = [device({ acceptedIp: '192.0.2.1', enrolledAt: '2026-09-27T14:03:04Z' })]
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
-      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.168.13.1', events: 69, decodedActions: 12 }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.0.2.1', events: 69, decodedActions: 12 }],
     })
     wizardState.openReEnrol('rb5009')
     render(Wizard)
@@ -321,7 +321,7 @@ describe('Wizard: the full-screen shell', () => {
   it('places Run setup… on a fresh read of the evidence, not the one held since sign-in', async () => {
     wizardState.open = false
     vi.mocked(fetchSetupStatus).mockResolvedValue(
-      status({ sources: [{ source: '192.168.13.1', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }] }),
+      status({ sources: [{ source: '192.0.2.1', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }] }),
     )
     wizardState.launch()
     render(Wizard)
@@ -337,7 +337,7 @@ describe('Wizard: the full-screen shell', () => {
     render(Wizard)
     await tick()
     await fireEvent.input(screen.getByLabelText(/^Name/), { target: { value: 'rb5009' } })
-    land(status({ sources: [{ source: '192.168.13.1', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }] }))
+    land(status({ sources: [{ source: '192.0.2.1', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }] }))
     await waitFor(() => expect(wizardRun.evidence.enrol).toBe('2026-09-27T14:03:04Z'))
     await tick()
     expect(wizardRun.stage).toBe('ask')
@@ -351,12 +351,12 @@ describe('Wizard: the full-screen shell', () => {
   // sensibly instead, and never touches a walk that names itself.
   it('names the run for the sending address when fleet-wide evidence places it with no router record', async () => {
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
     })
     render(Wizard)
     await tick()
-    expect(wizardRun.name).toBe('192.168.13.1')
-    expect(screen.getByText('192.168.13.1 is sending.')).toBeTruthy()
+    expect(wizardRun.name).toBe('192.0.2.1')
+    expect(screen.getByText('192.0.2.1 is sending.')).toBeTruthy()
   })
 
   it('is not in the tree while closed', async () => {
@@ -411,8 +411,8 @@ describe('Wizard: the full-screen shell', () => {
 describe('Wizard: the first-run tail', () => {
   const sending = () =>
     status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
-      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.168.13.1', events: 69, decodedActions: 0 }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.0.2.1', events: 69, decodedActions: 0 }],
     })
 
   function builder(held: boolean): BlocklistBuilder {
@@ -446,7 +446,7 @@ describe('Wizard: the first-run tail', () => {
 
   beforeEach(() => {
     vi.mocked(fetchSetupStatus).mockResolvedValue(sending())
-    vi.mocked(fetchDevices).mockResolvedValue([device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })])
+    vi.mocked(fetchDevices).mockResolvedValue([device({ acceptedIp: '192.0.2.1', enrolledAt: '2026-09-27T14:03:04Z' })])
     vi.mocked(fetchRefusedSenders).mockResolvedValue([])
     vi.mocked(fetchRouterBackups).mockResolvedValue({ enabled: true, keyUnreadable: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, lock: 'open' } as never)
     vi.mocked(fetchBlocklistBuilder).mockResolvedValue(builder(false))
@@ -457,7 +457,7 @@ describe('Wizard: the first-run tail', () => {
     wizardRun.reset()
     blocklistState.reset()
     wizardState.status = sending()
-    wizardState.devices = [device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })]
+    wizardState.devices = [device({ acceptedIp: '192.0.2.1', enrolledAt: '2026-09-27T14:03:04Z' })]
     wizardState.ledgerDevice = 'rb5009'
     wizardState.open = true
   })

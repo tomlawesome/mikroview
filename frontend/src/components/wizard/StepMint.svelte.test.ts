@@ -49,7 +49,7 @@ function status(): SetupStatus {
       hosts: [],
       syslogPort: '6514',
       syslogEnabled: true,
-      address: '192.168.13.15:8080',
+      address: '192.0.2.15:8080',
       addressCandidates: [],
       backupTransport: 'sftp',
     },
@@ -78,7 +78,7 @@ function device(over: Partial<Device> = {}): Device {
 // The router step's four answers, as the run holds them on arrival here.
 function answered() {
   wizardRun.name = 'rb5009'
-  wizardRun.addr = '192.168.13.1'
+  wizardRun.addr = '192.0.2.1'
   wizardRun.push = true
   wizardRun.backup = false
   wizardRun.q = 4
@@ -120,7 +120,7 @@ describe('StepMint: your password, to mint the token', () => {
     render(StepMint)
     await tick()
     expect(screen.getByText('Your password, to mint rb5009’s token.')).toBeTruthy()
-    expect(screen.getByText(/Minting opens the log port for 192\.168\.13\.1, for 15 minutes/)).toBeTruthy()
+    expect(screen.getByText(/Minting opens the log port for 192\.0\.2\.1, for 15 minutes/)).toBeTruthy()
     expect(screen.getByText(/The token goes at the end of the block\./)).toBeTruthy()
     expect(password().type).toBe('password')
     expect(document.activeElement).toBe(password())
@@ -139,7 +139,7 @@ describe('StepMint: your password, to mint the token', () => {
     expect(createDevice).toHaveBeenCalledWith('rb5009')
     expect(wizardState.ledgerDevice).toBe('rb5009')
     expect(mintEnrolment).toHaveBeenCalledTimes(1)
-    expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.168.13.1')
+    expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.0.2.1')
     // Spent: neither copy of the password outlives the call.
     expect(wizardRun.pass).toBe('')
     expect(wizardState.enrolPassword).toBe('')
@@ -162,7 +162,7 @@ describe('StepMint: your password, to mint the token', () => {
     await fireEvent.keyDown(password(), { key: 'Enter' })
     await waitFor(() => expect(wizardRun.stage).toBe('paste'))
     expect(createDevice).not.toHaveBeenCalled()
-    expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.168.13.1')
+    expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.0.2.1')
   })
 
   it('reads a refusal back under the field and asks again', async () => {

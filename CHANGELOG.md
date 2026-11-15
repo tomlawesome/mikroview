@@ -18,6 +18,19 @@ rewritten.
 
 ### Breaking changes
 
+- **An upgraded keyed install with an existing match log will not start
+  until the old file is moved** (#1470). The watchlist match log is now
+  sealed under `history.keyFile` like every other store; before, a keyed
+  install still wrote it to disk in the clear, whole matched events
+  included. MikroView does not seal a plaintext file in place, so a
+  `matchlog.jsonl` left by an earlier release is refused at start-up with
+  the plaintext-document message. Move it aside and start again; the log
+  starts empty:
+  `mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`.
+  `-backup` and `-restore` now need the key for the match log, and stop
+  with nothing changed without it. Nothing else in the data directory is
+  changed by the refused start.
+
 - **Admins need a passkey on an https domain** (#1202, owner ruling 1).
   With `auth.adminPasskey` unset and `publicUrl` an https domain name,
   an admin who has no passkey is held at a passkey enrolment screen on
@@ -221,6 +234,28 @@ rewritten.
 
 ### Fixed
 
+- **`-restore` no longer refuses a v0.6 backup over a torn match-log
+  line** that v0.6 skipped; the line is left out and the restore says so.
+
+- **`-backup` works on an install with a match log** (#1452). It read the
+  match log as a sealed document, which it never was, and stopped. It now
+  opens the sealed log with the key and carries its lines as plain JSON
+  lines, as v0.6 did; `-restore` seals them again under the restoring
+  install's key, so a v0.6 backup still restores.
+
+- **The data directory can move to a new path** (#1450). Each sealed
+  store file was bound to its own absolute path, so a data directory
+  copied or moved to a different path -- a bare-metal install, or a
+  config naming a new directory -- was refused at start-up as altered.
+  From v0.7.0 every install has a key, so this would have hit everyone.
+  Files are now bound to their store's name instead: a file put in
+  another store's place is still refused, naming the store, and a file
+  not made with your key still never opens. A file sealed by an earlier
+  release opens once at the path it was sealed at and is re-sealed the
+  new way, which the log notes once per file; after that it can move.
+  The re-seal happens once the start has opened every store; a start
+  refused before then (a plaintext match log, say) leaves every file as
+  it was, so the release it came from still opens it.
 - **An open tab no longer keeps you signed in** (#1448). The live
   view's connection checked the session every 30 seconds, and each check
   counted as activity, so a tab left open stayed signed in until the
@@ -688,7 +723,7 @@ rewritten.
   onto the old one.
 
 - **The blocked certificate step now shows the exact `tls.hosts` line to
-  paste** (#1365). It used to say "add 192.168.13.15 to tls.hosts in
+  paste** (#1365). It used to say "add 192.0.2.15 to tls.hosts in
   config.yaml and restart" without ever showing the syntax. The step now
   prints a copyable `hosts: [...]` line carrying every host already
   configured plus the missing one, so pasting it can only add coverage —

@@ -43,25 +43,25 @@ func TestExplainHandshakeSaysWhoRejectedWhom(t *testing.T) {
 		cause     string
 	}{
 		{"remote error: tls: unknown certificate",
-			[]string{"1.2.3.4 refused our certificate", "re-import /ca.crt"}, "refused-cert"},
+			[]string{"192.0.2.4 refused our certificate", "re-import /ca.crt"}, "refused-cert"},
 		{"remote error: tls: bad certificate",
-			[]string{"1.2.3.4 refused our certificate"}, "refused-cert"},
+			[]string{"192.0.2.4 refused our certificate"}, "refused-cert"},
 		{"tls: first record does not look like a TLS handshake",
 			[]string{"spoke plain HTTP", "use https://"}, "plaintext"},
 		{"tls: client offered only unsupported versions [301]",
-			[]string{"we turned 1.2.3.4 away", "older than 1.2"}, "old-tls"},
+			[]string{"we turned 192.0.2.4 away", "older than 1.2"}, "old-tls"},
 		{"local error: tls: bad record MAC",
 			[]string{"hung up during the handshake", "did not trust our certificate"}, "hung-up"},
-		{"read tcp 1.2.3.4:1: read: connection reset by peer",
+		{"read tcp 192.0.2.4:1: read: connection reset by peer",
 			[]string{"went away before finishing"}, "went-away"},
 		// #1365: "add it to tls.hosts" never said the syntax. The line now
 		// gives the exact hosts: entry to add, naming the peer, and says
 		// to keep whatever is already there.
-		{"x509: certificate is valid for 192.0.2.10, not 1.2.3.4",
-			[]string{"a name our certificate does not cover", `hosts: ["1.2.3.4"]`, "keeping any hosts already there"}, "wrong-name"},
+		{"x509: certificate is valid for 192.0.2.10, not 192.0.2.4",
+			[]string{"a name our certificate does not cover", `hosts: ["192.0.2.4"]`, "keeping any hosts already there"}, "wrong-name"},
 	}
 	for _, c := range cases {
-		got, cause := explainHandshake("1.2.3.4", c.raw)
+		got, cause := explainHandshake("192.0.2.4", c.raw)
 		for _, want := range c.wantParts {
 			if !strings.Contains(got, want) {
 				t.Errorf("explainHandshake(%q) = %q, missing %q", c.raw, got, want)
@@ -77,8 +77,8 @@ func TestExplainHandshakeSaysWhoRejectedWhom(t *testing.T) {
 // the caller still logs the raw text, so the sentence above it has to
 // claim only what is certain.
 func TestExplainHandshakeDoesNotGuess(t *testing.T) {
-	got, cause := explainHandshake("1.2.3.4", "tls: some brand new failure mode")
-	if got != "TLS handshake with 1.2.3.4 failed" {
+	got, cause := explainHandshake("192.0.2.4", "tls: some brand new failure mode")
+	if got != "TLS handshake with 192.0.2.4 failed" {
 		t.Errorf("explanation = %q, want a claim-nothing fallback", got)
 	}
 	if cause != "other" {

@@ -3,18 +3,14 @@
 package retention
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -43,8 +39,6 @@ import (
 const (
 	magic         = "MVEVT"
 	formatVersion = 1
-	saltBytes     = 16
-	headerBytes   = len(magic) + 1 + saltBytes
 	// maxFrameBytes bounds what the reader will allocate for a single
 	// frame. A corrupt or hostile length prefix otherwise asks for an
 	// arbitrary allocation on the strength of four bytes off disk. The
@@ -89,95 +83,43 @@ func dayFromFileName(name string) (string, bool) {
 	return day, true
 }
 
-// dayFile is one open day's file, held by the writer between flushes.
-type dayFile struct {
-	day  string
-	path string
-	f    *os.File
-	aead cipher.AEAD
-	// frames counts frames already written, and is the sequence number
-	// mixed into the next frame's additional data. It is recovered by
-	// counting existing frames when an existing file is reopened, so a
-	// restart mid-day continues the sequence rather than repeating
-	// numbers a reader would then accept out of order.
-	frames uint64
+// dayFormat is the framing of one day's file. The bytes are the ones
+// this file wrote before the framing moved to framelog.go (#1470): the
+// additional data is magic, version, day, then the sequence number.
+func dayFormat(day string) FrameFormat {
+	prefix := make([]byte, 0, len(magic)+1+len(day))
+	prefix = append(prefix, magic...)
+	prefix = append(prefix, formatVersion)
+	prefix = append(prefix, day...)
+	return FrameFormat{
+		Magic:         magic,
+		Version:       formatVersion,
+		KeyInfo:       keyInfoPrefix + day,
+		AADPrefix:     prefix,
+		MaxFrameBytes: maxFrameBytes,
+		Description:   "retained event file",
+	}
 }
 
-// openDayFile opens (or creates) the file for day under dir.
-//
-// Reopening an existing file has to recover two things before it can
-// append: the salt, because the file's key is derived from it, and the
-// frame count, because that is the next frame's sequence number. Both
-// come from walking the frames already there, which also has the useful
-// side effect of finding a truncated tail from a previous crash -- the
-// file is truncated back to the last whole frame before anything new is
-// appended, so a partial frame never sits in the middle of a file.
+// dayFile is one open day's file, held by the writer between flushes.
+type dayFile struct {
+	day string
+	log *FrameLog
+}
+
+// openDayFile opens (or creates) the file for day under dir. Recovering
+// the salt and frame count of an existing file, and cutting back a torn
+// tail, is OpenFrameLog's.
 func openDayFile(dir, day string, key *Key) (*dayFile, error) {
-	path := filepath.Join(dir, fileNameFor(day))
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("retention: opening %s: %w", path, err)
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			f.Close()
-		}
-	}()
-
-	info, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("retention: stat %s: %w", path, err)
-	}
-
-	var salt []byte
-	var frames uint64
-	switch {
-	case info.Size() == 0:
-		salt = make([]byte, saltBytes)
-		if _, err := rand.Read(salt); err != nil {
-			return nil, fmt.Errorf("retention: generating salt: %w", err)
-		}
-		header := make([]byte, 0, headerBytes)
-		header = append(header, magic...)
-		header = append(header, formatVersion)
-		header = append(header, salt...)
-		if _, err := f.Write(header); err != nil {
-			return nil, fmt.Errorf("retention: writing header to %s: %w", path, err)
-		}
-	default:
-		var end int64
-		salt, frames, end, err = scanFrames(f)
-		if err != nil {
-			return nil, err
-		}
-		// Drop a partial tail left by a crash mid-write, so the append
-		// below lands on a frame boundary.
-		if end != info.Size() {
-			if err := f.Truncate(end); err != nil {
-				return nil, fmt.Errorf("retention: truncating partial frame in %s: %w", path, err)
-			}
-		}
-		if _, err := f.Seek(end, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("retention: seeking %s: %w", path, err)
-		}
-	}
-
-	aead, err := aeadFor(key, salt, day)
+	l, err := OpenFrameLog(filepath.Join(dir, fileNameFor(day)), key, dayFormat(day))
 	if err != nil {
 		return nil, err
 	}
-	ok = true
-	return &dayFile{day: day, path: path, f: f, aead: aead, frames: frames}, nil
-}
-
-// aeadFor builds the AES-256-GCM cipher for one file.
-func aeadFor(key *Key, salt []byte, day string) (cipher.AEAD, error) {
-	return aeadFromInfo(key, salt, keyInfoPrefix+day)
+	return &dayFile{day: day, log: l}, nil
 }
 
 // aeadFromInfo builds the AES-256-GCM cipher for a key derived under one
-// info string. Shared by aeadFor (this package's per-day event files) and
+// info string. Shared by FrameLog (framelog.go's framed files) and
 // Seal/Open (seal.go's whole-document envelope for other packages holding
 // the same master key), so there is exactly one place that turns derived
 // key material into a cipher.AEAD.
@@ -197,24 +139,14 @@ func aeadFromInfo(key *Key, salt []byte, info string) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// frameAAD binds a frame to its file and its position in it.
+// appendFrame compresses one batch of events and appends it as a frame.
 //
-// Without this a frame is a self-contained sealed blob: valid wherever
-// it is put. With it, moving a frame to another day's file or reordering
-// two frames within one file makes them fail to open, so the window a
-// replay reports cannot be quietly rearranged by someone with write
-// access to the directory but not the key. They can still delete, and
-// deletion is visible in the window the replay reports rather than
-// invisible in its contents.
-func frameAAD(day string, seq uint64) []byte {
-	aad := make([]byte, 0, len(magic)+1+len(day)+8)
-	aad = append(aad, magic...)
-	aad = append(aad, formatVersion)
-	aad = append(aad, day...)
-	return binary.BigEndian.AppendUint64(aad, seq)
-}
-
-// appendFrame compresses, seals and appends one batch of events.
+// The frame's additional data binds it to its day and position, so
+// moving a frame to another day's file or reordering two frames within
+// one makes them fail to open: the window a replay reports cannot be
+// quietly rearranged by someone with write access to the directory but
+// not the key. They can still delete, and deletion is visible in the
+// window the replay reports rather than invisible in its contents.
 func (d *dayFile) appendFrame(batch []record) error {
 	if len(batch) == 0 {
 		return nil
@@ -230,85 +162,14 @@ func (d *dayFile) appendFrame(batch []record) error {
 	if err := gz.Close(); err != nil {
 		return fmt.Errorf("retention: compressing batch: %w", err)
 	}
-
-	nonce := make([]byte, d.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return fmt.Errorf("retention: generating nonce: %w", err)
-	}
-	sealed := d.aead.Seal(nil, nonce, plain.Bytes(), frameAAD(d.day, d.frames))
-
-	frame := make([]byte, 0, 4+len(nonce)+len(sealed))
-	frame = binary.BigEndian.AppendUint32(frame, uint32(len(nonce)+len(sealed)))
-	frame = append(frame, nonce...)
-	frame = append(frame, sealed...)
-	if _, err := d.f.Write(frame); err != nil {
-		return fmt.Errorf("retention: appending to %s: %w", d.path, err)
-	}
-	// Sync so that what the reader can see matches what the writer has
-	// been told it wrote. A retained corpus that loses its last minutes
-	// to the page cache on a hard reset would still report the window it
-	// believed it held, which is the one thing a receipt must never do.
-	if err := d.f.Sync(); err != nil {
-		return fmt.Errorf("retention: syncing %s: %w", d.path, err)
-	}
-	d.frames++
-	return nil
+	return d.log.Append(plain.Bytes())
 }
 
 func (d *dayFile) Close() error {
-	if d == nil || d.f == nil {
+	if d == nil {
 		return nil
 	}
-	err := d.f.Close()
-	d.f = nil
-	return err
-}
-
-// scanFrames walks a file's frames without decrypting them, reporting
-// its salt, how many whole frames it holds, and the offset the last
-// whole frame ends at.
-//
-// It reads lengths only, so reopening a large file costs seeks rather
-// than decryption. A short or impossible length prefix ends the walk
-// and the offset before it is treated as the end -- that is the crash
-// tail case, not corruption worth refusing over.
-func scanFrames(f *os.File) (salt []byte, frames uint64, end int64, err error) {
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, 0, fmt.Errorf("retention: seeking to header: %w", err)
-	}
-	header := make([]byte, headerBytes)
-	if _, err := io.ReadFull(f, header); err != nil {
-		return nil, 0, 0, fmt.Errorf("retention: reading header: %w", err)
-	}
-	if string(header[:len(magic)]) != magic {
-		return nil, 0, 0, errors.New("retention: not a retained event file")
-	}
-	if header[len(magic)] != formatVersion {
-		return nil, 0, 0, fmt.Errorf("retention: unsupported file format version %d", header[len(magic)])
-	}
-	salt = header[len(magic)+1:]
-
-	off := int64(headerBytes)
-	size, err := f.Seek(0, io.SeekEnd)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("retention: sizing file: %w", err)
-	}
-	var lenBuf [4]byte
-	for {
-		if off+4 > size {
-			break
-		}
-		if _, err := f.ReadAt(lenBuf[:], off); err != nil {
-			break
-		}
-		n := int64(binary.BigEndian.Uint32(lenBuf[:]))
-		if n <= 0 || n > maxFrameBytes || off+4+n > size {
-			break
-		}
-		off += 4 + n
-		frames++
-	}
-	return salt, frames, off, nil
+	return d.log.Close()
 }
 
 // replayFile visits every event in one day's file, oldest first, and
@@ -320,50 +181,14 @@ func scanFrames(f *os.File) (salt []byte, frames uint64, end int64, err error) {
 // away a day of evidence to punish a frame. A frame that fails to open
 // stops the walk for the same reason, but is reported, because unlike a
 // short tail it means either the wrong key or a file somebody has
-// altered, and neither should pass silently.
+// altered, and neither should pass silently. See ReadFrames.
 func replayFile(path, day string, key *Key, visit func(store.Event)) (n int, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, fmt.Errorf("retention: opening %s: %w", path, err)
-	}
-	defer f.Close()
-
-	salt, _, _, err := scanFrames(f)
-	if err != nil {
-		return 0, err
-	}
-	aead, err := aeadFor(key, salt, day)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := f.Seek(int64(headerBytes), io.SeekStart); err != nil {
-		return 0, fmt.Errorf("retention: seeking %s: %w", path, err)
-	}
-
-	r := bufio.NewReader(f)
-	var lenBuf [4]byte
-	for seq := uint64(0); ; seq++ {
-		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
-			return n, nil // clean end, or a tail too short to be a frame
-		}
-		size := int(binary.BigEndian.Uint32(lenBuf[:]))
-		if size <= aead.NonceSize() || size > maxFrameBytes {
-			return n, nil
-		}
-		frame := make([]byte, size)
-		if _, err := io.ReadFull(r, frame); err != nil {
-			return n, nil // partial frame: the crash tail case
-		}
-		plain, err := aead.Open(nil, frame[:aead.NonceSize()], frame[aead.NonceSize():], frameAAD(day, seq))
-		if err != nil {
-			return n, fmt.Errorf("retention: %s frame %d did not open -- wrong key, or the file has been altered", filepath.Base(path), seq)
-		}
+	err = ReadFrames(path, key, dayFormat(day), func(_ uint64, plain []byte) error {
 		count, err := visitBatch(plain, visit)
 		n += count
-		if err != nil {
-			return n, err
-		}
-	}
+		return err
+	})
+	return n, err
 }
 
 // visitBatch decompresses one frame's plaintext and hands each event to

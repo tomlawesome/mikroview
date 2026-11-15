@@ -97,7 +97,7 @@ func newRichInstall(t *testing.T) *richInstall {
 		if json.Valid(ri.sealed[name]) {
 			t.Fatalf("test setup: %s is already plain JSON after use", name)
 		}
-		snap, err := persist.NewEncryptedFileBackend(path, key).Load(context.Background())
+		snap, err := persist.NewEncryptedFileBackend(path, storeNameFor(name), key).Load(context.Background())
 		if err != nil || !json.Valid(snap.Payload) {
 			t.Fatalf("test setup: unsealing %s: %v", name, err)
 		}
@@ -370,7 +370,7 @@ func newSealedInstallWith(t *testing.T, edit func(admin map[string]any)) *legacy
 	key, err := retention.LoadKey(l.keyPath)
 	must(t, err)
 	for name, body := range map[string][]byte{"users.json": l.accounts, "tokens.json": l.tokenDoc} {
-		_, err := persist.NewEncryptedFileBackend(filepath.Join(data, name), key).Save(context.Background(), body, 0)
+		_, err := persist.NewEncryptedFileBackend(filepath.Join(data, name), storeNameFor(name), key).Save(context.Background(), body, 0)
 		must(t, err)
 	}
 	return l

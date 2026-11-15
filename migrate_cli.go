@@ -16,6 +16,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // -migrate-data moves a deployment's data directory from wherever it is
@@ -392,7 +393,7 @@ func scanTree(root string) (int, int64, error) {
 		if err != nil {
 			return fmt.Errorf("reading %s: %v", path, unwrapPathErr(err))
 		}
-		if d.IsDir() {
+		if d.IsDir() || isStoreLockFile(path, d) {
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -412,6 +413,19 @@ func scanTree(root string) (int, int64, error) {
 		return 0, 0, err
 	}
 	return files, bytes, nil
+}
+
+// isStoreLockFile reports a file store's sidecar lock file (#1468). It
+// holds no data and the server recreates it, so a move neither counts,
+// copies nor verifies it. Only a *.lock beside the store it locks counts:
+// any other file of that name is the operator's and is moved like the rest.
+func isStoreLockFile(path string, d fs.DirEntry) bool {
+	if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), persist.LockFileSuffix) {
+		return false
+	}
+	// #nosec G703 -- path comes from WalkDir over the data directory being moved.
+	info, err := os.Lstat(strings.TrimSuffix(path, persist.LockFileSuffix))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // copyTree copies every file under src into dst, returning the SHA-256
@@ -443,6 +457,9 @@ func copyTree(src, dst string) (map[string]string, error) {
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return fmt.Errorf("creating %s: %v", target, unwrapPathErr(err))
 			}
+			return nil
+		}
+		if isStoreLockFile(path, d) {
 			return nil
 		}
 		sum, err := copyFile(path, target)
@@ -514,7 +531,7 @@ func verifyMigration(plan *migrationPlan, digests map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))
 		}
-		if d.IsDir() {
+		if d.IsDir() || isStoreLockFile(path, d) {
 			return nil
 		}
 		rel, err := filepath.Rel(plan.Dest, path)

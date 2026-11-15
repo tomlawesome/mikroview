@@ -34,7 +34,7 @@ func eachBackend(t *testing.T, run func(t *testing.T, b Backend)) {
 		if err != nil {
 			t.Fatalf("test key: %v", err)
 		}
-		run(t, NewEncryptedFileBackend(filepath.Join(t.TempDir(), "store.json"), key))
+		run(t, NewEncryptedFileBackend(filepath.Join(t.TempDir(), "store.json"), "store", key))
 	})
 
 	t.Run("postgres", func(t *testing.T) {

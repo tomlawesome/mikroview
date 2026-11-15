@@ -298,7 +298,7 @@ func TestOpenRecoveryKeysSealedRefusesPlaintextAndNonJSON(t *testing.T) {
 	}
 
 	// A sealed JSON document opens.
-	b := persist.NewEncryptedFileBackend(cfg.Auth.RecoveryKeysPath, st.key)
+	b := persist.NewEncryptedFileBackend(cfg.Auth.RecoveryKeysPath, authStoreRecoveryKeys, st.key)
 	if _, err := b.Save(ctx, []byte(`{"keys":[]}`), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestOpenRecoveryKeysSealedRefusesPlaintextAndNonJSON(t *testing.T) {
 	// A sealed document that is not JSON is refused by name.
 	notJSON := cfg
 	notJSON.Auth.RecoveryKeysPath = filepath.Join(t.TempDir(), "r.json")
-	if _, err := persist.NewEncryptedFileBackend(notJSON.Auth.RecoveryKeysPath, st.key).Save(ctx, []byte("not json at all"), 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(notJSON.Auth.RecoveryKeysPath, authStoreRecoveryKeys, st.key).Save(ctx, []byte("not json at all"), 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := openRecoveryKeysSealed(ctx, st, notJSON); err == nil || !strings.Contains(err.Error(), "recovery-key store") {

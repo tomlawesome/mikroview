@@ -245,6 +245,11 @@ floors:
 # merged in, measured as test:postgres does (golang:1.27.1, root, a TLS
 # Postgres 18): persist 85.3% (85.0% unit tests alone), matchlog 84.1%
 # (81.8%). Both within five points of their floors, so neither moved.
+#
+# #1202 merge (2026-11-13): the conflicting floors took the lower side, 79,
+# which the ratchet refused -- CI measured 84.4% on go1.27.4 (pipeline
+# 4075) -- so persist went back to 84. The margin is 0.4 points: a small
+# drop in persist coverage fails test:postgres.
 postgres-floors:
   internal/persist: 84
-  internal/matchlog: 79
+  internal/matchlog: 86

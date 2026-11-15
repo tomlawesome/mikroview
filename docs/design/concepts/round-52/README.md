@@ -39,7 +39,7 @@ each scene full-frame (2800×1720) and the top-right quarter
 
 ## Data story
 
-Round 49's, plus one line: `laptop-anna → 198.51.100.12 · 445/tcp` through
+Round 49's, plus one line: `laptop-anna → 198.51.100.1 · 445/tcp` through
 l2tp-out, first seen 22:04, 3×, off the baseline — header reads
 **off-baseline today 4**. gre-site-b not heard for three days. wg3,
 site-c and ovpn-legacy exist only in the eight-tunnel scene.

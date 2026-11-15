@@ -66,6 +66,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oui"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/recoverykeys"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -1139,22 +1140,55 @@ func main() {
 		matchLogPostgres = matchlog.OpenPostgres(persistence.pool, cfg.Watchlist.MatchLogRetention)
 		matchLog = matchLogPostgres
 		// Unlike every other store, there is no adoption path from the
-		// file backend's JSONL format into the Postgres table -- every
+		// file backend's sealed log into the Postgres table -- every
 		// other store's JSON blob round-trips byte-identically (see
 		// persistence.backendFor/persist.AdoptFile), but the match log's
-		// append-only line format doesn't fit that migration, and a
+		// append-only framed format doesn't fit that migration, and a
 		// backfill migrator was judged not worth building for what is,
 		// by design, bounded evidence rather than durable account state.
 		// Said plainly rather than left to be discovered as "why is my
-		// match history gone": the old file is untouched and still
-		// readable by reverting Postgres, it just isn't carried forward.
-		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
-			logging.New("matchlog").Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
-				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
-				"the old file is untouched and still readable if you revert postgres.dsnFile",
-				cfg.Watchlist.MatchLogPath, fi.Size()))
+		// match history gone", and in words that fit the file actually
+		// there. A sealed log (written by a v0.7.0 file-backend install)
+		// is untouched and readable again with the key if Postgres is
+		// reverted. A plaintext one (written before v0.7.0) is not read
+		// and not refused -- on Postgres a leftover plaintext file of the
+		// other non-account stores is warned about, not refused, and the
+		// match log follows them -- but it still holds matched events in
+		// the clear, so the warning names it and says how to move it.
+		mlPath := cfg.Watchlist.MatchLogPath
+		if fi, err := os.Stat(mlPath); err == nil && fi.Size() > 0 {
+			mlLog := logging.New("matchlog")
+			switch err := matchlog.Check(mlPath); {
+			case errors.Is(err, persist.ErrPlaintextDocument):
+				mlLog.Warn(fmt.Sprintf("%s (%d bytes) is a plaintext match log written before v0.7.0. This deployment "+
+					"runs on Postgres, so it is not read and not migrated, but it still holds matched events in the clear "+
+					"on the data volume. Move it off the volume or delete it, for example: mv %s %s.pre-0.7",
+					mlPath, fi.Size(), mlPath, mlPath))
+			case err != nil:
+				mlLog.Warn(fmt.Sprintf("%s (%d bytes) is not a match log this build can read (%v). This deployment runs "+
+					"on Postgres, so it is not read and not migrated", mlPath, fi.Size(), err))
+			default:
+				mlLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+					"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
+					"the old file is untouched, sealed, and readable by this build with history.keyFile if you revert postgres.dsnFile",
+					mlPath, fi.Size()))
+			}
 		}
-	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
+	} else if persistence.key == nil {
+		// Rule 2 of the #853 amendment (docs/decisions/event-retention.md):
+		// no key, no storage. The match log is sealed (#1470) and has no
+		// unsealed mode. Since #1202 ruling 2 the server does not start
+		// without a key, so this is unreachable in a running server; it
+		// is kept so the rule is visible here.
+		logging.New("matchlog").Info("no history.keyFile, so no match log: it is sealed under the key and nothing is written in the clear")
+	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity, persistence.key); err != nil {
+		// A plaintext log from an earlier release, or a sealed one with a
+		// frame that does not open, is refused like any other store that
+		// fails to open (#378, #1202 ruling 19): running on would leave
+		// the plaintext on disk, or pass over an altered file.
+		if errors.Is(err, persist.ErrPlaintextDocument) || errors.Is(err, retention.ErrFrameDidNotOpen) {
+			mustOpenStore(logging.New("matchlog"), err)
+		}
 		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and MikroView is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml

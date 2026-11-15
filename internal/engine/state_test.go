@@ -245,12 +245,12 @@ func TestStateStoreSetDoesNotBlockOnAStuckBackend(t *testing.T) {
 		s.Close(ctx)
 	}()
 
-	s.Set("port_scan", "1.1.1.1", BaselineState{Value: 1})
+	s.Set("port_scan", "198.51.100.3", BaselineState{Value: 1})
 
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 200; i++ {
-			s.Set("port_scan", "192.0.2.2", BaselineState{Value: float64(i)})
+			s.Set("port_scan", "203.0.113.6", BaselineState{Value: float64(i)})
 			s.Snapshot("port_scan")
 		}
 		close(done)

@@ -603,7 +603,7 @@ func TestHostNamesAreScopedToTheDeviceThatPushedThem(t *testing.T) {
 	apply(t, s, "router-victim", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[`+
 		`{"hostname":"printer","mac":"aa:bb:cc:dd:ee:03","address":"192.168.1.60"}]}`)
 
-	for _, ip := range []string{"192.168.1.50", "203.0.113.99", "8.8.8.8", "1.2.3.4", "198.51.100.7"} {
+	for _, ip := range []string{"192.168.1.50", "203.0.113.99", "203.0.113.6", "203.0.113.4", "198.51.100.7"} {
 		if got := s.HostName("router-victim", ip); got != "" {
 			t.Errorf("HostName(router-victim, %q) = %q -- router-evil's pushed name reached another device's traffic", ip, got)
 		}
@@ -614,8 +614,8 @@ func TestHostNamesAreScopedToTheDeviceThatPushedThem(t *testing.T) {
 	if got := s.HostName("router-evil", "192.168.1.50"); got != "trusted-nas" {
 		t.Errorf("HostName(router-evil, 192.168.1.50) = %q, want trusted-nas", got)
 	}
-	if got := s.HostName("router-evil", "8.8.8.8"); got != "Verified Trusted Network" {
-		t.Errorf("HostName(router-evil, 8.8.8.8) = %q -- a device's own catch-all peer still applies to its own traffic", got)
+	if got := s.HostName("router-evil", "203.0.113.6"); got != "Verified Trusted Network" {
+		t.Errorf("HostName(router-evil, 203.0.113.6) = %q -- a device's own catch-all peer still applies to its own traffic", got)
 	}
 	if got := s.HostName("router-victim", "192.168.1.60"); got != "printer" {
 		t.Errorf("HostName(router-victim, 192.168.1.60) = %q, want printer", got)

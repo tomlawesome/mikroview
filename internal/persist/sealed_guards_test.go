@@ -147,7 +147,7 @@ func (v *versionedBackend) Version(context.Context) (int64, bool, error) { retur
 func TestEncryptedFileVersionDoesNotNeedTheRightKey(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "doc.json")
-	b := NewEncryptedFileBackend(path, sealKey(t, "a"))
+	b := NewEncryptedFileBackend(path, "store", sealKey(t, "a"))
 	if _, ok, err := b.Version(ctx); err != nil || ok {
 		t.Fatalf("absent file: exists %v, %v", ok, err)
 	}
@@ -155,7 +155,7 @@ func TestEncryptedFileVersionDoesNotNeedTheRightKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := NewEncryptedFileBackend(path, sealKey(t, "b"))
+	other := NewEncryptedFileBackend(path, "store", sealKey(t, "b"))
 	if _, err := other.Load(ctx); err == nil {
 		t.Fatal("a document sealed under another key opened")
 	}
@@ -172,62 +172,62 @@ func TestAdoptSealedFileEdges(t *testing.T) {
 	key := sealKey(t, "k")
 	dir := t.TempDir()
 	src := filepath.Join(dir, "store.json")
-	if _, err := NewEncryptedFileBackend(src, key).Save(ctx, []byte(`{"n":1}`), 0); err != nil {
+	if _, err := NewEncryptedFileBackend(src, "store", key).Save(ctx, []byte(`{"n":1}`), 0); err != nil {
 		t.Fatal(err)
 	}
 	srcBytes, _ := os.ReadFile(src)
 
 	t.Run("nothing to do without a path or a destination", func(t *testing.T) {
-		if res, err := AdoptSealedFile(ctx, "", key, &memBackend{}); err != nil || res.Migrated {
+		if res, err := AdoptSealedFile(ctx, "", "store", key, &memBackend{}); err != nil || res.Migrated {
 			t.Errorf("empty path: %+v, %v", res, err)
 		}
-		if res, err := AdoptSealedFile(ctx, src, key, nil); err != nil || res.Migrated {
+		if res, err := AdoptSealedFile(ctx, src, "store", key, nil); err != nil || res.Migrated {
 			t.Errorf("nil destination: %+v, %v", res, err)
 		}
 	})
 	t.Run("no key is an error, not a plaintext copy", func(t *testing.T) {
 		dst := &memBackend{}
-		if _, err := AdoptSealedFile(ctx, src, nil, dst); err == nil || dst.saves != 0 {
+		if _, err := AdoptSealedFile(ctx, src, "store", nil, dst); err == nil || dst.saves != 0 {
 			t.Errorf("err %v, saves %d; want a refusal that wrote nothing", err, dst.saves)
 		}
 	})
 	t.Run("a destination with data is left alone", func(t *testing.T) {
 		dst := &memBackend{payload: []byte(`{"live":true}`), version: 5, exists: true}
-		res, err := AdoptSealedFile(ctx, src, key, dst)
+		res, err := AdoptSealedFile(ctx, src, "store", key, dst)
 		if err != nil || res.Migrated || dst.saves != 0 || string(dst.payload) != `{"live":true}` {
 			t.Errorf("res %+v err %v saves %d payload %q; want the live data untouched", res, err, dst.saves, dst.payload)
 		}
 	})
 	t.Run("a destination that cannot be read fails before anything is written", func(t *testing.T) {
 		dst := &memBackend{loadErr: errors.New("db down")}
-		if _, err := AdoptSealedFile(ctx, src, key, dst); err == nil || !strings.Contains(err.Error(), "before migrating") {
+		if _, err := AdoptSealedFile(ctx, src, "store", key, dst); err == nil || !strings.Contains(err.Error(), "before migrating") {
 			t.Errorf("err = %v", err)
 		}
 	})
 	t.Run("a missing source is a fresh install", func(t *testing.T) {
 		dst := &memBackend{}
-		res, err := AdoptSealedFile(ctx, filepath.Join(dir, "absent.json"), key, dst)
+		res, err := AdoptSealedFile(ctx, filepath.Join(dir, "absent.json"), "store", key, dst)
 		if err != nil || res.Migrated || dst.saves != 0 {
 			t.Errorf("res %+v err %v", res, err)
 		}
 	})
 	t.Run("the wrong key fails and writes nothing", func(t *testing.T) {
 		dst := &memBackend{}
-		if _, err := AdoptSealedFile(ctx, src, sealKey(t, "x"), dst); err == nil || dst.saves != 0 {
+		if _, err := AdoptSealedFile(ctx, src, "store", sealKey(t, "x"), dst); err == nil || dst.saves != 0 {
 			t.Errorf("err %v, saves %d; want a failure that wrote nothing", err, dst.saves)
 		}
 	})
 	t.Run("losing the create race is success, any other save failure is not", func(t *testing.T) {
-		if res, err := AdoptSealedFile(ctx, src, key, &memBackend{saveErr: ErrConflict}); err != nil || res.Migrated {
+		if res, err := AdoptSealedFile(ctx, src, "store", key, &memBackend{saveErr: ErrConflict}); err != nil || res.Migrated {
 			t.Errorf("conflict: %+v, %v; want success without Migrated", res, err)
 		}
-		if _, err := AdoptSealedFile(ctx, src, key, &memBackend{saveErr: errors.New("disk full")}); err == nil {
+		if _, err := AdoptSealedFile(ctx, src, "store", key, &memBackend{saveErr: errors.New("disk full")}); err == nil {
 			t.Error("a failed save was reported as success")
 		}
 	})
 	t.Run("a good move hands over the readable document and keeps the file", func(t *testing.T) {
 		dst := &memBackend{}
-		res, err := AdoptSealedFile(ctx, src, key, dst)
+		res, err := AdoptSealedFile(ctx, src, "store", key, dst)
 		if err != nil || !res.Migrated || res.Bytes != len(`{"n":1}`) || string(dst.payload) != `{"n":1}` {
 			t.Errorf("res %+v err %v payload %q", res, err, dst.payload)
 		}

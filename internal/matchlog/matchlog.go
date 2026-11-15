@@ -7,8 +7,9 @@
 // is a fact that matters individually, so it is kept at full fidelity
 // and survives a restart, which neither of those two stores does.
 //
-// Two backends: FileStore (file.go), capacity-bounded, refusing new
-// records once full; and PostgresStore (postgres.go), a dedicated
+// Two backends: FileStore (file.go), a sealed append-only file under the
+// retention key (#1470), capacity-bounded, refusing new records once
+// full; and PostgresStore (postgres.go), a dedicated
 // indexed table rather than a row in the shared blob table, bounded by
 // age (retention) rather than count instead -- see
 // docs/decisions/postgres-backend.md §1a for why a genuinely indexed

@@ -17,7 +17,7 @@ Round 56 was drawn first, so the numbering is out of order.
   six quiet hours retire it by themselves. Nothing is watched until the
   operator says so.
 - **The receipt is a replay.** "In the last 24 h a watch here would have
-  caught 3 lines — all from 203.0.113.14, last named garage-cam." It is the
+  caught 3 lines — all from 198.51.100.1, last named garage-cam." It is the
   only argument the offer makes; it is drawn in watch ink because it is
   what the watch would have shown.
 - **The ink is the watch's state.** Grey before the watch starts,
@@ -59,13 +59,13 @@ Round 56 was drawn first, so the numbering is out of order.
 
 ## Data story
 
-Round 53's estate, plus one segment. Garage, `203.0.113.0/24`, sat behind
+Round 53's estate, plus one segment. Garage, `198.51.100.2/24`, sat behind
 rb5009 with three hosts — garage-cam `.14`, garage-door `.20`,
 ev-charger `.31` — and rule #29 logging garage → servers. It was folded
 into IoT on 1 Aug and the devices readdressed; the 22:07 push tonight is
 the first that no longer carries it. The receipt: a watch on the range
 over the last 24 h would have caught 3 lines, all from `.14`. At 22:41
-`203.0.113.14` talks to the nas on 554/tcp, arriving on iot and accepted by
+`198.51.100.1` talks to the nas on 554/tcp, arriving on iot and accepted by
 #26 — a camera with a static address the move did not touch. The watch
 breaks and the clock resets; it is readdressed by 23:50. At 03:52 the
 watch has held for 4 h of 6 h; at 04:11 the ghost retires by itself.

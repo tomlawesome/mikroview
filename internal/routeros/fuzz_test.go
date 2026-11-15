@@ -40,12 +40,12 @@ func FuzzParse(f *testing.F) {
 	// Seeds: real-shaped lines first (so the fuzzer starts from valid
 	// structure and mutates outward), then the shapes most likely to
 	// break an index-arithmetic parser.
-	f.Add("A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60")
+	f.Add("A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->198.51.100.4:443, len 60")
 	f.Add("D|wan-in|input: in:ether1 out:(unknown 0), proto UDP, 203.0.113.9:53->192.168.1.1:53, len 76")
 	f.Add("R|drop-invalid|forward: proto ICMP, 10.0.0.1->10.0.0.2, len 84")
-	f.Add("proto TCP (SYN), 1.2.3.4:99999->198.51.100.8:-1, len 60") // out-of-range ports
-	f.Add("A||: ->:, len ")                                     // empty everything
-	f.Add("A|x|y: 1.2.3.4:->198.51.100.8:, len 60")                  // colons with no port digits
+	f.Add("proto TCP (SYN), 198.51.100.4:99999->198.51.100.8:-1, len 60") // out-of-range ports
+	f.Add("A||: ->:, len ")                                               // empty everything
+	f.Add("A|x|y: 198.51.100.4:->198.51.100.8:, len 60")                  // colons with no port digits
 	f.Add(":")
 	f.Add("")
 	f.Add("len 99999999999999999999999")                          // integer overflow bait

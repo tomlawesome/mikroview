@@ -48,16 +48,16 @@ function status(): SetupStatus {
       hosts: [],
       syslogPort: '6514',
       syslogEnabled: true,
-      address: '192.168.13.15:8080',
+      address: '192.0.2.15:8080',
       addressCandidates: [],
       backupTransport: 'sftp',
     },
-    sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+    sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
     devices: [
       {
         device: 'rb5009',
         configured: true,
-        sourceIp: '192.168.13.1',
+        sourceIp: '192.0.2.1',
         events: 1204,
         decodedActions: 5,
         pushedKinds: { 'filter-rule': '2026-09-27T14:03:31Z' },
@@ -73,13 +73,13 @@ function device(over: Partial<Device> = {}): Device {
   return {
     id: 'rb5009',
     name: 'rb5009',
-    sourceIp: '192.168.13.1',
+    sourceIp: '192.0.2.1',
     configured: true,
     firstSeen: '2026-09-27T14:03:04Z',
     lastSeen: '2026-09-27T14:05:00Z',
     eventCount: 1204,
     status: 'live',
-    acceptedIp: '192.168.13.1',
+    acceptedIp: '192.0.2.1',
     enrolledAt: '2026-09-27T14:03:04Z',
     routerosVersion: '7.24.4',
     ...over,
@@ -133,7 +133,7 @@ function landOnStand(over: { push?: boolean; backup?: boolean; tagged?: boolean 
   wizardState.devices = [device()]
   wizardState.status = status()
   wizardRun.name = 'rb5009'
-  wizardRun.addr = '192.168.13.1'
+  wizardRun.addr = '192.0.2.1'
   wizardRun.push = over.push ?? true
   wizardRun.backup = over.backup ?? true
   wizardRun.stage = 'done'
@@ -161,7 +161,7 @@ describe('StepStand: the ledger (#1385)', () => {
         hosts: [],
         syslogPort: '6514',
         syslogEnabled: true,
-        address: '192.168.13.15:8080',
+        address: '192.0.2.15:8080',
         addressCandidates: [],
         backupTransport: 'sftp',
       },
@@ -357,7 +357,7 @@ describe('the doors: Entities berth and Re-enrol open the wizard at the right st
     expect(wizardRun.answers.stage).toBe('ask')
     expect(wizardRun.answers.q).toBe(4)
     expect(wizardRun.name).toBe('rb5009')
-    expect(wizardRun.addr).toBe('192.168.13.1')
+    expect(wizardRun.addr).toBe('192.0.2.1')
     // Consumed -- a later ordinary reopen (Admin ▸ Run setup…) must not
     // keep forcing Mint on this router.
     expect(wizardState.reEnrolling).toBe(false)

@@ -193,7 +193,7 @@ func TestTokenSweepRemovesATokenUnusedForAYearAndAuditsIt(t *testing.T) {
 	key, err := retention.LoadKey(f.keyPath)
 	must(t, err)
 	path := f.root + "/data/tokens.json"
-	b := persist.NewEncryptedFileBackend(path, key)
+	b := persist.NewEncryptedFileBackend(path, "tokens", key)
 	snap, err := b.Load(context.Background())
 	must(t, err)
 	if _, err := b.Save(context.Background(), raw, snap.Version); err != nil {

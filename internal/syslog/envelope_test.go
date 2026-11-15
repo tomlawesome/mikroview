@@ -20,11 +20,11 @@ func TestParseEnvelope(t *testing.T) {
 	}{
 		{
 			name:         "standard RouterOS line",
-			raw:          "<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			raw:          "<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 			wantHost:     "MikroTik",
 			wantFacility: 16, // 134/8
 			wantSeverity: 6,  // 134%8
-			wantMsg:      "A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			wantMsg:      "A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 		},
 		{
 			name:         "single digit day (double space)",
@@ -90,7 +90,7 @@ func TestParseEnvelopeNonUTCRouterClock(t *testing.T) {
 			// BST, UTC+1: device wall clock reads an hour ahead of the
 			// receiving host's trusted UTC clock.
 			name: "UTC+1 (BST) router logs an hour ahead of receipt",
-			raw:  "<134>Aug 15 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			raw:  "<134>Aug 15 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 			recv: time.Date(2026, time.August, 15, 13, 0, 0, 0, time.UTC),
 			want: time.Date(2026, time.August, 15, 13, 0, 0, 0, time.UTC),
 		},
@@ -98,7 +98,7 @@ func TestParseEnvelopeNonUTCRouterClock(t *testing.T) {
 			// A quarter-hour offset (Kathmandu, UTC+5:45) still lands on
 			// the 15-minute grid every real-world timezone uses.
 			name: "UTC+5:45 (Kathmandu) fractional offset",
-			raw:  "<134>Aug 15 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			raw:  "<134>Aug 15 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 			recv: time.Date(2026, time.August, 15, 8, 15, 0, 0, time.UTC),
 			want: time.Date(2026, time.August, 15, 8, 15, 0, 0, time.UTC),
 		},
@@ -106,7 +106,7 @@ func TestParseEnvelopeNonUTCRouterClock(t *testing.T) {
 			// A negative offset crossing a day boundary (US Eastern,
 			// UTC-4 in summer) near midnight local time.
 			name: "UTC-4 (US Eastern, EDT) crossing midnight",
-			raw:  "<134>Aug 16 00:30:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			raw:  "<134>Aug 16 00:30:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 			recv: time.Date(2026, time.August, 15, 20, 31, 0, 0, time.UTC),
 			want: time.Date(2026, time.August, 15, 20, 30, 0, 0, time.UTC),
 		},
@@ -115,7 +115,7 @@ func TestParseEnvelopeNonUTCRouterClock(t *testing.T) {
 			// must see no change at all: the small gap from ordinary
 			// network delay rounds to zero offset.
 			name: "UTC router, ordinary propagation delay: unaffected",
-			raw:  "<134>Aug 15 13:00:02 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			raw:  "<134>Aug 15 13:00:02 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 			recv: time.Date(2026, time.August, 15, 13, 0, 3, 0, time.UTC),
 			want: time.Date(2026, time.August, 15, 13, 0, 2, 0, time.UTC),
 		},
@@ -126,7 +126,7 @@ func TestParseEnvelopeNonUTCRouterClock(t *testing.T) {
 			// doc comment) that must not be guessed at. Left uncorrected,
 			// same as before this fix.
 			name: "gap beyond any real-world offset is left uncorrected",
-			raw:  "<134>Aug 10 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			raw:  "<134>Aug 10 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60",
 			recv: time.Date(2026, time.August, 15, 13, 0, 0, 0, time.UTC),
 			want: time.Date(2026, time.August, 10, 14, 0, 0, 0, time.UTC),
 		},

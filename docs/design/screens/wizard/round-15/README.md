@@ -10,8 +10,8 @@ groups that strike on — is AM, unchanged.
 
 | | Concept | Open |
 |---|---|---|
-| **AN** | **The neon, sparks done properly** | `http://198.51.100.30:8309/screens/wizard/round-15/an-neon.html` |
-| | the same with no sparks at all, to compare | `http://198.51.100.30:8309/screens/wizard/round-15/an-neon.html?nosparks` |
+| **AN** | **The neon, sparks done properly** | `http://198.51.100.1:8309/screens/wizard/round-15/an-neon.html` |
+| | the same with no sparks at all, to compare | `http://198.51.100.1:8309/screens/wizard/round-15/an-neon.html?nosparks` |
 
 ## What changed
 

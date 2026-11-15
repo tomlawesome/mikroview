@@ -56,7 +56,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
       hosts: [],
       syslogPort: '6514',
       syslogEnabled: true,
-      address: '192.168.13.15:8080',
+      address: '192.0.2.15:8080',
       addressCandidates: [],
       backupTransport: 'sftp',
     },
@@ -73,13 +73,13 @@ function device(over: Partial<Device> = {}): Device {
   return {
     id: 'rb5009',
     name: 'rb5009',
-    sourceIp: '192.168.13.1',
+    sourceIp: '192.0.2.1',
     configured: true,
     firstSeen: '2026-09-27T14:03:04Z',
     lastSeen: '2026-09-27T14:05:00Z',
     eventCount: 0,
     status: 'live',
-    acceptedIp: '192.168.13.1',
+    acceptedIp: '192.0.2.1',
     enrolledAt: '2026-09-27T14:03:04Z',
     ...over,
   }
@@ -123,7 +123,7 @@ function landOnPaste(over: { push?: boolean; backup?: boolean } = {}) {
   wizardState.token = 'ingest0000ingest0000'
   wizardState.tokenDevice = 'rb5009'
   wizardRun.name = 'rb5009'
-  wizardRun.addr = '192.168.13.1'
+  wizardRun.addr = '192.0.2.1'
   wizardRun.push = over.push ?? true
   wizardRun.backup = over.backup ?? true
   wizardRun.stage = 'paste'
@@ -249,7 +249,7 @@ describe('StepPaste: the block and Copy', () => {
     const pass = screen.getByLabelText('Your password, to reroll the token') as HTMLInputElement
     await fireEvent.input(pass, { target: { value: 'correct horse' } })
     await fireEvent.keyDown(pass, { key: 'Enter' })
-    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.168.13.1'))
+    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.0.2.1'))
     // Reroll never advances the stage -- it is only offered before Copy.
     expect(wizardRun.stage).toBe('paste')
     expect(wizardState.enrolment?.token).toBe('reroll00000reroll0000')
@@ -294,8 +294,8 @@ describe('StepPaste: the router’s turn -- the track', () => {
 
   it('lights each station from the receipts that arrived, and struck the one set aside', async () => {
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
-      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.168.13.1', events: 12, decodedActions: 0 }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.0.2.1', events: 12, decodedActions: 0 }],
     })
     render(StepPaste)
     await tick()
@@ -309,18 +309,18 @@ describe('StepPaste: the router’s turn -- the track', () => {
     expect(rows[3].classList.contains('wait')).toBe(true)
     // The latest arrival's own headline, in its ink via the shared .obs
     // classes -- the certificate is the most recent (real) arrival here.
-    expect(document.querySelector('.obs.arrived')?.textContent).toMatch(/^Enrol line from 192\.168\.13\.1/)
+    expect(document.querySelector('.obs.arrived')?.textContent).toMatch(/^Enrol line from 192\.0\.2\.1/)
     expect(screen.getByRole('heading', { level: 3 }).textContent).toBe('The router’s turn.')
   })
 
   it('reads "<name> is sending" once everything chosen has arrived', async () => {
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
       devices: [
         {
           device: 'rb5009',
           configured: true,
-          sourceIp: '192.168.13.1',
+          sourceIp: '192.0.2.1',
           events: 12,
           decodedActions: 0,
           pushedKinds: { 'filter-rule': '2026-09-27T14:03:31Z' },
@@ -335,12 +335,12 @@ describe('StepPaste: the router’s turn -- the track', () => {
 
   it('shows the ahead-of-review caution box and names the reviewed version', async () => {
     wizardState.status = status({
-      sources: [{ source: '192.168.13.1', caFetchedAt: 'x', syslogFirstSeenAt: 'y' }],
+      sources: [{ source: '192.0.2.1', caFetchedAt: 'x', syslogFirstSeenAt: 'y' }],
       devices: [
         {
           device: 'rb5009',
           configured: true,
-          sourceIp: '192.168.13.1',
+          sourceIp: '192.0.2.1',
           events: 12,
           decodedActions: 0,
           pushedKinds: { 'filter-rule': '2026-09-27T14:03:31Z' },
@@ -365,7 +365,7 @@ describe('StepPaste: the refused-sender recovery', () => {
     // so the refusal has to come from here -- setting wizardState.refused
     // directly would just be overwritten by the next poll tick.
     vi.mocked(fetchRefusedSenders).mockResolvedValue([
-      { ip: '192.168.13.99', firstSeen: '2026-09-27T14:01:00Z', lastSeen: '2026-09-27T14:01:30Z', lines: 3 },
+      { ip: '192.0.2.99', firstSeen: '2026-09-27T14:01:00Z', lastSeen: '2026-09-27T14:01:30Z', lines: 3 },
     ])
     vi.mocked(fetchRouterBackups).mockResolvedValue({
       enabled: true,
@@ -398,27 +398,27 @@ describe('StepPaste: the refused-sender recovery', () => {
     await tick()
     await waitFor(() => expect(document.querySelector('.warnbox')).not.toBeNull())
     expect(document.querySelector('.warnbox')?.textContent).toContain(
-      'Lines from 192.168.13.99 arrived without the enrol line and were refused.',
+      'Lines from 192.0.2.99 arrived without the enrol line and were refused.',
     )
     const fix = document.querySelector('.warnbox pre')?.textContent ?? ''
     expect(fix.split('\n')).toEqual([
       ':if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview }',
       ENROL_LINE,
     ])
-    expect(screen.getByRole('button', { name: 'enrol at 192.168.13.99 instead' })).toBeTruthy()
-    expect(document.querySelector('.bar .chips .att.alarm')?.textContent).toBe('refused · 192.168.13.99')
+    expect(screen.getByRole('button', { name: 'enrol at 192.0.2.99 instead' })).toBeTruthy()
+    expect(document.querySelector('.bar .chips .att.alarm')?.textContent).toBe('refused · 192.0.2.99')
   })
 
   it('"enrol at <other> instead" mints again for that address, and the box clears', async () => {
     vi.mocked(mintEnrolment).mockResolvedValue({ token: 'other000000other00000', expiresAt: '2026-09-27T14:35:00Z' })
     render(Wizard)
     await tick()
-    await fireEvent.click(await screen.findByRole('button', { name: 'enrol at 192.168.13.99 instead' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'enrol at 192.0.2.99 instead' }))
     await tick()
-    const pass = screen.getByLabelText('Your password, to enrol at 192.168.13.99 instead') as HTMLInputElement
+    const pass = screen.getByLabelText('Your password, to enrol at 192.0.2.99 instead') as HTMLInputElement
     await fireEvent.input(pass, { target: { value: 'correct horse' } })
     await fireEvent.keyDown(pass, { key: 'Enter' })
-    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.168.13.99'))
+    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.0.2.99'))
     // Never an accept by itself: only the mint happened, and the walk's
     // own "since" moved to now, so the old refusal drops out on its own.
     await waitFor(() => expect(document.querySelector('.warnbox')).toBeNull())

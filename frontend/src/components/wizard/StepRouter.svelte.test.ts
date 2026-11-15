@@ -92,7 +92,7 @@ describe('StepRouter: the router, one form', () => {
     // it changes.
     expect(document.querySelector('.form .problem')?.getAttribute('aria-live')).toBe('polite')
 
-    await fireEvent.input(address(), { target: { value: '192.168.13.1' } })
+    await fireEvent.input(address(), { target: { value: '192.0.2.1' } })
     await tick()
     expect(problem()).toBe('')
     expect(address().getAttribute('aria-invalid')).toBe('false')
@@ -152,14 +152,14 @@ describe('StepRouter: the router, one form', () => {
     render(StepRouter)
     await tick()
     await fireEvent.input(screen.getByLabelText(/^Name/), { target: { value: 'rb5009' } })
-    await fireEvent.input(address(), { target: { value: '192.168.13.1' } })
+    await fireEvent.input(address(), { target: { value: '192.0.2.1' } })
     await fireEvent.click(screen.getAllByRole('radio', { name: 'Yes' })[0])
     await fireEvent.click(screen.getAllByRole('radio', { name: 'No' })[1])
     await tick()
     const row = rowState(wizardRun.answers, wizardRun.evidence, 'router')
     expect(row.cls).toBe('chosen')
     expect(row.ink).toBe('token')
-    expect(row.receipt).toBe('rb5009 · 192.168.13.1 · push yes · backup not now')
+    expect(row.receipt).toBe('rb5009 · 192.0.2.1 · push yes · backup not now')
   })
 })
 
@@ -188,7 +188,7 @@ describe('StepRouter: the drop box, when closed (#1361)', () => {
         hosts: [],
         syslogPort: '6514',
         syslogEnabled: true,
-        address: '192.168.13.15:8080',
+        address: '192.0.2.15:8080',
         addressCandidates: [],
         backupTransport: 'sftp',
       },

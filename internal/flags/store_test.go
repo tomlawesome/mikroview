@@ -104,7 +104,7 @@ func TestOpenEmptyPathIsUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(\"\") returned an error: %v", err)
 	}
-	s.Add(TypePortScan, "1.2.3.4", "test", time.Now())
+	s.Add(TypePortScan, "192.0.2.4", "test", time.Now())
 	if len(s.List()) != 1 {
 		t.Errorf("expected an in-memory-only store to still work, got %d flags", len(s.List()))
 	}
@@ -128,7 +128,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 // startup" contract.
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	data := `{"flags":[null, {"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4"}, null]}`
+	data := `{"flags":[null, {"id":"port_scan:192.0.2.4","type":"port_scan","target":"192.0.2.4"}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestOpenSkipsNilArrayElements(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("expected the one real entry to survive, got %d: %+v", len(list), list)
 	}
-	if list[0].Target != "1.2.3.4" {
+	if list[0].Target != "192.0.2.4" {
 		t.Errorf("expected the real flag's data to be intact, got %+v", list[0])
 	}
 }
@@ -185,14 +185,14 @@ func TestOpenMalformedFileFailsClosed(t *testing.T) {
 func TestAddCreatesNewFlag(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
-	s.Add(TypePortScan, "1.2.3.4", "20 ports in 60s", now)
+	s.Add(TypePortScan, "192.0.2.4", "20 ports in 60s", now)
 
 	list := s.List()
 	if len(list) != 1 {
 		t.Fatalf("expected 1 flag, got %d", len(list))
 	}
 	f := list[0]
-	if f.Type != TypePortScan || f.Target != "1.2.3.4" || f.Detail != "20 ports in 60s" {
+	if f.Type != TypePortScan || f.Target != "192.0.2.4" || f.Detail != "20 ports in 60s" {
 		t.Errorf("unexpected flag: %+v", f)
 	}
 	if f.Count != 1 || f.Cleared {
@@ -205,7 +205,7 @@ func TestAddCreatesNewFlag(t *testing.T) {
 
 func TestAddLeavesConfidenceNil(t *testing.T) {
 	s, _ := Open("")
-	s.Add(TypePortScan, "1.2.3.4", "20 ports in 60s", time.Now())
+	s.Add(TypePortScan, "192.0.2.4", "20 ports in 60s", time.Now())
 
 	f := s.List()[0]
 	if f.Confidence != nil {
@@ -215,7 +215,7 @@ func TestAddLeavesConfidenceNil(t *testing.T) {
 
 func TestAddWithConfidenceSetsConfidence(t *testing.T) {
 	s, _ := Open("")
-	s.AddWithConfidence(TypeActivitySpike, "1.2.3.4", "5x baseline", 73, time.Now())
+	s.AddWithConfidence(TypeActivitySpike, "192.0.2.4", "5x baseline", 73, time.Now())
 
 	f := s.List()[0]
 	if f.Confidence == nil || *f.Confidence != 73 {
@@ -228,8 +228,8 @@ func TestAddUpdatesExistingActiveFlagInPlace(t *testing.T) {
 	t0 := time.Now()
 	t1 := t0.Add(time.Minute)
 
-	s.Add(TypePortScan, "1.2.3.4", "15 ports in 60s", t0)
-	s.Add(TypePortScan, "1.2.3.4", "22 ports in 60s", t1)
+	s.Add(TypePortScan, "192.0.2.4", "15 ports in 60s", t0)
+	s.Add(TypePortScan, "192.0.2.4", "22 ports in 60s", t1)
 
 	list := s.List()
 	if len(list) != 1 {
@@ -256,13 +256,13 @@ func TestAddRevivesClearedFlagAsFreshEpisode(t *testing.T) {
 	t1 := t0.Add(time.Hour)
 	t2 := t1.Add(time.Hour)
 
-	s.Add(TypePortScan, "1.2.3.4", "first episode", t0)
+	s.Add(TypePortScan, "192.0.2.4", "first episode", t0)
 	id := s.List()[0].ID
 	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", "", t1); !ok {
 		t.Fatal("Clear() on a freshly-added flag should succeed")
 	}
 
-	s.Add(TypePortScan, "1.2.3.4", "second episode", t2)
+	s.Add(TypePortScan, "192.0.2.4", "second episode", t2)
 	list := s.List()
 	if len(list) != 1 {
 		t.Fatalf("expected the revived flag to reuse the same ID, got %d flags", len(list))
@@ -292,7 +292,7 @@ func TestVerdictOnUnknownOrAlreadyClearedFlag(t *testing.T) {
 		t.Error("a verdict on an unknown ID should report not-found")
 	}
 
-	s.Add(TypePortScan, "1.2.3.4", "x", time.Now())
+	s.Add(TypePortScan, "192.0.2.4", "x", time.Now())
 	id := s.List()[0].ID
 	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", "", time.Now()); !ok {
 		t.Fatal("the first verdict should succeed")
@@ -312,7 +312,7 @@ func TestVerdictOnUnknownOrAlreadyClearedFlag(t *testing.T) {
 func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
-	s.Add(TypePortScan, "1.1.1.1", "oldest", now)
+	s.Add(TypePortScan, "192.0.2.1", "oldest", now)
 	s.Add(TypePortScan, "192.0.2.2", "newest", now.Add(time.Minute))
 	s.Add(TypePortScan, "192.0.2.3", "middle", now.Add(30*time.Second))
 
@@ -320,7 +320,7 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 	if len(list) != 3 {
 		t.Fatalf("expected 3 flags, got %d", len(list))
 	}
-	if list[0].Target != "192.0.2.2" || list[1].Target != "192.0.2.3" || list[2].Target != "1.1.1.1" {
+	if list[0].Target != "192.0.2.2" || list[1].Target != "192.0.2.3" || list[2].Target != "192.0.2.1" {
 		t.Errorf("unexpected order: %v, %v, %v", list[0].Target, list[1].Target, list[2].Target)
 	}
 }
@@ -363,7 +363,7 @@ func TestPersistLockedRateLimitsWrites(t *testing.T) {
 	}
 
 	now := time.Now()
-	s.Add(TypePortScan, "1.1.1.1", "first", now)
+	s.Add(TypePortScan, "192.0.2.1", "first", now)
 	flushForTest(t, s) // the very first write attempts immediately; wait for it as a baseline
 	if got := b.saveCount(); got != 1 {
 		t.Fatalf("expected the first Add to write immediately, got %d saves", got)
@@ -394,8 +394,8 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	s1.Add(TypeCriticalPort, "198.51.100.8", "6 attempts on port 22 in 5m", now)
-	s1.AddWithConfidence(TypeActivitySpike, "9.9.9.9", "5x baseline", 82, now)
+	s1.Add(TypeCriticalPort, "192.0.2.8", "6 attempts on port 22 in 5m", now)
+	s1.AddWithConfidence(TypeActivitySpike, "192.0.2.9", "5x baseline", 82, now)
 	id := s1.List()[0].ID
 	s1.SetVerdict(id, VerdictChecked, "operator", "", now.Add(time.Minute))
 	// #400: persistence is now write-behind (persist.WriteBehind), so a
@@ -415,7 +415,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 
 	for _, f := range list {
-		if f.Target == "9.9.9.9" && (f.Confidence == nil || *f.Confidence != 82) {
+		if f.Target == "192.0.2.9" && (f.Confidence == nil || *f.Confidence != 82) {
 			t.Errorf("expected Confidence=82 to survive persistence, got %+v", f.Confidence)
 		}
 	}
@@ -443,23 +443,23 @@ func TestPruneEvictsOldestClearedFlagsOverCap(t *testing.T) {
 
 	// Two cleared flags (oldest first) plus one active one -- adding a
 	// fourth should evict the oldest cleared entry, never the active one.
-	s.Add(TypePortScan, "1.1.1.1", "x", now)
-	s.SetVerdict(flagID(TypePortScan, "1.1.1.1"), VerdictChecked, "operator", "", now.Add(time.Minute))
+	s.Add(TypePortScan, "192.0.2.1", "x", now)
+	s.SetVerdict(flagID(TypePortScan, "192.0.2.1"), VerdictChecked, "operator", "", now.Add(time.Minute))
 
 	s.Add(TypePortScan, "192.0.2.2", "x", now.Add(2*time.Minute))
 	s.SetVerdict(flagID(TypePortScan, "192.0.2.2"), VerdictChecked, "operator", "", now.Add(3*time.Minute))
 
 	s.Add(TypePortScan, "192.0.2.3", "active, never cleared", now.Add(4*time.Minute))
 
-	s.Add(TypePortScan, "192.0.2.4", "pushes the store over the cap", now.Add(5*time.Minute))
+	s.Add(TypePortScan, "192.0.2.5", "pushes the store over the cap", now.Add(5*time.Minute))
 
 	list := s.List()
 	if len(list) != maxFlags {
 		t.Fatalf("expected pruning to hold the store at %d, got %d: %+v", maxFlags, len(list), list)
 	}
 	for _, f := range list {
-		if f.Target == "1.1.1.1" {
-			t.Error("expected the oldest cleared flag (1.1.1.1) to be evicted")
+		if f.Target == "192.0.2.1" {
+			t.Error("expected the oldest cleared flag (192.0.2.1) to be evicted")
 		}
 		if f.Target == "192.0.2.3" && f.Cleared {
 			t.Error("the active flag should never be evicted or altered by pruning")
@@ -471,16 +471,16 @@ func TestAddReportsNewEpisode(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
 
-	if isNew := s.Add(TypePortScan, "1.1.1.1", "first", now); !isNew {
+	if isNew := s.Add(TypePortScan, "192.0.2.1", "first", now); !isNew {
 		t.Error("expected the first-ever raise to report a new episode")
 	}
-	if isNew := s.Add(TypePortScan, "1.1.1.1", "re-fire", now.Add(time.Second)); isNew {
+	if isNew := s.Add(TypePortScan, "192.0.2.1", "re-fire", now.Add(time.Second)); isNew {
 		t.Error("expected a plain re-fire of an active flag to not report a new episode")
 	}
 
-	id := flagID(TypePortScan, "1.1.1.1")
+	id := flagID(TypePortScan, "192.0.2.1")
 	s.SetVerdict(id, VerdictChecked, "operator", "", now.Add(2*time.Second))
-	if isNew := s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(3*time.Second)); !isNew {
+	if isNew := s.Add(TypePortScan, "192.0.2.1", "revived", now.Add(3*time.Second)); !isNew {
 		t.Error("expected a revival from cleared to report a new episode")
 	}
 }
@@ -506,7 +506,7 @@ func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 	// shares one bucket regardless of when the suite runs.
 	now := time.Now().Truncate(time.Minute)
 
-	s.Add(TypePortScan, "1.1.1.1", "first", now)
+	s.Add(TypePortScan, "192.0.2.1", "first", now)
 	series := s.TimeSeries()
 	last := series[len(series)-1]
 	if got := last.ByType[TypePortScan]; got != 1 {
@@ -514,8 +514,8 @@ func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 	}
 
 	// A plain re-fire of the still-active flag must not bump the bucket.
-	s.Add(TypePortScan, "1.1.1.1", "re-fire", now.Add(time.Second))
-	s.Add(TypePortScan, "1.1.1.1", "re-fire again", now.Add(2*time.Second))
+	s.Add(TypePortScan, "192.0.2.1", "re-fire", now.Add(time.Second))
+	s.Add(TypePortScan, "192.0.2.1", "re-fire again", now.Add(2*time.Second))
 	series = s.TimeSeries()
 	last = series[len(series)-1]
 	if got := last.ByType[TypePortScan]; got != 1 {
@@ -523,9 +523,9 @@ func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 	}
 
 	// A revival from Cleared is a new episode and must bump it again.
-	id := flagID(TypePortScan, "1.1.1.1")
+	id := flagID(TypePortScan, "192.0.2.1")
 	s.SetVerdict(id, VerdictChecked, "operator", "", now.Add(3*time.Second))
-	s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(4*time.Second))
+	s.Add(TypePortScan, "192.0.2.1", "revived", now.Add(4*time.Second))
 	series = s.TimeSeries()
 	last = series[len(series)-1]
 	if got := last.ByType[TypePortScan]; got != 2 {
@@ -542,7 +542,7 @@ func TestTimeSeriesBucketsByType(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
 
-	s.Add(TypePortScan, "1.1.1.1", "d1", now)
+	s.Add(TypePortScan, "192.0.2.1", "d1", now)
 	s.Add(TypeCriticalPort, "192.0.2.2", "d2", now)
 	s.Add(TypeCriticalPort, "192.0.2.3", "d3", now)
 
@@ -587,8 +587,8 @@ func TestTimeSeriesReturnsFixedWidthWindow(t *testing.T) {
 // is ever determined -- doesn't sneak into the bucket history either.
 func TestTimeSeriesExcludedTargetNeverCounted(t *testing.T) {
 	s, _ := Open("")
-	s.Exclude(TypePortScan, "1.1.1.1")
-	s.Add(TypePortScan, "1.1.1.1", "should be a no-op", time.Now())
+	s.Exclude(TypePortScan, "192.0.2.1")
+	s.Add(TypePortScan, "192.0.2.1", "should be a no-op", time.Now())
 
 	series := s.TimeSeries()
 	last := series[len(series)-1]
@@ -835,7 +835,7 @@ func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
 	}
 	closeForTest(t, s1)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	s1.AddProvisional(TypeActivitySpike, "9.9.9.9", "warming up", 40, Evidence{}, "", true, now)
+	s1.AddProvisional(TypeActivitySpike, "192.0.2.9", "warming up", 40, Evidence{}, "", true, now)
 	// #400: write-behind -- flush before reopening, see flushForTest.
 	flushForTest(t, s1)
 

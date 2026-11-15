@@ -879,7 +879,7 @@ func TestHandleDefinitionsUpdateClearsStateWhenUninverted(t *testing.T) {
 	defer ts.Close()
 
 	entry := mustCreateInvertedDefinition(t, ts)
-	s.Definitions.RecordObservation(entry.ID, "1.2.3.4", 443, entry.Expectation.CreatedAt)
+	s.Definitions.RecordObservation(entry.ID, "192.0.2.4", 443, entry.Expectation.CreatedAt)
 	if e, _, _ := s.Definitions.GetExpectation(entry.ID); len(e.Observed) != 1 {
 		t.Fatal("setup failed: expected an observation to exist before the update")
 	}
@@ -1146,7 +1146,7 @@ func TestHandleDefinitionsUpdateDoesNotClearObservedWhenStayingInverted(t *testi
 	defer ts.Close()
 
 	entry := mustCreateInvertedDefinition(t, ts)
-	s.Definitions.RecordObservation(entry.ID, "1.2.3.4", 443, entry.Expectation.CreatedAt)
+	s.Definitions.RecordObservation(entry.ID, "192.0.2.4", 443, entry.Expectation.CreatedAt)
 
 	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
 		Expectation: &expectationRequest{Invert: true, Source: matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}},
@@ -1174,7 +1174,7 @@ func TestHandleDefinitionsCloneExpectation(t *testing.T) {
 	defer ts.Close()
 
 	entry := mustCreateInvertedDefinition(t, ts)
-	s.Definitions.RecordObservation(entry.ID, "1.2.3.4", 443, entry.Expectation.CreatedAt)
+	s.Definitions.RecordObservation(entry.ID, "192.0.2.4", 443, entry.Expectation.CreatedAt)
 
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID+"/clone", cloneRequest{})
 	defer resp.Body.Close()

@@ -54,7 +54,7 @@ function status(): SetupStatus {
       hosts: [],
       syslogPort: '6514',
       syslogEnabled: true,
-      address: '192.168.13.15:8080',
+      address: '192.0.2.15:8080',
       addressCandidates: [],
       backupTransport: 'sftp',
     },
@@ -83,7 +83,7 @@ function device(over: Partial<Device> = {}): Device {
 // The router step's four answers, as the run holds them on arrival here.
 function answered() {
   wizardRun.name = 'rb5009'
-  wizardRun.addr = '192.168.13.1'
+  wizardRun.addr = '192.0.2.1'
   wizardRun.push = true
   wizardRun.backup = false
   wizardRun.q = 4
@@ -140,7 +140,7 @@ describe('StepMint: the password goes to the ingest token mint too (#1202 spec 3
     await fireEvent.input(password(), { target: { value: 'correct horse' } })
     await fireEvent.keyDown(password(), { key: 'Enter' })
     await waitFor(() => expect(wizardRun.stage).toBe('paste'))
-    expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.168.13.1')
+    expect(mintEnrolment).toHaveBeenCalledWith('rb5009', 'correct horse', '192.0.2.1')
     expect(createToken).not.toHaveBeenCalled()
   })
 })

@@ -49,6 +49,9 @@ var Rows = []Row{
 	{From: "7.24.3", To: "7.24.3", Dialect: "a", VerifiedBy: "release notes read 2026-09-22",
 		Note: "7.24.3 reworked certificate handling: it adds the `SSL.com Root Certification Authority ECC` root to the built-in store, removes `GoDaddy Class 2 CA` from it (the operator-facing warning for that is the `cert-store-7.24.3` entry in Upgrades), and allows importing a cross-signed certificate without replacing the one already there. Read only, never exercised: the CHR job has no mikroview server beside it, so the CA fetch times out and the import step is parsed rather than run. Also fixes two CVEs, crypto CVE-2026-67278 and user CVE-2026-16347; neither is reachable from anything mikroview pastes, since mikroview never logs in to the router."},
 	{From: "7.24.4", To: "7.24.4", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.4, 2026-09-22", Note: ""},
+	{From: "7.24.5", To: "7.24.5", Dialect: "a", VerifiedBy: "exercised on CHR 7.24.5, 2026-10-05", Note: ""},
+	{From: "7.25", To: "7.25", Dialect: "a", VerifiedBy: "exercised on CHR 7.25, 2026-10-26", Note: ""},
+	{From: "7.25.1", To: "7.25.1", Dialect: "a", VerifiedBy: "exercised on CHR 7.25.1, 2026-11-09", Note: ""},
 }
 
 // RowFor returns the row whose [From, To] range contains version, and

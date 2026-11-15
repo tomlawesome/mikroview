@@ -117,7 +117,7 @@ func TestSealedAtRestAndReloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "config-snapshots.json")
-	s, err := Open(context.Background(), persist.NewEncryptedFileBackend(path, key))
+	s, err := Open(context.Background(), persist.NewEncryptedFileBackend(path, "config_snapshots", key))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestSealedAtRestAndReloaded(t *testing.T) {
 		t.Fatal("the snapshot file holds the config text in the clear")
 	}
 
-	again, err := Open(context.Background(), persist.NewEncryptedFileBackend(path, key))
+	again, err := Open(context.Background(), persist.NewEncryptedFileBackend(path, "config_snapshots", key))
 	if err != nil {
 		t.Fatal(err)
 	}

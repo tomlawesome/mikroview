@@ -114,8 +114,7 @@ stop
 ok "the source instance stopped cleanly"
 
 # The migration itself. A failure ends the run here: with no destination
-# there is nothing left to compare or start, and the `mv` below would
-# otherwise stop the script under `set -e` with no result line.
+# there is nothing left to compare or start.
 if MIKROVIEW_CONFIG="$SRC/cfg.yaml" "$DIR/mikroview" -migrate-data "$DST" > "$DIR/migrate.log" 2>&1; then
   ok "-migrate-data reported success"
 else
@@ -130,8 +129,10 @@ check "$([ -f "$SRC/users.json" ] && echo 0 || echo 1)" "the source was left who
 # script has never heard of still has to travel -- which is the whole
 # promise, and the one a hand-picked list of filenames cannot check.
 # cfg.yaml and server.log are this script's own, not the deployment's.
-( cd "$SRC" && find . -type f ! -name cfg.yaml ! -name server.log | sort ) > "$DIR/src.list"
-( cd "$DST" && find . -type f ! -name cfg.yaml ! -name server.log | sort ) > "$DIR/dst.list"
+# Store lock files (<store>.lock) hold no data and -migrate-data skips them
+# by design (internal/persist/file.go), so they are not expected to travel.
+( cd "$SRC" && find . -type f ! -name cfg.yaml ! -name server.log ! -name '*.lock' | sort ) > "$DIR/src.list"
+( cd "$DST" && find . -type f ! -name cfg.yaml ! -name server.log ! -name '*.lock' | sort ) > "$DIR/dst.list"
 if diff -q "$DIR/src.list" "$DIR/dst.list" >/dev/null; then
   ok "every file in the source arrived at the destination ($(wc -l < "$DIR/src.list") files)"
 else
@@ -150,20 +151,14 @@ fi
 # The real question: does a server come up on the destination, and is the
 # account still there? Anything less is checking that files were copied.
 #
-# The destination becomes the deployment's normal data mount, at the path
-# the config has always named (docs/configuration.md, "Moving the data
-# directory"). That matters since #1202: a file-backed store is sealed
-# bound to its own path, so a copy opened under a config naming some
-# other path would be refused as altered -- not what an operator does. So
-# the source is moved aside and the destination put where it was, which
-# is what repointing the mount does.
-mv "$SRC" "$DIR/src-old"
-mv "$DST" "$SRC"
-cfg "$SRC" > "$SRC/cfg.yaml"
-if start "$SRC"; then
+# The copy is started where it landed, under a config naming the new
+# path: a sealed store file is bound to its store's name, not to the path
+# it was written at (#1450), so a data directory can move.
+cfg "$DST" > "$DST/cfg.yaml"
+if start "$DST"; then
   ok "a fresh server started against the migrated directory"
 else
-  fail "the migrated instance never became healthy -- see $SRC/server.log"
+  fail "the migrated instance never became healthy -- see $DST/server.log"
 fi
 
 # The password goes over stdin, as the register call above sends it, so
@@ -179,7 +174,7 @@ check "$([ "$code" = "200" ] && echo 0 || echo 1)" "the account created before t
 # the top of the first. 409 is auth.ErrRegistrationClosed, answered
 # before any setup code is looked at -- and the destination, holding an
 # account, logs none.
-check "$(grep -q 'create the first admin with setup code' "$SRC/server.log" && echo 1 || echo 0)" \
+check "$(grep -q 'create the first admin with setup code' "$DST/server.log" && echo 1 || echo 0)" \
   "the migrated instance logged no setup code, so it knows the migrated account exists"
 second="$(printf '%s' '{"username":"second-admin","password":"correct horse battery staple 42"}' |
   curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/auth/register" \

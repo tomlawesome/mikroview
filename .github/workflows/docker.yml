@@ -52,7 +52,7 @@ jobs:
           go-version: '1.27.4'
       - run: go test ./...
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'
           cache: 'npm'
@@ -64,7 +64,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -142,7 +142,7 @@ jobs:
             exit 1
           fi
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -172,17 +172,34 @@ jobs:
       # image just built, and before `latest` points at it.
       - name: Smoke-test the image that will become latest
         run: |
-          docker run -d --name release-test             -p 8080:8080             $IMAGE:$VERSION
+          # From v0.7.0 the server refuses to start with no key mounted
+          # (CFG-0083, #1202 ruling 2: there is no unencrypted mode), so a bare
+          # `docker run` of this image never answers healthz and latest never
+          # moves. Make a throwaway key the way install.sh and .gitlab-ci.yml's
+          # test:container do -- in a volume, written by a helper container,
+          # owned by the image's uid 1000, mounted read-only at the app folder
+          # -- so this step starts the image the way an operator does.
+          docker volume create release-test-etc >/dev/null
+          docker run --rm -v release-test-etc:/etc/mikroview alpine:3.24 sh -c \
+            'mkdir -p /etc/mikroview/keys &&
+             head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key &&
+             chown 1000:1000 /etc/mikroview/keys/history.key &&
+             chmod 600 /etc/mikroview/keys/history.key'
+          docker run -d --name release-test -p 8080:8080 \
+            -v release-test-etc:/etc/mikroview:ro \
+            $IMAGE:$VERSION
           for attempt in $(seq 1 20); do
             if curl -k --fail --silent --show-error https://127.0.0.1:8080/api/healthz >/dev/null; then
               echo "healthy"
               docker rm --force release-test
+              docker volume rm release-test-etc
               exit 0
             fi
             sleep 1
           done
           docker logs release-test
           docker rm --force release-test
+          docker volume rm release-test-etc
           exit 1
 
       - name: Verify the binary reports the release version
@@ -248,7 +265,7 @@ jobs:
           parent="$(git rev-parse HEAD^2 2>/dev/null || git rev-parse HEAD)"
           echo "short=$(git rev-parse --short=7 "$parent")" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

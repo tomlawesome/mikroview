@@ -780,6 +780,11 @@ type acct struct {
 // code is the authenticator code step steps from the server's now
 // (-1, 0 or +1 are accepted by the server).
 func (a *acct) code(t *testing.T, app *app, step int) string {
+	// A past step is accepted only inside the server's ±1 window; near the
+	// end of a step it can fall out before the request lands.
+	if step < 0 {
+		awayFromStepEdge(app)
+	}
 	return totpCode(t, a.secret, app.serverNow().Add(time.Duration(step)*30*time.Second))
 }
 
@@ -993,6 +998,22 @@ func must(t *testing.T, err error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// storeNameFor is the store name the server seals each harness data file
+// under (#1450): the name storage.go opens it by, which the file's seal
+// is bound to. A test that seals or opens a data file itself uses it.
+func storeNameFor(file string) string {
+	names := map[string]string{
+		"users.json": "auth", "tokens.json": "tokens", "recovery.json": "recovery_keys",
+		"signins.json": "signins", "droplist.json": "droplist", "flags.json": "flags",
+		"entities.json": "entities", "audit.json": "audit", "settings.json": "settings",
+	}
+	name, ok := names[file]
+	if !ok {
+		panic("storeNameFor: no store name for " + file)
+	}
+	return name
 }
 
 var _ = context.Background
