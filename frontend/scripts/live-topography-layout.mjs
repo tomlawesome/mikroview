@@ -11,7 +11,7 @@
 // units. Long host names, deliberately too: the reproduction on #699 saw
 // hosts render as bare IPs, which understated how far the row overran.
 
-import { session, check, done, feedRaw, feedPortScan, waitForFlag } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedPortScan, waitForFlag, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
@@ -51,7 +51,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-layout', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-layout', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

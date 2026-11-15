@@ -61,8 +61,11 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 ## Authentication
 
-- **Local accounts (username/password, Argon2id-hashed, `internal/auth`),
-  plus optional OIDC/SSO.** SSO is strictly additive -- local login keeps
+- **Local accounts (username/password, Argon2id-hashed), plus optional
+  OIDC/SSO, both provided by the gauntlet library** (v0.7.0, #1202:
+  `github.com/tomlawesome/gauntlet`, pinned to an exact version in
+  `go.mod` and fetched straight from GitHub, never through the public Go
+  module proxy). SSO is strictly additive -- local login keeps
   working unmodified whether or not it's configured. See
   [docs/configuration.md](docs/configuration.md#single-sign-on-oidcsso)
   for setup; the security-relevant properties are below.
@@ -125,6 +128,23 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     → PKCE exchange → RS256 token verification → account provisioning →
     session flow, including a repeat login correctly reusing the same
     account.
+- **What gauntlet adds, from v0.7.0 (#1202).** Sign-in is shared code
+  that more than one of the author's projects depends on, so a flaw there
+  is fixed once. Beyond what the bullets below describe, it brings: a staged
+  lockout (5 failures in 5 minutes lock an account for 5 minutes,
+  tripling to an hour; 50 in a row disable its sign-in for 24 hours;
+  100 from one address ban the address for 24 hours), with a one-time
+  unlock code written to the log for a disabled lone admin; sessions held
+  to NIST SP 800-63B-4's limits for a two-factor session (1 hour idle, 24
+  hours in total, whatever is configured); the session cookie named
+  `__Host-mikroview_session` over https, which a browser accepts only with
+  `Secure`, no `Domain` and `Path=/`; errors as RFC 9457 Problem Details
+  with identical bodies for a wrong password and an unknown name; refusal
+  of any request with a non-`Bearer` `Authorization` header; new passwords
+  checked against a list of the 10,000 most common ones and against the
+  username; and sign-ins from a new browser or country flagged on the
+  session and in the audit log. See
+  [docs/configuration.md](docs/configuration.md#authentication) for each.
 - **First-run registration happens in the web UI, and needs a setup
   code from the server's log** (#1415). A server that starts with no
   accounts makes a one-time 80-bit code, prints it once as a warning
@@ -156,7 +176,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   because password hashing (Argon2id, ~100ms by design) runs first and
   would otherwise leave a wide window. Without this, N simultaneous
   registrations would each create an admin. A regression test exercises
-  the race directly (`internal/auth/store_test.go`).
+  the race directly (`TestConcurrentRegisterCreatesExactlyOneAdmin` in
+  gauntlet's `store_test.go`).
 - **There is no way to run MikroView without authentication.** An
   earlier version offered "no authentication" as a first-run choice.
   It was removed. An unauthenticated MikroView publishes which hosts are
@@ -174,7 +195,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 - **A corrupt or unreadable accounts file fails closed, not open.**
   MikroView refuses to start (rather than silently falling back to an
   empty, zero-account state) if the accounts file exists but can't be
-  loaded -- a fresh install (no file at all) is unaffected and boots
+  loaded -- damaged, or sealed under a different key than the one mounted -- a fresh install (no file at all) is unaffected and boots
   normally. Without this, a lost/corrupted accounts file would look
   identical, on the next restart, to a genuine fresh install: the
   first-run setup screen, reachable by whoever gets there first, on a
@@ -189,12 +210,20 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
-  persisted separately -- see "Data handling").
+  persisted separately -- see "Data handling"). **They are short:** at most
+  1 hour unused and 24 hours from sign-in (v0.7.0, #1202; the limits NIST
+  SP 800-63B-4 sets for a session protected by two factors). A longer
+  `auth.sessionTTL` or `auth.sessionMaxLifetime` is cut down to them
+  without a warning, since the sign-in library will not exceed them.
 - **The session cookie's `Secure` flag is on by default**
   (`auth.secureCookie` / `MIKROVIEW_AUTH_SECURE_COOKIE`), matching TLS
   being on by default -- see "TLS" below. Only turn this off if you've
   also set `tls.enabled: false`, or sessions won't work at all (a
-  `Secure` cookie is never sent back over a plain connection).
+  `Secure` cookie is never sent back over a plain connection). With it on
+  the cookie is named `__Host-mikroview_session`: the `__Host-` prefix
+  makes a browser accept it only if it is `Secure`, carries no `Domain`
+  and covers the whole site, so a neighbouring subdomain cannot overwrite
+  it. It is `HttpOnly` and `SameSite=Lax` either way.
 - **A lightweight CSRF mitigation** requires a custom header
   (`X-Requested-With: mikroview`) on every mutating request once an
   account exists -- `SameSite=Lax` cookies already block a cross-site
@@ -214,8 +243,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   standing invariant, checked in the authentication middleware on every
   request, not a one-off migration: **a signed-in session for a local
   account with no active second factor may reach nothing but enrolling
-  one** -- `POST /api/auth/totp/enrol`/`confirm`, or the passkey
-  `register/begin`/`finish` pair -- the same forced-door shape the
+  one** -- `POST /api/auth/totp/enrol`/`confirm`, the passkey
+  `register/begin`/`finish` pair, or `recovery-codes/confirm` -- the same forced-door shape the
   admin-reset-password gate ("An admin resets somebody else's password"
   below) uses. It catches an account however it ended up without a
   factor: never enrolled, cleared by an admin or the
@@ -236,7 +265,11 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   first second factor of either kind -- adding a second or third passkey
   afterward doesn't sign anything else out. Either way, the first factor
   to activate on an account also issues ten recovery codes, shown once
-  (see "Recovery codes are shared between both factors" below). From
+  and held until the person confirms they saved them: until
+  `POST /api/auth/recovery-codes/confirm`, the factor is not live (and an
+  enrolment left unconfirmed for ten minutes is dropped), so nobody is
+  left with a factor and no way back in (see "Recovery codes are shared
+  between both factors" below). From
   then on, a correct password
   on that account does **not** create a session: `POST /api/auth/login`
   instead sets a short-lived (5-minute) `pending` cookie naming the
@@ -274,7 +307,24 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   the password still never creates a session on its own, and the sign-in
   screen falls back to a recovery code with an explanation. See
   [docs/configuration.md](docs/configuration.md#public-url-publicurl-optional-for-passkeys)
-  for the config reference.
+  for the config reference. (The one thing that is a startup failure is
+  asking for the admin passkey rule below where no passkey can be made.)
+- **Every admin must hold a passkey when MikroView is served over https
+  on a domain name** (v0.7.0, owner ruling 2026-10-10, #1202; gauntlet
+  ADR-0015). `auth.adminPasskey` is `required` or `optional`; left unset,
+  it is `required` exactly when `publicUrl` is an https domain name and
+  `optional` otherwise. An admin without a passkey under `required` may
+  reach nothing but the enrolment routes (403 `must-enrol-passkey`), and
+  cannot remove their last working passkey. A user or viewer is never held
+  by it. `required` where no passkey can be made (no https domain name) is
+  refused at start-up (`CFG-0023`) rather than locking the admin out.
+  Setup-only mode, which starts when the config is refused, fails closed
+  too: if it cannot read `publicUrl` or the `auth` section and any admin
+  holds a passkey, it refuses to start rather than let that admin in on a
+  password alone (OWASP "fail securely"). The one case it relaxes the rule
+  is `required` on an IP-address `publicUrl` with no admin holding a
+  passkey -- there a passkey can never have been made -- and it logs that
+  it did.
 - **A passkey login is refused, not just logged, on a signature-counter
   regression -- unless the authenticator is one that never reports a
   counter at all.** Every WebAuthn assertion carries a signature counter
@@ -288,19 +338,20 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   (Touch ID, Windows Hello) never report a counter at all, and would be
   falsely flagged as clones on every single login if a flat "did it go
   backwards" check were used instead.
-- **The TOTP secret is stored in the clear, because verifying a code
-  means recomputing it; a passkey's public key is stored openly for the
-  same reason a public key always can be.** A TOTP code is checked by
-  recomputing HMAC-SHA1 over the shared secret and comparing, not by
-  comparing against a stored hash the way a password is -- there is no
-  one-way form that still lets the server verify a code, so `TOTPSecret`
-  sits in the accounts file (`auth.storePath`) as plain text, one more
-  field behind the same file permissions as the rest of that file. A
+- **The TOTP secret cannot be hashed, because verifying a code means
+  recomputing it, so the file that holds it is sealed; a passkey's public
+  key is stored openly for the same reason a public key always can be.** A
+  TOTP code is checked by recomputing HMAC-SHA1 over the shared secret and
+  comparing, not by comparing against a stored hash the way a password is
+  -- there is no one-way form that still lets the server verify a code, so
+  the secret sits in the accounts file (`auth.storePath`) in a form the
+  server can read back. Before v0.7.0 that file was plain JSON on an
+  install with no key (#1441); from v0.7.0 it is always sealed under
+  `history.keyFile`, which is required. A
   passkey's stored public key is not comparably sensitive: WebAuthn never
   gives the relying party the matching private key in the first place,
   so nothing about storing the public half in the clear weakens the
-  credential. See "Data handling" below for when the accounts file is
-  itself encrypted. **Recovery codes are different again: they get the
+  credential. See "Data handling" below. **Recovery codes are different again: they get the
   same Argon2id hashing a password does**, never stored in clear, and
   each is single-use -- spending one at the second login step marks it as
   burned so it cannot be presented again.
@@ -347,12 +398,12 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   rate-limited on the same bucket as any other password re-check in the
   account menu). An admin can clear another user's factor from the
   people group in Settings (`DELETE /api/auth/users/{id}/totp`,
-  `DELETE /api/auth/users/{id}/passkeys`, admin-only, audited as
-  `user.totp_cleared` / `user.passkeys_cleared`) -- **never on the
-  admin's own account**, the same division drawn for resetting somebody
-  else's password below: MikroView holds exactly one admin, so refusing
-  this route on the caller's own row is also what keeps the admin
-  account out of it entirely. The remaining case -- an admin who has
+  `DELETE /api/auth/users/{id}/passkeys`, admin-only, taking the calling
+  admin's own password, audited as `user.totp_cleared` /
+  `user.passkeys_cleared`) -- **never on the admin's own account**, the
+  same division drawn for resetting somebody else's password below:
+  refusing this route on the caller's own row is also what keeps the
+  admin account out of it. The remaining case -- an admin who has
   lost the phone or every passkey and has no session to reach that
   button from -- has no web route at all:
   `mikroview -clear-second-factor <username>` at the console, gated the
@@ -385,7 +436,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   design (SSO identity is `(issuer, subject)`; any `email` claim is a
   display hint), so there is no reset-by-mail path to attack and no
   SMTP dependency in the authentication surface. `POST
-  /api/auth/users/{id}/reset-password` (admin-only) mints a 16-character
+  /api/auth/users/{id}/reset-password` (admin-only, and it takes the
+  calling admin's own password, so a stolen session alone cannot do it)
+  mints a 16-character
   code over an alphabet with no `0`/`O`/`1`/`I`, stores only its Argon2id
   hash, and returns the code in that one response — it is not persisted
   in clear, not written to the audit log or any server log, and cannot be
@@ -403,9 +456,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   opens the application.
 
   What an admin **cannot** do with it: reset their own account (409 —
-  since MikroView holds a single admin, that keeps the admin account out
-  of this route entirely, and the console's recovery-key-gated
-  `-recover-admin-account` remains the only way back into it), reset an
+  that keeps the admin account out of this route, and the console's
+  recovery-key-gated `-recover-admin-account` remains the way back into
+  it), reset an
   SSO-only account (409 — its provider owns the credential), or set
   another person's password directly. There is no route anywhere that
   writes a chosen password onto somebody else's account: the only thing
@@ -427,7 +480,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   pepper stays a local file on the MikroView host -- so a database dump
   yields digests nothing can test, and compromising the MikroView host
   yields a pepper with no digests to apply it to. Neither prize is
-  useful alone.
+  useful alone. (From v0.7.0 the digests file is also sealed under
+  `history.keyFile`, like the accounts; the pepper is not, being a secret of
+  its own that is kept apart on purpose.)
 
 - **Recovery keys are never printed by the container's main process**,
   because in a container that stream is the container log: `docker run
@@ -565,8 +620,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   `HasLocalPassword`. There is deliberately no state where a local
   password and a linked identity both work — that would keep the weaker
   local-password surface alive on an account that has supposedly moved
-  past it. The invariant lives inside `auth.Store.LinkOIDCIdentity`, not
-  at the API layer, so a future caller cannot forget it.
+  past it. The invariant lives inside gauntlet's
+  `Store.LinkOIDCIdentity`, not at the API layer, so a future caller cannot forget it.
 
   It is **POST, not a GET redirect**, specifically because it is
   destructive: a GET-initiated flow is triggerable cross-site, and with
@@ -578,16 +633,16 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   sign-out-and-in mid-flow can't attach an identity to the wrong
   account.
 - **SSO is additive; the admin keeps both ways in.** A dead identity
-  provider must never lock the operator out. MikroView holds exactly one
-  admin and never authenticates to the provider on its own behalf, so if
-  the provider cannot answer, SSO cannot let anybody in — that one
-  account is the whole break-glass path (owner ruling, 2026-09-18, #1252).
+  provider must never lock the operator out. The admin is the break-glass account:
+  MikroView never authenticates to the provider on its own behalf, so if
+  the provider cannot answer, SSO cannot let anybody in — a local admin is
+  the whole way back (owner ruling, 2026-09-18, #1252).
 
   So the admin keeps its local password *and* its local second factor
   when it is connected to SSO, and keeps both permanently — an
   identity-provider outage costs the admin an ordinary local sign-in
   (username, password, second factor: the break-glass path) rather than
-  a rescue. `auth.Store.LinkOIDCIdentity` holds that as an invariant
+  a rescue. gauntlet's `Store.LinkOIDCIdentity` holds that as an invariant
   rather than the handlers arranging it, the same way the destructive
   conversion below is an invariant: a rule kept at the call sites is one
   forgetful caller away from being lost. **Every other role loses both
@@ -605,7 +660,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   to the provider and back. No email is compared, and none is stored.
 
   **A local account's username may not be an email address**
-  (`auth.ValidateLocalUsername`, enforced at creation only). Identity
+  (`gauntlet.ValidateLocalUsername`, enforced at creation only). Identity
   providers send an email as `preferred_username`, so a namespace that
   excludes them cannot collide with one — which is why nothing has to
   compare addresses to tell a returning identity from an existing local
@@ -622,20 +677,27 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   `mikroview -recover-admin-account` deliberately refuses an SSO-only
   admin — there is no password there to reset — which is why transfer
   is the one that helps.
-- **Admin is a single, transferable role, and transfer is CLI-only**
-  (`mikroview -transfer-admin <username>`, recovery-key gated). No
-  authenticated session can grant or move admin. The reasoning is that
-  identity-provider credentials are usually distinct from host access:
-  if an admin's IdP account is compromised, the attacker can sign in,
-  but cannot make themselves the durable owner of the deployment or
-  demote the real admin out of it. A second admin tier was considered
-  and rejected -- for the amount of administration MikroView actually
-  has, it adds attack surface without adding capability.
-- **API tokens (`internal/auth.Token`, issue #101) are read-only and
-  scoped by construction, not by convention.** A valid
+- **The first account is the admin, and handing that role to someone
+  else is CLI-only** (`mikroview -transfer-admin <username>`,
+  recovery-key gated). Moving the role from the web interface is not
+  offered. The reasoning is that identity-provider credentials are
+  usually distinct from host access: if an admin's IdP account is
+  compromised, the attacker can sign in, but cannot make themselves the
+  durable owner of the deployment or demote the real admin out of it.
+  **Since v0.7.0 (#1202) the sign-in library also lets an admin make
+  further admins through the API** (`POST /api/auth/users` with `role:
+  "admin"`, or `PUT /api/auth/users/{id}/role`). The web interface does
+  not offer it, and each such call needs the calling admin's own password
+  and a current second factor, so a stolen session cookie alone cannot
+  grant it; an admin who signs in only through SSO has no local password
+  to give, so the route refuses them. An earlier version of this page
+  said no authenticated session could grant admin, and that a second admin
+  tier had been rejected; that was true of the old code and is not now.
+- **API tokens (issue #101; kept by gauntlet since v0.7.0) are read-only
+  and scoped by construction, not by convention.** A valid
   `Authorization: Bearer <token>` request is routed to a completely
   separate, minimal internal router carrying only `GET /api/events`,
-  `/flags`, `/stats`, and `/devices` -- there is no handler for anything
+  `/flags`, `/stats`, `/devices` and `/matches` -- there is no handler for anything
   else registered on it, so no code path exists from a bearer token to a
   write, clear, or config endpoint, regardless of the method or path
   requested. Tokens are admin-created/revoked only (`POST`/`GET`/`DELETE
@@ -643,8 +705,13 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   only its SHA-256 hash is ever persisted (Argon2id is deliberately not
   used here -- that cost exists to slow down guessing a low-entropy,
   human-chosen password, and a token's value is already a 128-bit random
-  string). There is no expiry; a token is valid until explicitly
-  revoked, same as a session or account.
+  string). **A token now expires** (v0.7.0): an API token after one year,
+  an ingest token or the drop list's key never; one that is expired is
+  refused with the same 401 as one that is revoked or unknown. A daily
+  clean-up deletes any token unused for a year. **Making one needs the
+  admin's own password** (a token outlives the session that made it), and
+  its value starts `gnt_` so a secret scanner can recognise a leaked one;
+  tokens made earlier keep working unchanged.
 
 ## TLS
 
@@ -695,10 +762,10 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   regardless of anything below. Since #1357, `history.enabled` is also
   on by default: with a key mounted (`history.keyFile` — `install.sh`
   mints one on a fresh install; Compose and the bare `docker run` in
-  docs/install.md do not, so mount one yourself if you want this),
-  the same events are additionally written to one encrypted, compressed
-  file per day. There is no unencrypted fallback — with no key mounted,
-  MikroView stays memory-only, exactly as it always has. Either way,
+  docs/install.md do not, so make one yourself), the same events are
+  additionally written to one encrypted, compressed file per day. A key
+  is required to start at all from v0.7.0 (see the state-store bullet
+  below), and there is no unencrypted fallback. Either way,
   MikroView is a live/recent-history view, not a full log archive; if
   you need durable logs kept somewhere else too, forward RouterOS's
   syslog output to a second, dedicated logging destination as well.
@@ -714,67 +781,79 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   holds event lines, packet payloads, or the rule/NAT/DHCP tables your
   routers push -- those three stay in memory for the life of the
   process, which is what the bullet above promises and this feature does
-  not change. **Snapshot files are encrypted under `history.keyFile`
-  when one is mounted, and are not written at all otherwise** (#853): the
-  same key and cipher the on-disk event history uses, so there is one key
-  to manage, not two. With no key, a restart simply starts cold, exactly
-  as it did before warm restart existed. Losing the directory costs
+  not change. **Snapshot files are always encrypted under
+  `history.keyFile`** (#853): the same key and cipher the on-disk event
+  history uses, so there is one key to manage, not two. (Before v0.7.0 a
+  deployment with no key wrote none and started cold.) Losing the directory costs
   nothing but a cold start, so there is no reason to include it in a
   backup.
-- **The state store: encrypted under the same key, memory-only, or (for
-  the three hashed stores) plain JSON regardless.** Behavioral flags
+- **The state store: everything is sealed under the same key, and the
+  key is required** (#853, #1202). Behavioral flags
   (port scans, activity spikes, critical-port attempts, volume spikes --
   see [docs/configuration.md](docs/configuration.md)), the per-rule
   first/last-seen usage record backing the stale-rule detector, the
   new-device detector's per-MAC first/last-seen history, entities,
-  watchlist entries and definitions, and detector settings each persist
-  to a small JSON file under `/var/lib/mikroview` by default
-  (`flags.storePath` / `flags.ruleUsageStorePath` /
-  `deviceMac.storePath` and the rest -- see `docs/configuration.md` for
-  the full list). Accounts (plus the create/skip decision), API tokens
-  and recovery-key digests persist the same way, to their own files
-  (`auth.storePath` / `auth.tokensStorePath` / `auth.recoveryKeysPath`).
+  watchlist entries and definitions, detector settings, the drop list, and
+  the account stores each persist to a small file under
+  `/var/lib/mikroview` by default (`flags.storePath` /
+  `flags.ruleUsageStorePath` / `deviceMac.storePath` and the rest -- see
+  `docs/configuration.md` for the full list). The account stores are the
+  accounts (`auth.storePath`), API tokens (`auth.tokensStorePath`),
+  recovery-key digests (`auth.recoveryKeysPath`) and the sign-in history
+  (`auth.signInsStorePath`).
 
-  **Every file in the first group is sealed under `history.keyFile` --
-  the same key the event history and warm-restart snapshots use -- and
-  is memory-only, not plaintext, when no key is configured** (#853).
-  There is no unencrypted mode for these, and no migration path from a
-  plaintext file written before this amendment to an encrypted one
-  after: a document that fails to decrypt is refused outright, the same
-  way a corrupted one always was, rather than silently treated as a
-  fresh install.
+  **Every one of these files is sealed under `history.keyFile` -- the
+  same key the event history and warm-restart snapshots use -- and
+  MikroView refuses to start with no key** (v0.7.0, owner ruling,
+  2026-10-10; CFG-0083). Before v0.7.0 the other files were memory-only
+  without a key, and three of them were an exception (owner decision, #853
+  rule 6, 2026-09-05, and the drop list's addendum of 2026-09-18): the
+  accounts, tokens and recovery-key files persisted as plain JSON on the
+  argument that they held only one-way hashes. **That exception has ended,
+  and the argument was wrong:** the accounts file also holds each account's
+  authenticator-app secret, which cannot be hashed (#1441), so a plaintext
+  copy of it lets someone make valid codes for those accounts. The sign-in
+  library will not hold an accounts store unencrypted, and MikroView does
+  not ask it to. A document that fails to decrypt (the wrong key, or one
+  written with no key) is refused outright, the same way a corrupted one
+  always was, rather than treated as a fresh install.
 
-  The accounts, tokens and recovery-key files are the one exception
-  (owner decision, #853 rule 6, 2026-09-05): they hold only one-way
-  hashes -- Argon2id password hashes, SHA-256 token hashes, hashed
-  recovery keys -- so encryption adds nothing a plaintext copy could
-  expose beyond usernames and roles. They keep persisting to a plain
-  JSON file with no key configured, exactly as every MikroView release
-  before #853, and are sealed like everything else once a key is
-  mounted.
+  **Each file is sealed bound to its store's name, not its path**
+  (#1450), so the data directory can move to a new path and still open,
+  while a genuine file put in another store's place (the tokens file
+  copied over the accounts file, say) is refused, whatever the two files
+  are called. A file sealed before this change, bound to its absolute
+  path, opens once at that path and is re-sealed under its store name.
+  Neither binding stops an older genuine copy of the same store's file
+  being put back (a rollback) -- the path binding never did either, and
+  only a version counter kept outside the file would.
 
-  **The accounts file's one departure from "only one-way hashes" is the
-  authenticator-app secret** (#1249): `TOTPSecret` has to stay
-  reversible, since checking a code means recomputing it rather than
-  comparing a hash -- see "Authentication" above. It rides along on the
-  same exemption as the hashes beside it, for the same practical reason
-  (a memory-only accounts file would forget every account on a restart),
-  not because it is itself safe to disclose: with no `history.keyFile`
-  mounted, an account's TOTP secret sits in that file in the clear, same
-  as its username. Recovery codes are not this exception -- they are
-  hashed exactly like a password, alongside it in the same file.
+  **The watchlist match log is sealed too** (#1470): every match it
+  records carries the whole matched event -- addresses, MACs and the raw
+  log line -- so it was the one file a keyed install still wrote in the
+  clear. It is an append-only file of AES-256-GCM frames, one per record
+  or update, under a key derived from `history.keyFile` and a per-file
+  salt, each frame bound to the store name and its position: a frame
+  moved, dropped from the middle or copied from another file does not
+  open, and is refused rather than skipped. As for the event history,
+  frames cut off the end, or the whole file replaced with an older genuine
+  copy, are not detected. The `matchlog.jsonl` name is historical. A
+  plaintext match log from an earlier release is refused at start-up like
+  any other plaintext store, never read or sealed in place. `-backup`
+  carries the lines as plain JSON, like every other store, and `-restore`
+  seals them again under the restoring deployment's key.
 
-  This is a significant change from earlier releases: before #853, none
-  of the above needed any configuration to survive a process restart.
-  From this build, with no `history.keyFile` mounted, flags, entities,
-  watchlist entries, definitions and the rule-usage/MAC-registry records
-  are held in memory only and are lost on every restart. Accounts,
-  tokens and recovery keys are unaffected -- they, and the create/skip
-  decision, keep surviving a restart with or without a key, exactly as
-  before this build. Mount a key (see
-  [docs/configuration.md](docs/configuration.md), "On-disk event
-  history") to also keep the previous behaviour for the memory-only
-  stores, even with `history.enabled` left off.
+  **A plaintext file is never sealed in place** (#1202, ruling 19). An
+  earlier keyless release's plaintext accounts, tokens or recovery-key
+  digests -- on files or in Postgres rows -- a plaintext drop-list
+  file, including one being moved onto Postgres, and a plaintext match
+  log (#1470) are refused at any
+  schema and start-up stops, so someone who can write the data folder
+  but does not hold the key cannot plant an accounts file of their own
+  with an admin they chose. The key has to be in place before upgrading.
+  Drop-list rows already in Postgres are left as the database holds them:
+  unsealed, like every store other than the four account stores, and
+  protected by the database's own access control (ruling 21).
 
   With a key, the flags file contains the IP addresses that triggered a
   flag and a short human-readable description (encrypted); the accounts
@@ -784,21 +863,21 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   the reason given under "Authentication" above (encrypted); the tokens
   file contains token names and SHA-256 hashes, never the raw bearer
   values (encrypted); the rule-usage and MAC-registry files contain
-  labels/addresses and timestamps only (encrypted). Without a key, the
-  accounts, tokens and recovery-key files hold that same content in
-  plain JSON instead -- still no passwords, raw tokens or usable
-  recovery keys, only usernames, roles, token names, hashes, and, for an
-  account with the authenticator-app factor on, that one plaintext
-  secret. None of these survive *container recreation*
-  (as opposed to a simple restart) unless you mount a volume over
-  `/var/lib/mikroview`, whichever persistence mode is in effect.
+  labels/addresses and timestamps only (encrypted). None of these survive
+  *container recreation* (as opposed to a simple restart) unless you mount
+  a volume over `/var/lib/mikroview`. **Back the key up apart from the
+  data**: a lost key means the sealed accounts cannot be read, and there
+  is no recovery.
 
-  Postgres-backed deployments are unaffected by any of this: that backend
-  keeps whatever protection Postgres itself provides at rest, plus the
+  **Postgres-backed deployments seal the four account stores too, and keep
+  the rest as before.** On Postgres each account store's row is sealed
+  under the key with the store's name bound in, so a row copied over
+  another store's fails to open. Every other store keeps whatever
+  protection Postgres itself provides at rest, plus the
   `sslmode=verify-full` connection MikroView already requires -- see
-  `docs/decisions/event-retention.md`'s amendment for why a second
-  encryption layer there was not judged to add real value for this
-  build.
+  `docs/decisions/event-retention.md`'s amendment and its addendum of
+  2026-10-10 for why a second layer there was not judged to add real
+  value for those, and why the account stores are the exception.
 - **UI preferences follow the account, not the browser.** Saved filter
   presets, top-talker widgets, column widths and visibility,
   the topography altitude stop, group-repeats, the live table's
@@ -817,13 +896,23 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   server-side only and used solely to call AbuseIPDB's API from the
   backend (`internal/reputation`) — it's never sent to, or readable by,
   the frontend.
-- **No outbound calls except the on-demand IP lookup.** MikroView never
-  calls out to the network on its own initiative. The only outbound
-  requests it ever makes are to Shodan's InternetDB and (if configured)
-  AbuseIPDB, and only when a user explicitly clicks "investigate" on one
-  specific public IP — see the "IP reputation lookup" section of
+- **Few outbound calls, and the IP lookup is on demand.** The IP lookups
+  go to Shodan's InternetDB and (if configured) AbuseIPDB, and only when a
+  user explicitly clicks "investigate" on one specific public IP — see the
+  "IP reputation lookup" section of
   [docs/configuration.md](docs/configuration.md) for exactly what that
-  does and doesn't do.
+  does and doesn't do. Two downloads run on MikroView's own schedule: the
+  country lookup file (DB-IP's free list by default, a new file each
+  month, or the IPinfo or MaxMind file when the operator enters a key for
+  one), and, **since v0.7.0 (#1202), the common-password list.** At start-up
+  and about daily it fetches a signed list of the 10,000 most common
+  passwords from gauntlet's public GitHub release, so a new password can be
+  checked against it. The request carries no password and nothing of
+  yours, and the list is accepted only if its checksum and its signature
+  (against a key compiled into MikroView) both verify. If GitHub cannot be
+  reached it logs one warning and keeps the list it has. No password, or
+  part of one, is sent to Have I Been Pwned or anyone else. See
+  [docs/configuration.md](docs/configuration.md#choosing-a-password-what-is-refused-and-the-password-list-fetch).
 
 ## Network exposure, by listener
 
@@ -882,8 +971,9 @@ damage a hostile or misbehaving LAN device can do:
   no shell, no package manager, and it runs as a non-root user.
 - Passwords are hashed with Argon2id (64 MiB memory, per-user random
   salt), never stored or logged in plaintext. Login failures are rate-
-  limited per username and per source IP (`internal/auth.LoginLimiter`),
-  and a failed login takes the same amount of time whether the username
+  limited per username and per source IP, escalate to a lockout and then
+  an address ban (gauntlet's `LoginLimiter`; see "What gauntlet adds"
+  above), and a failed login takes the same amount of time whether the username
   exists or not (a constant-time comparison against a dummy hash either
   way), so response timing can't be used to enumerate valid usernames.
 - **Source-address attribution behind a reverse proxy is opt-in, and

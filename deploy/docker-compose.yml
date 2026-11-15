@@ -61,8 +61,8 @@ services:
     # that would need to write anywhere else. Note it does NOT need a
     # /tmp tmpfs: every persisted store writes its temp file alongside
     # the real one inside /var/lib/mikroview (see the atomic
-    # write-temp-then-rename in internal/auth, internal/flags,
-    # internal/entities, internal/audit), never into /tmp.
+    # write-temp-then-rename in internal/persist, which every store
+    # writes through), never into /tmp.
     read_only: true
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
@@ -78,12 +78,17 @@ services:
       # mikroview/config.yaml (see docs/install.md's "Persistent data"
       # section for the permissions step data/ needs first).
       #
-      # On-disk event history is on by default (#1357), but `install.sh`
-      # is what mints a key for it on a fresh install -- this file does
-      # not run that script, so history stays memory-only until you put
-      # one at mikroview/keys/history.key yourself (docs/install.md's
-      # Compose section has the one-liner). Nothing refuses to start
-      # without it.
+      # A KEY IS REQUIRED. MikroView seals its accounts, API tokens,
+      # recovery keys and sign-in history (and, with history on, the
+      # event history) under one key, and refuses to start without it
+      # (CFG-0083, from v0.7.0). It is read from the folder mounted on the
+      # next line: mikroview/keys/history.key on the host, which is
+      # /etc/mikroview/keys/history.key inside the container. `install.sh`
+      # makes one on a fresh install; this file does not run that script,
+      # so make it yourself BEFORE the first `docker compose up`, as
+      # docs/install.md's Compose section explains step by step. Keep a
+      # copy somewhere safe, apart from mikroview/data: without the key
+      # the sealed accounts cannot be read.
       - ./mikroview:/etc/mikroview:ro
       - ./mikroview/data:/var/lib/mikroview
       # Mounting each file separately instead -- config.yaml,
@@ -177,6 +182,10 @@ services:
     # sslmode must be require, verify-ca or verify-full; anything weaker
     # is refused at startup. Prefer verify-full -- require encrypts but
     # does not verify who you are talking to.
+    #
+    # The history key above is still required on Postgres: the accounts,
+    # tokens, recovery keys and sign-in history are sealed under it in
+    # their database rows too. Keep it off the database host.
     #
     # MOVING TO POSTGRES IS A ONE-WAY CHOICE. MAKE IT BEFORE YOU START,
     # OR NOT AT ALL.

@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/device"
 )
 
@@ -29,12 +30,12 @@ import (
 // Called once from main.go, after devices, tokens and auditStore have
 // all opened. A revoke that fails to save is logged and left for the
 // next restart to retry, not fatal -- see the per-token loop below.
-func RevokeOrphanedIngestTokens(devices *device.Registry, tokens *auth.TokenStore, auditStore *audit.Store) {
+func RevokeOrphanedIngestTokens(devices *device.Registry, tokens *gauntlet.TokenStore, auditStore *audit.Store) {
 	if devices == nil || tokens == nil || auditStore == nil {
 		return
 	}
 
-	var candidates []auth.Token
+	var candidates []gauntlet.Token
 	for _, tok := range tokens.List() {
 		if isRevocationCandidate(tok, devices) {
 			candidates = append(candidates, tok)
@@ -74,8 +75,8 @@ func RevokeOrphanedIngestTokens(devices *device.Registry, tokens *auth.TokenStor
 // TokenStore.Create itself refuses to mint (a non-ingest token carrying
 // a Device, or an ingest token carrying none). An old store file written
 // before that rule existed is not assumed to have obeyed it.
-func isRevocationCandidate(tok auth.Token, devices *device.Registry) bool {
-	return tok.Kind == auth.TokenKindIngest && tok.Device != "" && !devices.Has(tok.Device)
+func isRevocationCandidate(tok gauntlet.Token, devices *device.Registry) bool {
+	return tok.Kind == gauntlet.TokenKindIngest && tok.Device != "" && !devices.Has(tok.Device)
 }
 
 // removedAfter reports whether any timestamp in removals falls after

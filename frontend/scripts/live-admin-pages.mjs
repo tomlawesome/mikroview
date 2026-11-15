@@ -30,7 +30,7 @@
 // The room's own read-only grammar is live-engine-room.mjs's job. This
 // scenario stops at the menu and the group's page-level facts.
 
-import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn, removePerson } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -226,12 +226,8 @@ await browser.close()
 // --- Clean up: this account should not outlive the scenario -------------
 
 await openAndCheck('Settings')
-// Arm-then-confirm (round 28's gesture): a click arms remove, a second
-// click on the same button confirms it.
-const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
-await remove.click()
-await remove.click()
-await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+// Remove asks for the admin's password (#1202 U8): removePerson types it.
+await removePerson(page, VIEWER_USER)
 // safe: waitForSelector above throws on timeout
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 

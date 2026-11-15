@@ -42,7 +42,7 @@ each scene full-frame (2800×1720) and cropped to the top-right quarter
 
 ## Data story
 
-Round 49's, plus one line: `laptop-anna → 198.51.100.12 · 445/tcp` through
+Round 49's, plus one line: `laptop-anna → 198.51.100.1 · 445/tcp` through
 l2tp-out, first seen 22:04, 3×, off the baseline — so the header reads
 **off-baseline today 4**. gre-site-b has not been heard for three days.
 

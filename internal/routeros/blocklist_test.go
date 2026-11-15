@@ -549,16 +549,16 @@ func TestBlocklistParseRecipesAgainstRealSamples(t *testing.T) {
 {"type":"metadata","timestamp":1790586842,"size":5759,"records":91,"copyright":"(c) 2026 The Spamhaus Project SLU","terms":"https://www.spamhaus.org/drop/terms/"}
 `, []string{"2001:678:254::/48", "2001:678:6c0::/48", "2001:678:6c4::/48"}},
 		// ET, CINS, blocklist.de and GreenSnow have no header at all.
-		"et":        {"198.51.100.74\n101.47.152.216\n101.47.28.226\n", []string{"198.51.100.74", "198.51.100.216", "198.51.100.226"}},
-		"cins":      {"198.51.100.231\n1.15.14.29\n1.165.215.231\n", []string{"198.51.100.231", "198.51.100.29", "203.0.113.231"}},
-		"blde":      {"198.51.100.99\n1.214.42.172\n1.238.106.229\n", []string{"198.51.100.99", "198.51.100.172", "198.51.100.229"}},
-		"greensnow": {"192.0.2.70\n194.180.49.217\n79.124.58.134\n", []string{"192.0.2.70", "192.0.2.217", "198.51.100.134"}},
+		"et":        {"198.51.100.74\n198.51.100.216\n198.51.100.226\n", []string{"198.51.100.74", "198.51.100.216", "198.51.100.226"}},
+		"cins":      {"198.51.100.231\n198.51.100.29\n203.0.113.231\n", []string{"198.51.100.231", "198.51.100.29", "203.0.113.231"}},
+		"blde":      {"198.51.100.99\n198.51.100.172\n198.51.100.229\n", []string{"198.51.100.99", "198.51.100.172", "198.51.100.229"}},
+		"greensnow": {"192.0.2.70\n192.0.2.217\n198.51.100.134\n", []string{"192.0.2.70", "192.0.2.217", "198.51.100.134"}},
 		"dshield": {"#\n#   DShield.org Recommended Block List \n#    (c) $year DShield.org\n#   some rights reserved. Details http://creativecommons.org/licenses/by-nc-sa/2.5/\n#    If a range is assigned to multiple users, the first one is listed. \n#     \n" +
-			"192.0.2.0\t65.49.1.255\t24\t299\tHURRICANE\tUS\noreply@example.com\n" +
-			"198.51.100.0\t147.185.132.255\t24\t291\tGOOGLE-CLOUD-PLATFORM\tUS\tNone\n" +
-			"203.0.113.0\t64.62.156.255\t24\t290\tHURRICANE\tUS\noreply@example.com\n",
+			"192.0.2.0\t192.0.2.255\t24\t299\tEXAMPLE-NET\tUS\tabuse@example.net\n" +
+			"198.51.100.0\t198.51.100.255\t24\t291\tEXAMPLE-CLOUD\tUS\tNone\n" +
+			"203.0.113.0\t203.0.113.255\t24\t290\tEXAMPLE-NET\tUS\tabuse@example.net\n",
 			[]string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"}},
-		"bindef": {"#\n#\n#\n# Binary Defense Systems Artillery Threat Intelligence Feed and Banlist Feed\n# https://www.binarydefense.com\n#\n# Note that this is for public use only.\n# The ATIF feed may not be used for commercial resale or in products that are charging fees for such services.\n# Use of these feeds for commerical (having others pay for a service) use is strictly prohibited.\n#\n#\n#\n\n1.1.225.66\n1.9.108.229\n1.24.16.126\n",
+		"bindef": {"#\n#\n#\n# Binary Defense Systems Artillery Threat Intelligence Feed and Banlist Feed\n# https://www.binarydefense.com\n#\n# Note that this is for public use only.\n# The ATIF feed may not be used for commercial resale or in products that are charging fees for such services.\n# Use of these feeds for commerical (having others pay for a service) use is strictly prohibited.\n#\n#\n#\n\n198.51.100.66\n203.0.113.229\n198.51.100.126\n",
 			[]string{"198.51.100.66", "203.0.113.229", "198.51.100.126"}},
 	}
 	for key, s := range samples {

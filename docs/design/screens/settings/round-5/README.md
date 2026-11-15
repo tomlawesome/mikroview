@@ -50,8 +50,8 @@ only; round 30 (#708) removed the theme picker.
 | s3 | Garage probes: three lines held, one unfinished in amber; step 3 open on the range box; Try and Save waiting |
 | s4 | The same row complete and tried, Save live; the viewer's prose line; the bar at 390 px |
 
-Data story: the garage range `203.0.113.0/24` and its stragglers,
-`203.0.113.14 garage-cam` and `203.0.113.31 ev-charger`.
+Data story: the garage range `198.51.100.1/24` and its stragglers,
+`198.51.100.2 garage-cam` and `198.51.100.3 ev-charger`.
 
 ## For the build
 

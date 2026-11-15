@@ -18,7 +18,7 @@
 // Rows go absent, never disabled, so every check below also proves that
 // grammar: no menu row renders greyed out for a tier that cannot use it.
 
-import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn, removePerson } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -233,13 +233,9 @@ check(
 await viewer.browser.close()
 await editor.browser.close()
 
-// Arm-then-confirm (round 28's gesture): a click arms remove, a second
-// click on the same button confirms it.
+// Remove asks for the admin's password (#1202 U8): removePerson types it.
 for (const u of [VIEWER_USER, EDITOR_USER]) {
-  const remove = page.locator(`${PEOPLE} .prow:has-text("${u}") .remove`)
-  await remove.click()
-  await remove.click()
-  await page.waitForSelector(`${PEOPLE} .prow:has-text("${u}")`, { state: 'detached' })
+  await removePerson(page, u)
 }
 // safe: waitForSelector above throws on timeout
 check(true, `the viewer and user accounts are removed again`)

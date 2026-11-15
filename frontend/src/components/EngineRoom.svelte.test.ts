@@ -224,6 +224,14 @@ async function settle() {
   flushSync()
 }
 
+// #1202 U8: the people verbs ask for the admin's own password; this types
+// one into the prompt and presses its confirm button (named by `confirm`).
+async function answerPasswordPrompt(confirm: string, password = 'hunter2') {
+  await fireEvent.input(screen.getByLabelText('your password'), { target: { value: password } })
+  await fireEvent.click(screen.getByRole('button', { name: confirm }))
+  await settle()
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   appState.stats = stats()
@@ -462,10 +470,11 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
     await settle()
     await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
-    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
+    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined, 'hunter2')
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
     expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // A read-only key gets no RouterOS lines.
@@ -512,10 +521,11 @@ describe('The settings shelf (#633)', () => {
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
-    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009')
+    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009', 'hunter2')
     expect(screen.getByText('mv1_ingestsecret')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
   })
@@ -558,6 +568,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
@@ -613,7 +624,7 @@ describe('The settings shelf (#633)', () => {
     expect(createUser).toHaveBeenCalledWith('mia', 'first-password', 'viewer')
   })
 
-  it("remove arms before it acts, same gesture as revoke", async () => {
+  it("remove asks for the admin's password before it acts", async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
@@ -625,16 +636,16 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(remove)
     await settle()
     expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+    expect(deleteUser).not.toHaveBeenCalled()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' }))
-    await settle()
-    expect(deleteUser).toHaveBeenCalledWith('u2')
+    await answerPasswordPrompt('confirm — signs them out, revokes their keys')
+    expect(deleteUser).toHaveBeenCalledWith('u2', 'hunter2')
   })
 
   // #1251. The verb kills somebody's password outright, so it arms
   // before it acts like remove and revoke beside it, and what it mints
   // is shown exactly once.
-  it('reset password arms before it acts, then shows the code once', async () => {
+  it('reset password asks for the admin\'s password before it acts, then shows the code once', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     const { resetUserPassword } = await import('../lib/api')
@@ -650,12 +661,9 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(resetUserPassword).not.toHaveBeenCalled()
 
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — their password stops working now' }),
-    )
-    await settle()
+    await answerPasswordPrompt('confirm — their password stops working now')
 
-    expect(resetUserPassword).toHaveBeenCalledWith('u2')
+    expect(resetUserPassword).toHaveBeenCalledWith('u2', 'hunter2')
     expect(screen.getByTestId('reset-code').textContent).toBe('ABCD-EFGH-JKLM-NPQR')
 
     // Closing it is the end of the code: nothing holds it afterwards.
@@ -702,7 +710,7 @@ describe('The settings shelf (#633)', () => {
 
   // #1249's lost-phone path: arm-then-confirm like reset password and
   // remove beside it, and only offered when there is a factor to clear.
-  it('clear authenticator app arms before it acts, and only appears when there is one to clear', async () => {
+  it('clear authenticator app asks for the admin\'s password before it acts, and only appears when there is one to clear', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     const { fetchUsers, clearUserTOTP } = await import('../lib/api')
@@ -720,11 +728,8 @@ describe('The settings shelf (#633)', () => {
 
     // X9-F1: kai has no passkeys either, so clearing the authenticator
     // app also takes the recovery codes -- the confirm says so.
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off; their recovery codes go too' }),
-    )
-    await settle()
-    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
+    await answerPasswordPrompt('confirm — turns their authenticator app off; their recovery codes go too')
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2', 'hunter2')
   })
 
   // usersState.clearFactor() refreshes the list on success -- if that
@@ -745,13 +750,10 @@ describe('The settings shelf (#633)', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
     await settle()
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off; their recovery codes go too' }),
-    )
-    await settle()
+    await answerPasswordPrompt('confirm — turns their authenticator app off; their recovery codes go too')
 
-    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
-    expect(screen.queryByText('clearing…')).toBeNull()
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2', 'hunter2')
+    expect(screen.queryByText('working…')).toBeNull()
     expect(screen.getByRole('button', { name: 'clear authenticator app' })).toBeTruthy()
     expect(screen.getByText(/could not refresh the list/i)).toBeTruthy()
   })
@@ -798,7 +800,7 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByText('passkeys · 2')).toBeTruthy()
   })
 
-  it('clear passkeys arms before it acts, and only appears when there is one to clear', async () => {
+  it('clear passkeys asks for the admin\'s password before it acts, and only appears when there is one to clear', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     const { fetchUsers, clearUserPasskeys } = await import('../lib/api')
@@ -816,9 +818,8 @@ describe('The settings shelf (#633)', () => {
 
     // X9-F1: kai has no authenticator app either, so clearing passkeys
     // also takes the recovery codes -- the confirm says so.
-    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys; their recovery codes go too' }))
-    await settle()
-    expect(clearUserPasskeys).toHaveBeenCalledWith('u2')
+    await answerPasswordPrompt('confirm — removes their passkeys; their recovery codes go too')
+    expect(clearUserPasskeys).toHaveBeenCalledWith('u2', 'hunter2')
   })
 
   // X9-F1: the recovery-codes warning is said only when clearing this
@@ -1210,8 +1211,11 @@ describe('The settings shelf (#633)', () => {
     const { signOutEverywhere } = await import('../lib/api')
     await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm/ }))
+    await settle()
 
-    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(signOutEverywhere).toHaveBeenCalledWith('hunter2')
     expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 

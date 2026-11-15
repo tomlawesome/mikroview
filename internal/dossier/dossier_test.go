@@ -76,7 +76,7 @@ func iotEvents() []store.Event {
 				Time: at.Add(time.Minute), DeviceID: "core", Action: store.Action("accept"),
 				RuleLabel: "lan-out", Chain: "forward",
 				Protocol: "udp", SrcMAC: "d4:8a:fc:11:22:33",
-				SrcIP: "10.0.10.5", SrcPort: 51000, DstIP: "203.0.113.1", DstPort: 123,
+				SrcIP: "10.0.10.5", SrcPort: 51000, DstIP: "192.0.2.1", DstPort: 123,
 				DstCountry: "US",
 			})
 		}

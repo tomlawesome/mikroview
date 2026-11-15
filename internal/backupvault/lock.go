@@ -57,7 +57,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 )
@@ -146,10 +147,10 @@ type lockDoc struct {
 	PublicKey []byte `json:"publicKey"`
 	// Salt and KDF are what the passphrase was stretched with. Recorded
 	// rather than assumed from the current constants, for the reason
-	// internal/auth's hash strings record theirs: raising the cost later
+	// gauntlet's hash strings record theirs: raising the cost later
 	// must not make an existing vault unopenable.
-	Salt []byte         `json:"salt"`
-	KDF  auth.KDFParams `json:"kdf"`
+	Salt []byte             `json:"salt"`
+	KDF  gauntlet.KDFParams `json:"kdf"`
 	// WrappedPrivate is the X25519 private half sealed under the
 	// passphrase-derived key.
 	WrappedPrivate []byte `json:"wrappedPrivate"`
@@ -264,8 +265,8 @@ func (v *Vault) writeLockDoc(doc lockDoc) error {
 
 // wrapKeyFor stretches passphrase with the recorded salt and parameters
 // and returns the retention.Key the private half is sealed under.
-func wrapKeyFor(passphrase string, salt []byte, params auth.KDFParams) (*retention.Key, error) {
-	material := auth.DeriveKey(passphrase, salt, params)
+func wrapKeyFor(passphrase string, salt []byte, params gauntlet.KDFParams) (*retention.Key, error) {
+	material := gauntlet.DeriveKey(passphrase, salt, params)
 	k, err := retention.NewKeyFromMaterial(material)
 	if err != nil {
 		return nil, fmt.Errorf("backupvault: deriving the passphrase key: %w", err)
@@ -319,11 +320,11 @@ func (v *Vault) SetPassphrase(passphrase string) error {
 		return ErrPassphraseSet
 	}
 
-	salt, err := auth.NewKDFSalt()
+	salt, err := gauntlet.NewKDFSalt()
 	if err != nil {
 		return v.abandonChange(st, fmt.Errorf("backupvault: %w", err))
 	}
-	params := auth.DefaultKDFParams()
+	params := gauntlet.DefaultKDFParams()
 	wrapKey, err := wrapKeyFor(passphrase, salt, params)
 	if err != nil {
 		return v.abandonChange(st, err)
@@ -513,12 +514,12 @@ func (v *Vault) ChangePassphrase(current, next string) error {
 	st.busy = true
 	v.lockMu.Unlock()
 
-	salt, err := auth.NewKDFSalt()
+	salt, err := gauntlet.NewKDFSalt()
 	if err != nil {
 		v.finishChange(st)
 		return fmt.Errorf("backupvault: %w", err)
 	}
-	params := auth.DefaultKDFParams()
+	params := gauntlet.DefaultKDFParams()
 	newWrapKey, err := wrapKeyFor(next, salt, params)
 	if err != nil {
 		v.finishChange(st)

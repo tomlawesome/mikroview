@@ -52,6 +52,19 @@ echo main.go | python3 "$SCRIPT" --stdin --ci-file "$TMP/no-lists.yml" >/dev/nul
 set -e
 check "$rc" "2" "missing lists is a red job, not a pass"
 
+# `!reference` elsewhere in the file must parse (the batch rules use it); one
+# inside a path list is not a string list, so it fails red (exit 2).
+printf '.docs_only_paths:\n  - "README.md"\n.code_paths:\n  - "**/*.go"\njob:\n  rules:\n    - !reference [.x, rules]\n' >"$TMP/ref-ok.yml"
+set +e
+echo main.go | python3 "$SCRIPT" --stdin --ci-file "$TMP/ref-ok.yml" >/dev/null 2>"$TMP/err"; rc=$?
+set -e
+check "$rc" "0" "a !reference outside the path lists parses"
+printf '.docs_only_paths:\n  - "README.md"\n.code_paths:\n  - !reference [.x, paths]\n' >"$TMP/ref-bad.yml"
+set +e
+echo main.go | python3 "$SCRIPT" --stdin --ci-file "$TMP/ref-bad.yml" >/dev/null 2>"$TMP/err"; rc=$?
+set -e
+check "$rc" "2" "a !reference inside a path list fails red"
+
 # Diff-base cases that pass by design (GitLab's changes: runs everything there).
 set +e
 CI_PIPELINE_SOURCE=push CI_COMMIT_BEFORE_SHA=0000000000000000000000000000000000000000 \

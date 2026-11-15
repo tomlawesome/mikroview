@@ -62,7 +62,7 @@
         {/if}
 
         <!-- (a) copyright notice -->
-        <p>Copyright © 2026 Alex Bridgwater-Meredith</p>
+        <p>Copyright © 2026 tomlawesome</p>
 
         <!-- (c) licensees may convey under this License, and (d) how to view it -->
         <p>

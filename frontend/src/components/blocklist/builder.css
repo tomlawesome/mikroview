@@ -120,6 +120,13 @@
 .wiz .body.wide .obs.waiting { border-left-color: var(--now); }
 .wiz .body.wide .obs.quiet { border-left-color: var(--fg-dim); }
 .wiz .body.wide .obs b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .keyask { display: block; max-width: none; font-size: 12.5px; line-height: 1.5; padding: 8px 12px; border-left: 2px solid var(--now); color: var(--fg-muted); border-radius: 0 4px 4px 0; background: var(--bg-hover); }
+.wiz .body.wide .keyask b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .keyask .keypass { display: block; margin-top: 6px; width: 220px; max-width: 100%; padding: 4px 8px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+.wiz .body.wide .keyask .keylabel { display: block; margin-top: 6px; font-size: 11.5px; color: var(--fg-dim); }
+.wiz .body.wide .keyask .keylabel + .keypass { margin-top: 2px; }
+.wiz .body.wide .keyask .keymint { margin-top: 6px; padding: 4px 12px; font: inherit; color: var(--fg); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.wiz .body.wide .keyask .keymint:disabled { opacity: 0.5; cursor: default; }
 .wiz .body.wide .warnbox { align-self: stretch; border: 1px solid var(--warn); border-left-width: 3px; background: rgba(242, 138, 30, 0.08); color: var(--fg); padding: 12px 14px; border-radius: 6px; font-size: 13.5px; line-height: 1.6; display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
 .wiz .body.wide .warnbox b { color: var(--warn); font-weight: 600; }
 .wiz.page .body.wide .warnbox pre { font-size: 12px; }

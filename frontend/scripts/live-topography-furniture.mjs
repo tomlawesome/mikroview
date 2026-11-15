@@ -12,7 +12,7 @@
 // "exactly" (the same reasoning live-topography-reality.mjs gives for
 // its own alarm-count check).
 
-import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo, clickSvgText } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo, clickSvgText, tokenMint } from './live-browser.mjs'
 
 /**
  * Poll a selector's own transform+opacity signature until it stops
@@ -80,7 +80,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-furniture', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-furniture', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value

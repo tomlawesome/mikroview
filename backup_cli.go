@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -32,11 +34,26 @@ import (
 // JSON, exactly as every mikroview release before #853 did -- including a
 // file that predates the key, or one from a deployment that has since
 // removed it.
-func backupBackendFor(path string, key *retention.Key) persist.Backend {
+//
+// name is the store's name in backedUpStores, which is the name the
+// server opens it under, so a sealed file is opened bound to the same
+// store name the server sealed it with (#1450).
+func backupBackendFor(path, name string, key *retention.Key) persist.Backend {
 	if key == nil {
 		return persist.NewFileBackend(path)
 	}
-	return persist.NewEncryptedFileBackend(path, key)
+	return persist.NewEncryptedFileBackend(path, name, key)
+}
+
+// backupReaderFor is backupBackendFor for runBackup's reads, which never
+// write to the data directory (#1450 S2): a file still sealed under its
+// pre-#1450 path binding is read as it is, not re-sealed -- the server
+// does that at its next start.
+func backupReaderFor(path, name string, key *retention.Key) persist.Backend {
+	if key == nil {
+		return persist.NewFileBackend(path)
+	}
+	return persist.NewEncryptedFileBackend(path, name, key).WithoutRebind()
 }
 
 // backedUpStores is every store the envelope carries, paired with where
@@ -61,6 +78,9 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"auth", cfg.Auth.StorePath},
 		{"tokens", cfg.Auth.TokensStorePath},
 		{"recovery_keys", cfg.Auth.RecoveryKeysPath},
+		// The sign-in history (#1202): who signed in from where, kept
+		// with the accounts it describes.
+		{"signins", cfg.Auth.SignInsStorePath},
 		{"flags", cfg.Flags.StorePath},
 		{"rule_usage", cfg.Flags.RuleUsageStorePath},
 		{"entities", cfg.Entities.StorePath},
@@ -99,7 +119,7 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		// the one a rollback needs. At a fixed place in the data
 		// directory rather than a configured path; see
 		// configSnapshotsPath.
-		{"config_snapshots", configSnapshotsPath(cfg)},
+		{configSnapshotsStore, configSnapshotsPath(cfg)},
 	}
 }
 
@@ -199,8 +219,16 @@ var excludedFromBackup = map[string]string{
 }
 
 // jsonLinesStore is the one backedUpStores entry whose on-disk shape is
-// not a single JSON document: internal/matchlog's append-only
-// newline-delimited JSON file (#372). internal/backup.Envelope holds
+// not a single JSON document: internal/matchlog's append-only log, a
+// sealed framed file since #1470. It is not read through
+// persist.LoadDocument: -backup opens it with the key
+// (matchlog.ReadLines) and carries its lines as plain JSON lines, per
+// #853's "the backup envelope stays plain, readable JSON", and -restore
+// seals them again under the restoring deployment's key
+// (matchlog.WriteSealed), so the envelope's shape for it is the one v0.6
+// wrote and a v0.6 backup still restores. Both need the key: the file
+// cannot be read without it, and is never written in the clear (rule 2
+// of the #853 amendment). internal/backup.Envelope holds
 // each store as json.RawMessage, which requires exactly one JSON value --
 // fine for every other store here, which is a single JSON object, but a
 // match log with more than one line is many JSON values concatenated,
@@ -265,6 +293,23 @@ func wrapForEnvelope(name string, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("encoding %s for the backup: %w", name, err)
 	}
 	return wrapped, nil
+}
+
+// readMatchLogForBackup is runBackup's read of jsonLinesStore: the
+// sealed log's lines as plain JSON lines, nil when there is nothing to
+// carry. With no key, a match log on disk is refused rather than skipped
+// -- a backup that silently left it out would read as complete -- and
+// an absent or empty file is nothing to carry.
+func readMatchLogForBackup(path string, key *retention.Key) ([]byte, error) {
+	if key == nil {
+		// #nosec G703 -- this deployment's own store path, from config.
+		if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+			return nil, errors.New("the match log is sealed and cannot be read without history.keyFile -- " +
+				"configure the key the server runs with and re-run -backup")
+		}
+		return nil, nil
+	}
+	return matchlog.ReadLines(path, key)
 }
 
 // unwrapFromEnvelope reverses wrapForEnvelope on restore.
@@ -493,7 +538,13 @@ func runBackup(args []string) int {
 		if s.Path == "" {
 			continue
 		}
-		data, _, err := persist.LoadDocument(ctx, backupBackendFor(s.Path, ourKey))
+		var data []byte
+		var err error
+		if s.Name == jsonLinesStore {
+			data, err = readMatchLogForBackup(s.Path, ourKey)
+		} else {
+			data, _, err = persist.LoadDocument(ctx, backupReaderFor(s.Path, s.Name, ourKey))
+		}
 		if err != nil {
 			logger.Error(fmt.Sprintf("reading %s (%s): %v", s.Name, s.Path, err))
 			return 1
@@ -741,6 +792,18 @@ func runRestore(args []string) int {
 			logger.Error(fmt.Sprintf("%v -- nothing has been changed", err))
 			return 1
 		}
+		if name == jsonLinesStore && ourKey == nil {
+			logger.Error(fmt.Sprintf("this backup carries a match log (store %q) but no history.keyFile is "+
+				"configured on this deployment -- the match log is sealed under the key and is never written "+
+				"in the clear. Nothing has been changed", jsonLinesStore))
+			return 1
+		}
+		if name == jsonLinesStore {
+			if err := matchlog.ValidateLines(data); err != nil {
+				logger.Error(fmt.Sprintf("backup: store %q: %v -- nothing has been changed", jsonLinesStore, err))
+				return 1
+			}
+		}
 		decoded[name] = data
 	}
 
@@ -874,7 +937,17 @@ func runRestore(args []string) int {
 			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", path, name, err))
 			return 1
 		}
-		backend := backupBackendFor(path, ourKey)
+		if name == jsonLinesStore {
+			// Sealed again under this deployment's key, whatever key
+			// (or, from v0.6, none) the backup was taken under. ourKey
+			// is non-nil here: checked in the validation pass above.
+			if err := matchlog.WriteSealed(path, ourKey, data); err != nil {
+				rollback(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+				return 1
+			}
+			continue
+		}
+		backend := backupBackendFor(path, name, ourKey)
 		// The version to overwrite with, read without needing the
 		// existing document to actually decrypt -- see
 		// persist.EncryptedFileBackend.Version's doc comment. Backends

@@ -324,7 +324,7 @@ not:
   `/etc/subuid` and `/etc/subgid` avoids the fight entirely.
 
 Unrelated to MikroView but observed on that host: `gitlab-runner` and
-`alex` are assigned the *same* subordinate range in both files, so the
+the human account are assigned the *same* subordinate range in both files, so the
 isolation between those two accounts' containers is thinner than it
 looks. Reported to the owner; not an agent's to change.
 
@@ -365,6 +365,11 @@ share-alike dependency still needs the explicit consideration the global
 dependencies rule asks for, written on the issue. Attribution terms still bind data that
 is fetched rather than shipped — Spamhaus DROP requires credit, and its
 date and copyright text must travel with the data.
+
+The licence gate (`security:licence-policy`) also looks inside shipped
+packages: vendored packages face the same licence rules, and bundled
+assets, embedded files and inlined third-party code need a reviewed
+`bundled-assets:` entry in `supply-chain/licence-policy.yml` (#1432).
 
 ## Pin to the latest version
 

@@ -335,7 +335,7 @@ type Vault struct {
 // fields and device-registry ids (backups.go's recoveryCandidates).
 // Recovery is a one-shot match over a small set at start-up, not an
 // ongoing lookup, which is why this is a plain slice rather than a
-// resolver callback: it keeps this package from importing internal/auth
+// resolver callback: it keeps this package from importing gauntlet
 // or internal/device to get one, and the caller already has the answer
 // in hand from stores an index loss never touches.
 func Open(dir string, key *retention.Key, candidates []string) (*Vault, error) {
@@ -806,7 +806,7 @@ func (v *Vault) RecoveredNameUnknown(device string) bool {
 
 // dirNameFor is the on-disk directory a device's files live under: a
 // fixed-length hash of the device name, never the name itself. Device
-// names pass internal/auth's validDeviceID (printable, <=64 chars,
+// names pass gauntlet's validDeviceID (printable, <=64 chars,
 // control characters refused) but that still permits "..", "/" and
 // friends, and this is the one place a login-scoped write turns into a
 // filesystem path -- worth being unconditionally safe about rather than

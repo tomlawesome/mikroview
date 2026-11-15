@@ -212,15 +212,15 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := registerAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password456", Role: "viewer"}).Body.Close()
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password789", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: fixtureUserPassword, Role: "viewer"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureOtherPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/entities below
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password789"}).Body.Close()
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureOtherPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/entities below
 
 	getResp, err := viewerClient.Get(ts.URL + "/api/entities")
@@ -232,13 +232,13 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 		t.Errorf("expected a viewer GET /api/entities to be forbidden, got %d", getResp.StatusCode)
 	}
 
-	postResp := postJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	postResp := postJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "192.0.2.4"})
 	defer postResp.Body.Close()
 	if postResp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected a viewer POST /api/entities to be forbidden, got %d", postResp.StatusCode)
 	}
 
-	delResp := deleteJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	delResp := deleteJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "192.0.2.4"})
 	defer delResp.Body.Close()
 	if delResp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected a viewer DELETE /api/entities to be forbidden, got %d", delResp.StatusCode)
@@ -253,13 +253,13 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 		t.Errorf("expected a user GET /api/entities to succeed (#653), got %d", userGetResp.StatusCode)
 	}
 
-	userPostResp := postJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	userPostResp := postJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "192.0.2.4"})
 	defer userPostResp.Body.Close()
 	if userPostResp.StatusCode != http.StatusCreated {
 		t.Errorf("expected a user POST /api/entities to succeed (#653), got %d", userPostResp.StatusCode)
 	}
 
-	userDelResp := deleteJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	userDelResp := deleteJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "192.0.2.4"})
 	defer userDelResp.Body.Close()
 	if userDelResp.StatusCode != http.StatusOK {
 		t.Errorf("expected a user DELETE /api/entities to succeed (#653), got %d", userDelResp.StatusCode)

@@ -31,6 +31,59 @@ const PASS = process.env.MV_PASS
 // re-enter their password at that moment, so a scenario driving the
 // real ledger has to type it into the wizard as an operator would.
 export const adminPassword = PASS
+
+/**
+ * tokenMint shapes the body of POST /api/tokens for the gauntlet-era
+ * contract (#1202): token creation re-checks the admin's own password,
+ * so every body carries it, and an ingest token says `expiresAt:
+ * "never"` (a router's pushes should not stop on a calendar date).
+ * An API token sends no expiry, so the server's one-year default
+ * applies. Wrap the body of every direct mint in this rather than
+ * writing the two fields out by hand.
+ */
+export function tokenMint(body) {
+  return {
+    ...body,
+    password: PASS,
+    ...(body.kind === 'ingest' && body.expiresAt === undefined ? { expiresAt: 'never' } : {}),
+  }
+}
+/**
+ * removePerson removes a person from Settings -> people the way an
+ * operator does since #1202 U8: the first click on "remove" opens a
+ * password prompt under the row (it does not arm the button), the
+ * admin's own password goes in, and the confirm button then acts. Waits
+ * for the row to leave the page. The caller is already on Settings.
+ */
+export async function removePerson(page, name) {
+  const people = '#people'
+  await page.locator(`${people} .prow:has-text("${name}") .remove`).click()
+  const prompt = page.locator(`${people} input[aria-label="your password"]`)
+  await prompt.waitFor({ state: 'visible', timeout: 5000 })
+  await prompt.fill(PASS)
+  await page
+    .locator(`${people} button:has-text("confirm — signs them out, revokes their keys")`)
+    .click()
+  await page.waitForSelector(`${people} .prow:has-text("${name}")`, { state: 'detached' })
+}
+
+/**
+ * mintBlocklistKey answers the blocklist builder's key prompt (#1202):
+ * opening the builder no longer mints an ingest key on its own. Until
+ * one exists the block comes without its push part and the builder shows
+ * "The push needs a key", asking for the admin's password. Types it,
+ * presses "Mint key", and waits for the prompt to go (it leaves once the
+ * key exists and the block is drawn again with the push). Works for the
+ * page and the wizard's tail stage alike: both render the same body.
+ */
+export async function mintBlocklistKey(page) {
+  const field = page.locator('#bl-key-password')
+  await field.waitFor({ state: 'visible', timeout: 10000 })
+  await field.fill(PASS)
+  await page.locator('button.keymint').click()
+  await field.waitFor({ state: 'detached', timeout: 10000 })
+}
+
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
@@ -762,9 +815,63 @@ function totpCode(secret, counter) {
 // confirming enrolment.
 const COUNTER_FILE = process.env.MV_DIR ? path.join(process.env.MV_DIR, 'totp-last-counter') : null
 
+// The server's clock, as this harness knows it (#1202). Under the gauntlet
+// library the clock POST /api/test/clock moves (Server.now) also decides
+// sign-in: the authenticator-code window, session age, lockouts. So a
+// scenario that advances it makes every later code worked out from the
+// local Date.now() one the server refuses, for the rest of the instance's
+// life. The offset is not readable before signing in (the hook is admin
+// only), so whoever moves the clock -- advanceTestClock below -- writes the
+// offset it got back to $MV_DIR, which `live-env.sh up` recreates empty for
+// each instance. No file (hooks off, or the clock never moved) means zero,
+// which is plain Date.now().
+const CLOCK_OFFSET_FILE = process.env.MV_DIR ? path.join(process.env.MV_DIR, 'test-clock-offset-ms') : null
+let clockOffsetMs = 0
+
+function readClockOffsetMs() {
+  if (!CLOCK_OFFSET_FILE) return clockOffsetMs
+  try {
+    const n = Number.parseInt(fs.readFileSync(CLOCK_OFFSET_FILE, 'utf8').trim(), 10)
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+/** serverNowMs is the server's idea of now, in epoch milliseconds. */
+export function serverNowMs() {
+  return Date.now() + readClockOffsetMs()
+}
+
+/**
+ * advanceTestClock moves the server's test clock forward by a Go duration
+ * ("3m"; "0s" only reads it) through POST /api/test/clock and remembers
+ * how far ahead of this machine the server now is, so freshTotpCode keeps
+ * producing codes the server accepts. Returns { status, now }: now is the
+ * server's time as a Date, or null when the hook refused (it is absent
+ * unless the instance runs with MV_TEST_HOOKS=1) -- the offset is then
+ * left as it was. `request` is an APIRequestContext that is signed in as
+ * the admin, e.g. page.request.
+ */
+export async function advanceTestClock(request, advance) {
+  const res = await request.fetch(`${URL_BASE}/api/test/clock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    data: { advance },
+  })
+  if (res.status() !== 200) return { status: res.status(), now: null }
+  const now = new Date((await res.json()).now)
+  // The reply is stamped as the request was served, a few milliseconds
+  // before it is read here: the error is far below a 30-second step.
+  const offset = now.getTime() - Date.now()
+  clockOffsetMs = offset
+  if (CLOCK_OFFSET_FILE) fs.writeFileSync(CLOCK_OFFSET_FILE, String(offset))
+  return { status: 200, now }
+}
+
 async function freshTotpCode(secret) {
   for (;;) {
-    const counter = Math.floor(Date.now() / 1000 / 30)
+    const counter = Math.floor(serverNowMs() / 1000 / 30)
     let spent = -1
     try {
       spent = Number.parseInt(fs.readFileSync(COUNTER_FILE, 'utf8').trim(), 10)
@@ -776,7 +883,7 @@ async function freshTotpCode(secret) {
       return totpCode(secret, counter)
     }
     // +1s so the server's clock has certainly crossed the boundary too.
-    await new Promise((r) => setTimeout(r, 30000 - (Date.now() % 30000) + 1000))
+    await new Promise((r) => setTimeout(r, 30000 - (serverNowMs() % 30000) + 1000))
   }
 }
 
@@ -951,6 +1058,18 @@ export async function enrolFactorAndSignIn(page, password, urlBase = URL_BASE) {
   const confirmRes = await call('/api/auth/totp/confirm', { code: await freshTotpCode(secret) })
   if (confirmRes.status() !== 200) {
     throw new Error(`POST /api/auth/totp/confirm answered ${confirmRes.status()} -- the fresh code was refused`)
+  }
+  // gauntlet holds the first factor until the person says the recovery
+  // codes are saved (#1202): the confirm answer carries
+  // pendingConfirmation: true, and the door stays shut until
+  // POST /api/auth/recovery-codes/confirm. The codes themselves are not
+  // needed here. An older backend leaves the field out and the door is
+  // already open.
+  if ((await confirmRes.json().catch(() => ({}))).pendingConfirmation === true) {
+    const codesRes = await call('/api/auth/recovery-codes/confirm', {})
+    if (codesRes.status() !== 200) {
+      throw new Error(`POST /api/auth/recovery-codes/confirm answered ${codesRes.status()} -- the recovery codes were not confirmed`)
+    }
   }
 
   // The two fetches above changed the session's own state, not anything

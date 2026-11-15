@@ -177,7 +177,7 @@ pre .v { color: var(--now); }
 <body>
 <div class="page" id="page"></div>
 <script>
-/* The wizard's data story (screens/wizard/round-15/engine.js, happy path): rb5009, enrolled 198.51.100.1,
+/* The wizard's data story (screens/wizard/round-15/engine.js, happy path): rb5009, enrolled 192.0.2.1,
    certificate 14:02:58, logs 14:03:04 (69 lines), push every 20 min from 14:03:21 on RouterOS 7.24.4,
    backup 03:00 scheduled 14:03:22, 4 rules tagged 14:03:57. Round 2 adds the tail:
    ?scene=stand (default) — Where setup stands, with the tail offered
@@ -212,7 +212,7 @@ function bar() {
 
 function rail() {
   const steps = [
-    ['1', 'The router', 'rb5009 · enrolled 198.51.100.1 · 14:03:04'],
+    ['1', 'The router', 'rb5009 · enrolled 192.0.2.1 · 14:03:04'],
     ['2', 'Mint the token', 'token good until 14:17'],
     ['3', 'Paste once', 'everything arrived · 69 lines'],
     ['4', 'Tag firewall rules', '4 rules tagged · 14:03:57'],
@@ -237,8 +237,8 @@ function track() {
 
 function standBody() {
   const rows = [
-    ['Certificate trusted', 'fetched by 198.51.100.1 · 14:02:58'],
-    ['Logs flowing', `enrolled at 198.51.100.1 · 14:03:04 · ${AFTER ? '1,412' : '69'} lines`],
+    ['Certificate trusted', 'fetched by 192.0.2.1 · 14:02:58'],
+    ['Logs flowing', `enrolled at 192.0.2.1 · 14:03:04 · ${AFTER ? '1,412' : '69'} lines`],
     ['Router state pushed', `every 20 minutes · first 14:03:21 · RouterOS ${ROS}`],
     ['Nightly backup', '03:00 · scheduled 14:03:22'],
     ['Rules tagged', '4 rules log · since 14:03:57'],

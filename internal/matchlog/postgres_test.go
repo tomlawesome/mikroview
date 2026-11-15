@@ -295,7 +295,7 @@ func TestPostgresSameTupleDifferentEntriesDoNotCollapse(t *testing.T) {
 
 func TestPostgresAppendRefusesEmptyIdentity(t *testing.T) {
 	s := mustOpenPostgres(t, 7*24*time.Hour)
-	err := s.Append("e", Tuple{DestIP: "1.2.3.4", Port: 1}, testEvent("x"), time.Now())
+	err := s.Append("e", Tuple{DestIP: "192.0.2.4", Port: 1}, testEvent("x"), time.Now())
 	if err != ErrEmptyIdentity {
 		t.Errorf("Append with no MAC/IP = %v, want ErrEmptyIdentity", err)
 	}
@@ -315,8 +315,8 @@ func TestPostgresMatchingPrefersMACOverIP(t *testing.T) {
 	s := mustOpenPostgres(t, 7*24*time.Hour)
 	now := time.Now()
 
-	tuple1 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.10"}, DestIP: "1.2.3.4", Port: 443}
-	tuple2 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.99"}, DestIP: "1.2.3.4", Port: 443}
+	tuple1 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.10"}, DestIP: "192.0.2.4", Port: 443}
+	tuple2 := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff", IP: "192.168.1.99"}, DestIP: "192.0.2.4", Port: 443}
 	if err := s.Append("e", tuple1, testEvent("x"), now); err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestPostgresMatchingPrefersMACOverIP(t *testing.T) {
 
 func TestPostgresIPFallbackWhenNoMACKnown(t *testing.T) {
 	s := mustOpenPostgres(t, 7*24*time.Hour)
-	tuple := Tuple{Source: Identity{IP: "192.168.1.10"}, DestIP: "1.2.3.4", Port: 443}
+	tuple := Tuple{Source: Identity{IP: "192.168.1.10"}, DestIP: "192.0.2.4", Port: 443}
 	if err := s.Append("e", tuple, testEvent("x"), time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestPostgresQueryFiltersByTimeWindow(t *testing.T) {
 	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
 	base := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
 
-	if err := s.Append("e", Tuple{Source: src, DestIP: "1.1.1.1", Port: 1}, testEvent("x"), base); err != nil {
+	if err := s.Append("e", Tuple{Source: src, DestIP: "192.0.2.1", Port: 1}, testEvent("x"), base); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Append("e", Tuple{Source: src, DestIP: "192.0.2.2", Port: 2}, testEvent("x"), base.Add(48*time.Hour)); err != nil {
@@ -363,7 +363,7 @@ func TestPostgresQueryFiltersByTimeWindow(t *testing.T) {
 	}
 
 	got := collectPG(t, s, Query{Source: src, Since: base, Until: base.Add(time.Hour)})
-	if len(got) != 1 || got[0].Tuple.DestIP != "1.1.1.1" {
+	if len(got) != 1 || got[0].Tuple.DestIP != "192.0.2.1" {
 		t.Fatalf("windowed query got %+v, want only the first record", got)
 	}
 
@@ -378,7 +378,7 @@ func TestPostgresQueryFiltersByTimeWindow(t *testing.T) {
 func TestPostgresQueryIncludesRecordsSpanningIntoTheWindow(t *testing.T) {
 	s := mustOpenPostgres(t, 7*24*time.Hour)
 	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
-	tuple := Tuple{Source: src, DestIP: "1.1.1.1", Port: 1}
+	tuple := Tuple{Source: src, DestIP: "192.0.2.1", Port: 1}
 	base := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
 
 	if err := s.Append("e", tuple, testEvent("x"), base); err != nil {
@@ -467,7 +467,7 @@ func TestPostgresPurgeDeletesOlderThanRetention(t *testing.T) {
 	s := mustOpenPostgres(t, time.Hour)
 	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
 
-	old := Tuple{Source: src, DestIP: "1.1.1.1", Port: 1}
+	old := Tuple{Source: src, DestIP: "192.0.2.1", Port: 1}
 	fresh := Tuple{Source: src, DestIP: "192.0.2.2", Port: 2}
 	if err := s.Append("e", old, testEvent("x"), time.Now().Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -493,7 +493,7 @@ func TestPostgresPurgeDeletesOlderThanRetention(t *testing.T) {
 func TestPostgresPurgeKeepsRecentMatches(t *testing.T) {
 	s := mustOpenPostgres(t, 7*24*time.Hour)
 	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
-	if err := s.Append("e", Tuple{Source: src, DestIP: "1.1.1.1", Port: 1}, testEvent("x"), time.Now()); err != nil {
+	if err := s.Append("e", Tuple{Source: src, DestIP: "192.0.2.1", Port: 1}, testEvent("x"), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 

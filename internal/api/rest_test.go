@@ -15,8 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -40,7 +41,7 @@ import (
 
 // newTestServer's Auth has zero users. That is the "undecided"
 // bootstrap state, which requireAuth answers 503 to -- there is no
-// opt-out state any more, and the auth.Store.Disable this comment used
+// opt-out state any more, and the gauntlet.Store.Disable this comment used
 // to name has not existed for some time (#282).
 //
 // So these tests mount s.mux() rather than s.Routes(): the handlers
@@ -52,11 +53,12 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	st := store.New(1000, time.Hour)
 	fs, _ := flags.Open("")
 	es, _ := entities.Open("")
-	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
+	authStore, tokenStore := newTestAuthStores(t)
+	loginLimiter, err := gauntlet.NewLoginLimiter(10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokenStore, err := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	ingestLimiter, err := gauntlet.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
 	// own doc comment), unlike every other store here -- a temp file is
 	// the closest equivalent for a test fixture.
-	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 1000)
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 1000, testRetentionKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,10 +95,10 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Suggest:       ss,
 		MatchLog:      ml,
 		Auth:          authStore,
-		Sessions:      auth.NewSessionStore(time.Hour),
-		LoginLimiter:  auth.NewLoginLimiter(10, time.Minute),
+		Sessions:      gauntlet.NewSessionStore(time.Hour, 24*time.Hour),
+		LoginLimiter:  loginLimiter,
 		Tokens:        tokenStore,
-		IngestLimiter: auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		IngestLimiter: ingestLimiter,
 		RouterState:   routerstate.New(),
 		StartTime:     time.Now(),
 		Version:       "test-version",
@@ -106,6 +108,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	// and a redeemed enrolment token's acceptedIp), not the pushed
 	// tables, so a test server answers the same way the app does.
 	s.Droplist.SetOwnRanges(s.Devices)
+	mustGate(t, s)
 	return s, st
 }
 
@@ -205,8 +208,8 @@ func TestHandleEventsFiltering(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
-	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, Protocol: "TCP", SrcIP: "10.0.0.1", DstIP: "8.8.8.8", DstPort: 443})
-	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, Protocol: "UDP", SrcIP: "10.0.0.2", DstIP: "1.1.1.1", DstPort: 53})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, Protocol: "TCP", SrcIP: "10.0.0.1", DstIP: "192.0.2.8", DstPort: 443})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, Protocol: "UDP", SrcIP: "10.0.0.2", DstIP: "192.0.2.1", DstPort: 53})
 
 	resp, err := http.Get(ts.URL + "/api/events?action=drop")
 	if err != nil {
@@ -229,7 +232,7 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
-	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "192.0.2.8"})
 	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, SrcIP: "203.0.113.9", DstIP: "10.0.0.5"})
 
 	resp, err := http.Get(ts.URL + "/api/events?srcScope=internal")
@@ -268,8 +271,8 @@ func TestHandleEventsUntilFiltering(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
-	old := st.Insert(store.Event{Time: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
-	st.Insert(store.Event{Time: now, ReceivedAt: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	old := st.Insert(store.Event{Time: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "192.0.2.8"})
+	st.Insert(store.Event{Time: now, ReceivedAt: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "192.0.2.8"})
 
 	resp, err := http.Get(ts.URL + "/api/events?until=" + url.QueryEscape(old.ReceivedAt.Add(30*time.Second).Format(time.RFC3339)))
 	if err != nil {
@@ -298,9 +301,9 @@ func TestHandleEventsAroundWindow(t *testing.T) {
 	tooEarly := now.Add(-time.Hour)
 	center := now
 	tooLate := now.Add(time.Hour)
-	st.Insert(store.Event{Time: tooEarly, ReceivedAt: tooEarly, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
-	inWindow := st.Insert(store.Event{Time: center, ReceivedAt: center, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
-	st.Insert(store.Event{Time: tooLate, ReceivedAt: tooLate, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: tooEarly, ReceivedAt: tooEarly, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "192.0.2.8"})
+	inWindow := st.Insert(store.Event{Time: center, ReceivedAt: center, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "192.0.2.8"})
+	st.Insert(store.Event{Time: tooLate, ReceivedAt: tooLate, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "192.0.2.8"})
 
 	reqURL := ts.URL + "/api/events?ip=203.0.113.9&around=" + url.QueryEscape(center.Format(time.RFC3339)) + "&window=5m"
 	resp, err := http.Get(reqURL)
@@ -941,11 +944,11 @@ func TestHandleStats(t *testing.T) {
 // treated an anonymous caller as an admin while zero accounts existed.
 // That bypass is gone (#164), so the identity has to come from somewhere.
 // Injecting it keeps these tests about the handler; the gate itself is
-// covered by auth_test.go and the authzMatrix guard, which both mount
-// Routes and log in for real. Repeating a full login here would test the
+// covered by gauntlet's own suite and the authzMatrix guard, which
+// mounts Routes and signs in for real. Repeating a full login here would test the
 // middleware nine more times and the handler once.
 func asAdmin(h http.Handler) http.Handler {
-	admin := &auth.User{ID: "test-admin", Username: "admin", Role: auth.RoleAdmin}
+	admin := &gauntlet.User{ID: "test-admin", Username: "admin", Role: gauntlet.RoleAdmin}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, admin)))
 	})
@@ -957,14 +960,14 @@ func asAdmin(h http.Handler) http.Handler {
 // authzMatrix's job) that need a caller below admin to reach it, or to
 // pin that a caller below a handler's floor is refused.
 func asUser(h http.Handler) http.Handler {
-	user := &auth.User{ID: "test-user", Username: "user", Role: auth.RoleUser}
+	user := &gauntlet.User{ID: "test-user", Username: "user", Role: gauntlet.RoleUser}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
 	})
 }
 
 func asViewer(h http.Handler) http.Handler {
-	viewer := &auth.User{ID: "test-viewer", Username: "viewer", Role: auth.RoleViewer}
+	viewer := &gauntlet.User{ID: "test-viewer", Username: "viewer", Role: gauntlet.RoleViewer}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, viewer)))
 	})

@@ -20,7 +20,7 @@ for (const d of dirs) {
   const w = ms => page.waitForTimeout(ms)
   const answer = async (push = 'yes', backup = 'yes', shots = false) => {
     await page.fill('[data-field=name]', 'rb5009'); if (shots) await shot('02-name'); await page.press('[data-field=name]', 'Enter'); await w(250)
-    await page.fill('[data-field=addr]', '198.51.100.1'); await page.press('[data-field=addr]', 'Enter'); await w(250)
+    await page.fill('[data-field=addr]', '192.0.2.1'); await page.press('[data-field=addr]', 'Enter'); await w(250)
     if (shots) await shot('03-push-asked')
     await page.click(`[data-act=${push}]`); await w(250)
     await page.click(`[data-act=${backup}]`); await w(250)

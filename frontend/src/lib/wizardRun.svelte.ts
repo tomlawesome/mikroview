@@ -515,10 +515,14 @@ class WizardRun {
       }
       wizardState.enrolExpectedAddress = this.addr
       wizardState.enrolPassword = this.pass
+      // Kept for the ingest token below: wizardState clears its own copy
+      // once the enrolment call is made, and POST /api/tokens re-checks
+      // the same password (#1202).
+      const password = this.pass
       this.pass = ''
       await wizardState.mintEnrolmentToken()
       if (wizardState.enrolment) {
-        await this.ensureIngestToken()
+        await this.ensureIngestToken(password)
         this.stage = 'paste'
       }
     } finally {
@@ -547,13 +551,13 @@ class WizardRun {
   // /api/tokens writes its own audit line, so nothing else is recorded
   // here. Best-effort: a failure here leaves the push/backup sections
   // blank rather than failing the mint that already succeeded.
-  private async ensureIngestToken(): Promise<void> {
+  private async ensureIngestToken(password: string): Promise<void> {
     if (this.push !== true && this.backup !== true) return
     const device = wizardState.ledgerDevice
     if (!device) return
     if (wizardState.token && wizardState.tokenDevice === device) return
     try {
-      const result = await createToken(`setup-${device}`, 'ingest', device)
+      const result = await createToken(`setup-${device}`, 'ingest', device, password)
       if (typeof result === 'string' || !result.value) return
       wizardState.token = result.value
       wizardState.tokenDevice = device
@@ -581,7 +585,7 @@ class WizardRun {
     wizardState.enrolExpectedAddress = this.addr
     wizardState.enrolPassword = password
     await wizardState.mintEnrolmentToken()
-    if (wizardState.enrolment) await this.ensureIngestToken()
+    if (wizardState.enrolment) await this.ensureIngestToken(password)
   }
 
   // "enrol at <other> instead" (DESIGN.md, "Refused sender"; #1370,

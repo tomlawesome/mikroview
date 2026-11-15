@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/setup"
 )
@@ -457,7 +458,7 @@ func validEnrolToken(token string) bool {
 	return true
 }
 
-// validSetupDevice restricts Device to the charset internal/auth/token.go's
+// validSetupDevice restricts Device to the charset gauntlet's token.go's
 // validDeviceID already accepts in practice for a real device -- letters,
 // digits, dot, underscore, hyphen -- narrower than validDeviceID itself,
 // which exists to police the token store rather than a value that is
@@ -465,7 +466,7 @@ func validEnrolToken(token string) bool {
 // placements (#1095). Empty is fine: Device is optional, and
 // handleSetupCommands already treats "" as "render no backup script."
 //
-// The length bound is auth.MaxDeviceIDLen itself (#1304, Q9), not a
+// The length bound is gauntlet.MaxDeviceIDLen itself (#1304, Q9), not a
 // second constant here kept equal to it only by a comment: nothing
 // legitimate needs a longer device name than an ingest token's own
 // device scope already allows.
@@ -473,7 +474,7 @@ func validSetupDevice(device string) bool {
 	if device == "" {
 		return true
 	}
-	if len(device) > auth.MaxDeviceIDLen {
+	if len(device) > gauntlet.MaxDeviceIDLen {
 		return false
 	}
 	// An auto-discovered device's id is its source address
@@ -495,13 +496,13 @@ func validSetupDevice(device string) bool {
 	return true
 }
 
-// maxSetupTokenLen caps Token well above anything internal/auth ever
+// maxSetupTokenLen caps Token well above anything gauntlet ever
 // issues, while still keeping an absurd value out of the rendered
 // commands (#1095).
 const maxSetupTokenLen = 256
 
 // validSetupToken restricts Token to [A-Za-z0-9_-] -- the alphabet
-// internal/auth actually mints tokens in, so nothing legitimate is
+// gauntlet actually mints tokens in, so nothing legitimate is
 // refused. Narrower than "printable ASCII, no quote/backslash/dollar/
 // whitespace" on purpose: Token also lands bare inside PushBlock and
 // loggingPushBlock's http-header-field=("Content-Type: ...,

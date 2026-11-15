@@ -10,10 +10,12 @@
   // is two keys side by side; proving is a two-column stage, QR left,
   // code right; the ten recovery codes close only on the explicit
   // "I have saved these" (the overlays' own no-escape rule). There is
-  // deliberately no way out -- no cancel, no skip, no sign-out, no SSO
-  // -- and the mono caption says so: the server 403s everything but the
-  // four enrolment routes while this state holds (internal/api/auth.go's
-  // secondFactorEnrolPaths), so a way out here would be a lie.
+  // deliberately no way to skip -- no cancel, no SSO -- and the mono
+  // caption says so: the server 403s everything but the enrolment routes
+  // while this state holds, so a skip here would be a lie. The one
+  // exception (#1202): a passkey-only door at an address that cannot make
+  // a passkey offers a sign-out, and a link to the address that can --
+  // otherwise the person is stuck with no way forward at all.
   //
   // Enrolment logic and copy are AuthenticatorOverlay's and
   // PasskeysOverlay's own, reached through the same lib calls
@@ -21,8 +23,9 @@
   // the overlays themselves are untouched and keep serving the account
   // menu (#1332 is that menu's own open defect; nothing here reaches
   // into it).
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, enrolTOTP, confirmTOTP } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { copyToClipboard } from '../lib/clipboard'
@@ -54,6 +57,17 @@
   let codesCopied = $state(false)
   let error = $state<string | null>(null)
   let busy = $state(false)
+  // #1202 U13: where focus goes after the codes screen's call fails or
+  // sends the person back to choosing. A disabled button drops focus, so
+  // it is put back once the screen has rendered, never left on the body.
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  let choiceSection = $state<HTMLElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstChoice = () =>
+    choiceSection?.querySelector<HTMLElement>('button:not(:disabled)') ?? choiceSection
   // FR2-F1: a non-401 failure from confirm()/addPasskey() is ambiguous by
   // status alone (a passkey ceremony failure is also a plain error), so
   // the session is the signal -- re-checked after the failure, and
@@ -63,6 +77,16 @@
   // would need a fresh secret), so the door offers Enter instead of the
   // form's ordinary submit.
   let codesLost = $state(false)
+  // #1202: gauntlet holds a first factor, with its codes, until the person
+  // says they saved them (confirmRecoveryCodes). Set from the result of
+  // confirmTOTP / registerPasskey; false when the factor went live at once, so "I have saved these" then only re-reads the session.
+  let pendingConfirmation = $state(false)
+
+  // #1202: an admin held at gauntlet's passkey door sees the same walk
+  // with passkeys only -- no authenticator-app key, no way across to one.
+  const passkeyOnly = $derived(authState.state === 'must-enrol-passkey')
+  // Either door still holding means the factor did not commit (FR2-F1).
+  const stillHeld = () => authState.mustEnrolSecondFactor || authState.mustEnrolPasskey
 
   // The design's rule (PasskeysOverlay's own, restated by round 61):
   // passkeys unusable is a named state, never a hidden row -- the key
@@ -72,6 +96,51 @@
   const passkeyUsable = $derived(
     authState.passkeyStatus === 'ready' && location.origin === authState.passkeyOrigin,
   )
+
+  // #1202: where a passkey can be made, when it is not here -- only an
+  // http(s) origin that differs from this one, so a bad or identical
+  // value never becomes a link that goes nowhere.
+  const passkeyHome = $derived.by((): { href: string; host: string } | null => {
+    const origin = authState.passkeyOrigin
+    if (!origin || origin === location.origin) return null
+    try {
+      const u = new URL(origin)
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+      return { href: u.origin, host: u.host }
+    } catch {
+      return null
+    }
+  })
+  let signOutError = $state<string | null>(null)
+  async function signOut() {
+    signOutError = await authState.logout()
+  }
+
+  // #1202: a held first factor that gauntlet no longer holds (the ten
+  // minutes ran out, or nothing is waiting) leaves nothing to confirm.
+  // Back to choosing a factor, with the words saying so -- never a
+  // screen with no way forward.
+  function startAgain(message: string) {
+    recoveryCodes = []
+    pendingConfirmation = false
+    codesCopied = false
+    codesLost = false
+    code = ''
+    name = ''
+    password = ''
+    uri = ''
+    secret = ''
+    busy = false
+    error = message
+    stage = 'choose'
+  }
+
+  // Shown when the held setup is gone but gauntlet's own words are what
+  // say why (a 409: nothing is waiting to be confirmed).
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
+  }
 
   // AuthenticatorOverlay's own extraction, repeated rather than exported
   // from that component's instance scope: the secret lives in the URI's
@@ -163,19 +232,25 @@
     // Same reasoning as startTotpEnrol above -- confirmTOTP throws on a 401.
     try {
       const result = await confirmTOTP(code)
+      if (result === STEP_EXPIRED) {
+        // #1202: the scanned secret ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         // FR2-F1: tell a ceremony refusal apart from "the factor is on,
         // the codes aren't" by re-reading the session -- see codesLost's
         // own comment above.
         await authState.check()
-        if (!authState.mustEnrolSecondFactor) {
+        if (!stillHeld()) {
           codesLost = true
         } else {
           error = result
         }
         return
       }
-      authState.hasTOTP = true
+      // A held factor is not on yet: finish() below turns it on.
+      if (result.pendingConfirmation !== true) authState.hasTOTP = true
       // Codes are minted once, by whichever factor activates first
       // (#1250). On this door that is almost always now -- but an account
       // whose factor was cleared after its codes were issued gets
@@ -186,6 +261,7 @@
         return
       }
       recoveryCodes = result.recoveryCodes ?? []
+      pendingConfirmation = result.pendingConfirmation === true
       stage = 'codes'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -212,10 +288,15 @@
     // still true) and the caller stays on this same stage to retry.
     try {
       const result = await registerPasskey(name.trim(), password)
+      if (result === STEP_EXPIRED) {
+        // #1202: the ceremony ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         // FR2-F1: same reasoning as confirm() above.
         await authState.check()
-        if (!authState.mustEnrolSecondFactor) {
+        if (!stillHeld()) {
           codesLost = true
         } else {
           error = result
@@ -223,9 +304,11 @@
         return
       }
       password = ''
-      authState.passkeyCount += 1
+      // A held passkey is not counted until finish() confirms it.
+      if (result.pendingConfirmation !== true) authState.passkeyCount += 1
       if (result.recoveryCodes) {
         recoveryCodes = result.recoveryCodes
+        pendingConfirmation = result.pendingConfirmation === true
         stage = 'codes'
         return
       }
@@ -246,8 +329,36 @@
     codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
   }
 
-  function finish() {
-    void enter()
+  // "I have saved these". A held first factor (#1202) goes live only once
+  // the server is told, so that call comes first and the session is read
+  // again only if it succeeds. If the hold is gone (ran out, or nothing is
+  // waiting) the person goes back to choosing a factor; if the session is
+  // gone they are signed out; any other failure stays on this screen with
+  // the button usable, so pressing it again is the retry.
+  async function finish() {
+    if (pendingConfirmation) {
+      error = null
+      busy = true
+      try {
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
+          void focusWhenReady(firstChoice)
+          return
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        void focusWhenReady(() => saveButton)
+        return
+      } finally {
+        busy = false
+      }
+    }
+    await enter()
   }
 
   // X4-F1: the ten codes exist in clear nowhere else, and a reload before
@@ -285,23 +396,39 @@
       {#if stage === 'choose'}
         <section
           class="state"
-          aria-label={passkeyUsable
-            ? 'Add a second step: choose a kind'
-            : 'Add a second step: passkeys unavailable at this address'}
+          bind:this={choiceSection}
+          tabindex="-1"
+          aria-label={passkeyOnly
+            ? passkeyUsable
+              ? 'Add a passkey'
+              : 'Add a passkey: passkeys unavailable at this address'
+            : passkeyUsable
+              ? 'Add a second step: choose a kind'
+              : 'Add a second step: passkeys unavailable at this address'}
         >
-          <h1>Add a second step</h1>
-          <p class="subtitle">Your password was right. Signing in here needs a second
-            step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
-            key, prove it works, and you&rsquo;re in.</p>
+          {#if passkeyOnly}
+            <!-- #1202: the admin passkey rule -- one key, no app option. -->
+            <h1>Add a passkey</h1>
+            <p class="subtitle">Your password was right. An admin account here needs
+              a passkey, and this one doesn&rsquo;t have one yet &mdash; set one
+              up, prove it works, and you&rsquo;re in.</p>
+          {:else}
+            <h1>Add a second step</h1>
+            <p class="subtitle">Your password was right. Signing in here needs a second
+              step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
+              key, prove it works, and you&rsquo;re in.</p>
+          {/if}
           <div class="keys">
-            <button type="button" class="key" onclick={chooseTOTPPassword} disabled={busy}>
-              <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
-              <span class="cname">Authenticator app</span>
-              <span class="cdesc">a code from an app on your phone &mdash; Google
-                Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
-                IP addresses included.</span>
-              <span class="go">set it up &#9656;</span>
-            </button>
+            {#if !passkeyOnly}
+              <button type="button" class="key" onclick={chooseTOTPPassword} disabled={busy}>
+                <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
+                <span class="cname">Authenticator app</span>
+                <span class="cdesc">a code from an app on your phone &mdash; Google
+                  Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
+                  IP addresses included.</span>
+                <span class="go">set it up &#9656;</span>
+              </button>
+            {/if}
             {#if passkeyUsable}
               <button type="button" class="key" onclick={choosePasskey} disabled={busy}>
                 <span class="glyph" aria-hidden="true">
@@ -327,14 +454,31 @@
                 </span>
                 <span class="cname">Passkey</span>
                 <span class="cdesc">passkeys need a web address, and you&rsquo;re viewing
-                  MikroView at {location.host} &mdash; your authenticator app works
-                  everywhere.</span>
+                  MikroView at {location.host}{passkeyOnly ? '.' : ' — your authenticator app works everywhere.'}</span>
               </span>
             {/if}
           </div>
-          {#if error}<p class="error">{error}</p>{/if}
-          <p class="noexit">no skipping this one &mdash; every account here needs a
-            second step before the door opens.</p>
+          {#if passkeyOnly && !passkeyUsable}
+            <!-- #1202: passkey-only door at an address that cannot make a
+                 passkey: the way forward is the address that can, and the
+                 way out is signing out. -->
+            {#if passkeyHome}
+              <p class="aside">A passkey can be made at
+                <a class="home-link" href={passkeyHome.href}>{passkeyHome.host}</a>.
+                Open MikroView there and sign in to carry on.</p>
+            {/if}
+            <button class="link-btn" type="button" onclick={signOut}>Sign out</button>
+            {#if signOutError}<p class="error">{signOutError}</p>{/if}
+          {/if}
+          <p class="noexit">
+            {#if passkeyOnly}
+              no skipping this one &mdash; every admin account here needs a
+              passkey before the door opens.
+            {:else}
+              no skipping this one &mdash; every account here needs a
+              second step before the door opens.
+            {/if}
+          </p>
         </section>
       {:else if stage === 'totp-password'}
         <section class="state" aria-label="Authenticator app: confirm your password">
@@ -393,9 +537,8 @@
                 placeholder="123456"
                 bind:value={code}
               />
-              <p class="aside">Confirming turns this on and signs out everywhere
-                else this account is currently signed in. You&rsquo;ll stay signed
-                in here.</p>
+              <p class="aside">When the setup is finished, this account is signed out
+                everywhere else. You&rsquo;ll stay signed in here.</p>
               {#if codesLost}
                 <!-- FR2-F1: the factor is already on -- confirmTOTP can't
                      be retried (it would need a fresh secret), so the
@@ -441,8 +584,8 @@
               autocomplete="current-password"
               bind:value={password}
             />
-            <p class="aside">Adding it turns this on and signs out everywhere else
-              this account is currently signed in. You&rsquo;ll stay signed in here.</p>
+            <p class="aside">When the setup is finished, this account is signed out
+              everywhere else. You&rsquo;ll stay signed in here.</p>
             {#if codesLost}
               <!-- FR2-F1: the factor is already on -- registerPasskey
                    can't be retried (begin's excludeCredentials already
@@ -467,9 +610,11 @@
                Continue awaits startTotpEnrol(), so a second click before
                that settles must not be possible -- disabled matches the
                same busy flag. -->
-          <button class="link-btn" type="button" onclick={chooseTOTPPassword} disabled={busy}>
-            Use an authenticator app instead
-          </button>
+          {#if !passkeyOnly}
+            <button class="link-btn" type="button" onclick={chooseTOTPPassword} disabled={busy}>
+              Use an authenticator app instead
+            </button>
+          {/if}
         </section>
       {:else}
         <section class="state" aria-label="Recovery codes, shown once">
@@ -483,11 +628,18 @@
             {/each}
           </div>
           <button class="copy" type="button" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
-          <p class="aside">Your ten recovery codes cover your authenticator app and
-            your passkeys alike.</p>
-          <button class="enter" type="button" onclick={finish}>I have saved these</button>
+          {#if !passkeyOnly}
+            <p class="aside">Your ten recovery codes cover your authenticator app and
+              your passkeys alike.</p>
+          {/if}
+          <button class="enter" type="button" bind:this={saveButton} onclick={finish} disabled={busy}>I have saved these</button>
         </section>
       {/if}
+      <!-- #1202 U13: one live region, outside the stage chain so it is in
+           the page before any message and survives the move from the
+           codes screen back to choosing. It carries the choose and codes
+           screens' messages; the forms above keep their own. -->
+      <p class="error" role="status" aria-live="polite">{stage === 'choose' || stage === 'codes' ? (error ?? '') : ''}</p>
     </div>
   </div>
 </main>
@@ -827,6 +979,12 @@
   .link-btn:focus-visible {
     color: var(--fg-muted);
     outline: none;
+  }
+
+  .home-link {
+    color: var(--fg);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .codesblock {

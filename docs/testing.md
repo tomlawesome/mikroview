@@ -13,7 +13,10 @@ below its floor, and also fails more than 5 points *above* it: sitting on
 unlocked headroom means the floor is stale, and the fix is to raise it in
 the same change, never to leave the gap sitting there. Floors only ever go
 up — never lowered to make a change pass; a change that would need that
-needs more tests instead.
+needs more tests instead. The one exception: a Go toolchain change that
+alters how coverage is counted re-measures the affected floors in the same
+merge request, with before/after numbers in the commit (owner, 2026-10-10,
+#1440).
 
 The owner's band is 70–85% statement coverage (Go measures statements, not
 branches — a 100% package means every line ran, not that every condition
@@ -21,7 +24,7 @@ was tried both ways). A package inside the band is done; effort goes to
 packages below 70%, each of which carries its reason in the yml.
 
 Measure the way `test:go` does or the numbers are wrong in both directions:
-the `golang:1.27.3` image, `scripts/fetch-upgrade-fixtures.sh` run first,
+the `golang:1.27.4` image, `scripts/fetch-upgrade-fixtures.sh` run first,
 and the test run itself as a non-root user (uid 10001) — root bypasses the
 Unix permission bits some tests deliberately violate to prove a refusal.
 `supply-chain/coverage-floors.yml`'s header has the exact commands.

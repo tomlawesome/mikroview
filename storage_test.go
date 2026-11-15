@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 )
 
 func cfgWithData(dir string) config.Config {
@@ -150,94 +153,121 @@ func TestAdoptionMarkerLivesBesideTheFilesItGuards(t *testing.T) {
 	}
 }
 
-// #853 rule 6 (owner decision, 2026-09-05): auth, tokens and
-// recovery_keys hold only one-way hashes, so they keep persisting to a
-// plain JSON file with no key configured, exactly as every mikroview
-// release before #853. Every other store still follows "no key, no
-// storage" and gets nil.
-func TestBackendForKeepsTheHashedStoresWithoutAKey(t *testing.T) {
+// #853 rule 6 and its drop-list addendum are over (#1202, rulings 2 and
+// 13): no install runs without a key, so no store keeps persisting in
+// the clear without one. With no key every store -- the auth stores and
+// the drop list included, which used to be the exceptions -- gets nil,
+// "no key, no storage".
+func TestBackendForPersistsNothingWithoutAKey(t *testing.T) {
 	dir := t.TempDir()
 	s := &storage{}
 	ctx := context.Background()
 
-	for _, name := range []string{"auth", "tokens", "recovery_keys"} {
-		path := filepath.Join(dir, name+".json")
-		backend, err := s.backendFor(ctx, name, path)
+	for _, name := range []string{"auth", "tokens", "recovery_keys", "signins", "droplist", "flags"} {
+		backend, err := s.backendFor(ctx, name, filepath.Join(dir, name+".json"))
 		if err != nil {
 			t.Fatalf("%s: backendFor: %v", name, err)
 		}
-		if backend == nil {
-			t.Errorf("%s: backendFor returned nil with no key -- this store should keep persisting (#853 rule 6)", name)
-			continue
+		if backend != nil {
+			t.Errorf("%s: backendFor returned %T with no key, want nil -- nothing is written in the clear", name, backend)
 		}
-		if _, ok := backend.(*persist.FileBackend); !ok {
-			t.Errorf("%s: backendFor returned %T, want a plain *persist.FileBackend", name, backend)
-		}
-	}
-
-	backend, err := s.backendFor(ctx, "flags", filepath.Join(dir, "flags.json"))
-	if err != nil {
-		t.Fatalf("flags: backendFor: %v", err)
-	}
-	if backend != nil {
-		t.Errorf("flags: backendFor returned %T with no key, want nil -- flags is not a hashed store", backend)
 	}
 }
 
-// TestBackendForPersistsDroplistWithoutAKey is the v0.6.0 pre-release
-// audit's finding: on a default install (no history.keyFile configured,
-// the common case), the droplist store fell through the same "no key, no
-// storage" rule as any other store and stayed memory-only -- so every
-// entry an operator added was gone on the next restart, and the very
-// next scheduled fetch of the .rsc feed (a full sync -- see
-// droplist.Script's doc comment) pushed an empty list that wiped
-// whatever the router still had. Owner ruling: persist droplist by
-// default, the same plaintext-without-a-key exception #853 rule 6
-// already carved out for auth/tokens/recovery_keys, since an
-// operator-authored blocklist is not a secret the way a password is.
-func TestBackendForPersistsDroplistWithoutAKey(t *testing.T) {
-	dir := t.TempDir()
+// The auth stores refuse outright without a key rather than reading as
+// memory-only: an accounts store that quietly forgot every account on
+// restart would hand the first-run screen to whoever reached it first.
+// Start-up never gets here without one (requireKey); this is the
+// backstop.
+func TestAuthBackendForRefusesWithoutAKey(t *testing.T) {
 	s := &storage{}
-	ctx := context.Background()
-
-	path := filepath.Join(dir, "droplist.json")
-	backend, err := s.backendFor(ctx, "droplist", path)
-	if err != nil {
-		t.Fatalf("backendFor: %v", err)
-	}
-	if backend == nil {
-		t.Fatal("backendFor returned nil with no key -- droplist should keep persisting on a default install")
-	}
-	if _, ok := backend.(*persist.FileBackend); !ok {
-		t.Errorf("backendFor returned %T, want a plain *persist.FileBackend", backend)
+	for _, name := range []string{authStoreAccounts, authStoreTokens, authStoreRecoveryKeys, authStoreSignIns} {
+		if b, err := s.authBackendFor(context.Background(), name, filepath.Join(t.TempDir(), name+".json")); err == nil {
+			t.Errorf("%s: authBackendFor with no key returned %v and no error", name, b)
+		}
 	}
 }
 
-// TestEveryPlaintextStoreIsNamedForTheOperator covers the v0.6.0
-// pre-release audit's Security stage. The no-key log line is the one
-// place an operator is told which stores reach the disk without
-// encryption, and it had gone stale: droplist was added to
-// plaintextWithoutKeyStores and the sentence still named only accounts,
-// tokens and recovery keys. An operator reading it concluded their drop
-// list was memory-only while it was being written in the clear.
-//
-// Adding a store to the exemption without naming it here now fails
-// rather than quietly shipping an incomplete notice.
-func TestEveryPlaintextStoreIsNamedForTheOperator(t *testing.T) {
-	for store := range plaintextWithoutKeyStores {
-		name, ok := plaintextStoreNames[store]
-		if !ok {
-			t.Errorf("store %q is exempt from encryption but has no name for the log line -- the operator would never be told it reaches the disk in the clear", store)
-			continue
+// With a key, each auth store's file is sealed. A file an earlier keyless
+// release left in plain JSON is refused on its first open, like every
+// other store's plaintext file (#1202 review R26, ruling 19, which
+// removed sealing in place that ruling 11 had given the auth stores): the
+// load fails with persist.ErrPlaintextDocument, the message says the data
+// was written without a key before v0.7.0 and to restore a sealed copy or
+// move it aside, and the file is left byte for byte. Paired: a sealed
+// file of the same store opens, and an ordinary store refuses its
+// plaintext file in the same way.
+func TestAuthBackendForRefusesAPlaintextAuthFile(t *testing.T) {
+	key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &storage{key: key}
+	ctx := context.Background()
+	wantRuling19 := func(what string, err error) {
+		t.Helper()
+		low := strings.ToLower(err.Error())
+		for _, w := range []string{"without a key", "v0.7.0", "restore a sealed copy", "move it aside"} {
+			if !strings.Contains(low, w) {
+				t.Errorf("%s: the refusal does not say %q:\n%v", what, w, err)
+			}
 		}
-		if !strings.Contains(plaintextWithoutKeyList(), name) {
-			t.Errorf("store %q is named %q but that does not appear in the list the log line prints: %s", store, name, plaintextWithoutKeyList())
+		for _, w := range []string{"first start of v0.7.0", "seals it", "will seal", "normal start"} {
+			if strings.Contains(low, w) {
+				t.Errorf("%s: the refusal still says %q:\n%v", what, w, err)
+			}
+		}
+	}
+	for _, name := range []string{authStoreAccounts, authStoreTokens, authStoreRecoveryKeys, authStoreSignIns} {
+		path := filepath.Join(t.TempDir(), name+".json")
+		plain := []byte(`{"users":[]}`)
+		if err := os.WriteFile(path, plain, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := s.authBackendFor(ctx, name, path)
+		if err != nil {
+			t.Fatalf("%s: authBackendFor: %v", name, err)
+		}
+		if snap, err := b.Load(ctx); err == nil {
+			t.Errorf("%s: a plaintext auth file opened, Payload %q (it was sealed in place)", name, snap.Payload)
+		} else {
+			if !errors.Is(err, persist.ErrPlaintextDocument) {
+				t.Errorf("%s: err = %v, want one wrapping persist.ErrPlaintextDocument", name, err)
+			}
+			wantRuling19(name, err)
+		}
+		if onDisk, _ := os.ReadFile(path); !bytes.Equal(onDisk, plain) {
+			t.Errorf("%s: the refused file was changed: %q", name, onDisk)
+		}
+
+		// Paired: a sealed file of the same store opens.
+		sealedPath := filepath.Join(t.TempDir(), name+".json")
+		sb, err := s.authBackendFor(ctx, name, sealedPath)
+		if err != nil {
+			t.Fatalf("%s: authBackendFor: %v", name, err)
+		}
+		if _, err := sb.Save(ctx, plain, 0); err != nil {
+			t.Fatalf("%s: Save: %v", name, err)
+		}
+		again, err := s.authBackendFor(ctx, name, sealedPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := again.Load(ctx); err != nil || string(got.Payload) != string(plain) {
+			t.Errorf("%s: the sealed file of the same store did not open: %q, %v", name, got.Payload, err)
 		}
 	}
 
-	for store := range plaintextStoreNames {
-		if !plaintextWithoutKeyStores[store] {
-			t.Errorf("plaintextStoreNames still names %q, which is no longer exempt -- the log line would claim it is written in the clear when it is not", store)
-		}
+	// Paired: an ordinary store under the same key refuses the same file.
+	path := filepath.Join(t.TempDir(), "flags.json")
+	if err := os.WriteFile(path, []byte(`{"flags":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.backendFor(ctx, "flags", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Load(ctx); err == nil {
+		t.Error("an ordinary store opened a plaintext file")
 	}
 }

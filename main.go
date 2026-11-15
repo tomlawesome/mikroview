@@ -41,9 +41,11 @@ import (
 	// this project refuses -- an absence of ours that reads as calm.
 	_ "time/tzdata"
 
+	"github.com/tomlawesome/gauntlet"
+	goidc "github.com/tomlawesome/gauntlet/oidc"
+
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
@@ -63,10 +65,12 @@ import (
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
-	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/prefs"
+	"github.com/tomlawesome/mikroview/internal/recoverykeys"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -114,9 +118,9 @@ const suggestSyncInterval = 5 * time.Minute
 const matchLogPurgeInterval = 1 * time.Hour
 
 // loginLimiter{Threshold,Window}: brute-force protection on
-// POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
-// hardening constant, not exposed via config, same tier as ws.go's
-// wsPongTimeout/wsPingInterval.
+// POST /api/auth/login (gauntlet's LoginLimiter, which adds account
+// lockout on top) -- an internal hardening constant, not exposed via
+// config, same tier as ws.go's wsPongTimeout/wsPingInterval.
 const (
 	loginLimiterThreshold = 5
 	loginLimiterWindow    = 5 * time.Minute
@@ -537,10 +541,10 @@ func reportListenerFailure(log *slog.Logger, err error, failed *atomic.Bool, sto
 }
 
 // passkeyStartupRefusal is the owner's ruling on booting with passkeys
-// that publicUrl cannot support: status is the RelyingParty's own
-// PasskeyStatus (api.PasskeyStatusReady never reaches this -- main's own
+// that publicUrl cannot support: status is the relying party's own
+// PasskeyStatus (PasskeyStatusReady never reaches this -- main's own
 // switch only calls this from the non-ready branches), and
-// anyPasskeysExist is authStore.AnyPasskeysExist() (internal/auth).
+// anyPasskeysExist is authStore.AnyPasskeysExist().
 // Returns the message to log before os.Exit(1), or "" to boot normally
 // -- an install that has never registered a passkey is unaffected by
 // whatever publicUrl says, on any status.
@@ -551,8 +555,8 @@ func reportListenerFailure(log *slog.Logger, err error, failed *atomic.Bool, sto
 // the both-remedies wording, since a caller who only sees "passkeys are
 // off" from the log line above this has no way to know a CLI command is
 // the way out for accounts already holding one.
-func passkeyStartupRefusal(status api.PasskeyStatus, anyPasskeysExist bool) string {
-	if status == api.PasskeyStatusReady || !anyPasskeysExist {
+func passkeyStartupRefusal(status gauntlet.PasskeyStatus, anyPasskeysExist bool) string {
+	if status == gauntlet.PasskeyStatusReady || !anyPasskeysExist {
 		return ""
 	}
 	return fmt.Sprintf(
@@ -572,6 +576,15 @@ func main() {
 	// easy to capture in a script without trimming anything first.
 	if len(os.Args) > 1 && os.Args[1] == "-version" {
 		os.Exit(runVersion())
+	}
+	// A process test (#1202) puts config.yaml and keys/history.key in a
+	// folder of its own and needs the binary to find them there by
+	// itself, as it would at /etc/mikroview. Honoured only with the test
+	// hooks on, and before any mode below loads its config.
+	if os.Getenv("MV_TEST_HOOKS") == "1" {
+		if dir := os.Getenv("MV_TEST_APP_FOLDER"); dir != "" {
+			config.SetAppFolderForTest(dir)
+		}
 	}
 	// The runtime image is distroless (no shell, no curl/wget), so Docker's
 	// HEALTHCHECK -- and any orchestrator's readiness probe -- can't shell
@@ -704,6 +717,14 @@ func main() {
 	}
 
 	logging.PrintBanner()
+
+	// A key is required (#1202, ruling 2): the account stores are sealed
+	// under it and there is no unencrypted mode. Refused here, before
+	// the schema stamp below writes anything, so a refused start leaves
+	// the data directory exactly as it found it.
+	if !requireKey(logging.New("storage"), cfg, "start") {
+		os.Exit(1)
+	}
 
 	// #1238: bring the data directory up to the schema this build knows,
 	// and refuse outright if a newer build wrote it. Before anything else
@@ -856,39 +877,60 @@ func main() {
 	// this deployment persists to JSON files or Postgres, and performs
 	// the one-time JSON adoption when Postgres is newly configured.
 	// A configured-but-unreachable database is fatal -- see openStorage.
+	//
+	// Accounts are gauntlet's (#1202), sealed under the key on either
+	// backend (authBackendFor). A document that exists and will not
+	// open -- plaintext, which an earlier keyless release left and which
+	// is never sealed in place (ruling 19), damaged, or sealed under
+	// another key -- refuses start-up rather than reading as an empty store,
+	// which would present the first-run screen on an instance that has
+	// an admin (#378). The common-password list new passwords are
+	// checked against is built first: the store holds it from the start.
 	authLog := logging.New("auth")
-	authBackend, err := persistence.backendFor(bootCtx, "auth", cfg.Auth.StorePath)
+	passwordList, err := newPasswordList(cfg)
+	if err != nil {
+		authLog.Error(fmt.Sprintf("the common-password list's directory %s: %v", passwordListDir(cfg), err))
+		os.Exit(1)
+	}
+	authBackend, err := persistence.authBackendFor(bootCtx, authStoreAccounts, cfg.Auth.StorePath)
 	if err != nil {
 		authLog.Error(fmt.Sprintf("preparing the accounts store: %v -- refusing to start with authentication in an unknown state", err))
 		os.Exit(1)
 	}
-	authStore, err := auth.OpenWithBackend(authBackend)
-	// A non-nil error here, when persistence is actually configured,
-	// ALWAYS means "the accounts file exists but couldn't be
-	// read/parsed" -- OpenWithBackend returns (store, nil) for both "no
-	// persistence configured" and "file genuinely doesn't exist yet"
-	// (see its own doc comment), so this is never reached by a true
-	// fresh install. This used to be the one store in this boot
-	// sequence that failed closed at all: falling through with
-	// Count()==0 is exactly the state requireAuth treats as "no
-	// decision made yet," silently presenting a stranger with the
-	// first-run setup wizard on a previously-authenticated instance. It
-	// no longer needs to be a special case -- mustOpenStore now applies
-	// the same refusal to every persisted store below, for the same
-	// underlying reason (see #378): an unreadable-but-present document
-	// must never be treated as a blank one to build a live-backed store
-	// around.
+	authStore, err := gauntlet.OpenStore(authBackend, serverStoreOptions(authLog, passwordList))
 	mustOpenStore(authLog, err)
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
 	case authStore.Persisted():
-		// The setup code itself is the Warn line OpenWithBackend just
-		// logged (#1415); this says what it is for.
+		// The setup code itself is the Warn line OpenStore just logged
+		// (#1415); this says what it is for.
 		authLog.Info("no account yet -- MikroView is showing the create-account screen, which asks for the setup code logged above (see docs/configuration.md)")
 	default:
-		authLog.Info("no account yet -- MikroView is showing the create-account screen (see docs/configuration.md)")
+		// auth.storePath is empty: an account would not outlive this
+		// process, so no setup code is issued and none can be created.
+		authLog.Warn("auth.storePath is empty, so accounts are not kept and no account can be created -- nobody can sign in until auth.storePath names a file (see docs/configuration.md)")
 	}
+
+	// Tokens (issues #101, #186, #1224): API, ingest and droplist-pull
+	// bearer tokens, gauntlet's token store sealed like the accounts. A
+	// document that exists and cannot be loaded refuses start-up; see
+	// mustOpenStore. Opened straight after the accounts store and before
+	// anything else that can refuse the start (#1202, ruling 20): on
+	// Postgres this writes the sealed tokens row, which must be there
+	// once the accounts row is sealed -- it is what stops a v0.6.x build
+	// reading those accounts as none -- and must not be written by a
+	// start refused over the accounts themselves.
+	tokensLog := logging.New("tokens")
+	tokenStore, err := openTokens(bootCtx, persistence, cfg, tokensLog)
+	mustOpenStore(tokensLog, err)
+
+	// The sign-in history (#1202, ruling 8): every sign-in attempt, for
+	// an admin to page through (the page is #1442). Sealed like the
+	// accounts; closed at shutdown, which saves its last rows.
+	signInsLog := logging.New("signins")
+	signIns, err := openSignIns(bootCtx, persistence, cfg, signInsLog)
+	mustOpenStore(signInsLog, err)
 
 	// entities (issue #107): the persisted, admin-manageable (type, key)
 	// -> label/tags store backing GET/POST/DELETE /api/entities -- the
@@ -986,20 +1028,6 @@ func main() {
 	})
 	mustOpenStore(baselineLog, err)
 
-	// Tokens (issue #101): read-only API bearer tokens for service-to-
-	// service access. Persistence itself is optional -- a missing/
-	// unconfigured path just means token creation refuses with
-	// ErrTokenNotPersisted, not that mikroview fails to start -- but a
-	// document that exists and can't be loaded is not that case; see
-	// mustOpenStore.
-	tokensLog := logging.New("tokens")
-	tokensBackend, err := persistence.backendFor(bootCtx, "tokens", cfg.Auth.TokensStorePath)
-	if err != nil {
-		tokensLog.Warn(err.Error())
-	}
-	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
-	mustOpenStore(tokensLog, err)
-
 	// Router-backup vault (#394): the SFTP drop box (started further
 	// below, once the listen address is finalised) writes into this,
 	// and the admin API reads it back. Needs tokenStore above (a
@@ -1052,14 +1080,25 @@ func main() {
 	// is optional, same contract as Audit.StorePath above; SetOwnRanges
 	// is wired once routerState exists below, and SetAuditor now, since
 	// auditStore already does.
+	//
+	// Unlike the stores above, a drop-list file that cannot be moved
+	// onto Postgres -- plaintext, sealed under another key, damaged --
+	// refuses the start, in the words the file backend refuses the same
+	// file with (#1202, rulings 19 and 21), rather than carrying on with
+	// an empty, memory-only drop list.
 	droplistLog := logging.New("droplist")
 	droplistBackend, err := persistence.backendFor(bootCtx, "droplist", cfg.Droplist.StorePath)
-	if err != nil {
-		droplistLog.Warn(err.Error())
-	}
+	mustOpenStore(droplistLog, err)
 	droplistStore, err := droplist.OpenWithBackend(droplistBackend)
 	mustOpenStore(droplistLog, err)
 	droplistStore.SetAuditor(auditStore)
+
+	// The recovery-key digests are the fourth auth store. Only the
+	// command-line tools use them, but they are opened here as well, so
+	// that a start is refused over them as over the other three: a
+	// plaintext file an earlier keyless release left is refused, never
+	// sealed in place (#1202, ruling 19).
+	mustOpenStore(logging.New("recovery-keys"), openRecoveryKeysSealed(bootCtx, persistence, cfg))
 
 	// The per-user preferences store (issue #1283): one versioned JSON
 	// record per account, read on sign-in and written on change,
@@ -1101,22 +1140,55 @@ func main() {
 		matchLogPostgres = matchlog.OpenPostgres(persistence.pool, cfg.Watchlist.MatchLogRetention)
 		matchLog = matchLogPostgres
 		// Unlike every other store, there is no adoption path from the
-		// file backend's JSONL format into the Postgres table -- every
+		// file backend's sealed log into the Postgres table -- every
 		// other store's JSON blob round-trips byte-identically (see
 		// persistence.backendFor/persist.AdoptFile), but the match log's
-		// append-only line format doesn't fit that migration, and a
+		// append-only framed format doesn't fit that migration, and a
 		// backfill migrator was judged not worth building for what is,
 		// by design, bounded evidence rather than durable account state.
 		// Said plainly rather than left to be discovered as "why is my
-		// match history gone": the old file is untouched and still
-		// readable by reverting Postgres, it just isn't carried forward.
-		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
-			logging.New("matchlog").Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
-				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
-				"the old file is untouched and still readable if you revert postgres.dsnFile",
-				cfg.Watchlist.MatchLogPath, fi.Size()))
+		// match history gone", and in words that fit the file actually
+		// there. A sealed log (written by a v0.7.0 file-backend install)
+		// is untouched and readable again with the key if Postgres is
+		// reverted. A plaintext one (written before v0.7.0) is not read
+		// and not refused -- on Postgres a leftover plaintext file of the
+		// other non-account stores is warned about, not refused, and the
+		// match log follows them -- but it still holds matched events in
+		// the clear, so the warning names it and says how to move it.
+		mlPath := cfg.Watchlist.MatchLogPath
+		if fi, err := os.Stat(mlPath); err == nil && fi.Size() > 0 {
+			mlLog := logging.New("matchlog")
+			switch err := matchlog.Check(mlPath); {
+			case errors.Is(err, persist.ErrPlaintextDocument):
+				mlLog.Warn(fmt.Sprintf("%s (%d bytes) is a plaintext match log written before v0.7.0. This deployment "+
+					"runs on Postgres, so it is not read and not migrated, but it still holds matched events in the clear "+
+					"on the data volume. Move it off the volume or delete it, for example: mv %s %s.pre-0.7",
+					mlPath, fi.Size(), mlPath, mlPath))
+			case err != nil:
+				mlLog.Warn(fmt.Sprintf("%s (%d bytes) is not a match log this build can read (%v). This deployment runs "+
+					"on Postgres, so it is not read and not migrated", mlPath, fi.Size(), err))
+			default:
+				mlLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+					"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
+					"the old file is untouched, sealed, and readable by this build with history.keyFile if you revert postgres.dsnFile",
+					mlPath, fi.Size()))
+			}
 		}
-	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
+	} else if persistence.key == nil {
+		// Rule 2 of the #853 amendment (docs/decisions/event-retention.md):
+		// no key, no storage. The match log is sealed (#1470) and has no
+		// unsealed mode. Since #1202 ruling 2 the server does not start
+		// without a key, so this is unreachable in a running server; it
+		// is kept so the rule is visible here.
+		logging.New("matchlog").Info("no history.keyFile, so no match log: it is sealed under the key and nothing is written in the clear")
+	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity, persistence.key); err != nil {
+		// A plaintext log from an earlier release, or a sealed one with a
+		// frame that does not open, is refused like any other store that
+		// fails to open (#378, #1202 ruling 19): running on would leave
+		// the plaintext on disk, or pass over an altered file.
+		if errors.Is(err, persist.ErrPlaintextDocument) || errors.Is(err, retention.ErrFrameDidNotOpen) {
+			mustOpenStore(logging.New("matchlog"), err)
+		}
 		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and MikroView is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
@@ -1513,6 +1585,25 @@ func main() {
 	}
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
+
+	// Every store has now opened -- the auth stores and the drop list
+	// sealed -- so the schema can move to 4, the downgrade guard. Not
+	// before: a start refused above leaves the schema where it was, so
+	// the release the data came from can still open it. Nor on a start
+	// where a store failed to move onto Postgres (finishSchemaUpgrade).
+	// A stamp that cannot be written refuses start-up (#1202 review R20).
+	if err := persistence.finishSchemaUpgrade(bootCtx, cfg); err != nil {
+		logging.New("schema").Error(err.Error())
+		os.Exit(1)
+	}
+
+	// The last store has opened, so a first move onto Postgres is done
+	// -- unless one of them failed to move, in which case the marker is
+	// not written and the next start tries again (#1202 review R22).
+	if err := persistence.recordPostgresAdoption(); err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
 
 	// #1240: the build this data directory last ran, read out of the
@@ -1769,10 +1860,10 @@ func main() {
 	}
 
 	// SSO (issue #43): additive on top of local auth, never a
-	// replacement -- see internal/oidc and auth.Store.
+	// replacement -- see gauntlet/oidc and gauntlet's Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
 	// never take down local login, so every failure path here just
-	// leaves srv.OIDC nil (SSO unavailable, 404 on its routes) rather
+	// leaves the gate without SSO (unavailable, 404 on its routes) rather
 	// than exiting -- the same degrade-not-crash contract GeoIP/Flags/
 	// Auth/Definitions already have above for their own optional
 	// persistence/integrations.
@@ -1831,18 +1922,11 @@ func main() {
 	// persistenceInfo (issue #677's settings persistence row) states
 	// which backend the storage decision above (persistence.pool) actually
 	// resolved to, rather than re-deriving a guess from cfg.Postgres.DSNFile
-	// independently. Dir is internal/auth's own configured StorePath's
-	// directory, used only in the "file" case.
+	// independently. Dir is the accounts store's configured directory.
 	//
-	// #853 adds a third state: on the JSON path with no history.keyFile
-	// configured, backendFor refuses most stores rather than handing back
-	// a working file backend (see storage.go), so "file" would overclaim
-	// what is actually happening for those -- nothing is being written
-	// anywhere. Accounts and tokens are the exception (rule 6): they
-	// persist in every one of these three states, encrypted or plain, so
-	// api.PersistenceInfo's own doc comment carries that caveat rather
-	// than this switch, which still only describes the stores "memory"
-	// can truthfully apply to.
+	// #853's third state, "memory" (no history.keyFile, so nothing on the
+	// JSON path persists), is no longer reachable here: start-up refuses
+	// without a key (#1202). It stays for completeness, not as a mode.
 	persistenceInfo := api.PersistenceInfo{Backend: "postgres"}
 	switch {
 	case persistence.pool != nil:
@@ -1860,50 +1944,64 @@ func main() {
 		}
 	}
 
-	// Passkeys (#1250). NewRelyingParty turns the validated publicUrl
-	// setting into either a usable WebAuthn relying party or the reason
-	// there isn't one; internal/config has already warned the operator
-	// about the setting itself (CFG-0100..CFG-0103), so an unusable
-	// value is not a startup failure here -- passkeys simply report why
-	// they are off, which is the design's "MikroView always boots"
-	// stance. An error return is a different thing: it means
-	// webauthn.New rejected a configuration this code believed was
-	// well-formed, which is a bug rather than a bad setting, and
-	// booting past it would ship a deployment whose passkeys are
-	// missing with nothing said.
+	// Passkeys (#1250), gauntlet/passkey's relying party since #1202.
+	// passkey.New turns the validated publicUrl setting into either a
+	// usable WebAuthn relying party or the reason there isn't one;
+	// internal/config has already warned the operator about the setting
+	// itself (CFG-0100..CFG-0103), so an unusable value is not a startup
+	// failure here -- passkeys simply report why they are off, which is
+	// the design's "MikroView always boots" stance. An error return is a
+	// different thing: it means the WebAuthn library rejected a
+	// configuration this code believed was well-formed, which is a bug
+	// rather than a bad setting, and booting past it would ship a
+	// deployment whose passkeys are missing with nothing said.
 	passkeyLog := logging.New("passkeys")
-	relyingParty, err := api.NewRelyingParty(cfg.PublicURL)
+	relyingParty, err := newRelyingParty(cfg)
 	if err != nil {
 		passkeyLog.Error(fmt.Sprintf("building the WebAuthn relying party from publicUrl: %v", err))
 		os.Exit(1)
 	}
-	switch relyingParty.Status {
-	case api.PasskeyStatusReady:
-		passkeyLog.Info(fmt.Sprintf("passkeys on for %s (relying party %q)", relyingParty.Origin, relyingParty.RPID))
+	switch relyingParty.Status() {
+	case gauntlet.PasskeyStatusReady:
+		passkeyLog.Info(fmt.Sprintf("passkeys on for %s (relying party %q)", relyingParty.Origin(), relyingParty.RPID()))
 	default:
 		// Said once, at boot, because the alternative is an operator
 		// discovering it from an empty panel in the account menu.
-		passkeyLog.Info(fmt.Sprintf("passkeys off: %s -- set publicUrl to the https address people reach MikroView on", relyingParty.Status))
+		passkeyLog.Info(fmt.Sprintf("passkeys off: %s -- set publicUrl to the https address people reach MikroView on", relyingParty.Status()))
 
 		// Owner ruling: booting past this point with a passkey already
 		// registered would be worse than saying nothing -- that account
 		// has a credential sitting in its account menu that can never
-		// complete a login while publicUrl stays in this state (see
-		// nonStalePasskeys/PasskeyStatus's own doc comments for why), and
+		// complete a login while publicUrl stays in this state, and
 		// nothing else would ever tell its owner that. Refused here,
 		// naming both ways out, rather than left for someone to discover
 		// as an unexplained sign-in failure.
 		//
 		// Only reachable from ordinary server start-up: -clear-second-
 		// factor (runClearSecondFactor, above) os.Exits before this
-		// function is even entered, and never constructs a RelyingParty
+		// function is even entered, and never constructs a relying party
 		// itself, so the command this message points an operator at is
 		// never caught by the refusal it exists to resolve.
-		if msg := passkeyStartupRefusal(relyingParty.Status, authStore.AnyPasskeysExist()); msg != "" {
+		if msg := passkeyStartupRefusal(relyingParty.Status(), authStore.AnyPasskeysExist()); msg != "" {
 			passkeyLog.Error(msg)
 			os.Exit(1)
 		}
 	}
+
+	loginLimiter, err := gauntlet.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow)
+	if err != nil {
+		authLog.Error(fmt.Sprintf("the login limiter: %v", err))
+		os.Exit(1)
+	}
+	// Without a log the limiter drops what it has to report: a lockout
+	// it could not save, and pressure on its capped map (#1202 review R4).
+	loginLimiter.SetLog(authLog)
+	ingestLimiter, err := gauntlet.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow)
+	if err != nil {
+		authLog.Error(fmt.Sprintf("the ingest limiter: %v", err))
+		os.Exit(1)
+	}
+	sessionIdle, sessionCeiling := sessionLimits(cfg.Auth)
 
 	srv := &api.Server{
 		Store:                   st,
@@ -1939,14 +2037,13 @@ func main() {
 		Evaluation:              eng,
 		DeviceStaleAfter:        cfg.Flags.DeviceStaleAfter,
 		Auth:                    authStore,
-		Sessions:                auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
-		LoginLimiter:            auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:            cfg.Auth.SecureCookie,
+		Sessions:                gauntlet.NewSessionStore(sessionIdle, sessionCeiling),
+		LoginLimiter:            loginLimiter,
 		TrustedProxies:          trustedProxies,
 		ClientIPHeader:          cfg.Listen.ClientIPHeader,
 		UIAllow:                 uiAllow,
 		Tokens:                  tokenStore,
-		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		IngestLimiter:           ingestLimiter,
 		RouterState:             routerState,
 		Vault:                   routerBackupVault,
 		BackupSlices:            routerBackupSlices,
@@ -1963,9 +2060,6 @@ func main() {
 			BackupKeyUnreadable: routerBackupKeyUnreadable,
 			Candidates:          setupAddressCandidates(cfg.Listen.HTTP),
 		},
-		OIDC:                  oidcClient,
-		OIDCState:             oidcState,
-		OIDCPolicy:            oidcPolicy,
 		StartTime:             time.Now(),
 		Version:               version,
 		Geo:                   geo,
@@ -1973,7 +2067,6 @@ func main() {
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
-		RelyingParty:          relyingParty,
 		ConfigEditor:          newConfigEditor(configLog, persistence, cfg, configResult.ConfigPath),
 	}
 
@@ -1996,8 +2089,35 @@ func main() {
 		srv.Reseed = func() error {
 			return engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults)
 		}
-		logging.New("test-hooks").Warn("MV_TEST_HOOKS=1: the test-only routes POST /api/test/clock and POST /api/test/reset are registered. An admin can move this instance's watch clock forward and erase every event, flag, match, pushed router table and definition it holds. This exists for the live-check harness -- never set it on a real deployment.")
+		logging.New("test-hooks").Warn("MV_TEST_HOOKS=1: the test-only routes POST /api/test/clock and POST /api/test/reset are registered. An admin can move this instance's clock forward -- the watch clock, and the one sign-in, lockouts and token expiry are judged by -- and erase every event, flag, match, pushed router table and definition it holds. This exists for the live-check harness -- never set it on a real deployment.")
 	}
+
+	// The gate (#1202, design record decision 3): gauntlet's HTTP layer
+	// in front of every /api/ route, over the stores opened above.
+	// Unusual sign-ins are flagged, never refused; nobody is mailed;
+	// passkey-alone sign-in is off (ruling 9). The country comes from
+	// MikroView's own country data (ruling 6), which answers nothing
+	// until a source is loaded.
+	g, err := srv.NewGate(api.GateOptions{
+		SecureCookie: cfg.Auth.SecureCookie,
+		AdminPasskey: adminPasskeyRule(cfg, relyingParty),
+		Passkeys:     passkeysFor(relyingParty),
+		OIDC:         oidcClient,
+		OIDCState:    oidcState,
+		OIDCPolicy:   oidcPolicy,
+		SignIns:      signIns,
+		Country:      geo.Country,
+		Log:          logging.New("gate"),
+	})
+	if err != nil {
+		authLog.Error(fmt.Sprintf("building the sign-in layer: %v", err))
+		os.Exit(1)
+	}
+	srv.Gate = g
+	// The common-password list's refresh (ruling 7) and the daily token
+	// sweep (ruling 5), both tied to ctx so a shutdown stops them.
+	go passwordList.Run(ctx)
+	go runTokenSweep(ctx, g, tokensLog)
 
 	// The range the memory control may move within, read from this
 	// host's cgroup or RAM once, here, and never again while the process
@@ -2261,6 +2381,11 @@ func main() {
 	if err := hist.Close(); err != nil {
 		logging.New("history").Warn("could not flush the retained event history at shutdown", "err", err)
 	}
+	// The sign-in history saves a few seconds behind; its last rows are
+	// saved here, with nothing left that could add one.
+	if err := signIns.Close(); err != nil {
+		signInsLog.Warn(fmt.Sprintf("could not save the sign-in history at shutdown: %v", err))
+	}
 
 	// Everything above has now run -- stores drained, snapshot and
 	// history flushed -- exactly as it would for an operator's signal.
@@ -2277,11 +2402,13 @@ func main() {
 // with the reason logged -- see the call site in main for the
 // degrade-not-crash contract. Shared with setup-only mode (#1347), which
 // turns SSO on only when the oidc block itself validated.
-func startOIDC(ctx context.Context, cfg config.Config, authStore *auth.Store) (*oidc.Client, *oidc.StateCodec, oidc.Policy) {
-	var oidcClient *oidc.Client
-	var oidcState *oidc.StateCodec
+func startOIDC(ctx context.Context, cfg config.Config, authStore *gauntlet.Store) (*goidc.Client, *goidc.StateCodec, goidc.Policy) {
+	var oidcClient *goidc.Client
+	var oidcState *goidc.StateCodec
 	oidcLog := logging.New("oidc")
-	oidcPolicy := oidc.Policy{
+	// Group-to-role mapping (RoleFromGroups) stays off: every SSO account
+	// is provisioned as a user, as before (ruling 10, #1444).
+	oidcPolicy := goidc.Policy{
 		AllowedGroups:       cfg.OIDC.AllowedGroups,
 		GroupsClaim:         cfg.OIDC.GroupsClaim,
 		AllowedEmails:       cfg.OIDC.AllowedEmails,
@@ -2297,17 +2424,20 @@ func startOIDC(ctx context.Context, cfg config.Config, authStore *auth.Store) (*
 		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
 	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
 		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
-	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
+	case goidc.IsMultiTenantIssuer(cfg.OIDC.IssuerURL):
 		// Refused outright, not warned about, and deliberately not
-		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
-		// off is the fail-closed outcome; local login is unaffected.
+		// rescuable by configuration -- docs/decisions/multi-tenant-oidc.md
+		// stands as it was before #1202: gauntlet would accept a shared
+		// issuer once the policy pins its tenant, and MikroView does not
+		// take that offer. Leaving SSO off is the fail-closed outcome;
+		// local login is unaffected.
 		oidcLog.Error(fmt.Sprintf(
 			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
 				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
 				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
 			cfg.OIDC.IssuerURL))
 	default:
-		client, err := oidc.New(ctx, oidc.Config{
+		client, err := goidc.New(ctx, goidc.Config{
 			IssuerURL:    cfg.OIDC.IssuerURL,
 			ClientID:     cfg.OIDC.ClientID,
 			ClientSecret: cfg.OIDC.ClientSecret,
@@ -2317,10 +2447,11 @@ func startOIDC(ctx context.Context, cfg config.Config, authStore *auth.Store) (*
 			// redirect_uri-confusion vulnerability.
 			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
 			Scopes:      cfg.OIDC.Scopes,
+			Policy:      oidcPolicy,
 		})
 		if err != nil {
 			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
-		} else if state, err := oidc.NewStateCodec(); err != nil {
+		} else if state, err := goidc.NewStateCodec(); err != nil {
 			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
 		} else {
 			oidcClient, oidcState = client, state
@@ -2456,7 +2587,17 @@ func runValidateConfig(args []string) int {
 		return validateConfigExitUnusable
 	}
 	_ = args
-	_ = cfg
+
+	// A key is required to start (#1202, ruling 2), so a missing or
+	// unusable one is a problem this command reports like any other
+	// fatal, with the same CFG-0083 the server refuses with (#1202
+	// review R14) -- not a clean bill of health for a config that will
+	// not start.
+	if _, err := retention.LoadKey(cfg.History.KeyFile); err != nil {
+		fmt.Fprint(os.Stderr, config.Report([]config.Problem{config.KeyRequired(cfg.History.KeyFile, errors.Is(err, retention.ErrNoKey), err)}))
+		fmt.Fprintf(os.Stderr, "\n1 problem(s). MikroView would refuse to start.\n")
+		return validateConfigExitProblems
+	}
 
 	// #1218's item 4: the same "N new settings are available" list the
 	// server itself would log on its next restart if this were an
@@ -2507,7 +2648,7 @@ func runValidateConfig(args []string) int {
 // The pepper stays a local file in both cases. That is the whole design:
 // a database dump yields digests nothing can test, and this host yields a
 // pepper with no digests to apply it to.
-func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
+func openRecoveryStoreForCLI() (*recoverykeys.RecoveryStore, func(), error) {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config: %w", err)
@@ -2516,27 +2657,28 @@ func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
 		return nil, nil, fmt.Errorf("auth.recoveryKeysPath is not configured")
 	}
 
-	st, err := openStorage(context.Background(), cfg)
+	st, err := openStorageForCLI(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	backend, err := st.backendFor(context.Background(), "recovery_keys", cfg.Auth.RecoveryKeysPath)
+	// Sealed under the key like the other auth stores (#1202, ruling 2):
+	// a plaintext file an earlier keyless release wrote is refused, never
+	// sealed in place (ruling 19). Every caller has already refused a
+	// missing key (cliRequireKey).
+	backend, err := st.authBackendFor(context.Background(), authStoreRecoveryKeys, cfg.Auth.RecoveryKeysPath)
 	if err != nil {
 		st.Close()
 		return nil, nil, err
 	}
-	// #853 rule 6: recovery_keys is one of the hashed stores backendFor
-	// keeps persisting to a plain JSON file even with no history.keyFile
-	// configured, so a nil backend here only means the path itself is
-	// unset (already checked above) or Postgres rejected it. Checked
-	// anyway, loudly, because silently proceeding would hand this
-	// recovery command an empty in-memory store, which looks like a
-	// successful recovery while touching nothing on disk.
+	// A nil backend here means the path itself is unset (already checked
+	// above). Checked anyway, loudly, because silently proceeding would
+	// hand this recovery command an empty in-memory store, which looks
+	// like a successful recovery while touching nothing on disk.
 	if backend == nil && cfg.Auth.RecoveryKeysPath != "" {
 		st.Close()
 		return nil, nil, fmt.Errorf("the recovery-key store has no working backend -- check auth.recoveryKeysPath and the Postgres configuration")
 	}
-	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
+	store, err := recoverykeys.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
 	if err != nil {
 		st.Close()
 		return nil, nil, err
@@ -2644,6 +2786,9 @@ func runGenerateRecoveryKeys(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
+	if !cliRequireKey(logger, "-generate-recovery-keys") {
+		return 1
+	}
 	store, closeStorage, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
@@ -2681,6 +2826,9 @@ func runTransferAdmin(args []string) int {
 	logger := logging.New("transfer-admin")
 	if err := refuseIfContainerMainProcess("-transfer-admin"); err != nil {
 		logger.Error(err.Error())
+		return 1
+	}
+	if !cliRequireKey(logger, "-transfer-admin") {
 		return 1
 	}
 
@@ -2741,6 +2889,18 @@ func runTransferAdmin(args []string) int {
 		return 1
 	}
 
+	// Several admins: there is no one admin to hand over from, and
+	// gauntlet refuses rather than demote one nobody named
+	// (ErrSeveralAdmins). Its advice -- change each account's role --
+	// is a web UI action, so say how to reach it from here (#1202
+	// review R15). After the key, like everything else that describes
+	// the accounts.
+	if admins := store.Admins(); len(admins) > 1 {
+		logger.Error(severalAdminsAdvice(len(admins), current.Username))
+		fmt.Println("\nNothing was changed, and your recovery keys are unchanged.")
+		return 1
+	}
+
 	// Now that the key has been proven, naming the account is fine --
 	// and still useful, since the operator is about to choose what to
 	// transfer it to.
@@ -2772,6 +2932,11 @@ func runTransferAdmin(args []string) int {
 	}
 
 	from, to, err := store.TransferAdmin(target, time.Now())
+	if errors.Is(err, gauntlet.ErrSeveralAdmins) {
+		// Another admin appeared since the check above.
+		logger.Error("transfer failed, no keys were consumed: " + severalAdminsAdvice(len(store.Admins()), current.Username))
+		return 1
+	}
 	if err != nil {
 		logger.Error(fmt.Sprintf("transfer failed, no keys were consumed: %v", err))
 		return 1
@@ -2795,6 +2960,19 @@ func runTransferAdmin(args []string) int {
 	return 0
 }
 
+// severalAdminsAdvice is -transfer-admin's answer on a deployment with
+// more than one admin, in steps an operator at the command line can
+// follow: roles are changed in the web UI by any admin, and if none can
+// sign in, -recover-admin-account gets one back in first. firstAdmin is
+// the account that command resets (gauntlet's Store.Admin, the first
+// admin by username).
+func severalAdminsAdvice(n int, firstAdmin string) string {
+	return fmt.Sprintf("this deployment has %d admin accounts, so there is no single admin to hand over from -- "+
+		"-transfer-admin is for a deployment with one. Sign in to the web UI as any admin and change the roles in "+
+		"the Users group of Settings instead. If no admin can sign in, run -recover-admin-account first: it resets the password "+
+		"of %q, who can then sign in and change them", n, logging.Printable(firstAdmin))
+}
+
 // runClearSecondFactor backs `-clear-second-factor <username>` -- the way
 // back in for an admin who has lost every second factor on the account
 // (phone holding the authenticator app, passkeys, or both), mirroring
@@ -2803,14 +2981,13 @@ func runTransferAdmin(args []string) int {
 // one recovery-key-gated clear of whatever the account has, not a
 // per-factor tool, so there is no passkey-only variant of it.
 //
-// No web route can do this job. handleTOTPDelete and the passkey delete
-// route require the caller's current password, which is exactly what a
-// session that also lost its second factor cannot always be assumed to
-// have handy, and handleTOTPAdminClear -- the admin's own "clear someone
-// else's factor" button in the Users group -- explicitly refuses the
-// caller's own account (mikroview holds exactly one admin, so that
-// refusal is also what keeps the admin account out of that route
-// entirely). Between them there is no route back in for an admin locked
+// No web route can do this job. DELETE /api/auth/totp and the passkey
+// delete route require the caller's current password, which is exactly
+// what a session that also lost its second factor cannot always be
+// assumed to have handy, and DELETE /api/auth/users/{id}/totp -- the
+// admin's own "clear someone else's factor" button in the Users group --
+// explicitly refuses the caller's own account, which keeps a lone admin
+// out of that route entirely. Between them there is no route back in for an admin locked
 // out of their own factors, which is what this command is for.
 //
 // Unlike -recover-admin-account, this is not limited to the admin
@@ -2819,7 +2996,7 @@ func runTransferAdmin(args []string) int {
 // nothing beyond what their password already does -- so there is no
 // equivalent reason to narrow the target, and narrowing it would leave
 // every non-admin user with a lost phone or passkey and no way back in
-// at all (handleTOTPAdminClear needs the admin to still be signed in to
+// at all (the admin-clear route needs the admin to still be signed in to
 // use it; a user locked out of their own account has no session to reach
 // it from).
 //
@@ -2832,6 +3009,9 @@ func runClearSecondFactor(args []string) int {
 	logger := logging.New("clear-second-factor")
 	if err := refuseIfContainerMainProcess("-clear-second-factor"); err != nil {
 		logger.Error(err.Error())
+		return 1
+	}
+	if !cliRequireKey(logger, "-clear-second-factor") {
 		return 1
 	}
 
@@ -3002,7 +3182,7 @@ func runHealthcheck() int {
 }
 
 // openAuthStoreForCLI is shared by the account-management CLI commands.
-// They need a real, persisted auth.Store -- an ephemeral one would let
+// They need a real, persisted gauntlet.Store -- an ephemeral one would let
 // -recover-admin-account report success over a password that vanishes on
 // the next restart.
 //
@@ -3014,7 +3194,7 @@ func runHealthcheck() int {
 // go through an identity provider (an IdP account is a login, not an
 // authorisation to escalate). CLI is the only route, so it has to work
 // in every deployment shape.
-func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
+func openAuthStoreForCLI(cmd string) (*gauntlet.Store, func(), error) {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config: %w", err)
@@ -3023,31 +3203,31 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 		return nil, nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
 	}
 
-	st, err := openStorage(context.Background(), cfg)
+	st, err := openStorageForCLI(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	backend, err := st.backendFor(context.Background(), "auth", cfg.Auth.StorePath)
+	// The same sealed backend the server opens (authBackendFor), so a
+	// plaintext or damaged document refuses here too, rather than
+	// reading as empty.
+	backend, err := st.authBackendFor(context.Background(), authStoreAccounts, cfg.Auth.StorePath)
 	if err != nil {
 		st.Close()
 		return nil, nil, err
 	}
-	// #853 rule 6: auth is one of the hashed stores backendFor keeps
-	// persisting to a plain JSON file even with no history.keyFile
-	// configured, so a nil backend here means auth.storePath is empty
-	// (already checked above) or Postgres rejected it. Checked anyway,
-	// loudly, matters more for this command than almost any other: silent
-	// proceeding would hand it an empty in-memory accounts store, which
-	// looks like a working recovery/transfer while touching nothing that
-	// survives the next restart.
+	// A nil backend means auth.storePath is empty (already checked
+	// above). Checked anyway, loudly: silent proceeding would hand this
+	// command an empty in-memory accounts store, which looks like a
+	// working recovery/transfer while touching nothing that survives the
+	// next restart.
 	if backend == nil {
 		st.Close()
 		return nil, nil, fmt.Errorf("the accounts store has no working backend -- check auth.storePath and the Postgres configuration for %s", cmd)
 	}
-	// DiscardSetupCode: on an empty store this process would otherwise
+	// quietStoreOptions: on an empty store this process would otherwise
 	// announce a setup code of its own, which the running server does
-	// not know and would refuse (#1415).
-	store, err := auth.OpenStore(backend, auth.Options{OnSetupCode: auth.DiscardSetupCode})
+	// not know and would refuse (#1415, gauntlet ADR-0003 decision 6).
+	store, err := gauntlet.OpenStore(backend, quietStoreOptionsFor(cfg))
 	if err != nil {
 		st.Close()
 		return nil, nil, err
@@ -3108,6 +3288,9 @@ func runRecoverAdminAccount(args []string) int {
 	logger := logging.New("recover-admin-account")
 	if err := refuseIfContainerMainProcess("-recover-admin-account"); err != nil {
 		logger.Error(err.Error())
+		return 1
+	}
+	if !cliRequireKey(logger, "-recover-admin-account") {
 		return 1
 	}
 
@@ -3175,6 +3358,17 @@ func runRecoverAdminAccount(args []string) int {
 		return 1
 	}
 	fmt.Printf("Password for %q updated. Existing sessions for that account are now invalid.\n", admin.Username)
+	// A recovered admin signs in straight away: a sign-in disabled by
+	// failed attempts -- quite likely what brought the operator here --
+	// is lifted, with the lockout and its count (#1202 review R3). This
+	// process holds no limiter, so the store's own UnlockLogin is the
+	// one to call; the running server's limiter forgets its in-memory
+	// count at its next restart.
+	if err := store.UnlockLogin(admin.ID); err != nil {
+		logger.Error(fmt.Sprintf("the password was changed, but lifting the disabled sign-in failed: %v -- "+
+			"no key was consumed; the disable lifts itself %s after it began, or run this command again", err, gauntlet.LoginDisableDuration))
+		return 1
+	}
 
 	// Past this point the recovery itself has succeeded. Every remaining
 	// failure leaves the previous keys valid and says so -- rotating
@@ -3410,7 +3604,7 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 //
 // Returns (nil, exitCode) when there is nothing to transfer to or the
 // operator backs out. Callers must treat that as "change nothing".
-func resolveTransferTarget(store *auth.Store, current *auth.User, target string) (*auth.User, int) {
+func resolveTransferTarget(store *gauntlet.Store, current *gauntlet.User, target string) (*gauntlet.User, int) {
 	logger := logging.New("transfer-admin")
 
 	if target != "" {
@@ -3426,7 +3620,7 @@ func resolveTransferTarget(store *auth.Store, current *auth.User, target string)
 		return next, 0
 	}
 
-	candidates := make([]auth.User, 0)
+	candidates := make([]gauntlet.User, 0)
 	for _, u := range store.List() {
 		if u.ID != current.ID {
 			candidates = append(candidates, u)

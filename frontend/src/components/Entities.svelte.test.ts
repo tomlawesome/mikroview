@@ -801,7 +801,7 @@ describe('Entities named-things table (#675)', () => {
   })
 
   // #1158: an unknown MAC reads as the table's own em dash. It used to
-  // say "private", which on a row for a public address (1.1.1.1) read as
+  // say "private", which on a row for a public address (192.0.2.2) read as
   // a claim about the address rather than a value nothing here knows.
   it('elides a known MAC and falls back to the unknown-value dash', async () => {
     const { fetchDeviceMACs } = await import('../lib/api')

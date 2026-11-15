@@ -123,7 +123,7 @@ func TestFetchAbuseIPDBSendsTheKeyAsAHeaderNotAQueryParam(t *testing.T) {
 // altering the request path shape.
 //
 // Asserts EscapedPath(), not Path: url.URL.Path is the *decoded*
-// convenience field and still reads "/1.2.3.4/../../admin" even when
+// convenience field and still reads "/192.0.2.4/../../admin" even when
 // the wire form is correctly escaped. Checking Path makes this test
 // fail against perfectly good code -- which it did, on first write.
 func TestFetchShodanEscapesTheIPInThePath(t *testing.T) {
@@ -133,7 +133,7 @@ func TestFetchShodanEscapesTheIPInThePath(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: readCloser(`{}`), Header: make(http.Header), Request: r}, nil
 	})}
 
-	fetchShodan(context.Background(), c, "1.2.3.4/../../admin")
+	fetchShodan(context.Background(), c, "192.0.2.4/../../admin")
 
 	if captured == nil {
 		t.Fatal("no request was made")

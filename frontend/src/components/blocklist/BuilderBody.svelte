@@ -63,6 +63,31 @@
     if (blocklistState.showUndoAll && undoAllEl) undoAllEl.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
   })
 
+  // #1202: the password for minting this router's ingest key (the push
+  // part carries it). Typed here, spent on the one call, never kept.
+  let keyPassword = $state('')
+  let keyInput = $state<HTMLInputElement | null>(null)
+  async function mintKey() {
+    const password = keyPassword
+    if (!password) {
+      keyInput?.focus()
+      return
+    }
+    keyPassword = ''
+    await blocklistState.mintToken(password)
+  }
+  // After a failure the person is put back in the field to try again (it
+  // was disabled while the request ran, which drops focus). An effect,
+  // not code after the await, so the focus lands in the same update that
+  // shows the message and the field is enabled again by then.
+  let wasMinting = false
+  $effect(() => {
+    const minting = blocklistState.minting
+    const failed = !!blocklistState.tokenError
+    if (wasMinting && !minting && failed) keyInput?.focus()
+    wasMinting = minting
+  })
+
   function partHeadInk(p: BlocklistPart): string | null {
     return p.ink ? inkFor(p.ink) : null
   }
@@ -191,6 +216,30 @@
       <pre class="script" aria-label="RouterOS block to paste">{#each parts as p, i (p.ordinal)}{#if i > 0}{'\n'}{/if}<span class="sec" style:--ink={partHeadInk(p)}># {p.ordinal} · {#if p.title}<b>{p.title}</b> — {/if}{@render spans(p.note)}</span>{#each p.shown as line, j (j)}{'\n'}{@render spans(line)}{/each}{#if p.fold?.length}{'\n'}<span class="fold">{@render spans(p.fold)}</span>{/if}{/each}{#if block && onCount === 0}<span class="fold"># nothing to paste — every list is Not now</span>{/if}</pre>
       {#if blocklistState.blockError}
         <p class="note" aria-live="polite">{blocklistState.blockError}</p>
+      {/if}
+      {#if data.standing === 'ok' && !blocklistState.token}
+        <div class="keyask">
+          <b>The push needs a key.</b> Making one asks for your password, because a key outlives this sign-in.
+          <label class="keylabel" for="bl-key-password">Your password</label>
+          <input
+            id="bl-key-password"
+            type="password"
+            class="keypass"
+            autocomplete="current-password"
+            bind:this={keyInput}
+            bind:value={keyPassword}
+            disabled={blocklistState.minting}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') mintKey()
+            }}
+          />
+          <button type="button" class="keymint" disabled={blocklistState.minting} onclick={mintKey}>
+            {blocklistState.minting ? 'Minting…' : 'Mint key'}
+          </button>
+          <!-- Present before any error so a screen reader announces the
+               message when it arrives. -->
+          <span class="note" role="status" aria-live="polite">{blocklistState.tokenError ?? ''}</span>
+        </div>
       {/if}
       <div class="copyrow">
         <button type="button" class="primary" disabled={!block?.copyText || onCount === 0} onclick={() => blocklistState.copy()}>{partsSummary(onCount, parts.length)}</button>

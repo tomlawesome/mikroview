@@ -27,7 +27,7 @@ import {
 // ink, is exactly the kind of claim this wizard exists not to make.
 
 function answered(over: Partial<RunAnswers> = {}): RunAnswers {
-  return { ...freshAnswers(), name: 'rb5009', addr: '192.168.13.1', push: true, backup: true, ...over }
+  return { ...freshAnswers(), name: 'rb5009', addr: '192.0.2.1', push: true, backup: true, ...over }
 }
 
 function ev(over: Partial<Evidence> = {}): Evidence {
@@ -37,12 +37,12 @@ function ev(over: Partial<Evidence> = {}): Evidence {
 describe('the router address', () => {
   it('is a dotted quad and nothing else', () => {
     expect(addrProblem('')).toBe('')
-    expect(addrProblem('192.168.13.1')).toBe('')
-    expect(addrProblem('192.168.13.1:514')).toMatch(/No port/)
-    expect(addrProblem('192.168.13.0/24')).toMatch(/No prefix length/)
+    expect(addrProblem('192.0.2.1')).toBe('')
+    expect(addrProblem('192.0.2.1:514')).toMatch(/No port/)
+    expect(addrProblem('192.0.2.0/24')).toMatch(/No prefix length/)
     expect(addrProblem('router.lan')).toMatch(/A name will not do/)
-    expect(addrProblem('192.168.13')).toMatch(/Four numbers/)
-    expect(addrProblem('192.168.13.999')).toMatch(/Four numbers/)
+    expect(addrProblem('192.0.2')).toMatch(/Four numbers/)
+    expect(addrProblem('192.0.2.999')).toMatch(/Four numbers/)
     // The server's rule (netip.ParseAddr) refuses leading zeros and
     // accepts an IPv6 literal; the client accepts nothing the server
     // would refuse (#1380).
@@ -126,11 +126,11 @@ describe('the receipts, in the ink of what they record', () => {
     expect(rowState(freshAnswers(), ev(), 'router')).toEqual({ cls: '', receipt: 'name, address, push, backup', ink: '' })
     const chosen = rowState(answered({ backup: false }), ev(), 'router')
     expect(chosen.cls).toBe('chosen')
-    expect(chosen.receipt).toBe('rb5009 · 192.168.13.1 · push yes · backup not now')
-    const done = rowState(answered(), ev({ enrol: '2026-09-27T14:03:04Z', from: '192.168.13.1' }), 'router')
+    expect(chosen.receipt).toBe('rb5009 · 192.0.2.1 · push yes · backup not now')
+    const done = rowState(answered(), ev({ enrol: '2026-09-27T14:03:04Z', from: '192.0.2.1' }), 'router')
     expect(done.cls).toBe('done')
     expect(done.ink).toBe('logs')
-    expect(done.receipt).toMatch(/^rb5009 · enrolled 192\.168\.13\.1 · /)
+    expect(done.receipt).toMatch(/^rb5009 · enrolled 192\.0\.2\.1 · /)
   })
 
   it('reads the token row in decision blue until the certificate lands', () => {
@@ -279,9 +279,9 @@ describe('the router’s turn: the track', () => {
   })
 
   it('reads a refusal as the enrol station’s own alarm, not a second station', () => {
-    const st = trackStations(answered({ copied: true }), ev({ cert: 'c', refused: '192.168.13.99' }), 't')
+    const st = trackStations(answered({ copied: true }), ev({ cert: 'c', refused: '192.0.2.99' }), 't')
     expect(st).toHaveLength(5)
-    expect(st[2]).toEqual({ id: 'enrol', lab: 'refused', st: 'lines from 192.168.13.99', state: 'alarm' })
+    expect(st[2]).toEqual({ id: 'enrol', lab: 'refused', st: 'lines from 192.0.2.99', state: 'alarm' })
   })
 
   it('reads the latest arrival’s own sentence, last in wire order, and nothing before Copy', () => {
@@ -291,7 +291,7 @@ describe('the router’s turn: the track', () => {
       text: 'Certificate fetched by ',
       small: '14:02:58',
     })
-    const push = ev({ cert: 'c', enrol: 'e', from: '192.168.13.1', push: '2026-09-27T14:03:31Z' })
+    const push = ev({ cert: 'c', enrol: 'e', from: '192.0.2.1', push: '2026-09-27T14:03:31Z' })
     expect(latestArrivalHeadline(trackStations(answered({ copied: true }), push, 't'), push, 'rb5009')).toEqual({
       text: 'First push from rb5009',
       small: '14:03:31',
@@ -326,11 +326,11 @@ describe('the router’s turn: the track', () => {
 
 describe('✓ · Where setup stands: the ledger (#1385)', () => {
   it('reads certificate and logs as always done, in their own ink, with Undo', () => {
-    const rows = ledgerRows(answered(), ev({ cert: '2026-09-27T14:02:58Z', enrol: '2026-09-27T14:03:04Z', from: '192.168.13.1', lines: 69 }))
+    const rows = ledgerRows(answered(), ev({ cert: '2026-09-27T14:02:58Z', enrol: '2026-09-27T14:03:04Z', from: '192.0.2.1', lines: 69 }))
     expect(rows[0]).toMatchObject({ done: true, t: 'Certificate trusted', ink: 'cert', u: 'cert' })
-    expect(rows[0].r).toBe('fetched by 192.168.13.1 · 14:02:58')
+    expect(rows[0].r).toBe('fetched by 192.0.2.1 · 14:02:58')
     expect(rows[1]).toMatchObject({ done: true, t: 'Logs flowing', ink: 'logs', u: 'logs' })
-    expect(rows[1].r).toBe('enrolled at 192.168.13.1 · 14:03:04 · 69 lines')
+    expect(rows[1].r).toBe('enrolled at 192.0.2.1 · 14:03:04 · 69 lines')
   })
 
   it('reads router state and backup as dashed and struck, no Undo, exactly as the design words it, when set aside', () => {

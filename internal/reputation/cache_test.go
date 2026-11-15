@@ -46,7 +46,7 @@ func TestLookupCacheHitSkipsTheNetwork(t *testing.T) {
 	c, tr := newCountingClient(t)
 	ctx := context.Background()
 
-	if _, err := c.Lookup(ctx, "8.8.8.8"); err != nil {
+	if _, err := c.Lookup(ctx, "192.0.2.8"); err != nil {
 		t.Fatalf("first Lookup: %v", err)
 	}
 	first := tr.requests.Load()
@@ -55,7 +55,7 @@ func TestLookupCacheHitSkipsTheNetwork(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if _, err := c.Lookup(ctx, "8.8.8.8"); err != nil {
+		if _, err := c.Lookup(ctx, "192.0.2.8"); err != nil {
 			t.Fatalf("cached Lookup: %v", err)
 		}
 	}
@@ -68,7 +68,7 @@ func TestLookupRefetchesOnceTheTTLHasPassed(t *testing.T) {
 	c, tr := newCountingClient(t)
 	ctx := context.Background()
 
-	if _, err := c.Lookup(ctx, "8.8.8.8"); err != nil {
+	if _, err := c.Lookup(ctx, "192.0.2.8"); err != nil {
 		t.Fatalf("first Lookup: %v", err)
 	}
 	first := tr.requests.Load()
@@ -77,12 +77,12 @@ func TestLookupRefetchesOnceTheTTLHasPassed(t *testing.T) {
 	// map is fair game in the same package, and beats making cacheTTL a
 	// var purely so a test can move it.
 	c.mu.Lock()
-	entry := c.cache["8.8.8.8"]
+	entry := c.cache["192.0.2.8"]
 	entry.expires = time.Now().Add(-time.Second)
-	c.cache["8.8.8.8"] = entry
+	c.cache["192.0.2.8"] = entry
 	c.mu.Unlock()
 
-	if _, err := c.Lookup(ctx, "8.8.8.8"); err != nil {
+	if _, err := c.Lookup(ctx, "192.0.2.8"); err != nil {
 		t.Fatalf("Lookup after expiry: %v", err)
 	}
 	if got := tr.requests.Load(); got <= first {
@@ -102,7 +102,7 @@ func TestLookupCacheStaysBounded(t *testing.T) {
 	}
 	c.mu.Unlock()
 
-	if _, err := c.Lookup(ctx, "8.8.8.8"); err != nil {
+	if _, err := c.Lookup(ctx, "192.0.2.8"); err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
 

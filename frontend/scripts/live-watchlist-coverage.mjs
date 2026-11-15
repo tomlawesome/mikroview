@@ -30,7 +30,7 @@
 // re-reads the list and picks the one definition out, rather than
 // indexing a separate map.
 
-import { session, check, done, feedSyslog, goTo } from './live-browser.mjs'
+import { session, check, done, feedSyslog, goTo, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -79,7 +79,7 @@ feedSyslog(3, 'coverage-probe')
 const device = ((await api('GET', '/api/devices')).body?.devices ?? []).find((d) => d.id === 'live-router')?.id
 check(!!device, `the harness's own router is in the registry (${device})`)
 
-const token = await api('POST', '/api/tokens', { name: 'coverage', kind: 'ingest', device })
+const token = await api('POST', '/api/tokens', tokenMint({ name: 'coverage', kind: 'ingest', device }))
 check(token.status === 201, `an ingest token is issued (${token.status})`)
 
 async function push(records) {

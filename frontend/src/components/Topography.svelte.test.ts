@@ -801,7 +801,7 @@ describe('coverage is the material, not a caption (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
     appState.events = [
       event({ inInterface: 'bridge1', srcIp: '192.168.1.50' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }), // resolves wan1 as the WAN boundary
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }), // resolves wan1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -814,7 +814,7 @@ describe('coverage is the material, not a caption (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'Guest' }]
     appState.events = [
       event({ inInterface: 'bridge2', srcIp: '10.0.30.9' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }),
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -894,7 +894,7 @@ describe('a rib is two halves (round 49, #1016)', () => {
   const oneEachWay = (): void => {
     zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'IoT' }]
     appState.events = [
-      event({ inInterface: 'wan1', outInterface: 'bridge2', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', outInterface: 'bridge2', srcIp: '192.0.2.8' }),
       event({ inInterface: 'bridge2', outInterface: 'wan1', srcIp: '10.0.30.9' }),
     ]
     policyState.anyPushed = true
@@ -945,7 +945,7 @@ describe('a rib is two halves (round 49, #1016)', () => {
     policyState.edges = [] // nothing in the table names this pair: unplanned
     appState.events = [
       event({ inInterface: 'bridge2', outInterface: 'wan1', srcIp: '10.0.30.9' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }),
     ]
     const { container } = render(Topography)
     flushSync()
@@ -1831,6 +1831,189 @@ describe('#723: a lane\'s port list gets a visible tie to its own card ("ports f
   })
 })
 
+// #1430: the v0.7.0 release capture put a "never exercised" plate over
+// the Servers lane's own port list (":445 :53 :5001"), and the internet
+// card's red flag count over its "Doors from the internet · 8" row.
+describe('labels on the map keep off each other (#1430)', () => {
+  // The lane card's top edge is y=490 and the services row sits just
+  // above it (text baseline 472, #723). Box metrics follow the
+  // component's own: a plate hangs from its anchor (y-10, 14 tall); the
+  // 10.5px mono services text runs about 6.3 units a character.
+  function svcBoxes(container: HTMLElement) {
+    return [...container.querySelectorAll('.svc .svc-t')].map((t) => {
+      const text = t.textContent ?? ''
+      const w = text.length * 6.3
+      const x = Number(t.getAttribute('x'))
+      const y = Number(t.getAttribute('y'))
+      return { text, x: x - w / 2, y: y - 9, w, h: 12 }
+    })
+  }
+  function plateBoxes(container: HTMLElement) {
+    return [...container.querySelectorAll('.edge-plate')].map((p) => ({
+      text: p.parentElement?.textContent?.trim() ?? '',
+      x: Number(p.getAttribute('x')),
+      y: Number(p.getAttribute('y')),
+      w: Number(p.getAttribute('width')),
+      h: Number(p.getAttribute('height')),
+    }))
+  }
+
+  it("never lets an edge plate cover a lane's services row -- it lifts instead, since below it is the card", () => {
+    // Five lanes with the release capture's shape: one busy lane
+    // (bridge2, the Servers lane) fed from the others, and policy
+    // edges into it and its neighbour that nothing ever exercised.
+    // The crowding around bridge2's lane is what pushed a plate down
+    // onto its port list.
+    zonesState.pushed = Array.from({ length: 5 }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      ...Array.from({ length: 56 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 75 }, () => event({ inInterface: 'bridge3', outInterface: 'bridge2', srcIp: '10.0.3.20', dstPort: 53, action: 'accept' })),
+      ...Array.from({ length: 25 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.21', dstPort: 445, action: 'accept' })),
+      ...Array.from({ length: 4 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.22', dstPort: 5001, action: 'accept' })),
+      ...Array.from({ length: 42 }, () => event({ inInterface: 'bridge3', outInterface: 'ether1', srcIp: '10.0.3.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 57 }, () => event({ inInterface: 'bridge4', outInterface: 'ether1', srcIp: '10.0.4.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 7 }, () => event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })),
+    ]
+    policyState.anyPushed = true
+    const intent = (from: string, to: string) => ({
+      key: `${from}|${to}`,
+      from,
+      to,
+      accepted: true,
+      refused: false,
+      acceptPorts: [],
+      refusePorts: [],
+      comment: '',
+      ruleCount: 1,
+      logged: true,
+    })
+    policyState.edges = [
+      intent('bridge1', 'bridge2'),
+      intent('bridge3', 'bridge2'),
+      intent('bridge4', 'bridge2'),
+      intent('bridge5', 'bridge2'),
+      intent('bridge2', 'bridge1'),
+      intent('ether1', 'bridge2'),
+      intent('ether1', 'bridge1'),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const svc = svcBoxes(container)
+    const plates = plateBoxes(container)
+    expect(svc.length).toBeGreaterThan(0)
+    expect(plates.some((p) => p.text === 'never exercised')).toBe(true)
+    for (const p of plates) {
+      for (const s of svc) {
+        const overlaps = p.x < s.x + s.w && s.x < p.x + p.w && p.y < s.y + s.h && s.y < p.y + p.h
+        expect(overlaps, `"${p.text}" plate (${p.x},${p.y}) covers the "${s.text}" services row (${s.x},${s.y})`).toBe(false)
+      }
+    }
+    // And lifting a plate off the row never puts it on another plate.
+    for (let a = 0; a < plates.length; a++) {
+      for (let b = a + 1; b < plates.length; b++) {
+        const p1 = plates[a]
+        const p2 = plates[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps, `"${p1.text}" and "${p2.text}" plates overlap`).toBe(false)
+      }
+    }
+  })
+
+  it('drops the "Doors from the internet" row beneath the flag bar when the internet card draws one', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' })]
+    flagsState.list = [flag('port_scan', '203.0.113.9')]
+    const { container } = render(Topography)
+    flushSync()
+
+    // The bar is rendered 16 tall at y=34 under the internet card (the
+    // aggregateBar call on the card), so it ends at y=50 in the card's
+    // own frame. A 9.5px row hanging from its baseline needs that
+    // baseline below 50 + its own ascent.
+    const bar = container.querySelector('.isl-card .hb.hb-f')
+    expect(bar, 'the internet card should draw its flag bar').toBeTruthy()
+    const barY = Number(/translate\(0 ([\d.]+)\)/.exec(bar!.getAttribute('transform') ?? '')?.[1])
+    const doors = container.querySelector('.isl-card .doors-anchor-t')
+    expect(doors).toBeTruthy()
+    const baseline = Number(doors!.getAttribute('y'))
+    expect(baseline - 8).toBeGreaterThanOrEqual(barY + 16)
+  })
+
+  it('keeps the "Doors from the internet" row in its own place when there is no bar to clear', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.isl-card .hb')).toBeNull()
+    expect(container.querySelector('.isl-card .doors-anchor-t')?.getAttribute('y')).toBe('52')
+  })
+})
+
+// #1430, part 2: on the same capture the green edge curves ran straight
+// through the lanes' port lists (":5001 :80 :53" above LAN) and the red
+// internet edges through "Doors from the internet · 8". Neither label is
+// *about* a line, so #699's plate is not theirs; they take the map's
+// own halo instead -- the mockup's `.flat text` device, a stroke of the
+// page colour painted under the glyphs, so a line passes visibly behind
+// the text rather than through it.
+describe('edge lines pass behind the bare labels they cross (#1430)', () => {
+  /** Every selector of every style rule that paints the page-colour halo. */
+  function haloedSelectors(): string[] {
+    const out: string[] = []
+    const rule = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = rule.exec(componentSource))) {
+      if (/paint-order:\s*stroke/.test(m[2]) && /stroke:\s*var\(--bg\)/.test(m[2])) {
+        out.push(...m[1].split(',').map((s) => s.trim()))
+      }
+    }
+    return out
+  }
+
+  it("haloes a lane's port list and the internet card's doors row with the page colour", () => {
+    const haloed = haloedSelectors()
+    expect(haloed.length, 'the component should already carry the halo rule for its other bare labels').toBeGreaterThan(0)
+    expect(haloed.some((s) => /(^|\s)\.svc-t$/.test(s)), 'the services row (.svc-t) should be haloed').toBe(true)
+    expect(haloed.some((s) => /(^|\s)\.doors-anchor-t$/.test(s)), 'the doors row (.doors-anchor-t) should be haloed').toBe(true)
+  })
+
+  it('paints both labels after every edge line, so the halo has a line beneath it to knock out', () => {
+    // A halo only hides what is painted *under* the text. This held
+    // already (#723 ordered lines before labels); it is asserted here
+    // so a future reordering cannot quietly undo the fix above.
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstPort: 80, action: 'accept' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const lines = [...container.querySelectorAll('.redge, .gedge')]
+    const labels = [...container.querySelectorAll('.svc .svc-t, .isl-card .doors-anchor-t')]
+    expect(lines.length).toBeGreaterThan(0)
+    expect(container.querySelector('.svc .svc-t'), 'a lane should draw its port list').not.toBeNull()
+    expect(container.querySelector('.isl-card .doors-anchor-t'), 'the internet card should draw its doors row').not.toBeNull()
+    for (const line of lines) {
+      for (const label of labels) {
+        // DOCUMENT_POSITION_FOLLOWING (4): the label comes after the line.
+        expect(line.compareDocumentPosition(label) & 4, `"${label.textContent}" should be painted after the line`).toBeTruthy()
+      }
+    }
+  })
+})
+
 describe('#723: the dials sit just under the top bar rather than well below it', () => {
   it('keeps the dials\' own offset small enough to read as "just under", not a floating pair', () => {
     const m = componentSource.match(/\.dials\s*{[^}]*top:\s*([\d.]+)px/)
@@ -1950,7 +2133,7 @@ describe('#723: lines are painted before labels in every lens, so a line can nev
     appState.events = [
       event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
       event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -2021,7 +2204,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
   const seenOnBothLanes = () => [
     event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
     event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-    event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+    event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
   ]
 
   // Dark, so that every one of these boundary-directions draws its own
@@ -2098,7 +2281,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
       }))
       appState.events = [
         ...Array.from({ length: 3 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
-        event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+        event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
       ]
       policyState.anyPushed = true
       policyState.edges = [
@@ -2129,7 +2312,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
     }))
     appState.events = [
       ...Array.from({ length: 5 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -2834,6 +3017,29 @@ describe('the tunnel node (#877)', () => {
     expect(ghost?.getAttribute('d')).toBe('M 1100 186 C 945 300, 795 385, 700 476')
   })
 
+  // #1433: the ghost line drew as a solid black band. The path had no
+  // style rule of its own, so the SVG defaults applied -- black fill, no
+  // stroke -- and the S-curve filled as black wedges. The mockup
+  // (round-30/the-whole.html:122) draws it as a faint dashed hairline.
+  it('draws the ghost line as the mockup does: a faint dashed stroke with no fill', () => {
+    const rules: string[] = []
+    const rule = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = rule.exec(componentSource))) {
+      // The selector capture carries any comment written above the
+      // rule; drop it so the rule's own selector is what is compared.
+      const selectors = m[1].replace(/\/\*[\s\S]*?\*\//g, '').split(',')
+      if (selectors.some((s) => s.trim() === '.rib-ghost')) rules.push(m[2])
+    }
+    expect(rules.length, 'the component should carry a style rule of its own for .rib-ghost').toBeGreaterThan(0)
+    const body = rules.join('\n')
+    expect(body).toMatch(/fill:\s*none/)
+    expect(body).toMatch(/stroke:\s*var\(--fg-dim\)/)
+    expect(body).toMatch(/stroke-width:\s*1\.2\b/)
+    expect(body).toMatch(/stroke-dasharray:\s*3 6/)
+    expect(body).toMatch(/opacity:\s*0\.45/)
+  })
+
   it('gives the node a watch bar only when a pushed range can correlate one', () => {
     tunnelsState.byDevice = new Map([['router1', [tunnel()]]])
     watchlistState.entries = [watchEntry({ source: { ip: '10.99.0.2' } })]
@@ -3092,7 +3298,7 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '10.0.40.1/24', network: '10.0.40.0', interface: 'bridge4', comment: 'Guest' }]
     appState.events = [
       event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [

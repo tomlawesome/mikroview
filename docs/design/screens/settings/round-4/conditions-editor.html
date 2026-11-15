@@ -242,7 +242,7 @@
 
         <h4>Matches when every line holds</h4>
         <div class="conds">
-          <div class="cond"><span class="and first">and</span><span class="sel">source address</span><span class="sel">is within</span><span class="in" style="font-family:var(--mono)">203.0.113.0/24</span><span class="rm">×</span></div>
+          <div class="cond"><span class="and first">and</span><span class="sel">source address</span><span class="sel">is within</span><span class="in" style="font-family:var(--mono)">198.51.100.1/24</span><span class="rm">×</span></div>
           <div class="cond"><span class="and">and</span><span class="sel">action</span><span class="sel">is</span><span class="sel">drop</span><span class="rm">×</span></div>
           <div class="cond bad"><span class="and">and</span><span class="sel">destination port</span><span class="sel">is between</span><div class="range"><span class="in num">1</span>and<span class="in num" style="color:var(--ink-3);font-family:var(--sans);text-align:left;font-style:italic">port</span></div><span class="rm">×</span><span class="cond-err">between needs both ends — the high port is missing</span></div>
           <div class="cond"><span class="and">and</span><span class="sel">destination address</span><span class="sel">is classed as</span><span class="sel">internal</span><span class="rm">×</span></div>
@@ -256,11 +256,11 @@
         <div class="field"><span>Detail</span><span class="in wide">{SourceAddress} in the garage range was dropped reaching {Count} internal hosts</span></div>
         <div class="field"><span></span><div class="tokens"><span class="lbl">can use</span><span class="t">{Count}</span><span class="t">{SourceAddress}</span><span class="t">{Window}</span></div></div>
 
-        <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> that is dropped reaching <b>8 distinct internal destination addresses</b> within <b>300 s</b>, counting only events from <b>203.0.113.0/24</b> with action <b>drop</b> — once the port line is finished.</div>
+        <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> that is dropped reaching <b>8 distinct internal destination addresses</b> within <b>300 s</b>, counting only events from <b>198.51.100.1/24</b> with action <b>drop</b> — once the port line is finished.</div>
 
         <div class="tried">
           <div class="cnt">Would have fired <b>3 times</b> in the last 24 h<span class="cur">currently: not saved yet</span></div>
-          <ul><li>203.0.113.14 garage-cam</li><li>203.0.113.31 ev-charger</li><li>203.0.113.14 garage-cam</li></ul>
+          <ul><li>198.51.100.2 garage-cam</li><li>198.51.100.3 ev-charger</li><li>198.51.100.2 garage-cam</li></ul>
         </div>
 
         <div class="actions">
@@ -302,13 +302,13 @@
         <div class="panel">
           <h4>Matches when every line holds</h4>
           <div class="conds">
-            <div class="cond"><span class="and first"></span><span class="sel">source address</span><span class="sel">is within</span><span class="in" style="font-family:var(--mono)">203.0.113.0/24</span><span class="rm">remove line</span></div>
+            <div class="cond"><span class="and first"></span><span class="sel">source address</span><span class="sel">is within</span><span class="in" style="font-family:var(--mono)">198.51.100.1/24</span><span class="rm">remove line</span></div>
             <div class="cond"><span class="and">and</span><span class="sel">action</span><span class="sel">is</span><span class="sel">drop</span><span class="rm">remove line</span></div>
           </div>
           <div class="addcond"><i>+</i> add a line</div>
           <h4>Counts</h4>
           <div class="sentence">count <span class="sel">distinct destination addresses</span> per <span class="sel">source address</span>, flag at <span class="in num">8</span> in <span class="in num">300</span> s.</div>
-          <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> dropped reaching <b>8 internal hosts</b> in <b>300 s</b>, from <b>203.0.113.0/24</b>.</div>
+          <div class="readsas"><span class="lbl">Reads as</span>flag a <b>source address</b> dropped reaching <b>8 internal hosts</b> in <b>300 s</b>, from <b>198.51.100.1/24</b>.</div>
           <div class="actions"><span class="btn quiet">Try</span><span class="sp"></span><span class="btn primary">Save</span></div>
         </div>
       </div>

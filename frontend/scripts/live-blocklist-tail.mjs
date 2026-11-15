@@ -21,7 +21,7 @@
 
 import http from 'http'
 import https from 'https'
-import { check, done, enrolDevice, goTo, pushFrom, session } from './live-browser.mjs'
+import { check, done, enrolDevice, goTo, mintBlocklistKey, pushFrom, session, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const DEVICE = 'bl-tail'
@@ -76,7 +76,7 @@ const caStatus = await new Promise((resolve, reject) => {
 check(caStatus === 200, `${DEVICE} fetches the certificate from ${ADDR} (${caStatus})`)
 const tokRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-blocklist-tail', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-blocklist-tail', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokRes.json()).value
 const pushed = await pushFrom(URL_BASE, ADDR, token, { kind: 'filter-rule', page: 1, pages: 1, routerosVersion: '7.24.4 (stable)', wizardVersion: 6, records: [] })
@@ -99,6 +99,9 @@ check(
 
 await wizard.locator('.foot button', { hasText: 'Block known-bad addresses' }).click()
 await wizard.locator('.body.wide h3', { hasText: `Block known-bad addresses on ${DEVICE}.` }).waitFor({ timeout: 10000 })
+// The stage opens without a key (#1202): answer its prompt, which adds the
+// push part back to the block.
+await mintBlocklistKey(page)
 await page.waitForFunction(() => /^Copy — 2 lists · 8 parts$/.test(document.querySelector('.wiz .foot button.primary')?.textContent?.trim() ?? ''), null, { timeout: 15000 })
 // safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'the stage is the builder in the wizard’s frame, its Copy counting the block')

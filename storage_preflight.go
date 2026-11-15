@@ -147,7 +147,7 @@ func checkPathUsable(path string) error {
 	//
 	// Created rather than merely required, because that is what the
 	// stores themselves do on their first write (internal/persist's
-	// file.go, internal/auth's recovery.go, and servertls). A check
+	// file.go, internal/recoverykeys, and servertls). A check
 	// stricter than the code it guards would refuse deployments that
 	// actually work.
 	dir := filepath.Dir(path)

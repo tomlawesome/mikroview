@@ -470,7 +470,7 @@ func TestExpectationsNeverProduceFlags(t *testing.T) {
 // the event embedded as evidence, and a repeat of the same tuple
 // collapses rather than writing a second record.
 func TestMatchlogSinkRecordsAndCollapses(t *testing.T) {
-	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 100)
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 100, matchLogTestKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +522,7 @@ func TestMatchlogSinkRecordsAndCollapses(t *testing.T) {
 // a rate-limited "recording a match failed" warning, which is what
 // matchlog.ErrEmptyIdentity would otherwise produce at event rate.
 func TestMatchlogSinkDropsAnUnattributableMatch(t *testing.T) {
-	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 100)
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 100, matchLogTestKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}

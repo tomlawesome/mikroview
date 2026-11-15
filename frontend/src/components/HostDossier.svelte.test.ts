@@ -254,14 +254,14 @@ describe('HostDossier', () => {
   // #1352: the network owner, beside the MAC vendor, for a public
   // address only -- looked up on demand, drawn only when known.
   it('shows the network owner for a public address', async () => {
-    FIXTURE.ip = '1.1.1.1'
-    await open('1.1.1.1')
+    FIXTURE.ip = '192.0.2.2'
+    await open('192.0.2.2')
     await vi.waitFor(() =>
       expect(screen.getByTestId('dossier-network-owner').textContent?.trim()).toBe(
         'network owner · AS13335 Cloudflare, Inc.',
       ),
     )
-    expect(geoLookup).toHaveBeenCalledWith('1.1.1.1')
+    expect(geoLookup).toHaveBeenCalledWith('192.0.2.2')
   })
 
   it('asks nothing and shows no owner for a local address', async () => {
@@ -272,8 +272,8 @@ describe('HostDossier', () => {
 
   it('shows no owner row when the source does not know one', async () => {
     vi.mocked(geoLookup).mockResolvedValueOnce({ country: 'US', asn: null, asName: null })
-    FIXTURE.ip = '1.1.1.1'
-    await open('1.1.1.1')
+    FIXTURE.ip = '192.0.2.2'
+    await open('192.0.2.2')
     await vi.waitFor(() => expect(geoLookup).toHaveBeenCalled())
     flushSync()
     expect(screen.queryByTestId('dossier-network-owner')).toBeNull()

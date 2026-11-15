@@ -35,6 +35,7 @@ var appliedMigrations = map[string]string{
 	"0001_store_blob.sql":            "a2dda218a690e4bd0d5d41be7cc9f8c9562d860dc183019304027b0119fd91e5",
 	"0002_match_log.sql":             "20d244a9e6a977d30b5065bd713b1b0cc72fba34edd4bc3346ccbb18283e8cd4",
 	"0003_match_log_provisional.sql": "4e22216aaac474e723f35876ebb714dfe9446e4b3291d58fa72def55938bf605",
+	"0004_auth_on_gauntlet.sql":      "0906c44b8de169c222ad6fda74bdc292d8fe1a6fb74d3070f942996b3d302921",
 }
 
 func TestAppliedMigrationsAreImmutable(t *testing.T) {

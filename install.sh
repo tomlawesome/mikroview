@@ -100,7 +100,7 @@ elif docker run --rm -v "${etc_vol}:/etc/mikroview" alpine:3.24 sh -c '
   '; then
   echo "install.sh: on-disk event history is on by default -- a key for it now lives in the ${etc_vol} volume at keys/history.key. Back it up: losing it makes the retained history unreadable."
 else
-  echo "install.sh: could not create a history encryption key in ${etc_vol} -- mikroview will start with on-disk history off until one is mounted (see docs/configuration.md)" >&2
+  echo "install.sh: could not create a history encryption key in ${etc_vol} -- mikroview will refuse to start until one is mounted, since it keeps accounts and tokens sealed under it (see docs/install.md)" >&2
 fi
 
 # Two named volumes: the data store, and the app folder #1243 taught the

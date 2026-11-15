@@ -206,7 +206,7 @@ describe('step status', () => {
   // same as "cannot reach me", which is why the connection is observed
   // separately from events.
   it('separates connected-but-no-events from no connection', () => {
-    const connected = status({ sources: [{ source: '1.2.3.4', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
+    const connected = status({ sources: [{ source: '192.0.2.4', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
     expect(syslogStep(connected).state).toBe('done')
     expect(rulesStep(connected).state).toBe('waiting')
     expect(rulesStep(connected).detail).toContain('log=yes')
@@ -216,7 +216,7 @@ describe('step status', () => {
   // other measure. This is the state the wizard exists to name.
   it('flags events arriving with no decoded action', () => {
     const s = rulesStep(
-      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 40, decodedActions: 0 }] }),
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 40, decodedActions: 0 }] }),
     )
     expect(s.state).toBe('partial')
     expect(s.detail).toBe('Events are arriving.')
@@ -225,7 +225,7 @@ describe('step status', () => {
 
   it('reports partial tagging honestly', () => {
     const s = rulesStep(
-      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 4 }] }),
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 10, decodedActions: 4 }] }),
     )
     expect(s.state).toBe('partial')
     expect(s.detail).toBe('4 of 10 events carry an action.')
@@ -239,7 +239,7 @@ describe('step status', () => {
           {
             device: 'r',
             configured: true,
-            sourceIp: '1.2.3.4',
+            sourceIp: '192.0.2.4',
             events: 1,
             decodedActions: 1,
             pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z' },
@@ -269,7 +269,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
           {
             device: 'r',
             configured: true,
-            sourceIp: '1.2.3.4',
+            sourceIp: '192.0.2.4',
             events: 1,
             decodedActions: 1,
             pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z', arp: '2026-08-13T00:00:00Z' },
@@ -292,7 +292,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
         {
           device: 'r',
           configured: true,
-          sourceIp: '1.2.3.4',
+          sourceIp: '192.0.2.4',
           events: 4,
           decodedActions: 4,
           pushedKinds: {
@@ -319,7 +319,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
         {
           device: 'r',
           configured: true,
-          sourceIp: '1.2.3.4',
+          sourceIp: '192.0.2.4',
           events: 1,
           decodedActions: 1,
           pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z' },
@@ -430,7 +430,7 @@ describe('the claim ledger', () => {
   // router ledger is those five on their own.
   it('always has exactly seven steps on first-run setup', () => {
     expect(buildLedger(status(), [], 'h').length).toBe(7)
-    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(7)
+    expect(buildLedger(status({ sources: [{ source: '192.0.2.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(7)
   })
 
   // The router ledger is embedded, not copied: the same five steps in
@@ -531,7 +531,7 @@ describe('the claim ledger', () => {
 
   it('reads a partially tagged rule set as counting, not as half-failed', () => {
     const ledger = buildLedger(
-      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 4 }] }),
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 10, decodedActions: 4 }] }),
       [],
       '192.0.2.10',
     )
@@ -718,7 +718,7 @@ describe('reopening the ledger', () => {
   it('lands on the first step still waiting', () => {
     const ledger = buildLedger(
       status({
-        sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }],
+        sources: [{ source: '192.0.2.4', caFetchedAt: '2026-08-23T09:00:00Z' }],
         // The server's own numbers: 5 is Name your router and 2 is Send
         // logs, whichever position each is walked in.
         marks: [mark(5, 'skipped'), mark(2, 'skipped')],
@@ -835,9 +835,9 @@ describe('the finish', () => {
     const ledger = buildLedger(
       status({
         sources: [
-          { source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z', syslogFirstSeenAt: '2026-08-23T09:00:00Z' },
+          { source: '192.0.2.4', caFetchedAt: '2026-08-23T09:00:00Z', syslogFirstSeenAt: '2026-08-23T09:00:00Z' },
         ],
-        devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 10 }],
+        devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 10, decodedActions: 10 }],
         marks: [mark(5, 'skipped')],
       }),
       [],

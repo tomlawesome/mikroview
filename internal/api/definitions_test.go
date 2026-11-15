@@ -879,7 +879,7 @@ func TestHandleDefinitionsUpdateClearsStateWhenUninverted(t *testing.T) {
 	defer ts.Close()
 
 	entry := mustCreateInvertedDefinition(t, ts)
-	s.Definitions.RecordObservation(entry.ID, "1.2.3.4", 443, entry.Expectation.CreatedAt)
+	s.Definitions.RecordObservation(entry.ID, "192.0.2.4", 443, entry.Expectation.CreatedAt)
 	if e, _, _ := s.Definitions.GetExpectation(entry.ID); len(e.Observed) != 1 {
 		t.Fatal("setup failed: expected an observation to exist before the update")
 	}
@@ -1146,7 +1146,7 @@ func TestHandleDefinitionsUpdateDoesNotClearObservedWhenStayingInverted(t *testi
 	defer ts.Close()
 
 	entry := mustCreateInvertedDefinition(t, ts)
-	s.Definitions.RecordObservation(entry.ID, "1.2.3.4", 443, entry.Expectation.CreatedAt)
+	s.Definitions.RecordObservation(entry.ID, "192.0.2.4", 443, entry.Expectation.CreatedAt)
 
 	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID, updateDefinitionRequest{
 		Expectation: &expectationRequest{Invert: true, Source: matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}},
@@ -1174,7 +1174,7 @@ func TestHandleDefinitionsCloneExpectation(t *testing.T) {
 	defer ts.Close()
 
 	entry := mustCreateInvertedDefinition(t, ts)
-	s.Definitions.RecordObservation(entry.ID, "1.2.3.4", 443, entry.Expectation.CreatedAt)
+	s.Definitions.RecordObservation(entry.ID, "192.0.2.4", 443, entry.Expectation.CreatedAt)
 
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+entry.ID+"/clone", cloneRequest{})
 	defer resp.Body.Close()
@@ -1574,15 +1574,15 @@ func TestDefinitionsListOpenToViewer(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureUserPassword, Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: fixtureOtherPassword, Role: "viewer"}).Body.Close()
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/definitions below
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: fixtureOtherPassword}).Body.Close()
 	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/definitions below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/definitions")

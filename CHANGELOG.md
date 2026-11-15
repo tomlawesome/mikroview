@@ -16,6 +16,81 @@ rewritten.
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **An upgraded keyed install with an existing match log will not start
+  until the old file is moved** (#1470). The watchlist match log is now
+  sealed under `history.keyFile` like every other store; before, a keyed
+  install still wrote it to disk in the clear, whole matched events
+  included. MikroView does not seal a plaintext file in place, so a
+  `matchlog.jsonl` left by an earlier release is refused at start-up with
+  the plaintext-document message. Move it aside and start again; the log
+  starts empty:
+  `mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`.
+  `-backup` and `-restore` now need the key for the match log, and stop
+  with nothing changed without it.
+
+- **Admins need a passkey on an https domain** (#1202, owner ruling 1).
+  With `auth.adminPasskey` unset and `publicUrl` an https domain name,
+  an admin who has no passkey is held at a passkey enrolment screen on
+  their next request after the upgrade, and can do nothing else until
+  they register one. Set `auth.adminPasskey: optional` to keep the old
+  behaviour. Details under Changed.
+- **MikroView will not start without a key** (#1202, owner ruling
+  2026-10-10). From this version it seals its accounts, API tokens,
+  recovery-key digests and sign-in history under `history.keyFile`, on
+  the file backend and on Postgres, and refuses to start when no usable
+  key is mounted: [CFG-0083](docs/configuration.md#cfg-0083). That covers
+  the server, setup-only mode and `-recover-admin-account`,
+  `-transfer-admin`, `-clear-second-factor` and `-generate-recovery-keys`,
+  and nothing is written before it stops. **Mount a key before you
+  upgrade**: `install.sh` makes one for you, including when you re-run it to
+  upgrade, and keeps one that is already there; a Compose or hand-made
+  install may have none. The
+  steps, and why each command is needed, are in
+  [docs/install.md](docs/install.md#the-key-make-it-once-before-the-first-start).
+  Keep a copy of the key apart from the data: a lost key cannot be
+  recovered and the accounts cannot be read without it. Plaintext data is
+  **not** sealed in place: accounts, tokens or recovery-key digests that a
+  keyless install left in the clear, on files or on Postgres, and a
+  plaintext drop-list file (including one being moved onto Postgres),
+  stop this version starting, left exactly as they are, with a message
+  saying to restore a sealed copy or move them aside and start fresh. A
+  drop list already in Postgres stays as it is, unsealed like the other
+  stores there. The
+  key has to be in place before you upgrade. Take a copy of the data
+  directory (or a `pg_dump`) first: see [docs/upgrades.md](docs/upgrades.md).
+  On Postgres the first start writes the sealed tokens row even when no
+  token exists, so a 0.6.x build refuses to start on the database rather
+  than reading the sealed accounts as none.
+- **Sessions are 1 hour idle and 24 hours in total at most** (#1202,
+  owner ruling 2026-10-10). The defaults were 24 hours and 7 days. An
+  `auth.sessionTTL` above 1h or an `auth.sessionMaxLifetime` above 24h is
+  cut down to those limits **silently**, with no warning, so a config file
+  written for an older version starts as before and sessions are shorter.
+  A `sessionMaxLifetime` of `0`, which used to mean no ceiling, is cut to
+  24h as well. Everyone signs in at least once a day.
+- **A request carrying a non-Bearer `Authorization` header is refused**
+  (#1202). The sign-in library rejects any `Authorization` header that is
+  not `Bearer <token>`, on any route, with a 401. A reverse proxy that
+  adds or forwards HTTP basic auth in front of MikroView breaks sign-in
+  until it stops sending that header to MikroView.
+- **Making an API token needs the admin's password** (#1202).
+  `POST /api/tokens` takes the calling admin's own `password` in the body,
+  so a stolen session cookie cannot mint a credential that outlives it; a
+  script that posted without one now gets a 401. Removing a user,
+  resetting someone's password and clearing someone's authenticator app or
+  passkeys over the API need it too.
+- **Errors from `/api/auth/*` and `/api/tokens` are Problem Details**
+  (#1202, RFC 9457). If you script against the API: the body is JSON with
+  `Content-Type: application/problem+json` and the fields `type`,
+  `title`, `status` and `detail`, no longer plain text. Branch on `type`
+  (a link ending in a name such as `#invalid-credentials`), not on
+  `detail`. These routes also refuse a body with a field they do not know,
+  a 401 now says `WWW-Authenticate: Bearer realm="gate"`, and the header
+  that reports a sign-in step owed is `X-Auth-Gate` (it was
+  `X-Mikroview-Auth-Gate`) with a new value, `must-enrol-passkey`.
+
 ### Added
 
 - **Block known-bad addresses on the router** (#1360, round 2 ratified
@@ -158,6 +233,32 @@ rewritten.
 
 ### Fixed
 
+- **`-backup` works on an install with a match log** (#1452). It read the
+  match log as a sealed document, which it never was, and stopped. It now
+  opens the sealed log with the key and carries its lines as plain JSON
+  lines, as v0.6 did; `-restore` seals them again under the restoring
+  install's key, so a v0.6 backup still restores.
+
+- **The data directory can move to a new path** (#1450). Each sealed
+  store file was bound to its own absolute path, so a data directory
+  copied or moved to a different path -- a bare-metal install, or a
+  config naming a new directory -- was refused at start-up as altered.
+  From v0.7.0 every install has a key, so this would have hit everyone.
+  Files are now bound to their store's name instead: a file put in
+  another store's place is still refused, naming the store, and a file
+  not made with your key still never opens. A file sealed by an earlier
+  release opens once at the path it was sealed at and is re-sealed the
+  new way, which the log notes once per file; after that it can move.
+- **An open tab no longer keeps you signed in** (#1448). The live
+  view's connection checked the session every 30 seconds, and each check
+  counted as activity, so a tab left open stayed signed in until the
+  session's maximum lifetime (`auth.sessionMaxLifetime`, at most 24
+  hours), however long nobody touched it. The check now
+  changes nothing, so the session ends at the idle limit
+  (`auth.sessionTTL`, at most an hour) after your last real request, and
+  the connection closes with it. A session that is signed out, revoked or
+  ended by a password change still closes its connection at the next
+  check, as before (#375).
 - **Safari: the page no longer ends up 12 px too high after a lost
   connection** (#1423). With the connection banner showing, tabbing to
   the last name on the side rail scrolled the whole app up to show it,
@@ -213,6 +314,17 @@ rewritten.
 
 ### Removed
 
+- **`internal/auth` and `internal/oidc` are gone** (#1202). Authentication
+  runs on the [gauntlet](https://github.com/tomlawesome/gauntlet) library
+  (v0.4.1, Apache-2.0) instead, and the auth handler files in `internal/api` went
+  with them. Routes, paths and success bodies are unchanged, and existing
+  accounts, recovery keys and token values keep working. Recovery keys,
+  which are MikroView's own, moved to `internal/recoverykeys`.
+- **The keyless exception for accounts, tokens, recovery keys and the drop
+  list is gone** (#1202, ends #853 rule 6 and the 2026-09-18 drop-list
+  addendum; see `docs/decisions/event-retention.md`). No install runs
+  without a key any more.
+
 - **`backup.enabled` and `MIKROVIEW_BACKUP_ENABLED` are gone** (#1361):
   the router-backup drop box's switch moved to Settings → router backups
   (see Added above). A `config.yaml` that still sets `backup.enabled`
@@ -238,6 +350,59 @@ rewritten.
   refuses to start and names the card. Remove the key.
 
 ### Changed
+
+- **Authentication runs on gauntlet** (#1202), the sign-in library shared
+  with the author's other projects. What you will notice, beyond the
+  breaking changes above:
+  - **Lockout, not only rate limiting.** 5 failed attempts in 5 minutes
+    lock the account for 5 minutes, tripling each time up to an hour; 50
+    in a row disable its sign-in for 24 hours; 100 from one address in 24
+    hours ban the address for 24 hours. Lockouts are kept on the account
+    and survive a restart. If the only admin is disabled, MikroView prints
+    a one-time unlock code in its log at start-up: see [Too many wrong
+    guesses](docs/configuration.md#too-many-wrong-guesses-lockout-address-bans-and-the-unlock-code).
+  - **New passwords are checked harder.** One on the list of the 10,000
+    most common passwords, or the username or "mikroview" with different
+    capitals, punctuation or digits, is refused. Existing passwords are not
+    re-checked.
+  - **A new outbound fetch.** MikroView downloads a signed list of the
+    10,000 most common passwords from gauntlet's public GitHub release at
+    start-up and about once a day, to refresh that check. It sends no
+    password and nothing about your install, and keeps the list built into
+    the release if it cannot reach GitHub (one warning in the log). No
+    password is ever sent to Have I Been Pwned. There is no setting for it;
+    see [Choosing a
+    password](docs/configuration.md#choosing-a-password-what-is-refused-and-the-password-list-fetch).
+  - **Tokens.** New token values start `gnt_`; a token made before this
+    version keeps working. API tokens expire after one year; ingest tokens
+    and the drop list's key never do (an ingest token made over the API
+    must send `"expiresAt": "never"`). A daily clean-up removes any token
+    unused for a year, audited as `token.removed_unused`.
+  - **Recovery codes are confirmed.** The ten codes shown when someone adds
+    their first second factor are held until they confirm they saved them
+    (`POST /api/auth/recovery-codes/confirm`; the screen's "I have saved
+    these" button). Until then the factor is not live, and an enrolment not
+    confirmed within ten minutes is dropped.
+  - **The admin passkey rule.** New `auth.adminPasskey: required|optional`
+    (`MIKROVIEW_AUTH_ADMIN_PASSKEY`). Unset, it is `required` when
+    `publicUrl` is an https domain name: **an admin without a passkey is
+    then held at a passkey enrolment screen at their next request.** A
+    `required` rule without such a `publicUrl` is refused at start-up
+    (CFG-0023); an unknown value is CFG-0022.
+  - **Sign-ins from a new browser or country are flagged** on the session
+    and in the audit log (a `gate_known_browser` cookie remembers a browser
+    for 45 days); nothing is refused. Every sign-in is also recorded, in a
+    new sealed store, `auth.signInsStorePath`
+    (`MIKROVIEW_AUTH_SIGN_INS_STORE_PATH`); a page to read it is planned.
+  - **More than one admin is possible through the API** (an admin making
+    another needs their password and a current second factor). The web
+    interface does not offer it, and `-transfer-admin` works as before.
+  - **Setup-only mode** needs the key as well, never seals anything, and
+    fails closed on the admin passkey rule when it cannot read `publicUrl`
+    or the `auth` section and an admin holds a passkey.
+  - **Postgres refuses a database from a newer build**, as the file backend
+    always has: start-up stops and names the stored and the known versions.
+    The schema is now 4; see [docs/upgrades.md](docs/upgrades.md).
 
 - **`scripts/gate-remote.sh` prunes the second host's Docker cache after
   every run** (#1387), pass or fail: dangling images and the whole build
@@ -292,6 +457,33 @@ rewritten.
   old trie's tie-break.
 
 ### Security
+
+- **Accounts, tokens, recovery keys and the sign-in history are sealed
+  under the key, and the authenticator-app secret is no longer in a plain
+  file** (#1202, #1441). The accounts file holds each account's TOTP
+  secret, which cannot be hashed, and it used to sit in plain JSON on any
+  install without a key; `docs/configuration.md` also wrongly said these
+  files held only one-way hashes. A copy of the data folder or a backup now
+  yields nothing without the key. Sealing happens once, on the first start
+  of this version; a plaintext document is refused after that, so
+  somebody who can write the data folder cannot plant an accounts file of
+  their own.
+- **The session cookie is `__Host-mikroview_session`** (#1202) when
+  `auth.secureCookie` is on: a browser accepts it only over https with no
+  `Domain` attribute, so a neighbouring subdomain cannot overwrite it. Its
+  `Max-Age` is now the session ceiling rather than 30 days.
+- **Lockout, address bans and a stricter password check** (#1202): see
+  Changed above. Removing a user, resetting a password, clearing someone's
+  second factor and minting a token all re-check the admin's password, so a
+  stolen admin session alone cannot do them.
+- **Errors are standard Problem Details with a fixed `type`** (#1202), the
+  same wording for a wrong password as for an unknown name, so a script or
+  a person learns nothing about which part of a guess was wrong.
+- **Postgres refuses a database written by a newer build** (#1202, owner
+  ruling 2026-10-10). Before, a build skipped a migration it did not know
+  and ran on. A v0.6 build started against a v0.7.0 database is stopped
+  today only because it cannot read the tokens row, which is now sealed;
+  restore your copy rather than rely on that.
 
 - **Adding a second factor needs your password** (#1418, #1422). Adding
   a passkey or an authenticator app used to need only a signed-in
@@ -524,7 +716,7 @@ rewritten.
   onto the old one.
 
 - **The blocked certificate step now shows the exact `tls.hosts` line to
-  paste** (#1365). It used to say "add 192.168.13.15 to tls.hosts in
+  paste** (#1365). It used to say "add 192.0.2.15 to tls.hosts in
   config.yaml and restart" without ever showing the syntax. The step now
   prints a copyable `hosts: [...]` line carrying every host already
   configured plus the missing one, so pasting it can only add coverage —

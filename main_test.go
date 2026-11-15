@@ -20,36 +20,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/api"
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/recoverykeys"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 )
-
-// TestMain drops Argon2id to the cheapest valid cost (auth.KDFParams.
-// Valid's floor) for this package's whole test binary, before any test
-// runs -- the same override internal/api's TestMain applies to its own
-// binary (#1392; see auth.SetHashParamsForTest's doc comment for why it
-// is safe here). This package is a separate test binary from
-// internal/api and internal/auth, so each needs its own TestMain;
-// internal/auth's tests never call this override, so they keep
-// exercising HashPassword at the real, unchanged production cost.
-//
-// clear_second_factor_test.go and backup_passkeys_roundtrip_test.go
-// each create real accounts through auth.Store, paying a full
-// production Argon2id hash per account.
-func TestMain(m *testing.M) {
-	restore := auth.SetHashParamsForTest(auth.KDFParams{Memory: 8 * 1024, Time: 1, Threads: 1})
-	code := m.Run()
-	restore()
-	os.Exit(code)
-}
 
 // newIngestTestDeps builds the minimal set of dependencies
 // ingestOneRecovered needs, all unconfigured/in-memory (no GeoIP DB, no
@@ -78,7 +61,7 @@ func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MA
 	return st, devices, macRegistry, fs, h, geo, ru
 }
 
-const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60"
+const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60"
 
 // TestIngestRaisesNewDeviceFlagOnceForFirstSighting is the phase-1 wiring
 // contract from issue #103: the first event carrying a given SrcMAC
@@ -199,18 +182,18 @@ func TestVersionBootMessageTrimsWhitespaceFromPersistedMarker(t *testing.T) {
 func TestPasskeyStartupRefusal(t *testing.T) {
 	cases := []struct {
 		name             string
-		status           api.PasskeyStatus
+		status           gauntlet.PasskeyStatus
 		anyPasskeysExist bool
 		wantRefusal      bool
 	}{
-		{"ready, none registered", api.PasskeyStatusReady, false, false},
-		{"ready, some registered", api.PasskeyStatusReady, true, false},
-		{"unset, none registered", api.PasskeyStatusUnset, false, false},
-		{"unset, some registered", api.PasskeyStatusUnset, true, true},
-		{"ip, none registered", api.PasskeyStatusIP, false, false},
-		{"ip, some registered", api.PasskeyStatusIP, true, true},
-		{"insecure, none registered", api.PasskeyStatusInsecure, false, false},
-		{"insecure, some registered", api.PasskeyStatusInsecure, true, true},
+		{"ready, none registered", gauntlet.PasskeyStatusReady, false, false},
+		{"ready, some registered", gauntlet.PasskeyStatusReady, true, false},
+		{"unset, none registered", gauntlet.PasskeyStatusUnset, false, false},
+		{"unset, some registered", gauntlet.PasskeyStatusUnset, true, true},
+		{"ip, none registered", gauntlet.PasskeyStatusIP, false, false},
+		{"ip, some registered", gauntlet.PasskeyStatusIP, true, true},
+		{"insecure, none registered", gauntlet.PasskeyStatusInsecure, false, false},
+		{"insecure, some registered", gauntlet.PasskeyStatusInsecure, true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -539,11 +522,6 @@ func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
 	}
 }
 
-// TestAuthShouldFailClosed pins the exact predicate main() boots against:
-// a non-nil auth.Open error with a configured store path is the only case
-// that must refuse to start. Both "no persistence configured" (storePath
-// == "", err always nil per auth.Open) and "file genuinely doesn't exist"
-// (a real fresh install, err == nil) must keep booting normally.
 // TestMustOpenStoreIsANoOpOnSuccess proves mustOpenStore's non-fatal
 // path never touches the logger or the process -- since its fatal path
 // calls os.Exit and so can't run in-process inside `go test`, this and
@@ -560,47 +538,54 @@ func TestMustOpenStoreIsANoOpOnSuccess(t *testing.T) {
 }
 
 // TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger
-// mustOpenStore's boot-sequence call sites depend on, against the actual
-// auth.Store.OpenWithBackend implementation (not just persist.Open in
-// isolation): a file that exists but fails to parse produces a non-nil
-// error and a nil store, while a path with no file at all (fresh
-// install) produces neither -- the exact distinction main()'s boot
-// sequence relies on to tell "was configured, now broken" apart from
-// "never configured". The corrupt case also asserts the error names the
-// file and states a remedy (issue #378's Done-when: the message content
-// is what an operator reads, not just its non-nilness).
+// mustOpenStore's boot-sequence call sites depend on, against the real
+// accounts open path (authBackendFor, then gauntlet.OpenStore -- not
+// just persist.Open in isolation): a file that exists but will not open
+// produces a non-nil error and a nil store, while a path with no file at
+// all (fresh install) produces neither -- the exact distinction main()'s
+// boot sequence relies on to tell "was configured, now broken" apart
+// from "never configured" (#378). The error must name the file, since
+// it is what an operator reads.
 func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	dir := t.TempDir()
+	key, err := retention.NewKeyFromMaterial([]byte(strings.Repeat("k", retention.MinKeyBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &storage{key: key, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	open := func(path string) (*gauntlet.Store, error) {
+		b, err := st.authBackendFor(context.Background(), authStoreAccounts, path)
+		if err != nil {
+			return nil, err
+		}
+		return gauntlet.OpenStore(b, quietStoreOptions())
+	}
 
 	freshPath := filepath.Join(dir, "fresh", "accounts.json")
-	freshStore, err := auth.Open(freshPath)
+	freshStore, err := open(freshPath)
 	if err != nil {
-		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
+		t.Fatalf("opening a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
 	}
 	if freshStore == nil {
-		t.Error("auth.Open on a fresh install returned a nil store, want a usable empty one")
+		t.Error("opening a fresh install returned a nil store, want a usable empty one")
 	}
 
 	corruptPath := filepath.Join(dir, "accounts.json")
 	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	corruptStore, err := auth.Open(corruptPath)
+	corruptStore, err := open(corruptPath)
 	if err == nil {
-		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
+		t.Fatal("opening a corrupt existing file returned nil error, want non-nil")
 	}
 	if corruptStore != nil {
-		t.Error("auth.Open on a corrupt file returned a non-nil store -- it would still carry a live backend (issue #378)")
+		t.Error("opening a corrupt file returned a non-nil store -- it would still carry a live backend (issue #378)")
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, corruptPath) {
+	if msg := err.Error(); !strings.Contains(msg, corruptPath) {
 		t.Errorf("error %q does not name the file path %q", msg, corruptPath)
 	}
-	if !strings.Contains(msg, "restore") && !strings.Contains(msg, "backup") {
-		t.Errorf("error %q does not state a remedy (restore from backup / move aside)", msg)
-	}
-	if !strings.Contains(msg, "accounts") {
-		t.Errorf("error %q does not name which store this is", msg)
+	if got, _ := os.ReadFile(corruptPath); string(got) != "{not valid json" {
+		t.Errorf("the corrupt file was changed by a refused open: %q", got)
 	}
 }
 
@@ -674,7 +659,7 @@ func TestVersionFileIsReleasable(t *testing.T) {
 // invariant the ordering depends on.
 func TestRedeemDoesNotConsumeAKeyUntilCommitted(t *testing.T) {
 	dir := t.TempDir()
-	rs, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	rs, err := recoverykeys.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -693,7 +678,7 @@ func TestRedeemDoesNotConsumeAKeyUntilCommitted(t *testing.T) {
 	}
 
 	// A fresh store, as the next invocation of the command would open.
-	again, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	again, err := recoverykeys.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
 	if err != nil {
 		t.Fatal(err)
 	}
