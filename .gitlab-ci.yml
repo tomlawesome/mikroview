@@ -2526,7 +2526,9 @@ publish:channel:
       # carries that token, so it is never echoed. A v* tag names one
       # commit for good, so tags skip the check.
       if [ -z "${CI_COMMIT_TAG:-}" ]; then
-        head="$(git ls-remote "$CI_REPOSITORY_URL" "refs/heads/$CI_COMMIT_BRANCH" | cut -f1)"
+        # ls-remote matches by suffix (zz/refs/heads/preview would match too),
+        # so keep only the line for exactly this branch's ref.
+        head="$(git ls-remote "$CI_REPOSITORY_URL" "refs/heads/$CI_COMMIT_BRANCH" | awk -v r="refs/heads/$CI_COMMIT_BRANCH" '$2 == r { print $1 }')"
         if [ "$head" != "$CI_COMMIT_SHA" ]; then
           echo "publish:channel: $CI_COMMIT_BRANCH is now at ${head:-<unknown>}, not this pipeline's $CI_COMMIT_SHA -- a newer pipeline publishes :preview; publishing nothing" >&2
           exit 1
