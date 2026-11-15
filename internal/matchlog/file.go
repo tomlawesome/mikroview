@@ -164,8 +164,9 @@ func Check(path string) error {
 }
 
 // sniff checks what is at path before anything opens it for writing,
-// and reports its size (-1 when absent). Absent, empty, or starting with
-// Format's magic is fine. A file that starts with '{' (after any
+// and reports its size (-1 when absent). Absent, empty, starting with
+// Format's magic, or a header torn by a crash (Format.TornHeader, which
+// OpenFrameLog starts again) is fine. A file that starts with '{' (after any
 // whitespace) is the JSON-lines log an earlier release wrote, and is
 // refused with persist.ErrPlaintextDocument; anything else is refused as
 // not a match log. Neither is changed.
@@ -189,7 +190,7 @@ func sniff(path string) (int64, error) {
 	}
 	head = head[:n]
 	switch {
-	case n == 0, Format.HasMagic(head):
+	case n == 0, Format.HasMagic(head), Format.TornHeader(head):
 		return fi.Size(), nil
 	case bytes.HasPrefix(bytes.TrimLeft(head, " \t\r\n"), []byte("{")):
 		return 0, fmt.Errorf("matchlog: store %q (%s): %w", storeName, path, persist.ErrPlaintextDocument)

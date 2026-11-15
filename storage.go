@@ -58,6 +58,10 @@ type storage struct {
 	// written (recordPostgresAdoption), so the next start tries again
 	// rather than coming up with that store empty for good.
 	adoptFailed bool
+	// sealedFiles is every sealed file this process opened with its
+	// re-seal deferred (PROP-R1); appended on the boot goroutine only,
+	// read by finishSchemaUpgrade.
+	sealedFiles []*persist.EncryptedFileBackend
 }
 
 // openStorage connects to Postgres if configured, and applies the schema.
@@ -188,7 +192,9 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 		// keyless install kept in the clear (#853's 2026-09-18 addendum,
 		// now ended), say -- is refused, never sealed in place (#1202,
 		// ruling 19).
-		return persist.NewEncryptedFileBackend(filePath, name, s.key), nil
+		b := persist.NewEncryptedFileBackend(filePath, name, s.key).DeferRebind()
+		s.sealedFiles = append(s.sealedFiles, b)
+		return b, nil
 	}
 
 	b := persist.NewPostgresBackend(s.pool, name)
@@ -302,7 +308,9 @@ func (s *storage) authBackendFor(ctx context.Context, name, filePath string) (gp
 		if filePath == "" {
 			return nil, nil // this store's persistence is switched off
 		}
-		return persist.NewEncryptedFileBackend(filePath, name, s.key), nil
+		b := persist.NewEncryptedFileBackend(filePath, name, s.key).DeferRebind()
+		s.sealedFiles = append(s.sealedFiles, b)
+		return b, nil
 	}
 	b, err := gpersist.Encrypt(persist.RefusePlaintextRows(persist.NewPostgresBackend(s.pool, name)), s.key.Material(),
 		gpersist.EncryptOptions{Label: name})
@@ -517,6 +525,19 @@ func (s *storage) finishSchemaUpgrade(ctx context.Context, cfg config.Config) er
 		logging.New("schema").Warn(fmt.Sprintf("not recording schema %d on this start, because a file did not move onto "+
 			"Postgres -- it is recorded at the first start that finishes the move", persist.CurrentSchema()))
 		return nil
+	}
+	// The start is committed: every store opened. Only now are files
+	// still sealed under their pre-#1450 path binding re-sealed under
+	// their store name, for the reason the schema is stamped only here: a
+	// start refused above leaves every file as the release it came from
+	// wrote it, so that release can still open it. Best effort, as the
+	// re-seal always was: a file that could not be re-sealed stays
+	// readable and is re-sealed by a later start.
+	for _, b := range s.sealedFiles {
+		if err := b.Rebind(ctx); err != nil {
+			logging.New("persist").Warn(fmt.Sprintf("%s could not be re-sealed under its store name after the start: %v "+
+				"-- it stays readable under its old binding", b.Describe(), err))
+		}
 	}
 	if s.pool != nil {
 		if _, err := s.pool.MigrateTo(ctx, persist.CurrentSchema()); err != nil {

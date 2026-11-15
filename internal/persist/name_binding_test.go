@@ -314,3 +314,79 @@ func TestLegacyFileWhoseReSealFailsStillOpensAndIsLeftUnchanged(t *testing.T) {
 		t.Error("a failed re-seal changed the file on disk")
 	}
 }
+
+// PROP-R1: a server start opens a dozen stores before the one that may
+// refuse it, so a file still sealed under its pre-#1450 path binding is
+// left exactly as the earlier release wrote it until the start is
+// committed (Rebind). Written from the ruling; does not compile until
+// DeferRebind and Rebind exist.
+func TestDeferredRebindLeavesALegacyFileUntilRebind(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	p := legacyFixture(t, dir)
+	key := testKey(t, 0x07)
+	before := readFileBytes(t, p)
+
+	b := NewEncryptedFileBackendForPath(p, legacyLogical, "flags", key).DeferRebind()
+	snap, err := b.Load(ctx)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if string(snap.Payload) != legacyPayload {
+		t.Errorf("payload = %q, want %q", snap.Payload, legacyPayload)
+	}
+	if !bytes.Equal(before, readFileBytes(t, p)) {
+		t.Fatal("a deferred Load changed the file")
+	}
+
+	saved := `{"flags":[]}`
+	if _, err := b.Save(ctx, []byte(saved), snap.Version); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Still the old binding: the release that wrote it can open it...
+	got, err := NewEncryptedFileBackendForPath(p, legacyLogical, "flags", key).WithoutRebind().Load(ctx)
+	if err != nil || string(got.Payload) != saved {
+		t.Fatalf("a save before Rebind moved the file off its old binding: %v %q", err, got.Payload)
+	}
+	// ...and it is still path-bound, so a copy elsewhere is refused.
+	other := filepath.Join(t.TempDir(), "flags.json")
+	writePlain(t, other, readFileBytes(t, p))
+	if _, err := NewEncryptedFileBackend(other, "flags", key).Load(ctx); err == nil {
+		t.Fatal("a copy at another path opened before Rebind; the file was re-sealed early")
+	}
+
+	mid := readFileBytes(t, p)
+	if err := b.Rebind(ctx); err != nil {
+		t.Fatalf("Rebind: %v", err)
+	}
+	if bytes.Equal(mid, readFileBytes(t, p)) {
+		t.Fatal("Rebind did not re-seal the file")
+	}
+	moved := filepath.Join(t.TempDir(), "flags.json")
+	writePlain(t, moved, readFileBytes(t, p))
+	got, err = NewEncryptedFileBackend(moved, "flags", key).Load(ctx)
+	if err != nil || string(got.Payload) != saved {
+		t.Fatalf("after Rebind a copy at another path did not open with the saved payload: %v %q", err, got.Payload)
+	}
+}
+
+// PROP-R1: Rebind on a file already bound to its store name writes nothing.
+func TestRebindOnAFileAlreadyBoundToItsNameWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	key := testKey(t, 0x07)
+	p := filepath.Join(t.TempDir(), "flags.json")
+	if _, err := NewEncryptedFileBackend(p, "flags", key).Save(ctx, []byte(legacyPayload), 0); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	before := readFileBytes(t, p)
+	b := NewEncryptedFileBackend(p, "flags", key).DeferRebind()
+	if _, err := b.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := b.Rebind(ctx); err != nil {
+		t.Fatalf("Rebind: %v", err)
+	}
+	if !bytes.Equal(before, readFileBytes(t, p)) {
+		t.Error("Rebind rewrote a file already bound to its store name")
+	}
+}

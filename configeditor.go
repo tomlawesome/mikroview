@@ -192,7 +192,9 @@ func runSetupOnly(result config.Result, problems int) int {
 	}
 	// Never migrate here: a rollback to the previous release starts it
 	// on this same data with the old config, and data stamped by this
-	// build would be refused. Checking touches nothing.
+	// build would be refused. Checking touches nothing: the sealed files
+	// are opened, but with their re-seal deferred (PROP-R1) they are not
+	// rewritten.
 	if err := persist.CheckFileSchema(dataDir(cfg)); err != nil {
 		log.Error(err.Error())
 		return 1

@@ -19,7 +19,7 @@ import (
 // restore marker or any store is written.
 func TestRestoreOfABadMatchLogLineChangesNothing(t *testing.T) {
 	good := `{"kind":"record","id":"r1","entryId":"e1","tuple":{"source":{"mac":"52:54:00:ab:cd:ef"},"destIp":"203.0.113.9","port":22},"firstSeen":"2026-08-09T12:00:00Z","lastSeen":"2026-08-09T12:00:00Z"}`
-	wrapped, err := wrapForEnvelope("match_log", []byte(good+"\n{broken\n"))
+	wrapped, err := wrapForEnvelope("match_log", []byte(good+"\n"+`{"kind":"wat","id":"x"}`+"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
