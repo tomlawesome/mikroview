@@ -857,6 +857,8 @@ lint:supply-chain-pins:
     - node --test tools/supply-chain/pins-policy.test.mjs
     # #1462: the six scanner jobs are report-only and pinned.
     - node --test tools/supply-chain/scanner-jobs.test.mjs
+    # #1479: no cache in a job that signs.
+    - node --test tools/supply-chain/release-cache.test.mjs
     - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------
