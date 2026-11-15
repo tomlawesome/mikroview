@@ -16,7 +16,7 @@ door's rain is the real `Fullfall`'s (`fullfall.css`). One direction:
 
 | | Concept | Open |
 |---|---|---|
-| **AK** | **The catch** — slide, swell, the box, the line that catches the rain and wipes it away, the wizard in groups | `http://198.51.100.1:8309/screens/wizard/round-12/ak-catch.html` |
+| **AK** | **The catch** — slide, swell, the box, the line that catches the rain and wipes it away, the wizard in groups | `http://192.0.2.30:8309/screens/wizard/round-12/ak-catch.html` |
 
 Start at the door: Enter (or ⏎). Fill the one router step, Next, your
 password, Copy, watch, tag, Finish. The prototype strip is bottom right;

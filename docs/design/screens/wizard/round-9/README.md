@@ -34,8 +34,8 @@ Served from the design host, port 8309:
 
 | | Concept | Open |
 |---|---|---|
-| **AE** | **The ledger, in colour** — round 8's AD with the enrolment line rethought | `http://198.51.100.1:8309/screens/wizard/round-9/ae-ledger.html` |
-| **AF** | **The fall comes alive, finished in the panel** — round 8's AC without the bar | `http://198.51.100.1:8309/screens/wizard/round-9/af-alive.html` |
+| **AE** | **The ledger, in colour** — round 8's AD with the enrolment line rethought | `http://192.0.2.30:8309/screens/wizard/round-9/ae-ledger.html` |
+| **AF** | **The fall comes alive, finished in the panel** — round 8's AC without the bar | `http://192.0.2.30:8309/screens/wizard/round-9/af-alive.html` |
 
 Answer the five questions, Copy, watch. Prototype strip at bottom left:
 scenario, speed, Restart. `?demo` prefills every answer.

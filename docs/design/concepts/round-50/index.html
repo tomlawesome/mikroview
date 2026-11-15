@@ -314,8 +314,8 @@ function leader(from, to) {
 }
 const CARDS = {
   moreList: (px) => ({ px: px, w: 236, n: '2 more tunnels', sub: 'folded',
-    body: '<div class="s"><i class="sw es"></i>wg2 · 198.51.100.1/24 · established</div>' +
-      '<div class="s dk"><i class="sw dot" style="background:var(--dark)"></i>gre-site-b · 198.51.100.2/24 · quiet 3 d</div>',
+    body: '<div class="s"><i class="sw es"></i>wg2 · 192.0.2.48/28 · established</div>' +
+      '<div class="s dk"><i class="sw dot" style="background:var(--dark)"></i>gre-site-b · 192.0.2.80/28 · quiet 3 d</div>',
     acts: [['put both on the map', 1], ['stream', 1, 'dim']] })
 };
 
@@ -326,19 +326,19 @@ const CARDS = {
    is the colour. Hosts are a dot row inside their lane card.
    ================================================================ */
 const N2 = {
-  internet: { x: 700, y: 68, w: 200, h: 60, name: 'Internet', cidr: 'ether1 · 203.0.113.7', hb: ['◉ 1', '✱ 2'] },
+  internet: { x: 700, y: 68, w: 200, h: 60, name: 'Internet', cidr: 'ether1 · 192.0.2.7', hb: ['◉ 1', '✱ 2'] },
   rb: { x: 700, y: 268, w: 256, h: 68, name: 'rb5009', sub: 'RouterOS 7.20.1 · the waist · 41 rules', router: 1 },
-  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 198.51.100.3/24', hb: ['◉ 1', null], small: 1 },
-  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '198.51.100.4/24', hb: ['◉ 2', '✱ 1'],
+  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 198.51.100.128/27', hb: ['◉ 1', null], small: 1 },
+  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '198.51.100.0/27', hb: ['◉ 2', '✱ 1'],
     hosts: [['alex-desktop', 'live', 'w'], ['phone-alex', 'live'], ['laptop-anna', 'live', 'f'], ['tv-lounge', 'quiet'], ['printer-old', 'intended'],
       ['nuc', 'live'], ['tablet', 'live'], ['ap-hall', 'live'], ['ap-loft', 'live'], ['switch-desk', 'live']], more: 2,
     tally: '12 hosts · 1 quiet · 1 quiet on purpose' },
-  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '198.51.100.5/24', hb: ['◉ 2', null],
+  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '198.51.100.32/27', hb: ['◉ 2', null],
     hosts: [['nas', 'live', 'w'], ['pihole', 'live'], ['unifi', 'live']], tally: '3 hosts' },
-  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '198.51.100.6/24', hb: ['◉ 1 ○', '✱ 3'],
+  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '198.51.100.64/27', hb: ['◉ 1 ○', '✱ 3'],
     hosts: [['cam-porch', 'live', 'f'], ['hue-bridge', 'live'], ['thermostat', 'live'], ['doorbell', 'live', 'f'], ['esp-weather', 'live'], ['plug-kettle', 'live'], ['tv-kitchen', 'live']],
     tally: '7 hosts' },
-  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '198.51.100.7/24',
+  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '198.51.100.96/27',
     hosts: [['guest-e8b2', 'live'], ['guest-1a07', 'quiet'], ['guest-c3d9', 'quiet']], tally: '3 hosts · 2 quiet' },
   /* ---- ROUND 50: the column. Same card as wg0, same width, one
      column pitch apart (76 = the 56 card plus a 20 gap), busiest
@@ -346,8 +346,8 @@ const N2 = {
      slots have to finish above the Guest rib and the zone row; see
      the README. The fourth slot is the fold: a list, not a tunnel,
      so it is drawn a shade dimmer. ---- */
-  wg1: { x: 1128, y: 236, w: 188, h: 56, name: 'WireGuard', cidr: 'wg1 · 198.51.100.8/24', small: 1 },
-  l2tp: { x: 1128, y: 312, w: 188, h: 56, name: 'L2TP', cidr: 'l2tp-out · 198.51.100.9/24', small: 1 },
+  wg1: { x: 1128, y: 236, w: 188, h: 56, name: 'WireGuard', cidr: 'wg1 · 192.0.2.32/28', small: 1 },
+  l2tp: { x: 1128, y: 312, w: 188, h: 56, name: 'L2TP', cidr: 'l2tp-out · 192.0.2.64/28', small: 1 },
   more: { x: 1128, y: 388, w: 188, h: 56, name: '2 more tunnels', cidr: 'wg2 · gre-site-b', small: 1, dim: 0.62 }
 };
 /* a rib: [from, to, bezier, width, {cov,k,nb} for from→to, {cov,k,nb} for to→from]

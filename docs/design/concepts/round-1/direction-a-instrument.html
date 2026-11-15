@@ -351,7 +351,7 @@
           <g transform="translate(620 62)">
             <rect x="-88" y="-30" width="176" height="60" rx="3" fill="var(--panel-2)" stroke="var(--line-strong)"/>
             <text x="-72" y="-6" class="t-label">INTERNET</text>
-            <text x="-72" y="12" class="t-sub">ether1 · 203.0.113.7</text>
+            <text x="-72" y="12" class="t-sub">ether1 · 192.0.2.7</text>
             <g transform="translate(46 -12)"><text class="cov cov-logged" x="0" y="0">LOGGED</text><text class="cov cov-logged" x="0" y="11">in / out</text></g>
           </g>
 
@@ -366,7 +366,7 @@
           <g transform="translate(1130 118)">
             <rect x="-72" y="-28" width="172" height="56" rx="3" fill="var(--panel-2)" stroke="var(--line-strong)"/>
             <text x="-58" y="-5" class="t-label">WG</text>
-            <text x="-58" y="12" class="t-sub">wg0 · 198.51.100.1/24</text>
+            <text x="-58" y="12" class="t-sub">wg0 · 198.51.100.128/27</text>
             <g transform="translate(38 -10)"><text class="cov cov-quiet" x="0" y="0">QUIET</text><text class="cov cov-quiet" x="0" y="11">by choice</text></g>
           </g>
 
@@ -376,9 +376,9 @@
             <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--lan)" stroke-opacity="0.55"/>
             <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--lan)" fill-opacity="0.12"/>
             <text x="-98" y="17" class="t-label">LAN</text>
-            <text x="6" y="17" class="t-cidr">198.51.100.2/24</text>
+            <text x="6" y="17" class="t-cidr">198.51.100.0/27</text>
             <text x="-98" y="46" class="t-member">alex-desktop · .21</text>
-            <text x="-98" y="64" class="t-member">phone-alex · .34</text>
+            <text x="-98" y="64" class="t-member">phone-alex · .5</text>
             <text x="-98" y="82" class="t-member">laptop-anna · .29</text>
             <text x="-98" y="100" class="t-sub">+9 quiet hosts</text>
             <text x="-98" y="132" class="cov cov-logged">LOGGED both ways</text>
@@ -388,10 +388,10 @@
             <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--srv)" stroke-opacity="0.55"/>
             <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--srv)" fill-opacity="0.12"/>
             <text x="-98" y="17" class="t-label">SERVERS</text>
-            <text x="6" y="17" class="t-cidr">198.51.100.3/24</text>
-            <text x="-98" y="46" class="t-member">nas · .10</text>
-            <text x="-98" y="64" class="t-member">pihole · .53</text>
-            <text x="-98" y="82" class="t-member">unifi · .12</text>
+            <text x="6" y="17" class="t-cidr">198.51.100.32/27</text>
+            <text x="-98" y="46" class="t-member">nas · .42</text>
+            <text x="-98" y="64" class="t-member">pihole · .55</text>
+            <text x="-98" y="82" class="t-member">unifi · .44</text>
             <text x="-98" y="132" class="cov cov-logged">LOGGED both ways</text>
           </g>
           <!-- IOT -->
@@ -399,10 +399,10 @@
             <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--iot)" stroke-opacity="0.55"/>
             <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--iot)" fill-opacity="0.12"/>
             <text x="-98" y="17" class="t-label">IOT</text>
-            <text x="6" y="17" class="t-cidr">198.51.100.4/24 · vlan20</text>
-            <text x="-98" y="46" class="t-member">cam-porch · .31</text>
-            <text x="-98" y="64" class="t-member">hue-bridge · .14</text>
-            <text x="-98" y="82" class="t-member">thermostat · .18</text>
+            <text x="6" y="17" class="t-cidr">198.51.100.64/27 · vlan20</text>
+            <text x="-98" y="46" class="t-member">cam-porch · .65</text>
+            <text x="-98" y="64" class="t-member">hue-bridge · .78</text>
+            <text x="-98" y="82" class="t-member">thermostat · .82</text>
             <text x="-98" y="100" class="t-sub">+4 quiet hosts</text>
             <text x="-98" y="132" class="cov cov-logged">LOGGED both ways</text>
           </g>
@@ -411,8 +411,8 @@
             <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--guest)" stroke-opacity="0.55"/>
             <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--guest)" fill-opacity="0.12"/>
             <text x="-98" y="17" class="t-label">GUEST</text>
-            <text x="6" y="17" class="t-cidr">198.51.100.5/24 · vlan30</text>
-            <text x="-98" y="46" class="t-member">guest-e8b2 · .17</text>
+            <text x="6" y="17" class="t-cidr">198.51.100.96/27 · vlan30</text>
+            <text x="-98" y="46" class="t-member">guest-e8b2 · .113</text>
             <text x="-98" y="64" class="t-sub">+2 quiet hosts</text>
             <text x="-98" y="118" class="cov cov-dark">DARK toward wan</text>
             <text x="-98" y="132" class="t-sub">no log rule on this boundary</text>
@@ -484,97 +484,97 @@
           <tr class="new">
             <td class="t">14:02:11.482</td><td class="chain">forward</td><td><span class="chip drop">DROP</span></td>
             <td class="editor-anchor">
-              <span class="lanetick" style="background:var(--iot)"></span><span class="host">cam-porch <span class="ip">198.51.100.6</span></span>
-              <span class="rowtools"><span class="glyph" title="Copy raw value">⧉</span><span class="glyph" title="Edit name for 198.51.100.6">✎</span></span>
+              <span class="lanetick" style="background:var(--iot)"></span><span class="host">cam-porch <span class="ip">198.51.100.65</span></span>
+              <span class="rowtools"><span class="glyph" title="Copy raw value">⧉</span><span class="glyph" title="Edit name for 198.51.100.65">✎</span></span>
               <!-- the #413 anchored editor, focus-trapped, stream held while open -->
               <div class="editor" role="dialog" aria-label="Name this host">
                 <h3>Name this host</h3>
-                <div class="ident"><b>198.51.100.6</b> — currently “cam-porch”, from a DHCP lease</div>
+                <div class="ident"><b>198.51.100.65</b> — currently “cam-porch”, from a DHCP lease</div>
                 <input type="text" value="Porch camera" aria-label="Display name">
-                <p class="scope">Applies everywhere 198.51.100.6 appears, in every view.</p>
+                <p class="scope">Applies everywhere 198.51.100.65 appears, in every view.</p>
                 <p class="note">Display only. Filters, groups and copies keep using the raw value.</p>
                 <div class="row"><button class="cancel">Cancel</button><button class="save">Save</button></div>
               </div>
             </td>
             <td class="arrow">→</td>
-            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">198.51.100.7</span></span></td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">198.51.100.42</span></span></td>
             <td>tcp/445 <span class="flag">smb</span></td><td class="rule">iot-to-lan-drop</td>
           </tr>
           <tr>
             <td class="t">14:02:11.407</td><td class="chain">srcnat</td><td><span class="chip nat">NAT</span></td>
-            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">phone-alex <span class="ip">198.51.100.8</span></span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">phone-alex <span class="ip">198.51.100.5</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="host">198.51.100.9 <span class="flag">🇺🇸 US</span></span></td>
-            <td>udp/443 <span class="flag">quic</span></td><td class="rule">nat-wan <span class="flag">→ 203.0.113.7</span></td>
+            <td><span class="host">203.0.113.206 <span class="flag">🇺🇸 US</span></span></td>
+            <td>udp/443 <span class="flag">quic</span></td><td class="rule">nat-wan <span class="flag">→ 192.0.2.7</span></td>
           </tr>
           <tr>
             <td class="t">14:02:10.951</td><td class="chain">input</td><td><span class="chip drop">DROP</span></td>
-            <td><span class="host">198.51.100.10 <span class="flag">🇩🇪 DE</span></span></td>
+            <td><span class="host">203.0.113.34 <span class="flag">🇩🇪 DE</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="host">rb5009 <span class="ip">203.0.113.7</span></span></td>
+            <td><span class="host">rb5009 <span class="ip">192.0.2.7</span></span></td>
             <td>tcp/8291 <span class="flag">winbox</span></td><td class="rule">wan-in-drop</td>
           </tr>
           <tr>
             <td class="t">14:02:10.783</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
-            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">alex-desktop <span class="ip">198.51.100.11</span></span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">alex-desktop <span class="ip">198.51.100.21</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">198.51.100.7</span></span></td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">198.51.100.42</span></span></td>
             <td>tcp/5001 <span class="flag">syncthing</span></td><td class="rule">lan-to-srv</td>
           </tr>
           <tr>
             <td class="t">14:02:10.611</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
-            <td><span class="lanetick" style="background:var(--iot)"></span><span class="host">hue-bridge <span class="ip">198.51.100.12</span></span></td>
+            <td><span class="lanetick" style="background:var(--iot)"></span><span class="host">hue-bridge <span class="ip">198.51.100.78</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">pihole <span class="ip">198.51.100.13</span></span></td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">pihole <span class="ip">198.51.100.55</span></span></td>
             <td>udp/53 <span class="flag">dns</span></td><td class="rule">iot-dns-allow</td>
           </tr>
           <tr>
             <td class="t">14:02:10.512</td><td class="chain">input</td><td><span class="chip drop">DROP</span></td>
-            <td><span class="host">198.51.100.14 <span class="flag">🇳🇱 NL</span></span></td>
+            <td><span class="host">203.0.113.78 <span class="flag">🇳🇱 NL</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="host">rb5009 <span class="ip">203.0.113.7</span></span></td>
+            <td><span class="host">rb5009 <span class="ip">192.0.2.7</span></span></td>
             <td>tcp/22 <span class="flag">ssh</span></td><td class="rule">wan-in-drop</td>
           </tr>
           <tr>
             <td class="t">14:02:10.288</td><td class="chain">forward</td><td><span class="chip drop">DROP</span></td>
-            <td><span class="lanetick" style="background:var(--guest)"></span><span class="host">guest-e8b2 <span class="ip">198.51.100.15</span></span></td>
+            <td><span class="lanetick" style="background:var(--guest)"></span><span class="host">guest-e8b2 <span class="ip">198.51.100.113</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">alex-desktop <span class="ip">198.51.100.11</span></span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">alex-desktop <span class="ip">198.51.100.21</span></span></td>
             <td>tcp/445 <span class="flag">smb</span></td><td class="rule">guest-isolation</td>
           </tr>
           <tr>
             <td class="t">14:02:09.934</td><td class="chain">dstnat</td><td><span class="chip nat">NAT</span></td>
-            <td><span class="host">198.51.100.16 <span class="flag">🇬🇧 GB</span></span></td>
+            <td><span class="host">203.0.113.55 <span class="flag">🇬🇧 GB</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">198.51.100.7</span></span></td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">198.51.100.42</span></span></td>
             <td>tcp/443 <span class="flag">https</span></td><td class="rule">nat-wan-https <span class="glyph" style="width:14px;height:14px" title="NAT rule lookup">ⓘ</span></td>
           </tr>
           <tr>
             <td class="t">14:02:09.856</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
-            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">laptop-anna <span class="ip">198.51.100.17</span></span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">laptop-anna <span class="ip">198.51.100.29</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="host">198.51.100.18 <span class="flag">🇺🇸 US</span></span></td>
+            <td><span class="host">203.0.113.223 <span class="flag">🇺🇸 US</span></span></td>
             <td>tcp/443 <span class="flag">https</span></td><td class="rule">lan-to-wan</td>
           </tr>
           <tr>
             <td class="t">14:02:09.701</td><td class="chain">forward</td><td><span class="chip drop">DROP</span></td>
-            <td><span class="lanetick" style="background:var(--iot)"></span><span class="host">cam-porch <span class="ip">198.51.100.6</span></span></td>
+            <td><span class="lanetick" style="background:var(--iot)"></span><span class="host">cam-porch <span class="ip">198.51.100.65</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="host">198.51.100.19 <span class="flag">🇨🇳 CN</span></span></td>
+            <td><span class="host">203.0.113.8 <span class="flag">🇨🇳 CN</span></span></td>
             <td>tcp/443 <span class="flag">https</span></td><td class="rule">iot-egress-drop</td>
           </tr>
           <tr>
             <td class="t">14:02:09.455</td><td class="chain">input</td><td><span class="chip accept">ACCEPT</span></td>
-            <td><span class="host">phone-alex-wg <span class="ip">198.51.100.20</span></span></td>
+            <td><span class="host">phone-alex-wg <span class="ip">198.51.100.130</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="host">rb5009 <span class="ip">203.0.113.7</span></span></td>
+            <td><span class="host">rb5009 <span class="ip">192.0.2.7</span></span></td>
             <td>udp/51820 <span class="flag">wireguard</span></td><td class="rule">wg-in</td>
           </tr>
           <tr>
             <td class="t">14:02:09.312</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
-            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">alex-desktop <span class="ip">198.51.100.11</span></span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">alex-desktop <span class="ip">198.51.100.21</span></span></td>
             <td class="arrow">→</td>
-            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">pihole <span class="ip">198.51.100.13</span></span></td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">pihole <span class="ip">198.51.100.55</span></span></td>
             <td>udp/53 <span class="flag">dns</span></td><td class="rule">lan-to-srv</td>
           </tr>
         </tbody>
@@ -658,7 +658,7 @@
           <div class="b"><span class="n">alex-desktop</span><span class="bar"><i style="width:63%"></i></span><span class="v">2,817</span></div>
           <div class="b"><span class="n">cam-porch</span><span class="bar"><i style="width:43%; background:var(--iot)"></i></span><span class="v">1,904</span></div>
           <div class="b"><span class="n">phone-alex</span><span class="bar"><i style="width:28%"></i></span><span class="v">1,233</span></div>
-          <div class="b"><span class="n">198.51.100.10</span><span class="bar"><i style="width:19%; background:var(--drop)"></i></span><span class="v">861 <span style="color:var(--drop)">drop</span></span></div>
+          <div class="b"><span class="n">203.0.113.34</span><span class="bar"><i style="width:19%; background:var(--drop)"></i></span><span class="v">861 <span style="color:var(--drop)">drop</span></span></div>
         </div>
 
         <div class="tile wide barlist">

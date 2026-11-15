@@ -34,7 +34,7 @@ ledger itself.**
   (unchanged from round 3; on a phone the seam is moot), and #490's
   read-only grammar.
 - Accessibility: mark and record are one row, so screen readers get
-  position as words ("at .77, on LAN ground"), spoken once per row;
+  position as words ("at .17, on LAN ground"), spoken once per row;
   arrows walk rows with nothing to keep in sync.
 - Build note: the seam is one CSS variable; marks are
   absolutely-positioned children of their row's plot cell — no
