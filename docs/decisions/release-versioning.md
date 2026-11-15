@@ -83,6 +83,9 @@ What changed:
 - `docker.yml` runs its release job on a `v*` tag push, and refuses unless
   the tag equals `v<VERSION>` at the tagged commit. A merge to `main` now
   only retags preview's tested digest as `latest`; it never releases.
+- Since #1472 (2026-11-15) GitLab makes the same check first, in
+  `release:check-version`, and also requires the built binary to report
+  the tag, before the tag pipeline publishes anything to its own registry.
 - A failed release is re-run on the same tag once the cause is fixed.
   Nothing is deleted or renumbered, because the tag never claimed the
   publish had happened — the registry does.
@@ -91,6 +94,13 @@ What did not change: the `VERSION` file is still where the version lives,
 and the bump is still part of the promotion diff. "Not a git tag pushed
 after the fact" above was about *deriving* the version from a tag; the
 tag now says when, the file still says what, and the two must agree.
+
+**No `v*` tag may be pushed until #1472's landing step 3 is in** (GitHub
+copying GitLab's signed digest to GHCR). Until then GitLab signs only its own
+registry's digest, while `docker.yml` publishes a separate rebuild to GHCR,
+so that release would reach GHCR with no key-based signature, and
+`countersign.yml` and `SECURITY.md`'s `cosign verify` would both refuse it
+(docs/release-signing.md).
 
 Release steps, in order: promote `preview` → `main`; wait for the
 promote job on GitHub; on GitLab, `git tag v<VERSION> <main sha>` and

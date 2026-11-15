@@ -274,16 +274,16 @@
       "reviewBy": "2026-11-06"
     },
     {
-      "name": "Docker CLI (container smoke-test and gate:image build, #1106)",
-      "reference": "docker:29-cli",
+      "name": "Docker CLI (sign:release-digest job image on the signing runner, #1472)",
+      "reference": "docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/docker/cli",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-10",
-      "reviewBy": "2026-11-10"
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "Semgrep static analysis scanner",

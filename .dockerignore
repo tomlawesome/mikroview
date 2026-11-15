@@ -12,7 +12,12 @@ docs/design
 .upgrade-fixtures
 # Coverage counts from test runs (#1451), never in a build context.
 .coverdata
-# Trivy's vulnerability database (GitLab cache, #1462) and test:container's
-# saved image, both restored or written in the checkout before the build.
+# Trivy's vulnerability database (GitLab cache, #1462), restored in the
+# checkout before the build.
 .trivy-cache
-mikroview-image.tar
+# CI artefacts written into the checkout (#1472): build:image's saved
+# image, security:trivy-image's SBOM, publish:image's evidence. Never part
+# of a build context, so a later build cannot carry one image in another.
+image.tar
+image.spdx.json
+.mv-supply-chain

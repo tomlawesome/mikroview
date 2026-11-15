@@ -51,6 +51,12 @@
 # scripts/ensure-cosign.sh). A downloaded binary, never committed.
 .mv-cosign/
 
+# CI artefacts of the publish jobs (#1472): build:image's saved image,
+# security:trivy-image's SBOM, publish:image's evidence. Never committed.
+/image.tar
+/image.spdx.json
+/.mv-supply-chain/
+
 # Coverage counts from the real program, written when MIKROVIEW_COVERDIR
 # points here (#1451; CI's test:go and test:postgres). Run data, not content.
 /.coverdata/
