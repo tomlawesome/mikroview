@@ -4,11 +4,13 @@ package recoverykeys
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
@@ -36,6 +38,10 @@ func eachRecoveryBackend(t *testing.T, run func(t *testing.T, open func() *Recov
 		if dsn == "" {
 			t.Skip("MIKROVIEW_TEST_POSTGRES not set")
 		}
+		// A schema of its own, dropped afterwards, so a second run against
+		// the same database starts clean (the way internal/persist's
+		// Postgres tests isolate themselves).
+		dsn = isolatedSchemaDSN(t, dsn)
 		pool, err := persist.OpenPool(context.Background(), dsn)
 		if err != nil {
 			t.Fatalf("OpenPool: %v", err)
@@ -53,6 +59,46 @@ func eachRecoveryBackend(t *testing.T, run func(t *testing.T, open func() *Recov
 			return s
 		}, pepperPath)
 	})
+}
+
+// isolatedSchemaDSN creates a schema unique to this test, registers its
+// removal with t.Cleanup, and returns dsn with search_path pinned to it.
+func isolatedSchemaDSN(t *testing.T, dsn string) string {
+	t.Helper()
+	ctx := context.Background()
+	schema := "test_" + strings.ReplaceAll(strings.ToLower(t.Name()), "/", "_")
+	for _, r := range schema {
+		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			t.Fatalf("test name produces an unsafe schema identifier: %q", schema)
+		}
+	}
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connecting to create the test schema: %v", err)
+	}
+	defer admin.Close(ctx)
+	if _, err := admin.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
+		t.Fatalf("dropping stale schema: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatalf("creating schema: %v", err)
+	}
+	t.Cleanup(func() {
+		c, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			return
+		}
+		defer c.Close(ctx)
+		_, _ = c.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+	})
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parsing MIKROVIEW_TEST_POSTGRES: %v", err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // A key generated against one backend has to verify against a store
