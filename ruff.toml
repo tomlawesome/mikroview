@@ -9,7 +9,8 @@ extend-select = ["S"]
 
 [lint.per-file-ignores]
 # demo-data generators: random is for fake traffic, never for security; the
-# literals are placeholder credentials for a throwaway demo instance
+# literals are placeholder credentials for a throwaway demo instance; S108:
+# the fixed /tmp demo folder is made 0700 and its file 0600 before use
 "scripts/seed-demo.py" = ["S311", "S105", "S108"]
 "tools/screenshots/*" = ["S311"] # fake traffic for screenshots, not security use
 # fixed `git` calls with list arguments, no shell, inputs are CI SHAs
