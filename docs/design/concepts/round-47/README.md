@@ -21,7 +21,7 @@ same source, regardless of type. cam-porch's UNPLANNED, OUTBOUND and
 REPEATED DROPS (13:28 → still arriving) fold into one row:
 
 - FLAG: `⁂ CAMPAIGN · 3 flags`, in the worst flag's ink (alarm).
-- WHERE: the source — `cam-porch · 198.51.100.1`.
+- WHERE: the source — `cam-porch · 198.51.100.78`.
 - EVIDENCE: one word per type inside, each in its own type ink, then
   the span (`13:28 → still arriving`).
 - COUNT: the sum (`26×`). AGE: from the oldest flag (`24 m`). The row

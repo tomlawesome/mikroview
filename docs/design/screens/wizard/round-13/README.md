@@ -23,7 +23,7 @@ wordmark, the groups — is AK, unchanged.
 
 | | Concept | Open |
 |---|---|---|
-| **AL** | **The catch, tuned** | `http://198.51.100.1:8309/screens/wizard/round-13/al-catch.html` |
+| **AL** | **The catch, tuned** | `http://192.0.2.30:8309/screens/wizard/round-13/al-catch.html` |
 
 Start at the door: Enter (or ⏎). Fill the one router step, Next, your
 password, Copy, watch, tag, Finish. `?skipdoor` opens on the wizard.

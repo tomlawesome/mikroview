@@ -24,9 +24,9 @@ Served from the design host, port 8309:
 
 | | Concept | Open |
 |---|---|---|
-| **AH** | **The slide** — you slide down the fall to the wizard | `http://198.51.100.1:8309/screens/wizard/round-11/ah-slide.html` |
-| **AI** | **The swell** — the rain rises to fill the screen, then falls away | `http://198.51.100.1:8309/screens/wizard/round-11/ai-swell.html` |
-| **AJ** | **The storm** — wind, the rain drunk into the box, one ring | `http://198.51.100.1:8309/screens/wizard/round-11/aj-storm.html` |
+| **AH** | **The slide** — you slide down the fall to the wizard | `http://192.0.2.30:8309/screens/wizard/round-11/ah-slide.html` |
+| **AI** | **The swell** — the rain rises to fill the screen, then falls away | `http://192.0.2.30:8309/screens/wizard/round-11/ai-swell.html` |
+| **AJ** | **The storm** — wind, the rain drunk into the box, one ring | `http://192.0.2.30:8309/screens/wizard/round-11/aj-storm.html` |
 
 Start at the door: Enter (or ⏎). Fill the one router step, Next, your
 password, Copy, watch, tag, Finish. The prototype strip is bottom right;

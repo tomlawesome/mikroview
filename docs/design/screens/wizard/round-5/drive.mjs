@@ -18,7 +18,7 @@ const url = 'file://' + path.join(here, 'first-light.html')
 
 await page.goto(url); await page.waitForTimeout(600)
 await shot('01-tell-empty')
-await page.fill('#f-name', 'rb5009'); await page.fill('#f-addr', '192.0.2.1'); await page.focus('#f-pass'); await page.fill('#f-pass', 'correct horse')
+await page.fill('#f-name', 'rb5009'); await page.fill('#f-addr', '198.51.100.1'); await page.focus('#f-pass'); await page.fill('#f-pass', 'correct horse')
 await page.waitForTimeout(300); await shot('02-tell-filled')
 await page.selectOption('#speed', '3')
 await page.click('#go-paste'); await page.waitForTimeout(500); await shot('03-paste')
@@ -38,14 +38,14 @@ await page.click('[data-act=undo][data-u=connect]'); await page.waitForTimeout(4
 // wrong-address scenario
 await page.goto(url + '?demo'); await page.waitForTimeout(400)
 await page.selectOption('#scenario', 'wrongaddr'); await page.selectOption('#speed', '3')
-await page.fill('#f-name', 'rb5009'); await page.fill('#f-addr', '192.0.2.1'); await page.fill('#f-pass', 'x')
+await page.fill('#f-name', 'rb5009'); await page.fill('#f-addr', '198.51.100.1'); await page.fill('#f-pass', 'x')
 await page.click('#go-paste'); await page.click('[data-act=copy]'); await page.waitForTimeout(5000); await shot('15-wrongaddr-refused')
 await page.click('[data-act=use-other]'); await page.waitForTimeout(4000); await shot('16-wrongaddr-recovered')
 
 // ahead-of-review scenario
 await page.goto(url); await page.waitForTimeout(400)
 await page.selectOption('#scenario', 'ahead'); await page.selectOption('#speed', '3')
-await page.fill('#f-name', 'rb5009'); await page.fill('#f-addr', '192.0.2.1'); await page.fill('#f-pass', 'x')
+await page.fill('#f-name', 'rb5009'); await page.fill('#f-addr', '198.51.100.1'); await page.fill('#f-pass', 'x')
 await page.click('#go-paste'); await page.click('[data-act=copy]'); await page.waitForTimeout(7500)
 await page.click('[data-act=warn]'); await page.waitForTimeout(300); await shot('17-ahead-warning')
 console.log(errors.length ? errors.join('\n') : 'no console errors')

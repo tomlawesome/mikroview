@@ -65,9 +65,9 @@ planting a label where the thing stands.
   every act is possible from the roll alone. Screen readers get each
   terrain as one described image and the roll as the operable list.
 - **Spatial findings a list cannot make**: a stranger standing
-  *inside* the fence (.77) reads differently from a visitor beyond
+  *inside* the fence (.17) reads differently from a visitor beyond
   it; 5000 stands in registered ground near winbox — bad company; the
-  unclaimed range .78–.255 is itself a finding.
+  unclaimed range .18–.31 is itself a finding.
 - Filtered-empty dims the terrain to its contours (an empty map and a
   missing map are different facts) and the empty state below names
   both knobs, as in W.

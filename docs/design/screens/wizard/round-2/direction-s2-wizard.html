@@ -208,7 +208,7 @@
             <div class="wmain">
               <p class="lead">The push named what it could. <b>One device is still just an address</b> — give it a name in MikroView's config file:</p>
               <div class="cmd"><span class="cm"># mikroview config.yaml — devices:</span>
-  - address: <span class="hi">192.0.2.7</span>
+  - address: <span class="hi">198.51.100.7</span>
     name: <span class="hi">cam-porch</span>     <span class="cm"># seen via ARP · 13:44</span></div>
               <span class="copy">Copy</span>
               <div class="obs quiet"><span class="st">●</span><span>This is config-file work on the MikroView host — picked up on restart; nothing to wait for here.<span class="why">This step only exists while an unnamed device does. Every device named — no step 5.</span></span><time>13:45:02</time></div>
@@ -237,7 +237,7 @@
           <div class="wmain">
             <div class="fin">
               <p class="headline"><b>Logs are flowing.</b> Four steps stand on evidence; one was skipped.</p>
-              <div class="finrow done"><span class="st">✓</span><span>Trust the certificate</span><span class="receipt">ca.crt fetched by 192.0.2.1 · 13:39</span></div>
+              <div class="finrow done"><span class="st">✓</span><span>Trust the certificate</span><span class="receipt">ca.crt fetched by 198.51.100.1 · 13:39</span></div>
               <div class="finrow done"><span class="st">✓</span><span>Send logs</span><span class="receipt">TLS · 41 lines and counting · since 13:41</span></div>
               <div class="finrow done"><span class="st">✓</span><span>Tag firewall rules</span><span class="receipt">3 rules decoding · fwd-drop · wan-in · nat</span></div>
               <div class="finrow skipped"><span class="st">—</span><span>Push router state — skipped</span><span class="receipt">by alex · 13:44 · the stream stays address-only</span></div>
@@ -269,7 +269,7 @@
           <div class="cmd">/system logging action add \
     name=mikroview \
     target=remote \
-    remote=<span class="hi">192.0.2.30</span> \
+    remote=<span class="hi">198.51.100.30</span> \
     remote-port=<span class="hi">6514</span> tls=yes
 /system logging add \
     topics=firewall \
@@ -317,7 +317,7 @@
     <div class="anno"><b>Commands on a phone are still commands.</b> Copy matters more here, not less — the operator reads on the phone and pastes in a RouterOS terminal elsewhere. Lines pre-broken to phone width so nothing scrolls sideways.</div>
     <div class="anno"><b>Reduced motion &amp; keyboard:</b> the body⟷ledger flip is instant under reduced motion; on hardware keyboards Tab order is header → body → footer, and the step button is a real button ("Show setup steps" / "Show this step").</div>
   </div>
-  <p class="specnote"><b>Carried forward, untouched:</b> everything round 1 accepted — the modal at its corrected size, the step anatomy, waiting/arrived, forced-past-and-recorded, explicit close, relaunch semantics, the Q V shell, and the day-one data story (rb5009 · 192.0.2.1 · MikroView at 192.0.2.30). Scene 2's skipped step-4 timeline is an alternate afternoon to scene 1's completed one — same clock, one choice different.</p>
+  <p class="specnote"><b>Carried forward, untouched:</b> everything round 1 accepted — the modal at its corrected size, the step anatomy, waiting/arrived, forced-past-and-recorded, explicit close, relaunch semantics, the Q V shell, and the day-one data story (rb5009 · 198.51.100.1 · MikroView at 198.51.100.30). Scene 2's skipped step-4 timeline is an alternate afternoon to scene 1's completed one — same clock, one choice different.</p>
 </section>
 
 <script>

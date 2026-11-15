@@ -37,7 +37,7 @@ name your router (conditional). Skip is quiet; forcing past a waiting
 check is loud — that distinction is this direction's voice.
 
 Data story: the same world as the navigation rounds, on day one —
-rb5009 at 192.0.2.1, MikroView at 192.0.2.30; the nav rounds'
+rb5009 at 198.51.100.1, MikroView at 198.51.100.30; the nav rounds'
 "first in 41 days" quiet starts counting when this afternoon's logs
 start arriving. No new data palette this round: surfaces reuse the
 validated navigation tokens (light lane steps recorded in

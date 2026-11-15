@@ -18,7 +18,7 @@
   One data story throughout, carried from the earlier mockup and extended:
   router branch-e4a1 - 43 turned away - 24 of 24 syslog slots - live rate
   38/s - wsDropped 156 - Dropped 812 - Rejected (undeclared) 2,867 -
-  Oversized 7 from 198.51.100.1.
+  Oversized 7 from 198.51.100.9.
 
   Colour tokens: red is the app's own -\-alarm, cyan is -\-log (the
   connecting banner's ink). Neither orange nor yellow exists in app.css
@@ -393,7 +393,7 @@
           <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
         </div>
         <span class="wstat">
-          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">198.51.100.2</b> · top port <b class="k">53</b>
+          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">198.51.100.7</b> · top port <b class="k">53</b>
         </span>
         <span class="hand" role="group" aria-label="The stream's hand">
           <button type="button" class="hand-btn on" aria-pressed="true">following</button>
@@ -407,23 +407,23 @@
         <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
         <div class="stream-row band">
           <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
-          <span class="src">198.51.100.2:51422</span><span class="dst">198.51.100.3:53</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:51422</span><span class="dst">198.51.100.1:53</span><span class="dev">branch-e4a1</span>
         </div>
         <div class="stream-row">
           <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
-          <span class="src">198.51.100.4:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+          <span class="src">198.51.100.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
         </div>
         <div class="stream-row band">
           <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
-          <span class="src">198.51.100.2:22</span><span class="dst">198.51.100.5:51500</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:22</span><span class="dst">198.51.100.4:51500</span><span class="dev">branch-e4a1</span>
         </div>
         <div class="stream-row">
           <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
-          <span class="src">198.51.100.6:443</span><span class="dst">198.51.100.7:8080</span><span class="dev">guest-e8b2</span>
+          <span class="src">198.51.100.110:443</span><span class="dst">198.51.100.37:8080</span><span class="dev">guest-e8b2</span>
         </div>
         <div class="stream-row band">
           <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
-          <span class="src">198.51.100.2:51420</span><span class="dst">198.51.100.3:53</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:51420</span><span class="dst">198.51.100.1:53</span><span class="dev">branch-e4a1</span>
         </div>
       </div>
     </div>
@@ -464,7 +464,7 @@
     <p class="bar-label"><b>Oversized</b> — something is sending lines no RouterOS device produces · yellow</p>
     <div class="appframe">
       <div class="banner banner-caution" role="status">
-        <strong>Non-RouterOS sender:</strong> <span class="dt">7 oversized messages received from 198.51.100.1 were truncated</span>
+        <strong>Non-RouterOS sender:</strong> <span class="dt">7 oversized messages received from 198.51.100.9 were truncated</span>
         <a class="detail" href="#scene-6-settings">details</a>
       </div>
     </div>
@@ -516,7 +516,7 @@
           <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
         </div>
         <span class="wstat">
-          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">198.51.100.2</b> · top port <b class="k">53</b>
+          <b class="k">38/s</b> now · <b class="r">drops 1%</b> · top talker <b class="k">198.51.100.7</b> · top port <b class="k">53</b>
         </span>
         <span class="hand" role="group" aria-label="The stream's hand">
           <button type="button" class="hand-btn on" aria-pressed="true">following</button>
@@ -529,23 +529,23 @@
         <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
         <div class="stream-row band">
           <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
-          <span class="src">198.51.100.2:51422</span><span class="dst">198.51.100.3:53</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:51422</span><span class="dst">198.51.100.1:53</span><span class="dev">branch-e4a1</span>
         </div>
         <div class="stream-row">
           <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
-          <span class="src">198.51.100.4:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+          <span class="src">198.51.100.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
         </div>
         <div class="stream-row band">
           <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
-          <span class="src">198.51.100.2:22</span><span class="dst">198.51.100.5:51500</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:22</span><span class="dst">198.51.100.4:51500</span><span class="dev">branch-e4a1</span>
         </div>
         <div class="stream-row">
           <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
-          <span class="src">198.51.100.6:443</span><span class="dst">198.51.100.7:8080</span><span class="dev">guest-e8b2</span>
+          <span class="src">198.51.100.110:443</span><span class="dst">198.51.100.37:8080</span><span class="dev">guest-e8b2</span>
         </div>
         <div class="stream-row band">
           <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
-          <span class="src">198.51.100.2:51420</span><span class="dst">198.51.100.3:53</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:51420</span><span class="dst">198.51.100.1:53</span><span class="dev">branch-e4a1</span>
         </div>
       </div>
     </div>
@@ -587,7 +587,7 @@
           <div class="wtimes"><span>14:17</span><span>14:32 · now</span></div>
         </div>
         <span class="wstat">
-          <b class="k">61/s</b> now · <b class="r">drops 9%</b> · top talker <b class="k">198.51.100.2</b> · top port <b class="k">53</b>
+          <b class="k">61/s</b> now · <b class="r">drops 9%</b> · top talker <b class="k">198.51.100.7</b> · top port <b class="k">53</b>
         </span>
         <span class="hand" role="group" aria-label="The stream's hand">
           <button type="button" class="hand-btn on" aria-pressed="true">following</button>
@@ -600,23 +600,23 @@
         <div class="stream-head"><span>time</span><span>action</span><span>src</span><span>dst</span><span>device</span></div>
         <div class="stream-row band">
           <span class="t">14:32:07.112</span><span><span class="badge badge-accept">ACCEPT</span></span>
-          <span class="src">198.51.100.2:51422</span><span class="dst">198.51.100.3:53</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:51422</span><span class="dst">198.51.100.1:53</span><span class="dev">branch-e4a1</span>
         </div>
         <div class="stream-row">
           <span class="t">14:32:07.098</span><span><span class="badge badge-drop">DROP</span></span>
-          <span class="src">198.51.100.4:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
+          <span class="src">198.51.100.2:33911</span><span class="dst">224.0.0.251:5353</span><span class="dev">core-ccr1</span>
         </div>
         <div class="stream-row band">
           <span class="t">14:32:06.884</span><span><span class="badge badge-log">LOG</span></span>
-          <span class="src">198.51.100.2:22</span><span class="dst">198.51.100.5:51500</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:22</span><span class="dst">198.51.100.4:51500</span><span class="dev">branch-e4a1</span>
         </div>
         <div class="stream-row">
           <span class="t">14:32:06.771</span><span><span class="badge badge-reject">REJECT</span></span>
-          <span class="src">198.51.100.6:443</span><span class="dst">198.51.100.7:8080</span><span class="dev">guest-e8b2</span>
+          <span class="src">198.51.100.110:443</span><span class="dst">198.51.100.37:8080</span><span class="dev">guest-e8b2</span>
         </div>
         <div class="stream-row band">
           <span class="t">14:32:06.650</span><span><span class="badge badge-accept">ACCEPT</span></span>
-          <span class="src">198.51.100.2:51420</span><span class="dst">198.51.100.3:53</span><span class="dev">branch-e4a1</span>
+          <span class="src">198.51.100.7:51420</span><span class="dst">198.51.100.1:53</span><span class="dev">branch-e4a1</span>
         </div>
       </div>
     </div>
@@ -714,7 +714,7 @@
           </div>
           <div class="orow sub">
             <span>oversized truncated</span>
-            <span class="ov ink-caution">7 · from 198.51.100.1</span>
+            <span class="ov ink-caution">7 · from 198.51.100.9</span>
           </div>
           <div class="orow sub">
             <span>not shown in this tab</span>
