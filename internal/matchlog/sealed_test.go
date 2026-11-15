@@ -625,3 +625,89 @@ func TestZeroFilledTailIsCutBackAsACrashTail(t *testing.T) {
 		}
 	})
 }
+
+// A crash while the header is being written leaves a short, zero-filled
+// or prefix-only file. It holds no record, so it is started again (O1-R1).
+func TestTornHeaderIsStartedAgainAndTheLogKeepsWorking(t *testing.T) {
+	cases := map[string][]byte{
+		"22 zeros":              make([]byte, hdrEnd),
+		"11 zeros":              make([]byte, 11),
+		"magic version zeros":   append([]byte(sealedMagic+"\x01"), make([]byte, 16)...),
+		"a prefix of the magic": []byte("MVM"),
+	}
+	for name, torn := range cases {
+		t.Run(name, func(t *testing.T) {
+			key := testKey(t)
+			path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+			if err := os.WriteFile(path, torn, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := Check(path); err != nil {
+				t.Fatalf("Check of a torn header: %v", err)
+			}
+			if got, err := ReadLines(path, key); err != nil || len(got) != 0 {
+				t.Fatalf("ReadLines = %q, %v; want empty, nil", got, err)
+			}
+			s, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("Open of a torn header: %v", err)
+			}
+			defer s.Close()
+			if n := size(t, path); n != hdrEnd {
+				t.Errorf("file is %d bytes after open, want a fresh %d-byte header", n, hdrEnd)
+			}
+			if err := s.Append(evEnt, secretTuple(1000), secretEvent(), time.Now()); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			s.Close()
+			s2, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer s2.Close()
+			if got := allRecords(t, s2); len(got) != 1 {
+				t.Errorf("got %d records after reopen, want 1", len(got))
+			}
+		})
+	}
+}
+
+// Guards (pass now, must keep passing): a genuine header-only log keeps
+// its exact bytes on reopen; a 23-byte zero file and a foreign 22-byte
+// file are refused and left unchanged.
+func TestTornHeaderRuleDoesNotTouchOtherFiles(t *testing.T) {
+	key := testKey(t)
+	t.Run("genuine header-only log", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+		s, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		before, _ := os.ReadFile(path)
+		s, err = Open(path, 100, key)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		s.Close()
+		after, _ := os.ReadFile(path)
+		if !bytes.Equal(before, after) {
+			t.Error("a genuine header-only log was rewritten")
+		}
+	})
+	for name, body := range map[string][]byte{
+		"23 zero bytes":    make([]byte, hdrEnd+1),
+		"foreign 22 bytes": []byte("not a frame log at all"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			mustRefuse(t, name, path, key)
+			if got, _ := os.ReadFile(path); !bytes.Equal(got, body) {
+				t.Error("the refused file was changed")
+			}
+		})
+	}
+}

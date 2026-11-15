@@ -264,6 +264,102 @@ func TestZeroFilledTailIsToleratedThenTrimmed(t *testing.T) {
 	}
 }
 
+// A crash between writeHeader's Write and Sync leaves a short or
+// zero-filled header. Such a file holds no frame, so it is started again
+// (O1-R1).
+func TestTornHeaderIsStartedAgain(t *testing.T) {
+	cases := map[string][]byte{
+		"22 zeros":              make([]byte, 22),
+		"11 zeros":              make([]byte, 11),
+		"magic version zeros":   append([]byte("MVEVT\x01"), make([]byte, 16)...),
+		"a prefix of the magic": []byte("MVE"),
+	}
+	for name, torn := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			key := testKey(t)
+			path := filepath.Join(dir, fileNameFor("2026-09-03"))
+			if err := os.WriteFile(path, torn, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, w := collect(t, dir, key, time.Time{})
+			if w.Err != nil {
+				t.Fatalf("a torn header should read as an empty day: %v", w.Err)
+			}
+			if len(got) != 0 {
+				t.Fatalf("got %d events from a torn header", len(got))
+			}
+			s := openStore(t, dir, key)
+			s.Append(event(1, time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)))
+			if err := s.Flush(); err != nil {
+				t.Fatalf("Flush onto a torn header: %v", err)
+			}
+			s.Close()
+			got, w = collect(t, dir, key, time.Time{})
+			if w.Err != nil || len(got) != 1 {
+				t.Fatalf("after flush: %d events, err %v; want 1, nil", len(got), w.Err)
+			}
+			if fi, err := os.Stat(path); err != nil || fi.Size() <= 22 {
+				t.Errorf("file is not a header plus a frame: %v", err)
+			}
+		})
+	}
+}
+
+// Guards (pass now, must keep passing): only a torn header is started
+// again; a genuine header-only file, a header-plus-one-byte file and a
+// foreign file are left exactly as they were.
+func TestTornHeaderRuleDoesNotTouchOtherFiles(t *testing.T) {
+	key := testKey(t)
+	genuine := func(t *testing.T, path string) {
+		l, err := OpenFrameLog(path, key, dayFormat("2026-09-03"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Close()
+	}
+	cases := map[string]struct {
+		prep    func(t *testing.T, path string)
+		refused bool
+	}{
+		"genuine header-only file": {genuine, false},
+		"23 zero bytes":            {func(t *testing.T, p string) { os.WriteFile(p, make([]byte, 23), 0o600) }, true},
+		"foreign 22 bytes":         {func(t *testing.T, p string) { os.WriteFile(p, []byte("not a frame log at all"), 0o600) }, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, fileNameFor("2026-09-03"))
+			c.prep(t, path)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := openStore(t, dir, key)
+			s.Append(event(1, time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)))
+			ferr := s.Flush()
+			s.Close()
+			if c.refused {
+				if ferr == nil {
+					t.Error("Flush onto a damaged or foreign header succeeded")
+				}
+				after, _ := os.ReadFile(path)
+				if !bytes.Equal(before, after) {
+					t.Error("the refused file was changed")
+				}
+				return
+			}
+			if ferr != nil {
+				t.Fatalf("Flush: %v", ferr)
+			}
+			after, _ := os.ReadFile(path)
+			if !bytes.HasPrefix(after, before) {
+				t.Error("a genuine header was rewritten: its salt changed")
+			}
+		})
+	}
+}
+
 // Events are filed by their own day, not by the clock at flush time.
 func TestEventsAreFiledByTheirOwnDay(t *testing.T) {
 	dir := t.TempDir()
