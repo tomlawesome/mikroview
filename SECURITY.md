@@ -533,7 +533,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 - **Integrity is verified before the artefact runs, not by the artefact
   itself.** Published images are signed with Sigstore/cosign and carry
-  SLSA build provenance and an SBOM, all bound to the image *digest*
+  a provenance attestation and an SBOM, all bound to the image *digest*
   rather than a tag (a tag is a mutable pointer; signing one would let it
   later point at different content and still verify).
 
@@ -568,20 +568,21 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     --repo tomlawesome/mikroview
   ```
 
-  **Preview images carry the keyless signature only** (step 2). The second
-  custody is for releases: a preview is not something to trust, it is
-  something to test.
+  **Preview images carry the key-based signature only** (step 1). The
+  second custody is for releases: a preview is not something to trust, it
+  is something to test.
 
-  **Releases are rebuilt, and re-earn what rebuilding costs.** A
-  `v<x.y.z>` binary has to be built from the release, so `main` cannot
-  simply retag preview's digest for it. Retagging existed to guarantee
-  that the exact bytes smoke-tested are the bytes that ship, so the
-  release job runs the container smoke test **against the image it just
-  built, before `latest` moves to it**, and additionally asserts the
-  binary reports the version being released. The guarantee is preserved,
-  just re-earned on the release artefact instead of inherited. The
-  release is tagged last, so a failure anywhere above leaves no tag
-  claiming a release happened. See
+  **GHCR holds GitLab's bytes, never a rebuild.** GitLab builds each
+  preview and release image once, runs the container tests and, for a
+  release, checks that the binary reports the tag being released, all
+  against that build; then it signs the digest. GitHub builds nothing: it
+  verifies GitLab's key-based signature against `cosign.pub` and only then
+  copies the same digest to GHCR with `cosign copy`, which brings the
+  signature and the SBOM attestation along. `latest` moves only on a release
+  tag, to that release's digest, re-checked after the move. The provenance
+  attestation on GHCR records the GitHub workflow that published the digest;
+  the build itself is GitLab's, recorded by its signed evidence. See
+  [docs/release-signing.md](docs/release-signing.md) and
   [docs/decisions/release-versioning.md](docs/decisions/release-versioning.md).
 
   **Self-verification was considered and deliberately rejected** -- an

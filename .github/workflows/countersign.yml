@@ -15,6 +15,14 @@ name: countersign
 # (Sigstore/OIDC) signature -- the same kind docker.yml's release job used
 # to add automatically.
 #
+# Since #1472 step 3 the GHCR digest is GitLab's own: release-on-tag.yml
+# (and publish-from-gitlab.yml for preview) puts it on GHCR with
+# `cosign copy`, which carries GitLab's key-based signature and SBOM
+# attestation along, so the signature this verifies is GitLab's, copied.
+# Dispatch this with the digest release-on-tag.yml reports. Behaviour is
+# unchanged. A re-run of release-on-tag.yml after this re-copies GitLab's
+# signatures over GHCR's; run this again if that happens.
+#
 # No new secret: the built-in GITHUB_TOKEN, plus id-token: write (keyless
 # signing) and packages: write (pushing the signature to our own
 # package), is the whole permission set.

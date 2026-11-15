@@ -1,0 +1,196 @@
+name: Publish the GitLab-tested release to GHCR
+
+# A release is a `vX.Y.Z` tag, created on GitLab (the source of truth) and
+# pushed here by sync:mirror-to-github (#1472 step 3). The tag's own GitLab
+# pipeline builds the image once (VERSION = the tag), checks the tag equals
+# v<VERSION> and the binary reports it (release:check-version), runs
+# test:container and the security jobs on those bytes, pushes it to
+# registry.tomlawson.io (publish:image), signs the digest with the fenced key
+# and attests its SPDX SBOM (sign:release-digest), and names it `:vX.Y.Z`
+# there after verifying that signature (publish:channel).
+#
+# This workflow copies that exact digest to GHCR as `:vX.Y.Z` with
+# `cosign copy` (which carries GitLab's signature and SBOM attestation), then
+# moves `:latest` to the same digest, and attests it. It never builds, and it
+# creates no GitHub Release (there has never been one). Nothing reaches GHCR
+# until GitLab's key-based signature verifies here against cosign.pub.
+#
+# `latest` moves only on a release tag, never on a `main` merge (owner, #1472),
+# so it always equals a published `vX.Y.Z`.
+#
+# The keyless countersignature is still added by hand, afterwards, with
+# countersign.yml against this digest. Re-running this workflow after that
+# re-copies GitLab's signatures with --force, which replaces the GHCR
+# signature tag: run countersign.yml again if that happens.
+#
+# If GitLab's pipeline fails, this fails too and publishes nothing; GHCR keeps
+# the previous `latest`. Re-run from the Actions tab once GitLab is green.
+#
+# Secrets: the same read-only GitLab project access token
+# publish-from-gitlab.yml uses (GITLAB_READ_TOKEN_NAME, GITLAB_READ_TOKEN).
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-on-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GITLAB_API_URL: https://gitlab.tomlawson.io/api/v4
+  GITLAB_PROJECT_ID: "53"
+  GITLAB_REGISTRY: registry.tomlawson.io
+
+jobs:
+  release:
+    name: Copy the tested, signed release digest to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      # The tag reaches every run: step through this variable, never inline
+      # as ${{ github.ref_name }} (semgrep run-shell-injection). The await
+      # script refuses anything but vX.Y.Z before it is used.
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Wait for the tag's GitLab pipeline and fetch its evidence
+        id: evidence
+        env:
+          GITLAB_READ_TOKEN: ${{ secrets.GITLAB_READ_TOKEN }}
+          MV_COMMIT: ${{ github.sha }}
+          MV_REF: ${{ github.ref_name }}
+          MV_EVIDENCE_DIR: "."
+        run: bash scripts/ci/gitlab-await-tested-image.sh
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to the GitLab registry (read only)
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.GITLAB_REGISTRY }}
+          username: ${{ secrets.GITLAB_READ_TOKEN_NAME }}
+          password: ${{ secrets.GITLAB_READ_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify GitLab's key-based signature before copying
+        env:
+          SOURCE: ${{ steps.evidence.outputs.source_reference }}
+        run: |
+          cosign verify --key cosign.pub "${SOURCE}" > signature-verification.json
+          cosign verify-attestation --key cosign.pub --type spdxjson "${SOURCE}" > /dev/null
+
+      - name: Copy the exact tested digest as the version tag
+        env:
+          SOURCE: ${{ steps.evidence.outputs.source_reference }}
+          DIGEST: ${{ steps.evidence.outputs.digest }}
+        run: |
+          cosign copy --force "${SOURCE}" "ghcr.io/tomlawesome/mikroview:${VERSION}"
+          got="$(docker buildx imagetools inspect "ghcr.io/tomlawesome/mikroview:${VERSION}" --format '{{.Manifest.Digest}}')"
+          if [ "${got}" != "${DIGEST}" ]; then
+            echo "::error::ghcr.io/tomlawesome/mikroview:${VERSION} resolved to ${got} after the copy, expected ${DIGEST}"
+            exit 1
+          fi
+
+      - name: Move latest to the release digest
+        env:
+          DIGEST: ${{ steps.evidence.outputs.digest }}
+        run: |
+          # Re-check that the version tag still names the GitLab digest before
+          # latest follows it.
+          got="$(docker buildx imagetools inspect "ghcr.io/tomlawesome/mikroview:${VERSION}" --format '{{.Manifest.Digest}}')"
+          if [ "${got}" != "${DIGEST}" ]; then
+            echo "::error::ghcr.io/tomlawesome/mikroview:${VERSION} is now ${got}, expected ${DIGEST}; latest not moved"
+            exit 1
+          fi
+          # --prefer-index=false: a single-manifest source is not wrapped in a
+          # new index under a different digest (#1407).
+          docker buildx imagetools create --prefer-index=false \
+            --tag "ghcr.io/tomlawesome/mikroview:latest" "ghcr.io/tomlawesome/mikroview@${DIGEST}"
+          got="$(docker buildx imagetools inspect "ghcr.io/tomlawesome/mikroview:latest" --format '{{.Manifest.Digest}}')"
+          if [ "${got}" != "${DIGEST}" ]; then
+            echo "::error::retag moved the digest: latest is ${got}, expected ${DIGEST}"
+            exit 1
+          fi
+
+      - name: Attest published image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/tomlawesome/mikroview
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest published image SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/tomlawesome/mikroview
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          sbom-path: image.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Verify published image attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.evidence.outputs.digest }}
+        run: |
+          ref="oci://ghcr.io/tomlawesome/mikroview@${DIGEST}"
+          gh attestation verify "${ref}" --repo "${GITHUB_REPOSITORY}" \
+            --format json > provenance-verification.json
+          gh attestation verify "${ref}" --repo "${GITHUB_REPOSITORY}" \
+            --predicate-type https://spdx.dev/Document/v2.3 \
+            --format json > sbom-verification.json
+
+      - name: Upload publication evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mikroview-release-from-gitlab
+          path: |
+            gitlab-tested-image.json
+            image.spdx.json
+            signature-verification.json
+            provenance-verification.json
+            sbom-verification.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Record published release
+        env:
+          DIGEST: ${{ steps.evidence.outputs.digest }}
+          SOURCE: ${{ steps.evidence.outputs.source_reference }}
+          PIPELINE_URL: ${{ steps.evidence.outputs.pipeline_url }}
+        run: |
+          {
+            printf '## mikroview %s, copied from GitLab\n\n' "${VERSION}"
+            printf -- '- Image: `ghcr.io/tomlawesome/mikroview`\n'
+            printf -- '- Tags: `%s latest`\n' "${VERSION}"
+            printf -- '- Digest: `%s`\n' "${DIGEST}"
+            printf -- '- Copied from: `%s`\n' "${SOURCE}"
+            printf -- '- Tested and signed by: %s\n' "${PIPELINE_URL}"
+            printf '\nNo container was built here. Countersign this digest with countersign.yml.\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
