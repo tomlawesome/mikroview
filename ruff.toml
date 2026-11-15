@@ -1,0 +1,4 @@
+# ruff, CI-only (lint:ruff, report-only until #1462/#1463 switch it to
+# blocking): the defaults plus the flake8-bandit security rules.
+[lint]
+extend-select = ["S"]

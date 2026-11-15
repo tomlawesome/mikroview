@@ -1,0 +1,9 @@
+{
+  "path": ["frontend/src"],
+  "format": ["typescript", "javascript", "svelte"],
+  "ignore": ["**/*.test.ts", "**/*.test.js", "**/node_modules/**"],
+  "reporters": ["console", "json"],
+  "output": "jscpd-report",
+  "gitignore": true,
+  "exitCode": 3
+}
