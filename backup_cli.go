@@ -798,6 +798,12 @@ func runRestore(args []string) int {
 				"in the clear. Nothing has been changed", jsonLinesStore))
 			return 1
 		}
+		if name == jsonLinesStore {
+			if err := matchlog.ValidateLines(data); err != nil {
+				logger.Error(fmt.Sprintf("backup: store %q: %v -- nothing has been changed", jsonLinesStore, err))
+				return 1
+			}
+		}
 		decoded[name] = data
 	}
 

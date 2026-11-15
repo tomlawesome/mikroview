@@ -169,6 +169,12 @@ func (l *FrameLog) writeHeader() error {
 	if _, err := l.f.Write(header); err != nil {
 		return fmt.Errorf("retention: writing header to %s: %w", l.path, err)
 	}
+	// Synced like every frame, so a crash cannot leave a file whose
+	// frames reached the disk but whose salt -- without which none of
+	// them opens -- did not.
+	if err := l.f.Sync(); err != nil {
+		return fmt.Errorf("retention: syncing header of %s: %w", l.path, err)
+	}
 	aead, err := aeadFromInfo(l.key, salt, l.format.KeyInfo)
 	if err != nil {
 		return err

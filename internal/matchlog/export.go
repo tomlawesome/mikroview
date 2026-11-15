@@ -62,23 +62,9 @@ func WriteSealed(path string, key *retention.Key, lines []byte) error {
 	if key == nil {
 		return errors.New("matchlog: writing the match log needs history.keyFile: it is sealed, and there is no unsealed mode")
 	}
-	var plains [][]byte
-	for i, line := range bytes.Split(lines, []byte("\n")) {
-		line = bytes.TrimRight(line, "\r")
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var l fileLine
-		if err := json.Unmarshal(line, &l); err != nil {
-			return fmt.Errorf("matchlog: line %d is not a match log line: %w", i+1, err)
-		}
-		if l.Kind != kindRecord && l.Kind != kindUpdate {
-			return fmt.Errorf("matchlog: line %d has kind %q, want %q or %q", i+1, l.Kind, kindRecord, kindUpdate)
-		}
-		if len(line) > maxLineBytes {
-			return fmt.Errorf("matchlog: line %d is %d bytes, over the %d-byte line limit", i+1, len(line), maxLineBytes)
-		}
-		plains = append(plains, line)
+	plains, err := parseLines(lines)
+	if err != nil {
+		return err
 	}
 	data, err := retention.SealFrames(key, Format, plains)
 	if err != nil {
@@ -88,4 +74,38 @@ func WriteSealed(path string, key *retention.Key, lines []byte) error {
 		return fmt.Errorf("matchlog: writing %s: %w", path, err)
 	}
 	return nil
+}
+
+// ValidateLines checks lines as WriteSealed would, without a key and
+// without writing anything: every non-empty line must decode as a record
+// or an update line within the line limit. -restore runs it in its
+// validate-everything-first pass, so a bad backup stops before anything
+// on disk changes.
+func ValidateLines(lines []byte) error {
+	_, err := parseLines(lines)
+	return err
+}
+
+// parseLines splits JSON lines into the frames WriteSealed seals,
+// refusing any line that is not a match log line.
+func parseLines(lines []byte) ([][]byte, error) {
+	var plains [][]byte
+	for i, line := range bytes.Split(lines, []byte("\n")) {
+		line = bytes.TrimRight(line, "\r")
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var l fileLine
+		if err := json.Unmarshal(line, &l); err != nil {
+			return nil, fmt.Errorf("matchlog: line %d is not a match log line: %w", i+1, err)
+		}
+		if l.Kind != kindRecord && l.Kind != kindUpdate {
+			return nil, fmt.Errorf("matchlog: line %d has kind %q, want %q or %q", i+1, l.Kind, kindRecord, kindUpdate)
+		}
+		if len(line) > maxLineBytes {
+			return nil, fmt.Errorf("matchlog: line %d is %d bytes, over the %d-byte line limit", i+1, len(line), maxLineBytes)
+		}
+		plains = append(plains, line)
+	}
+	return plains, nil
 }
