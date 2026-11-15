@@ -22,6 +22,7 @@ func TestDamagedMiddleFrameLengthIsRefusedAndNothingIsCut(t *testing.T) {
 		{"zero", 0, 0},
 		{"shorter than a nonce", 5, 0},
 		{"over the ceiling", uint32(Format.MaxFrameBytes + 1), Format.MaxFrameBytes + 1},
+		{"over the ceiling and past the end of the file", uint32(Format.MaxFrameBytes + 1), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			key := testKey(t)

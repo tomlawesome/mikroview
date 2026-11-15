@@ -530,9 +530,11 @@ func TestConcurrentAppendAndQuery(t *testing.T) {
 	}
 }
 
-// A torn line (as an unclean shutdown could leave) must not break
-// replay or querying -- it is skipped, not fatal, like every other
-// optional store in this codebase.
+// A torn write (as an unclean shutdown could leave) must not break
+// replay or querying -- the torn record is skipped, not fatal, earlier
+// records read back, and appends continue. Since #1470 the log is sealed
+// frames, so the tear is a real one: the file cut part-way into its last
+// frame.
 func TestTornLineIsSkippedNotFatal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
 	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
@@ -544,30 +546,43 @@ func TestTornLineIsSkippedNotFatal(t *testing.T) {
 	if err := s.Append("e", Tuple{Source: src, DestIP: "1", Port: 1}, testEvent("good"), time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodEnd := fi.Size()
+	if err := s.Append("e", Tuple{Source: src, DestIP: "2", Port: 2}, testEvent("torn"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	// Simulate a torn write: append a truncated JSON fragment with no
-	// trailing newline, as a crash mid-write could leave.
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	// Simulate a torn write: cut the file part-way into the last frame,
+	// as a crash mid-write could leave it.
+	fi, err = os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.WriteString(`{"kind":"record","id":"deadbeef`); err != nil {
+	if err := os.Truncate(path, goodEnd+(fi.Size()-goodEnd)/2); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
 
 	s2, err := Open(path, 10, testKey(t))
 	if err != nil {
-		t.Fatalf("Open with a torn trailing line should not fail: %v", err)
+		t.Fatalf("Open with a torn trailing frame should not fail: %v", err)
 	}
 	defer s2.Close()
 
 	got := collect(t, s2, Query{Source: src})
 	if len(got) != 1 || got[0].Event.Raw != "good" {
-		t.Fatalf("got %+v, want the one good record recovered despite the torn line", got)
+		t.Fatalf("got %+v, want the one good record recovered despite the torn frame", got)
+	}
+	if err := s2.Append("e", Tuple{Source: src, DestIP: "3", Port: 3}, testEvent("after"), time.Now()); err != nil {
+		t.Fatalf("Append after a torn frame: %v", err)
+	}
+	if got := collect(t, s2, Query{Source: src}); len(got) != 2 {
+		t.Fatalf("got %d records after appending past a torn frame, want 2", len(got))
 	}
 }
 

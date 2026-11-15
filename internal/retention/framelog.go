@@ -32,6 +32,9 @@ import (
 // watchlist match log ("MVMLG", internal/matchlog, #1470). Not detected,
 // in either: frames cut off the end (indistinguishable from a crash tail
 // and handled as one) and the whole file replaced by an older valid copy.
+// A middle frame's length damaged to a value within the ceiling that runs
+// past the end of the file is likewise indistinguishable from a torn tail
+// and is cut, as for the day files.
 type FrameFormat struct {
 	Magic   string
 	Version byte
@@ -313,11 +316,10 @@ func SealFrames(key *Key, format FrameFormat, plains [][]byte) ([]byte, error) {
 // damage, not a crash tail, and treating it as one would cut off every
 // whole frame after it.
 //
-// The past-the-end test comes first, so a tail whose length bytes are
-// not a length at all (the start of a JSON line from before v0.7.0, say)
-// is still a torn tail rather than a refusal.
+// A length over the ceiling is never a torn tail, even past the end of
+// the file: the writer never declares one, so it is damage.
 func checkFrameLength(name string, seq uint64, off, size, n int64, format FrameFormat) (torn bool, err error) {
-	if off+4+n > size {
+	if n <= int64(format.MaxFrameBytes) && off+4+n > size {
 		return true, nil
 	}
 	if n <= nonceBytes || n > int64(format.MaxFrameBytes) {
