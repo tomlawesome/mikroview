@@ -9,9 +9,11 @@
 // is exercised for real by running the script directly against this repo,
 // which is how #711's policy file was built and checked in the first
 // place.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -349,5 +351,22 @@ describe("loadPolicy", () => {
 
   it("reports a missing file rather than an unhandled read error", () => {
     assert.throws(() => loadPolicy("/nonexistent/pins-policy.json"), /is missing/);
+  });
+});
+
+// #1472 step 3, ruling v2: the attest job takes the verified SBOM from the
+// gitlab job as an artifact, so actions/download-artifact joins the pins.
+describe("#1472 ruling v2: actions/download-artifact is a reviewed pin", () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  it("is recorded with a 40-hex commit and a reviewedOn date", () => {
+    const policy = loadPolicy(join(repoRoot, "supply-chain/pins-policy.json"));
+    const entry = policy.ciActions.find((a) => a.name === "actions/download-artifact");
+    assert.ok(entry, "no actions/download-artifact entry in supply-chain/pins-policy.json");
+    assert.match(entry.commit, /^[0-9a-f]{40}$/);
+    assert.match(String(entry.reviewedOn ?? ""), /^\d{4}-\d{2}-\d{2}$/);
+  });
+  it("node tools/supply-chain/pins-policy.mjs exits 0", () => {
+    const r = spawnSync(process.execPath, ["tools/supply-chain/pins-policy.mjs"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(r.status, 0, `pins-policy.mjs failed:\n${r.stdout}${r.stderr}`);
   });
 });

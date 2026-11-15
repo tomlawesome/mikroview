@@ -9,7 +9,7 @@
 // subset GitHub workflows use (maps, sequences of maps, flow lists, quoted
 // and plain scalars, | and > block scalars) by indentation, in the style of
 // gitlab-image.test.mjs's block(): `on` stays the plain key "on".
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -93,6 +93,10 @@ const indexOfStep = (steps, re, from = 0) => {
   return -1;
 };
 const allRun = (doc) => stepsOf(doc).map(runOf).join("\n");
+// Shell line continuations folded, so one command reads as one line.
+const joinCont = (t) => t.replace(/[ \t]*\\\n\s*/g, " ");
+const doc0 = (name) => load(name).doc;
+const jobText = (job) => joinCont((job?.steps ?? []).map(stepText).join("\n"));
 
 const NEW = ["publish-from-gitlab.yml", "release-on-tag.yml"];
 
@@ -143,43 +147,21 @@ for (const name of NEW) {
     });
   });
 
+  // Ruling v2 replaced cosign copy with imagetools create and moved the
+  // key-based verification to the GitLab source; see "ruling v2" below.
   describe(`#1472 step 3 ${name}: verify before copy`, () => {
-    it("runs await, then cosign verify --key cosign.pub, then the first GHCR write", () => {
-      const { doc } = load(name);
-      const steps = stepsOf(doc);
-      const aw = indexOfStep(steps, /gitlab-await-tested-image\.sh/);
-      const vf = steps.findIndex((s) => /cosign verify\b/.test(runOf(s)) && /cosign\.pub/.test(runOf(s)));
-      const wr = steps.findIndex((s) => /cosign copy\b|imagetools create|docker push|crane (copy|push|tag)/.test(runOf(s)));
-      assert.ok(aw >= 0, "no await step");
-      assert.ok(vf >= 0, "no cosign verify --key cosign.pub step");
-      assert.ok(wr >= 0, "no GHCR write step");
-      assert.ok(aw < vf, "await must come before verify");
-      assert.ok(vf < wr, "verify must come before any GHCR write");
+    it("the gitlab job's checks cannot be skipped or ignored", () => {
+      const steps = doc0(name).jobs?.gitlab?.steps ?? [];
+      const checks = steps.filter((x) => /verify-release-signature\.sh|cosign verify-attestation/.test(runOf(x)));
+      assert.ok(checks.length > 0, "no verify step in the gitlab job");
+      for (const s of checks) {
+        assert.ok(!s["continue-on-error"], "verify has continue-on-error");
+        assert.doesNotMatch(runOf(s), /\|\|\s*(true|:)\b/);
+      }
     });
-    it("verify cannot be skipped or ignored", () => {
-      const { doc } = load(name);
-      const s = stepsOf(doc).find((x) => /cosign verify\b/.test(runOf(x)) && /cosign\.pub/.test(runOf(x)));
-      assert.ok(s, "no verify step");
-      assert.ok(!s["continue-on-error"], "verify has continue-on-error");
-      assert.doesNotMatch(runOf(s), /\|\|\s*(true|:)\b/);
-    });
-    it("copies with cosign copy by digest, never crane, to ghcr.io/tomlawesome/mikroview", () => {
-      const { doc } = load(name);
-      const run = allRun(doc);
-      assert.match(run, /cosign copy\b/);
-      assert.match(run, /ghcr\.io\/tomlawesome\/mikroview/);
-      assert.doesNotMatch(run, /\bcrane\b/);
-    });
-    it("re-reads each GHCR tag after writing it and fails unless it is the GitLab digest", () => {
-      const { doc } = load(name);
-      const steps = stepsOf(doc);
-      const c = steps.findIndex((s) => /cosign copy\b/.test(runOf(s)));
-      assert.ok(c >= 0, "no copy step");
-      const after = steps.slice(c).map(runOf).join("\n");
-      const copyAt = after.search(/cosign copy\b/);
-      const tail = after.slice(copyAt);
-      assert.match(tail, /imagetools inspect|crane digest|manifest inspect|skopeo inspect|cosign triangulate/, "no re-read after copy");
-      assert.match(tail, /!=|!==|\[\[ .* == .* \]\]|\bdiff\b|exit 1/, "no comparison/failure after re-read");
+    it("copy needs gitlab, so nothing is written unless the gitlab job passed", () => {
+      const needs = doc0(name).jobs?.copy?.needs;
+      assert.ok([needs].flat().includes("gitlab"), "copy job does not need gitlab");
     });
   });
 
@@ -221,7 +203,7 @@ describe("#1472 step 3 publish-from-gitlab.yml: triggers and :preview", () => {
     const text = runOf(steps[head]);
     // ls-remote matches by suffix: only the line whose ref is exactly the branch may count.
     assert.match(text, /\$2\s*==/, "head check is not an exact ref match");
-    const moved = steps.findIndex((s) => /mikroview:preview(["'\s]|$)/m.test(runOf(s)) && /cosign copy/.test(runOf(s)));
+    const moved = steps.findIndex((s) => /mikroview:preview(["'\s]|$)/m.test(runOf(s)) && /imagetools create/.test(runOf(s)));
     assert.ok(moved >= 0, "no copy to :preview");
     assert.ok(head <= moved, "head check must come before (or in) the :preview copy");
   });
@@ -237,7 +219,7 @@ describe("#1472 step 3 release-on-tag.yml: triggers and :latest", () => {
   });
   it("copies to :vX.Y.Z from the tag's own pipeline", () => {
     const { doc, text } = load("release-on-tag.yml");
-    assert.match(allRun(doc), /cosign copy[^\n]*mikroview:\$\{?(GITHUB_REF_NAME|[A-Za-z_]*TAG[A-Za-z_]*|[A-Za-z_]*VERSION[A-Za-z_]*)/i);
+    assert.match(joinCont(allRun(doc)), /imagetools create[^\n]*mikroview:\$\{?(GITHUB_REF_NAME|[A-Za-z_]*TAG[A-Za-z_]*|[A-Za-z_]*VERSION[A-Za-z_]*)/i);
     assert.match(text, /GITHUB_REF_NAME|github\.ref_name/);
   });
   it("moves :latest with imagetools create --prefer-index=false after re-checking the digest, then re-reads it", () => {
@@ -298,9 +280,11 @@ describe("#1472 step 3 countersign.yml: behaviour unchanged, header updated", ()
     const sign = steps.findIndex((s) => /cosign sign\b/.test(runOf(s)));
     assert.ok(v >= 0 && sign > v, "verify must precede the keyless sign");
   });
-  it("header says the key-based signature is now copied from GitLab by cosign copy", () => {
+  // Ruling v2 item 10: the signature no longer travels, so the header
+  // must stop saying cosign copy carries it.
+  it("header names the publish workflows and no longer mentions cosign copy", () => {
     const { header } = load("countersign.yml");
-    assert.match(header, /cosign copy/);
+    assert.doesNotMatch(header, /cosign copy/);
     assert.match(header, /publish-from-gitlab|release-on-tag/);
   });
 });
@@ -308,9 +292,6 @@ describe("#1472 step 3 countersign.yml: behaviour unchanged, header updated", ()
 // ---------------------------------------------------------------------------
 // Review round 1 on step 3 (M1-M5, L1-L4).
 // ---------------------------------------------------------------------------
-const isWrite = /cosign copy\b|imagetools create/g;
-const verifyKey = /cosign verify --key cosign\.pub/g;
-const lastIndex = (re, s) => { let m, at = -1; re.lastIndex = 0; while ((m = re.exec(s))) at = m.index; return at; };
 const ciText = readFileSync(join(root, ".gitlab-ci.yml"), "utf8");
 
 describe("review M1: :latest moves only for the highest vX.Y.Z tag", () => {
@@ -362,19 +343,9 @@ describe("review M4: the attested SBOM is the verified GitLab SBOM", () => {
   }
 });
 
-describe("review L1: each GHCR write is followed by cosign verify --key cosign.pub", () => {
-  for (const name of NEW) {
-    it(`${name}: the last GHCR write is verified against cosign.pub afterwards`, () => {
-      const { doc } = load(name);
-      const run = allRun(doc);
-      const w = lastIndex(isWrite, run);
-      assert.ok(w >= 0, "no GHCR write");
-      const direct = lastIndex(verifyKey, run) > w;
-      const viaHelper = /check\(\)\s*\{[\s\S]*?cosign verify --key cosign\.pub[\s\S]*?\n\s*\}/.test(run) && lastIndex(/\bcheck "/g, run) > w;
-      assert.ok(direct || viaHelper, "nothing verifies the GHCR digest with cosign.pub after the last write");
-    });
-  }
-});
+// Review L1 (cosign verify --key on GHCR after each write) is dropped by
+// ruling v2: there is no key signature on GHCR to find. Item 5 below
+// asserts its absence instead.
 
 describe("review L3: preview concurrency comment is true", () => {
   it("does not claim every merge gets its own tag; says only the newest pending run is kept", () => {
@@ -416,4 +387,225 @@ describe("review M5: both new test files run in CI", () => {
     const apk = head.slice(head.lastIndexOf("apk add"));
     assert.match(apk.split("\n")[0], /coreutils/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Ruling v2 on step 3: copy the image only (imagetools create), verify the
+// signed evidence at the GitLab source, attest the copy on GitHub. The
+// signature never travels; the digest does. Items numbered as in the ruling.
+// ---------------------------------------------------------------------------
+const wfFiles = () => readdirSync(join(root, WF)).filter((f) => /\.ya?ml$/.test(f)).sort();
+const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const digestCompare = /!=\s*"?\$\{?DIGEST\}?"?/;
+const GHCR = "ghcr.io/tomlawesome/mikroview";
+
+describe("ruling v2 item 1: no oras, cosign copy or crane in any workflow", () => {
+  for (const f of wfFiles()) {
+    it(`${f} names none of them`, () => {
+      const text = readFileSync(join(root, WF, f), "utf8");
+      assert.doesNotMatch(text, /\boras\b/i, "oras is not an approved tool");
+      assert.doesNotMatch(text, /cosign copy\b/, "cosign copy carries the signature; v2 copies the image only");
+      assert.doesNotMatch(text, /\bcrane\b/, "crane is the fallback only, not used");
+    });
+  }
+});
+
+for (const name of NEW) {
+  describe(`ruling v2 ${name}`, () => {
+    it("item 2: every GHCR write is imagetools create --prefer-index=false --tag <ghcr tag> <source>, each re-read against DIGEST", () => {
+      const run = joinCont(allRun(doc0(name)));
+      const lines = run.split("\n");
+      const writes = lines.map((l, i) => [l, i]).filter(([l]) => /imagetools create/.test(l));
+      assert.ok(writes.length >= 2, `expected at least two GHCR writes, found ${writes.length}`);
+      const helper = run.match(/check\(\)\s*\{([\s\S]*?)\n\s*\}/);
+      const helperOk = helper && /imagetools inspect "?\$1"?/.test(helper[1]) && digestCompare.test(helper[1]) && /exit 1/.test(helper[1]);
+      writes.forEach(([l, i], k) => {
+        const m = l.trim().match(/^docker buildx imagetools create --prefer-index=false --tag "?ghcr\.io\/tomlawesome\/mikroview:([^"\s]+)"? "?(\$\{SOURCE\}|ghcr\.io\/tomlawesome\/mikroview@\$\{DIGEST\})"?$/);
+        assert.ok(m, `GHCR write is not the ruled form: ${l.trim()}`);
+        if (m[1] !== "latest") assert.equal(m[2], "${SOURCE}", `${m[1]} is not copied from the GitLab source`);
+        const next = k + 1 < writes.length ? writes[k + 1][1] : lines.length;
+        const after = lines.slice(i + 1, next).join("\n");
+        const tag = reEsc(`${GHCR}:${m[1]}`);
+        const direct = after.search(new RegExp(`imagetools inspect "?${tag}"?`));
+        const viaCheck = helperOk && new RegExp(`\\bcheck "?${tag}"?`).test(after);
+        const directOk = direct >= 0 && digestCompare.test(after.slice(direct)) && /exit 1/.test(after.slice(direct));
+        assert.ok(directOk || viaCheck, `no re-read of ${GHCR}:${m[1]} compared with DIGEST, failing on mismatch`);
+      });
+    });
+
+    it("item 3: gitlab job runs await, then verify-release-signature.sh, then verify-attestation with an exactly-one check; no GHCR login or write", () => {
+      const job = doc0(name).jobs?.gitlab;
+      assert.ok(job, "no gitlab job");
+      const t = jobText(job);
+      const aw = t.search(/scripts\/ci\/gitlab-await-tested-image\.sh/);
+      const vs = t.search(/scripts\/verify-release-signature\.sh "\$\{SOURCE\}"/);
+      const va = t.search(/cosign verify-attestation --key cosign\.pub --type spdxjson "\$\{SOURCE\}"/);
+      assert.ok(aw >= 0, "no await step");
+      assert.ok(vs >= 0, 'no scripts/verify-release-signature.sh "${SOURCE}" in the gitlab job');
+      assert.ok(va >= 0, 'no cosign verify-attestation --key cosign.pub --type spdxjson "${SOURCE}" in the gitlab job');
+      assert.ok(aw < vs && vs < va, "order must be await, signature script, attestation");
+      const tail = t.slice(va);
+      assert.match(tail, /grep -c|wc -l|jq -s/, "no count of verified attestations");
+      assert.match(tail, /(!=|-ne)\s*"?1"?/, "count is not compared with exactly one");
+      assert.match(tail, /exit 1/, "count mismatch does not fail");
+      for (const s of job.steps ?? []) {
+        assert.ok(!(/docker\/login-action/.test(s.uses ?? "") && /ghcr\.io/.test(JSON.stringify(s.with ?? {}))), "gitlab job logs in to GHCR");
+      }
+      assert.doesNotMatch(t, /imagetools create|docker push/, "gitlab job writes to a registry");
+    });
+
+    it("item 4: copy checks imagetools inspect ${SOURCE} equals ${DIGEST} before its first imagetools create", () => {
+      const t = jobText(doc0(name).jobs?.copy);
+      const ins = t.search(/imagetools inspect "?\$\{SOURCE\}"?/);
+      const cr = t.search(/imagetools create/);
+      assert.ok(ins >= 0, "copy job never re-checks the source digest");
+      assert.ok(cr >= 0, "copy job writes nothing");
+      assert.ok(ins < cr, "source check comes after the first write");
+      const between = t.slice(ins, cr);
+      assert.match(between, digestCompare, "source digest is not compared with DIGEST");
+      assert.match(between, /exit 1/, "source digest mismatch does not fail");
+    });
+
+    it("item 6: SBOM is the verified predicate, made in gitlab and handed to attest as an artifact", () => {
+      const doc = doc0(name);
+      const gl = doc.jobs?.gitlab;
+      const at = doc.jobs?.attest;
+      assert.ok(gl && at, "gitlab or attest job missing");
+      const gt = jobText(gl);
+      const va = gt.search(/cosign verify-attestation/);
+      assert.ok(va >= 0, "gitlab job does not verify the attestation");
+      const after = gt.slice(va);
+      assert.match(after, /\.predicate/, "no jq pipeline taking .predicate");
+      assert.match(after, />\s*"?image\.spdx\.json"?/, "image.spdx.json is not written from the verified attestation");
+      const up = (gl.steps ?? []).find((s) => /^actions\/upload-artifact@[0-9a-f]{40}/.test(s.uses ?? "") && /image\.spdx\.json/.test(String(s.with?.path ?? "")));
+      assert.ok(up, "gitlab job does not upload image.spdx.json");
+      const steps = at.steps ?? [];
+      const dl = steps.findIndex((s) => /^actions\/download-artifact@[0-9a-f]{40}/.test(s.uses ?? ""));
+      const sb = steps.findIndex((s) => /^actions\/attest@/.test(s.uses ?? "") && s.with?.["sbom-path"] === "image.spdx.json");
+      assert.ok(dl >= 0, "attest job does not download the artifact (pinned by sha)");
+      assert.ok(sb >= 0, "no SBOM attest with sbom-path: image.spdx.json");
+      assert.ok(dl < sb, "download must come before the SBOM attest");
+      if (steps[dl].with?.name && up.with?.name) assert.equal(steps[dl].with.name, up.with.name, "downloads a different artifact");
+      const aj = JSON.stringify(at);
+      assert.doesNotMatch(aj, /GITLAB_READ_TOKEN/, "attest job carries the GitLab token");
+      assert.doesNotMatch(aj, /GITLAB_REGISTRY|registry\.tomlawson\.io|gitlab-await-tested-image|GITLAB_API_URL/, "attest job reaches GitLab");
+      assert.doesNotMatch(jobText(at), /verify-attestation/, "attest job re-reads the SBOM from a registry");
+    });
+
+    it("item 7: attest runs gh attestation verify for provenance and for the SPDX predicate type", () => {
+      const t = jobText(doc0(name).jobs?.attest);
+      const v = t.split("\n").filter((l) => /gh attestation verify/.test(l));
+      assert.ok(v.some((l) => !/--predicate-type/.test(l)), "no provenance verify");
+      assert.ok(v.some((l) => /--predicate-type https:\/\/spdx\.dev\/Document\/v2\.3/.test(l)), "no SPDX verify");
+    });
+
+    it("item 9: per-job permissions are exactly gitlab read, copy +packages, attest +id-token +attestations", () => {
+      const doc = doc0(name);
+      assert.deepEqual(doc.permissions, { contents: "read" });
+      assert.deepEqual(doc.jobs?.gitlab?.permissions, { contents: "read" });
+      assert.deepEqual(doc.jobs?.copy?.permissions, { contents: "read", packages: "write" });
+      assert.deepEqual(doc.jobs?.attest?.permissions, { contents: "read", packages: "write", "id-token": "write", attestations: "write" });
+      assert.deepEqual(Object.keys(doc.jobs ?? {}).sort(), ["attest", "copy", "gitlab"]);
+    });
+  });
+}
+
+describe("ruling v2 item 5: no cosign verify --key against ghcr.io", () => {
+  for (const f of wfFiles()) {
+    it(`${f} never key-verifies a GHCR reference`, () => {
+      // Run text only: what the workflow does, not what its comments say
+      // (item 12 covers the user-facing commands in the docs).
+      const { doc } = load(f);
+      const text = allRun(doc);
+      const ghcrVars = Object.entries({ ...(doc.env ?? {}), ...Object.assign({}, ...jobsOf(doc).map((j) => j.env ?? {})) })
+        .filter(([, v]) => /ghcr\.io/.test(String(v))).map(([k]) => k);
+      for (const l of joinCont(text).split("\n")) {
+        if (!/cosign verify (?!-)[^\n]*--key|cosign verify --key/.test(l)) continue;
+        assert.doesNotMatch(l, /ghcr\.io/, `key verify on GHCR: ${l.trim()}`);
+        for (const v of ghcrVars) assert.ok(!new RegExp(`\\$\\{?${v}\\b`).test(l), `key verify on GHCR via ${v}: ${l.trim()}`);
+      }
+    });
+  }
+});
+
+describe("ruling v2 item 8: cosign-installer pinned to cosign v3.1.3 everywhere", () => {
+  const ensure = readFileSync(join(root, "scripts/ensure-cosign.sh"), "utf8");
+  const ver = ensure.match(/COSIGN_VERSION="([^"]+)"/)?.[1];
+  it("ensure-cosign.sh's COSIGN_VERSION is the v3.1.3 the workflows use", () => {
+    assert.equal(`v${ver}`, "v3.1.3");
+  });
+  for (const f of wfFiles()) {
+    it(`${f}: every sigstore/cosign-installer step has cosign-release: v${ver}`, () => {
+      const steps = stepsOf(load(f).doc).filter((s) => /^sigstore\/cosign-installer@/.test(s.uses ?? ""));
+      for (const s of steps) assert.equal(s.with?.["cosign-release"], `v${ver}`, `${f}: cosign-installer without cosign-release v${ver}`);
+    });
+  }
+});
+
+describe("ruling v2 item 10: countersign verifies on the GitLab source, then signs GHCR keyless", () => {
+  // Expand ${{ env.X }} and shell ${X} where X is defined in env with a
+  // static value, so a SOURCE built from GITLAB_REGISTRY reads as the path.
+  const expand = (t, env) => {
+    for (let n = 0; n < 4; n++) {
+      t = t.replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, (m, k) => env[k] ?? m);
+      t = t.replace(/\$\{(\w+)\}|\$(\w+)/g, (m, a, b) => {
+        const v = env[a ?? b]?.replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, (mm, k) => env[k] ?? mm);
+        return v != null && !/\$\{\{/.test(v) ? v : m;
+      });
+    }
+    return t;
+  };
+  it("is dispatch-only with a digest input validated as sha256:<64 hex>", () => {
+    const { doc } = load("countersign.yml");
+    assert.deepEqual(Object.keys(onOf(doc)), ["workflow_dispatch"]);
+    assert.ok(onOf(doc).workflow_dispatch.inputs?.digest?.required);
+    assert.match(allRun(doc), /\^sha256:\[0-9a-f\]\{64\}\$/);
+  });
+  it("logs in to registry.tomlawson.io with the GitLab read secrets", () => {
+    const { doc } = load("countersign.yml");
+    const env = { ...(doc.env ?? {}), ...Object.assign({}, ...jobsOf(doc).map((j) => j.env ?? {})) };
+    const login = stepsOf(doc).find((s) => /^docker\/login-action@/.test(s.uses ?? "") && expand(String(s.with?.registry ?? ""), env) === "registry.tomlawson.io");
+    assert.ok(login, "no login to registry.tomlawson.io");
+    assert.match(String(login.with.username), /secrets\.GITLAB_READ_TOKEN_NAME/);
+    assert.match(String(login.with.password), /secrets\.GITLAB_READ_TOKEN\b/);
+  });
+  it("verifies signature and attestation on registry.tomlawson.io/ai/mikroview@${DIGEST}, then signs, then verifies keyless", () => {
+    const { doc, header } = load("countersign.yml");
+    const env = { ...(doc.env ?? {}), ...Object.assign({}, ...jobsOf(doc).map((j) => j.env ?? {})) };
+    const t = stepsOf(doc).map((s) => expand(joinCont(runOf(s)), { ...env, ...(s.env ?? {}) })).join("\n");
+    const src = reEsc("registry.tomlawson.io/ai/mikroview@") + "\\$\\{?DIGEST\\}?";
+    const vs = t.search(new RegExp(`scripts/verify-release-signature\\.sh "?${src}"?`));
+    const va = t.search(new RegExp(`cosign verify-attestation --key cosign\\.pub --type spdxjson "?${src}"?`));
+    const sg = t.search(/cosign sign --yes "\$\{IMAGE\}@\$\{DIGEST\}"/);
+    assert.ok(vs >= 0, "verify-release-signature.sh is not run on the GitLab source digest");
+    assert.ok(va >= 0, "verify-attestation is not run on the GitLab source digest");
+    assert.ok(sg >= 0, 'no cosign sign --yes "${IMAGE}@${DIGEST}"');
+    assert.ok(vs < sg && va < sg, "both verifies must precede the keyless sign");
+    const kl = t.slice(sg).split("\n").find((l) => /cosign verify (?!-)/.test(l) && !/--key/.test(l));
+    assert.ok(kl, "no keyless cosign verify after the sign");
+    assert.match(kl, /--certificate-identity-regexp '\^https:\/\/github\.com\/tomlawesome\/mikroview\/'/);
+    assert.match(kl, /--certificate-oidc-issuer https:\/\/token\.actions\.githubusercontent\.com/);
+    assert.doesNotMatch(header, /cosign copy/);
+  });
+});
+
+describe("ruling v2 item 12: docs describe the verify-at-source shape", () => {
+  const read = (p) => joinCont(readFileSync(join(root, p), "utf8")).replace(/[ \t]+/g, " ");
+  it("SECURITY.md's verify block has the three ruled commands and no key verify on GHCR", () => {
+    const sec = read("SECURITY.md");
+    const blocks = [...sec.matchAll(/```sh\n([\s\S]*?)```/g)].map((m) => m[1]);
+    const b = blocks.find((x) => /gh attestation verify/.test(x));
+    assert.ok(b, "no sh block with gh attestation verify");
+    assert.match(b, /gh attestation verify oci:\/\/ghcr\.io\/tomlawesome\/mikroview@/);
+    assert.match(b, /cosign verify ghcr\.io\/tomlawesome\/mikroview@\S+ --certificate-identity-regexp/);
+    assert.match(b, /cosign verify --key cosign\.pub registry\.tomlawson\.io\/ai\/mikroview@/);
+    assert.doesNotMatch(sec, /cosign verify --key cosign\.pub ghcr\.io/);
+  });
+  for (const p of ["docs/release-signing.md", "docs/decisions/release-versioning.md"]) {
+    it(`${p} names neither cosign copy nor oras`, () => {
+      const t = read(p);
+      assert.doesNotMatch(t, /cosign copy\b/);
+      assert.doesNotMatch(t, /\boras\b/i);
+    });
+  }
 });

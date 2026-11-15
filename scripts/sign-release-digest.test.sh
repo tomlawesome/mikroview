@@ -86,10 +86,23 @@ chmod +x "$DOCKER_STUB"
 # The cosign stub: appends each call's arguments and the password cosign
 # would have read from the environment, so the tests can assert on both
 # the signature and the attestation without ever running the real binary.
+# `verify` and `verify-attestation` (ruling v2's already-signed checks)
+# default to exit 1, a digest not yet signed, so every case above case 16
+# models a fresh digest; STUB_VERIFY_* and STUB_VERIFY_ATT_* set them.
 COSIGN_STUB="$TMP/cosign"
 cat > "$COSIGN_STUB" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_COSIGN_CALL:-/dev/null}"
+case "$1" in
+  verify)
+    printf '%s' "${STUB_VERIFY_OUTPUT:-}"
+    exit "${STUB_VERIFY_EXIT:-1}"
+    ;;
+  verify-attestation)
+    printf '%s' "${STUB_VERIFY_ATT_OUTPUT:-}"
+    exit "${STUB_VERIFY_ATT_EXIT:-1}"
+    ;;
+esac
 printf '%s' "${COSIGN_PASSWORD:-}" > "${STUB_COSIGN_PASSWORD_SEEN:-/dev/null}"
 exit "${STUB_COSIGN_EXIT:-0}"
 STUB
@@ -156,7 +169,9 @@ grep -q -- "^sign --key ${KEYDIR}/cosign.key --yes ${REPO}@${GOOD_DIGEST}$" "$CO
   echo "ok - cosign signed the recorded digest with the mounted key" || { echo "FAIL - cosign signed the recorded digest with the mounted key: $(cat "$COSIGN_CALL" 2>/dev/null)"; fail=1; }
 grep -q -- "^attest --key ${KEYDIR}/cosign.key --yes --type spdxjson --predicate ${SBOM} ${REPO}@${GOOD_DIGEST}$" "$COSIGN_CALL" 2>/dev/null &&
   echo "ok - cosign attested the SPDX SBOM to the same digest" || { echo "FAIL - cosign attested the SPDX SBOM to the same digest: $(cat "$COSIGN_CALL" 2>/dev/null)"; fail=1; }
-check "$(sed -n 1p "$COSIGN_CALL" | cut -d' ' -f1)" "sign" "the signature comes before the attestation"
+# Ruling v2: a verify call may now come first, so compare the first sign
+# and first attest lines rather than the first call.
+check "$(grep -nE '^(sign|attest) ' "$COSIGN_CALL" | head -n 1 | cut -d: -f2 | cut -d' ' -f1)" "sign" "the signature comes before the attestation"
 grep -q "$GOOD_DIGEST" <<< "$out" && echo "ok - the signed digest is reported" || { echo "FAIL - the signed digest is reported"; fail=1; }
 
 # 2. Missing key: refuses, naming the exact path expected.
@@ -335,5 +350,106 @@ rc=$?
 check "$rc" "1" "no repository (CI_REGISTRY_IMAGE unset) refuses"
 grep -q "CI_REGISTRY_IMAGE (or MV_IMAGE) is not set" <<< "$o" && echo "ok - the refusal names CI_REGISTRY_IMAGE" || { echo "FAIL - the refusal names CI_REGISTRY_IMAGE: $o"; fail=1; }
 check "$([ -e "$cc" ] && echo called || echo not-called)" "not-called" "nothing is signed with no repository"
+
+# ---------------------------------------------------------------------------
+# #1472 step 3, ruling v2: a retried job is a no-op, not a second signature.
+# Before `cosign sign`, a `cosign verify --key` that already verifies the
+# digest skips the signature; before `cosign attest`, a verifying
+# `verify-attestation --type spdxjson` skips the attestation.
+# ---------------------------------------------------------------------------
+SIGNED_JSON="[{\"critical\":{\"identity\":{\"docker-reference\":\"${REPO}\"},\"image\":{\"docker-manifest-digest\":\"${GOOD_DIGEST}\"},\"type\":\"cosign container image signature\"},\"optional\":null}]"
+ATTESTED_LINE='{"payloadType":"application/vnd.in-toto+json","payload":"e30=","signatures":[{"keyid":"","sig":"c2ln"}]}'
+count_calls() { grep -c "^$1 " "$2" 2>/dev/null; true; }
+
+# 16. Already signed: verify --key exits 0 with a signature array for
+# <repo>@<digest>, so no second signature is minted; the attestation still
+# proceeds because verify-attestation does not verify.
+CC16="$TMP/cosign-call-16"
+out16="$(run -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$CC16" \
+  STUB_VERIFY_EXIT=0 STUB_VERIFY_OUTPUT="$SIGNED_JSON" \
+  2>"$TMP/err16")"
+rc=$?
+check "$rc" "0" "already signed: exits 0"
+grep -qE -- "^verify .*--key .*${REPO}@${GOOD_DIGEST}( |$)" "$CC16" 2>/dev/null &&
+  echo "ok - already signed: verify --key is asked about the recorded digest" || { echo "FAIL - already signed: verify --key is asked about the recorded digest: $(cat "$CC16" 2>/dev/null)"; fail=1; }
+check "$(count_calls sign "$CC16")" "0" "already signed: no sign call"
+grep -q "already signed" <<< "$out16" && echo "ok - already signed: stdout says already signed" || { echo "FAIL - already signed: stdout says already signed: $out16"; fail=1; }
+check "$(count_calls attest "$CC16")" "1" "already signed: the attestation still runs once"
+
+# 17. Already attested: verify-attestation --type spdxjson exits 0, so no
+# second attestation; the signature still proceeds.
+CC17="$TMP/cosign-call-17"
+out17="$(run -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$CC17" \
+  STUB_VERIFY_ATT_EXIT=0 STUB_VERIFY_ATT_OUTPUT="$ATTESTED_LINE" \
+  2>"$TMP/err17")"
+rc=$?
+check "$rc" "0" "already attested: exits 0"
+grep -qE -- "^verify-attestation .*--type spdxjson.*${REPO}@${GOOD_DIGEST}( |$)" "$CC17" 2>/dev/null &&
+  echo "ok - already attested: verify-attestation --type spdxjson is asked about the recorded digest" || { echo "FAIL - already attested: verify-attestation --type spdxjson is asked about the recorded digest: $(cat "$CC17" 2>/dev/null)"; fail=1; }
+check "$(count_calls attest "$CC17")" "0" "already attested: no attest call"
+grep -q "already attested" <<< "$out17" && echo "ok - already attested: stdout says already attested" || { echo "FAIL - already attested: stdout says already attested: $out17"; fail=1; }
+check "$(count_calls sign "$CC17")" "1" "already attested: the signature still runs once"
+
+# 18. Neither yet: both verifies exit 1, so sign then attest, once each.
+CC18="$TMP/cosign-call-18"
+run -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$CC18" \
+  >/dev/null 2>"$TMP/err18"
+rc=$?
+check "$rc" "0" "fresh digest: exits 0"
+check "$(count_calls sign "$CC18")" "1" "fresh digest: sign called once"
+check "$(count_calls attest "$CC18")" "1" "fresh digest: attest called once"
+check "$(grep -nE '^(sign|attest) ' "$CC18" | head -n 1 | cut -d: -f2 | cut -d' ' -f1)" "sign" "fresh digest: sign before attest"
+
+# 19. Exercise path (tag argument): the signature check is consulted; a
+# fresh digest is signed once, an already-signed one not at all; never an
+# attestation.
+CC19="$TMP/cosign-call-19"
+run v9.9.9 -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$CC19" \
+  >/dev/null 2>"$TMP/err19"
+rc=$?
+check "$rc" "0" "exercise path, fresh: exits 0"
+check "$([ "$(count_calls verify "$CC19")" -ge 1 ] && echo yes || echo no)" "yes" "exercise path, fresh: verify is checked"
+check "$(count_calls sign "$CC19")" "1" "exercise path, fresh: sign called once"
+check "$(count_calls attest "$CC19")" "0" "exercise path, fresh: no attest"
+CC19b="$TMP/cosign-call-19b"
+out19b="$(run v9.9.9 -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$CC19b" \
+  STUB_VERIFY_EXIT=0 STUB_VERIFY_OUTPUT="$SIGNED_JSON" \
+  2>"$TMP/err19b")"
+rc=$?
+check "$rc" "0" "exercise path, already signed: exits 0"
+check "$(count_calls sign "$CC19b")" "0" "exercise path, already signed: no sign call"
+check "$(count_calls attest "$CC19b")" "0" "exercise path, already signed: no attest"
+grep -q "already signed" <<< "$out19b" && echo "ok - exercise path, already signed: stdout says already signed" || { echo "FAIL - exercise path, already signed: stdout says already signed: $out19b"; fail=1; }
+
+# 20. A verify that exits 0 but prints no JSON array is not proof of a
+# signature: sign proceeds, and the run does not fail on it.
+for case in empty text; do
+  if [ "$case" = empty ]; then o=""; else o="Verification for ${REPO}@${GOOD_DIGEST} --"; fi
+  cc="$TMP/cosign-call-20-$case"
+  run -- \
+    MV_SIGNING_DIR="$KEYDIR" \
+    STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+    STUB_COSIGN_CALL="$cc" \
+    STUB_VERIFY_EXIT=0 STUB_VERIFY_OUTPUT="$o" \
+    >/dev/null 2>"$TMP/err20-$case"
+  rc=$?
+  check "$rc" "0" "verify exit 0 with $case output: exits 0"
+  check "$(count_calls sign "$cc")" "1" "verify exit 0 with $case output: still signs"
+done
 
 exit "$fail"
