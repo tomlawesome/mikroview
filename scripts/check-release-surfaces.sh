@@ -332,6 +332,26 @@ if [ "$shot_fails" -eq 0 ]; then
   ok "no unrealized shot markers"
 fi
 
+# ---------------------------------------------------------------------
+# 10. release smoke test mounts a key: from v0.7.0 the server exits with
+#     CFG-0083 before listening when no key is mounted (#1202 ruling 2),
+#     so the release job's smoke test in .github/workflows/docker.yml
+#     must make a history.key and mount it read-only at the app folder,
+#     or healthz never answers and `latest` can never move (D-F1).
+# ---------------------------------------------------------------------
+if [ -f .github/workflows/docker.yml ]; then
+  sed -n '/- name: Smoke-test the image that will become latest/,/- name:/p' \
+    .github/workflows/docker.yml >"$tmpd/smoke-step"
+  if grep -qF -- 'history.key' "$tmpd/smoke-step" &&
+     grep -qF -- ':/etc/mikroview:ro' "$tmpd/smoke-step"; then
+    ok "release smoke test makes a history.key and mounts it at /etc/mikroview:ro"
+  else
+    fail "release smoke test starts the image with no key mounted -- from v0.7.0 it exits with CFG-0083 before healthz answers, so latest can never move; mount a key as .gitlab-ci.yml's test:container does"
+  fi
+else
+  echo "skip: release smoke test key mount (.github/workflows/docker.yml not present)"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
   echo "check-release-surfaces: $fails check(s) failed"
