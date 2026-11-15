@@ -77,22 +77,26 @@ GitHub builds nothing. `.github/workflows/publish-from-gitlab.yml` (a push to
    SBOM (`scripts/ci/gitlab-await-tested-image.sh`), refusing unless
    `publish:image`, `sign:release-digest`, `publish:channel` and
    `security:trivy-image` all succeeded;
-2. verify the key-based signature and SBOM attestation on the GitLab digest
-   against `cosign.pub`, and stop before any GHCR write if that fails;
-3. `cosign copy` the digest to `ghcr.io/tomlawesome/mikroview`, which carries
-   the signature and the SBOM attestation, so the GHCR digest is the GitLab
-   one: `preview-<short7>`, plus `preview` while the commit is still
-   `preview`'s head; or `vX.Y.Z`, then `latest` with
-   `docker buildx imagetools create --prefer-index=false` when the tag is the
+2. verify on the GitLab digest, against `cosign.pub`, exactly one key-based
+   signature (`scripts/verify-release-signature.sh`) and exactly one SPDX
+   attestation, whose predicate becomes the SBOM GitHub attests; stop before
+   any GHCR write if either fails;
+3. check the GitLab digest still resolves, then copy the image only (manifest
+   and layers, by digest) to `ghcr.io/tomlawesome/mikroview` with
+   `docker buildx imagetools create --prefer-index=false`, so the GHCR digest
+   is the GitLab one: `preview-<short7>`, plus `preview` while the commit is
+   still `preview`'s head; or `vX.Y.Z`, then `latest` when the tag is the
    highest `vX.Y.Z` in the repository. Each tag is read back and must resolve
-   to the GitLab digest, and that digest on GHCR must verify with
-   `cosign.pub`;
-4. attest provenance, and the SBOM taken from GitLab's verified attestation,
-   on GHCR (`actions/attest`, in a job that never sees the GitLab token) and
-   verify both with `gh attestation verify`.
+   to the GitLab digest. The key-based signature and attestation are not
+   copied: they stay in the GitLab registry (verify-at-source, as orbit
+   does);
+4. attest provenance, and the SBOM handed over from step 2 as a workflow
+   artifact, on GHCR (`actions/attest`, in a job that never sees the GitLab
+   token) and verify both with `gh attestation verify`.
 
-`countersign.yml` then verifies the copied key-based signature on the GHCR
-digest and adds the keyless one, as before. If a copy fails, GHCR keeps its
+`countersign.yml` then verifies the key-based signature and SBOM attestation
+on the GitLab registry digest (read-only GitLab secrets), checks the digest is
+on GHCR, adds the keyless signature there and verifies it. If a copy fails, GHCR keeps its
 previous `preview`/`latest`; re-run the workflow once GitLab is green.
 `docker.yml` is `workflow_dispatch` only and is deleted once two preview
 publishes and one release have gone through this path.
@@ -105,19 +109,26 @@ Owner steps for the rest of #1472, none of which an assistant can do:
 - check the registry cleanup policy keeps `sha-*` for 7 days and `v*` and
   `preview` for good;
 - delete the `GHCR_PUBLISH_TOKEN` CI/CD variable: nothing in this pipeline
-  reads it any more.
+  reads it any more;
+- add `sha256-[0-9a-f]{64}.*` to the registry cleanup policy's keep-tags
+  regex (and, if the registry uses the referrers API, confirm untagged
+  manifests are not garbage-collected): the key-based signature and
+  attestation now live only in the GitLab registry, so a release's evidence
+  must outlive the 14-day `sha256-*` expiry. Rekor keeps the log entry regardless, and
+  the publish run's `signature-verification.json` keeps the verification for
+  90 days.
 
 ## The signature goes in the transparency log
 
 `scripts/sign-release-digest.sh` does **not** pass `--tlog-upload=false`,
 unlike orbit's key-based signing. `cosign verify --key` requires a log entry
-by default, so a signature without one would fail both the countersignature's
-verify step and the plain command SECURITY.md hands operators.
+by default, so a signature without one would fail the publish workflows' and
+the countersignature's verify steps and the command SECURITY.md hands anyone
+with read access to the GitLab registry.
 
-The difference is the registry: orbit signs into its own private registry,
-where nothing is publicly verifiable anyway, while this image is public on
-GHCR and the whole point of the pair is that an operator can check both
-signatures without being told to pass `--insecure-ignore-tlog`.
+The key-based signature stays in the GitLab registry (it is not copied to
+GHCR), so the Rekor entry is its only public record: it shows the signature
+was made, and it outlives the registry's retention.
 
 ## The job needs no Docker daemon
 

@@ -98,9 +98,11 @@ and the bump is still part of the promotion diff. "Not a git tag pushed
 after the fact" above was about *deriving* the version from a tag; the
 tag now says when, the file still says what, and the two must agree.
 
-The GHCR release digest is GitLab's own, copied with its key-based signature
-and SBOM attestation (`cosign copy`), so `countersign.yml` and `SECURITY.md`'s
-`cosign verify` work on it (docs/release-signing.md).
+The GHCR release digest is GitLab's own: GitHub verifies its key-based
+signature and SBOM attestation in the GitLab registry, copies the image only
+by digest (`docker buildx imagetools create`), and attests the copy;
+`countersign.yml` verifies at the same source before signing GHCR
+(docs/release-signing.md).
 
 Release steps, in order: promote `preview` → `main`; on GitLab,
 `git tag v<VERSION> <main sha>` and push it to `gitlab`; watch the tag

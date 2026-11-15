@@ -170,29 +170,75 @@ fi
 
 # The signature goes into the transparency log, unlike orbit's key-based
 # signing, which sets --tlog-upload=false. That is the one place the two
-# projects genuinely differ: orbit signs into its own private registry,
-# where nobody outside can verify anything anyway, while this image is
-# published on GHCR and the whole point of the pair is that an operator can
-# check both signatures themselves.
+# projects genuinely differ: since #1472 step 3 this signature stays in the
+# GitLab registry (GitHub copies the image only), so the Rekor entry is its
+# one public record, and it outlives the registry's retention.
 #
 # It is not a preference. `cosign verify --key` requires a log entry by
 # default (--insecure-ignore-tlog defaults to false, and cosign's own help
 # says an artefact "cannot be publicly verified when not included in a
 # log"), so a signature made with --tlog-upload=false would fail
 # publish:channel's verify step, the GitHub countersignature's, and the
-# plain command SECURITY.md hands operators -- and telling them to pass
+# command SECURITY.md hands anyone checking the GitLab digest -- and telling them to pass
 # --insecure-ignore-tlog to check a release is not a story worth having.
 # Rekor also timestamps the signature, which only strengthens the second
 # custody.
-"$cosign_cmd" sign \
-  --key "$key_path" \
-  --yes \
-  "${repository}@${digest}" ||
-  fail "cosign could not sign ${repository}@${digest}"
+#
+# A retried job is a no-op, not a second signature (#1472 note 59703):
+# before signing, a signature that already verifies against cosign.pub on
+# this digest is left alone; before attesting, so is an SPDX attestation
+# that already verifies (`attest --replace` does not replace in cosign
+# 3.1.3). Only a verify that exits 0 *and* returns what a verification
+# returns counts: anything else is "not yet", and signing proceeds.
+pubkey="cosign.pub"
 
-printf 'sign-release-digest: signed %s\n' "${repository}@${digest}"
+already_signed() {
+  local out
+  out="$("$cosign_cmd" verify --key "$pubkey" --output json "${repository}@${digest}" 2>/dev/null)" || return 1
+  python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(data, list) and len(data) > 0 else 1)
+' <<< "$out"
+}
 
-if [[ -z "$tag" ]]; then
+already_attested() {
+  local out
+  out="$("$cosign_cmd" verify-attestation --key "$pubkey" --type spdxjson "${repository}@${digest}" 2>/dev/null)" || return 1
+  python3 -c '
+import json, sys
+n = 0
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    try:
+        doc = json.loads(line)
+    except ValueError:
+        sys.exit(1)
+    if not isinstance(doc, dict) or "payload" not in doc:
+        sys.exit(1)
+    n += 1
+sys.exit(0 if n > 0 else 1)
+' <<< "$out"
+}
+
+if already_signed; then
+  printf 'sign-release-digest: %s already signed, skipping\n' "${repository}@${digest}"
+else
+  "$cosign_cmd" sign \
+    --key "$key_path" \
+    --yes \
+    "${repository}@${digest}" ||
+    fail "cosign could not sign ${repository}@${digest}"
+  printf 'sign-release-digest: signed %s\n' "${repository}@${digest}"
+fi
+
+if [[ -z "$tag" ]] && already_attested; then
+  printf 'sign-release-digest: %s already attested, skipping\n' "${repository}@${digest}"
+elif [[ -z "$tag" ]]; then
   "$cosign_cmd" attest \
     --key "$key_path" \
     --yes \
