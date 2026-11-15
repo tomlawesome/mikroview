@@ -23,8 +23,10 @@ import random
 import shutil
 import stat
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 _PATH = pathlib.Path(__file__).resolve().parent / "seed-demo.py"
 _spec = importlib.util.spec_from_file_location("seed_demo", _PATH)
@@ -405,6 +407,78 @@ class IngestPushSourceTests(unittest.TestCase):
         finally:
             srv.shutdown()
         self.assertEqual(seen, ["127.0.0.2"])
+
+
+class TotpClaimLockTests(unittest.TestCase):
+    """#1466: fresh_totp_code claims a step under a mkdir lock
+    ($MV_DIR/totp-last-counter.lock) so concurrent claimers never share one."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="seed-demo-totp-")
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.lock = os.path.join(self.dir, "totp-last-counter.lock")
+        env = mock.patch.dict(os.environ, {"MV_DIR": self.dir, "MV_TOTP_SECRET": "JBSWY3DPEHPK3PXP"})
+        env.start()
+        self.addCleanup(env.stop)
+        code = mock.patch.object(seed_demo, "totp_code", lambda secret, counter: counter)
+        code.start()
+        self.addCleanup(code.stop)
+
+    def _claim_in_thread(self, results):
+        t = threading.Thread(target=lambda: results.append(seed_demo.fresh_totp_code()), daemon=True)
+        t.start()
+        return t
+
+    def test_concurrent_claimers_never_share_a_counter(self):
+        # A fake clock: waiting for the next 30 s step advances it instead
+        # of sleeping; short sleeps (lock polling) really sleep.
+        offset = [0.0]
+        guard = threading.Lock()
+        real_time, real_sleep = time.time, time.sleep
+
+        def fake_time():
+            return real_time() + offset[0]
+
+        def fake_sleep(seconds):
+            if seconds >= 1:
+                with guard:
+                    offset[0] += seconds
+            else:
+                real_sleep(seconds)
+
+        shim = mock.Mock(wraps=time)
+        shim.time = fake_time
+        shim.sleep = fake_sleep
+        results = []
+        with mock.patch.object(seed_demo, "time", shim):
+            threads = [self._claim_in_thread(results) for _ in range(8)]
+            for t in threads:
+                t.join(60)
+        self.assertEqual(len(results), 8, "every claimer returns")
+        self.assertEqual(len(set(results)), 8, f"counters must be distinct: {sorted(results)}")
+
+    def test_stale_lock_does_not_block(self):
+        os.mkdir(self.lock)
+        old = time.time() - 60
+        os.utime(self.lock, (old, old))
+        results = []
+        t = self._claim_in_thread(results)
+        t.join(5)
+        self.assertFalse(t.is_alive(), "a lock older than 30 s is removed as stale")
+        self.assertEqual(len(results), 1)
+
+    def test_fresh_lock_held_by_someone_else_makes_the_claimer_wait(self):
+        os.mkdir(self.lock)
+        results = []
+        t = self._claim_in_thread(results)
+        t.join(1.5)
+        self.assertTrue(t.is_alive(), "claimer must wait while a fresh lock is held")
+        self.assertEqual(results, [])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "totp-last-counter")))
+        os.rmdir(self.lock)
+        t.join(5)
+        self.assertFalse(t.is_alive(), "claimer proceeds once the lock is released")
+        self.assertEqual(len(results), 1)
 
 
 if __name__ == "__main__":
