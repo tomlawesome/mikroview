@@ -754,3 +754,103 @@ func TestWriteSealedTornLineEdgeCases(t *testing.T) {
 		t.Error("WriteSealed wrote a file for a refused log")
 	}
 }
+
+// TestFixReviewZeroTailAndTornHeaderEdges tries to break the PROP-S2 and
+// O1-R1 rules: a zero tail longer than one read chunk, a late non-zero
+// byte past a chunk boundary, and a header-only file whose genuine salt
+// starts with zeros.
+func TestFixReviewZeroTailAndTornHeaderEdges(t *testing.T) {
+	appendBytes := func(t *testing.T, path string, b []byte) []byte {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(b); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		all, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return all
+	}
+
+	t.Run("a zero tail longer than the read chunk is cut and every real frame kept", func(t *testing.T) {
+		key := testKey(t)
+		path, bounds := writeN(t, key, 3)
+		appendBytes(t, path, make([]byte, 200<<10))
+		if _, err := ReadLines(path, key); err != nil {
+			t.Fatalf("ReadLines: %v", err)
+		}
+		s, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer s.Close()
+		if got := len(allRecords(t, s)); got != 3 {
+			t.Fatalf("%d records, want 3", got)
+		}
+		if got := size(t, path); got != bounds[3] {
+			t.Fatalf("size %d, want %d", got, bounds[3])
+		}
+	})
+
+	t.Run("one non-zero byte past the first chunk keeps the file refused and untouched", func(t *testing.T) {
+		key := testKey(t)
+		path, _ := writeN(t, key, 3)
+		tail := make([]byte, 100<<10)
+		tail[len(tail)-1] = 1
+		want := appendBytes(t, path, tail)
+		if s, err := Open(path, 100, key); err == nil {
+			s.Close()
+			t.Fatal("Open accepted zeros ending in a non-zero byte")
+		}
+		if _, err := ReadLines(path, key); err == nil {
+			t.Fatal("ReadLines accepted zeros ending in a non-zero byte")
+		}
+		got, _ := os.ReadFile(path)
+		if !bytes.Equal(got, want) {
+			t.Fatal("file was changed")
+		}
+	})
+
+	t.Run("a genuine header-only file with a mostly-zero salt keeps its bytes", func(t *testing.T) {
+		key := testKey(t)
+		path, _ := writeN(t, key, 0)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := len(b) - 16; i < len(b)-1; i++ {
+			b[i] = 0
+		}
+		b[len(b)-1] = 7
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := s.Append(evEnt, secretTuple(1), secretEvent(), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		got, _ := os.ReadFile(path)
+		if !bytes.HasPrefix(got, b) {
+			t.Fatal("the genuine header was rewritten")
+		}
+		s2, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s2.Close()
+		if n := len(allRecords(t, s2)); n != 1 {
+			t.Fatalf("%d records, want 1", n)
+		}
+	})
+}
