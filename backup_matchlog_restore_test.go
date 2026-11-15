@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -112,5 +113,61 @@ func TestV06EnvelopeRestoresIntoAKeyedInstallAsASealedLog(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("restored log reads back %d records, want 2", len(got))
+	}
+}
+
+// A v0.6 backup carries the raw match log, torn tail included; v0.6 skipped
+// that line on replay, so -restore leaves it out and restores the rest
+// (v0.7.0 audit, O1-F1).
+func TestV06EnvelopeWithATornLineRestoresTheRest(t *testing.T) {
+	good := func(id string, port int) string {
+		return `{"kind":"record","id":"` + id + `","entryId":"e1","tuple":{"source":{"mac":"` + v06MAC + `"},"destIp":"` + v06Dst + `","port":` + strconv.Itoa(port) + `},"event":{"raw":"v06-raw-line"},"firstSeen":"2026-08-09T12:00:00Z","lastSeen":"2026-08-09T12:00:00Z"}`
+	}
+	lines := good("r1", 22) + "\n" + good("r2", 23) + "\n" + `{"kind":"record","id":"r3","entryId":"e1","tu`
+	wrapped, err := wrapForEnvelope("match_log", []byte(lines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := backup.Write(&buf, "v0.6.0", map[string][]byte{"match_log": wrapped, "suggestions": []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "v06-torn.backup")
+	if err := os.WriteFile(src, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	keyPath := filepath.Join(dst, "history.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", retention.MinKeyBytes)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := restoreEnv(t, dst, keyPath)
+	sugPath := filepath.Join(dst, "suggestions.json")
+	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", sugPath)
+
+	if code := runRestore([]string{src}); code != 0 {
+		t.Fatalf("runRestore of a v0.6 backup with a torn match log line = %d, want 0", code)
+	}
+	key, err := retention.LoadKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ml, err := matchlog.Open(path, 100, key)
+	if err != nil {
+		t.Fatalf("matchlog.Open on the restored log: %v", err)
+	}
+	defer ml.Close()
+	var got []string
+	if err := ml.Query(context.Background(), matchlog.Query{Source: matchlog.Identity{MAC: v06MAC}}, func(r matchlog.Record) bool {
+		got = append(got, r.ID)
+		return true
+	}); err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("restored log holds %v, want r1 and r2", got)
+	}
+	if _, err := os.Stat(sugPath); err != nil {
+		t.Errorf("suggestions.json was not restored: %v", err)
 	}
 }

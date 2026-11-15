@@ -4046,7 +4046,9 @@ retention key to move it.
 
 The match log travels as plain JSON lines in the backup, like every other
 store's plain JSON, and is sealed again under the restoring deployment's
-key (#1452, #1470), so a v0.6 backup still restores. Both `-backup` of an
+key (#1452, #1470), so a v0.6 backup still restores; a torn line left by
+a crash under v0.6 is left out and reported in the log, as v0.6 itself
+skipped it. Both `-backup` of an
 install with a match log and `-restore` of a backup carrying one need
 `history.keyFile`, and stop with nothing changed without it.
 
@@ -4155,7 +4157,7 @@ names the new paths and the same `history.keyFile` key is in place.
 What is still refused at start-up, naming the store: a file not made
 with your key (forged, edited or plaintext), and one store's file put
 in another store's place. A file written by a release before v0.7.0 is
-bound to its old absolute path: start v0.7.0 once at the old path first
+bound to its old configured path: start v0.7.0 once at the old path first
 (each such file is re-sealed the new way when MikroView opens it, and
 the log says so once per file), then move it.
 

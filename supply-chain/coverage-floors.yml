@@ -252,4 +252,4 @@ floors:
 # drop in persist coverage fails test:postgres.
 postgres-floors:
   internal/persist: 84
-  internal/matchlog: 79
+  internal/matchlog: 86

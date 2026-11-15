@@ -2455,11 +2455,7 @@ func startOIDC(ctx context.Context, cfg config.Config, authStore *gauntlet.Store
 			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
 		} else {
 			oidcClient, oidcState = client, state
-			if oidcPolicy.Restricted() {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
-			} else {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
-			}
+			oidcLog.Info(ssoActiveLogLine(cfg.OIDC.IssuerURL, oidcPolicy))
 			// "SSO is additive; keep a local admin" (#1252). Said out
 			// loud at every start while it is untrue, because the day it
 			// matters is the day the provider is down and nobody is
@@ -3867,4 +3863,20 @@ func (a eventRateSource) EventsPerSecond() float64 {
 		return 0
 	}
 	return a.st.EventsPerSecond()
+}
+
+// ssoActiveLogLine is the start-up line for working SSO. It says
+// "restricted" only when gauntlet's own rule, AllowIssuerWithPolicy,
+// says strangers are kept out at a shared issuer (the tenant is pinned).
+// A group or email allow-list alone does not do that there, so it is
+// described as a check, not as a closed door (#1480).
+func ssoActiveLogLine(issuer string, p goidc.Policy) string {
+	if goidc.IsMultiTenantIssuer(issuer) && goidc.AllowIssuerWithPolicy(issuer, p) == nil {
+		return fmt.Sprintf("SSO login active against %s, restricted to the configured tenant", issuer)
+	}
+	line := fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", issuer)
+	if len(p.AllowedGroups) > 0 || len(p.AllowedEmails) > 0 || len(p.AllowedEmailDomains) > 0 || len(p.RequiredClaims) > 0 {
+		line += ", then checked against the configured allow-list"
+	}
+	return line
 }

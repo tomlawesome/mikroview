@@ -50,8 +50,10 @@ func ReadLines(path string, key *retention.Key) ([]byte, error) {
 
 // WriteSealed replaces the file at path with a sealed match log holding
 // lines (JSON lines, as ReadLines returns them and as a v0.6 backup
-// carries them), in order, under key. Every non-empty line must decode
-// as a record or an update line; otherwise nothing is written. The whole
+// carries them), in order, under key. Every non-empty line that decodes
+// must be a record or an update line within the line limit, or nothing
+// is written; a line that does not decode is left out, as v0.6 left it
+// out on replay. The whole
 // file is built in memory -- the restore envelope already held it all --
 // and written atomically with mode 0600.
 //
@@ -62,7 +64,7 @@ func WriteSealed(path string, key *retention.Key, lines []byte) error {
 	if key == nil {
 		return errors.New("matchlog: writing the match log needs history.keyFile: it is sealed, and there is no unsealed mode")
 	}
-	plains, err := parseLines(lines)
+	plains, _, err := parseLines(lines)
 	if err != nil {
 		return err
 	}
@@ -77,19 +79,20 @@ func WriteSealed(path string, key *retention.Key, lines []byte) error {
 }
 
 // ValidateLines checks lines as WriteSealed would, without a key and
-// without writing anything: every non-empty line must decode as a record
-// or an update line within the line limit. -restore runs it in its
-// validate-everything-first pass, so a bad backup stops before anything
-// on disk changes.
-func ValidateLines(lines []byte) error {
-	_, err := parseLines(lines)
-	return err
+// without writing anything: every non-empty line that decodes must be a
+// record or an update line within the line limit; a line that does not
+// decode is left out, as v0.6 left it out on replay, and counted in
+// skipped. -restore runs it in its validate-everything-first pass, so a
+// bad backup stops before anything on disk changes.
+func ValidateLines(lines []byte) (skipped int, err error) {
+	_, skipped, err = parseLines(lines)
+	return skipped, err
 }
 
 // parseLines splits JSON lines into the frames WriteSealed seals,
-// refusing any line that is not a match log line.
-func parseLines(lines []byte) ([][]byte, error) {
-	var plains [][]byte
+// refusing any line that decodes but is not a match log line, and
+// counting the lines that do not decode at all.
+func parseLines(lines []byte) (plains [][]byte, skipped int, err error) {
 	for i, line := range bytes.Split(lines, []byte("\n")) {
 		line = bytes.TrimRight(line, "\r")
 		if len(bytes.TrimSpace(line)) == 0 {
@@ -97,15 +100,22 @@ func parseLines(lines []byte) ([][]byte, error) {
 		}
 		var l fileLine
 		if err := json.Unmarshal(line, &l); err != nil {
-			return nil, fmt.Errorf("matchlog: line %d is not a match log line: %w", i+1, err)
+			// A line that does not decode at all is left out, not
+			// refused: v0.6's replay and Query skipped it (a torn write
+			// from an unclean shutdown or a full disk), and a v0.6
+			// backup carries the raw file, torn tail included. Refusing
+			// it refused the whole restore for a line v0.6 never read
+			// (v0.7.0 audit, O1-F1).
+			skipped++
+			continue
 		}
 		if l.Kind != kindRecord && l.Kind != kindUpdate {
-			return nil, fmt.Errorf("matchlog: line %d has kind %q, want %q or %q", i+1, l.Kind, kindRecord, kindUpdate)
+			return nil, 0, fmt.Errorf("matchlog: line %d has kind %q, want %q or %q", i+1, l.Kind, kindRecord, kindUpdate)
 		}
 		if len(line) > maxLineBytes {
-			return nil, fmt.Errorf("matchlog: line %d is %d bytes, over the %d-byte line limit", i+1, len(line), maxLineBytes)
+			return nil, 0, fmt.Errorf("matchlog: line %d is %d bytes, over the %d-byte line limit", i+1, len(line), maxLineBytes)
 		}
 		plains = append(plains, line)
 	}
-	return plains, nil
+	return plains, skipped, nil
 }
