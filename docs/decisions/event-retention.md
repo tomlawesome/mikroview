@@ -286,7 +286,9 @@ log is refused at start-up, never read or sealed in place, and a frame of
 whole length that does not open is refused, never skipped.
 
 The same limit as the day files, said plainly: frames cut off the end
-are indistinguishable from a crash tail and are dropped as one, and the
+are indistinguishable from a crash tail and are dropped as one (and a
+zero-filled tail left by a power loss mid-append is cut back as one; a
+header torn by a crash before any frame is written is started again), and the
 whole file replaced by an older valid copy is not detected. An
 append-only file cannot bind "nothing comes after me" without a commit
 record kept elsewhere; the match log is bounded evidence, not account
