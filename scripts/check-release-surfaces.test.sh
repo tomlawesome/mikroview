@@ -133,6 +133,26 @@ services:
       - ./mikroview:/etc/mikroview:ro
 EOF
 
+  # The release job's smoke-test step, reduced to what check 10 reads: it
+  # must make a key and mount it read-only at the app folder (CFG-0083).
+  cat >"$dir/.github/workflows/docker.yml" <<'EOF'
+name: docker
+on: push
+jobs:
+  release:
+    steps:
+      - name: Smoke-test the image that will become latest
+        run: |
+          docker volume create release-test-etc >/dev/null
+          docker run --rm -v release-test-etc:/etc/mikroview alpine:3.24 sh -c \
+            'head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key'
+          docker run -d --name release-test -p 8080:8080 \
+            -v release-test-etc:/etc/mikroview:ro \
+            $IMAGE:$VERSION
+      - name: Verify the binary reports the release version
+        run: echo ok
+EOF
+
   commit "$dir" "2026-01-01T00:00:00" "initial"
 }
 
@@ -387,6 +407,37 @@ check "$(case "$out" in *"shot marker 'the widget collapsed' has no screenshot y
   "and names the first marker's own text"
 check "$(case "$out" in *"shot marker 'the widget expanded' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
   "and the second marker's own text, not garbled together with the first"
+
+# --- check 10: the release smoke test mounts a key ------------------------
+# From v0.7.0 the server exits with CFG-0083 when no key is mounted, so a
+# smoke test that starts the image bare never sees healthz and latest never
+# moves.
+c10a="$TMP/case10a-no-key-mount"
+cp -r "$good" "$c10a"
+grep -vF -- '-v release-test-etc:/etc/mikroview:ro' "$c10a/.github/workflows/docker.yml" >"$c10a/docker.yml.new"
+mv "$c10a/docker.yml.new" "$c10a/.github/workflows/docker.yml"
+commit "$c10a" "2026-01-02T00:00:00" "drop the key mount from the smoke test"
+run "$c10a"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a smoke test with no key mount fails (rc=$rc)"
+check "$(case "$out" in *"release smoke test"*) echo true;; *) echo false;; esac)" \
+  "and names the release smoke test"
+
+c10b="$TMP/case10b-no-key-file"
+cp -r "$good" "$c10b"
+grep -vF -- 'history.key' "$c10b/.github/workflows/docker.yml" >"$c10b/docker.yml.new"
+mv "$c10b/docker.yml.new" "$c10b/.github/workflows/docker.yml"
+commit "$c10b" "2026-01-02T00:00:00" "drop the key file from the smoke test"
+run "$c10b"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a smoke test that never makes a key fails (rc=$rc)"
+
+c10c="$TMP/case10c-no-docker-yml"
+cp -r "$good" "$c10c"
+git -C "$c10c" rm -q .github/workflows/docker.yml
+commit "$c10c" "2026-01-02T00:00:00" "remove docker.yml"
+run "$c10c"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "no docker.yml still passes (rc=$rc)"
+check "$(case "$out" in *"skip: release smoke test key mount (.github/workflows/docker.yml not present)"*) echo true;; *) echo false;; esac)" \
+  "and prints the skip line"
 
 echo
 if [ "$fails" -ne 0 ]; then

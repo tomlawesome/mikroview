@@ -854,11 +854,8 @@ lint:supply-chain-pins:
     # #711: every action SHA and image tag CI uses must be in
     # supply-chain/pins-policy.json with its review date. Fails on a pin the
     # policy does not record, or a recorded pin CI no longer uses.
-    - node --test tools/supply-chain/pins-policy.test.mjs
-    # #1462: the six scanner jobs are report-only and pinned.
-    - node --test tools/supply-chain/scanner-jobs.test.mjs
-    # #1479: no cache in a job that signs.
-    - node --test tools/supply-chain/release-cache.test.mjs
+    # A glob, so a new suite here runs without a CI edit (#1473).
+    - node --test tools/supply-chain/*.test.mjs
     - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------

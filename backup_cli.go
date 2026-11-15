@@ -226,7 +226,8 @@ var excludedFromBackup = map[string]string{
 // #853's "the backup envelope stays plain, readable JSON", and -restore
 // seals them again under the restoring deployment's key
 // (matchlog.WriteSealed), so the envelope's shape for it is the one v0.6
-// wrote and a v0.6 backup still restores. Both need the key: the file
+// wrote and a v0.6 backup still restores; a torn line in a v0.6 file is
+// left out and said so in the log. Both need the key: the file
 // cannot be read without it, and is never written in the clear (rule 2
 // of the #853 amendment). internal/backup.Envelope holds
 // each store as json.RawMessage, which requires exactly one JSON value --
@@ -799,9 +800,14 @@ func runRestore(args []string) int {
 			return 1
 		}
 		if name == jsonLinesStore {
-			if err := matchlog.ValidateLines(data); err != nil {
+			skipped, err := matchlog.ValidateLines(data)
+			if err != nil {
 				logger.Error(fmt.Sprintf("backup: store %q: %v -- nothing has been changed", jsonLinesStore, err))
 				return 1
+			}
+			if skipped > 0 {
+				logger.Warn(fmt.Sprintf("backup: store %q: %d line(s) do not decode and are left out of the restored match log -- "+
+					"a torn write from an unclean shutdown, which the release that wrote the backup skipped on replay too", jsonLinesStore, skipped))
 			}
 		}
 		decoded[name] = data
