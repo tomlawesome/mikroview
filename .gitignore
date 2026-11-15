@@ -61,3 +61,4 @@
 # points here (#1451; CI's test:go and test:postgres). Run data, not content.
 /.coverdata/
 jscpd-report/
+__pycache__/
