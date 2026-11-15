@@ -724,6 +724,8 @@ lint:supply-chain-pins:
     # supply-chain/pins-policy.json with its review date. Fails on a pin the
     # policy does not record, or a recorded pin CI no longer uses.
     - node --test tools/supply-chain/pins-policy.test.mjs
+    # #1462: the six scanner jobs are report-only and pinned.
+    - node --test tools/supply-chain/scanner-jobs.test.mjs
     - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------
