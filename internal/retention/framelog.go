@@ -260,14 +260,39 @@ func SealFrames(key *Key, format FrameFormat, plains [][]byte) ([]byte, error) {
 	return out, nil
 }
 
+// checkFrameLength is the one rule for a frame's declared length n at
+// offset off in a file of size bytes. A torn tail -- fewer than 4 bytes
+// left, or a declared length running past the end of the file -- is
+// reported as torn, for the caller to stop at (and the writer to cut
+// back). A length of zero, over the format's ceiling, or too short to
+// hold a nonce, with the whole of it inside the file, is an error: it is
+// damage, not a crash tail, and treating it as one would cut off every
+// whole frame after it.
+//
+// The past-the-end test comes first, so a tail whose length bytes are
+// not a length at all (the start of a JSON line from before v0.7.0, say)
+// is still a torn tail rather than a refusal.
+func checkFrameLength(name string, seq uint64, off, size, n int64, format FrameFormat) (torn bool, err error) {
+	if off+4+n > size {
+		return true, nil
+	}
+	if n <= nonceBytes || n > int64(format.MaxFrameBytes) {
+		return false, fmt.Errorf("retention: %s frame %d at offset %d declares length %d: %w", name, seq, off, n, ErrFrameDidNotOpen)
+	}
+	return false, nil
+}
+
+// nonceBytes is the AES-GCM nonce size every frame starts with.
+const nonceBytes = 12
+
 // scanFrames walks a file's frames without decrypting them, reporting
 // its salt, how many whole frames it holds, and the offset the last
 // whole frame ends at.
 //
 // It reads lengths only, so reopening a large file costs seeks rather
-// than decryption. A short or impossible length prefix ends the walk
-// and the offset before it is treated as the end -- that is the crash
-// tail case, not corruption worth refusing over.
+// than decryption. A torn tail ends the walk and the offset before it is
+// treated as the end; a damaged length inside the file is an error (see
+// checkFrameLength).
 func scanFrames(f *os.File, format FrameFormat) (salt []byte, frames uint64, end int64, err error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, 0, 0, fmt.Errorf("retention: seeking to header: %w", err)
@@ -290,15 +315,16 @@ func scanFrames(f *os.File, format FrameFormat) (salt []byte, frames uint64, end
 		return nil, 0, 0, fmt.Errorf("retention: sizing file: %w", err)
 	}
 	var lenBuf [4]byte
-	for {
-		if off+4 > size {
-			break
-		}
+	for off+4 <= size {
 		if _, err := f.ReadAt(lenBuf[:], off); err != nil {
-			break
+			return nil, 0, 0, fmt.Errorf("retention: reading frame %d length: %w", frames, err)
 		}
 		n := int64(binary.BigEndian.Uint32(lenBuf[:]))
-		if n <= 0 || n > int64(format.MaxFrameBytes) || off+4+n > size {
+		torn, err := checkFrameLength(filepath.Base(f.Name()), frames, off, size, n, format)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if torn {
 			break
 		}
 		off += 4 + n
@@ -310,13 +336,14 @@ func scanFrames(f *os.File, format FrameFormat) (salt []byte, frames uint64, end
 // ReadFrames visits every frame of the framed file at path, oldest
 // first, through its own read handle.
 //
-// A truncated tail -- a short or over-long length, or a frame cut short
-// -- ends the walk silently and keeps everything before it: a crash
-// mid-write, or a write still in progress. A frame of good length that
-// does not open is an error naming the frame, because unlike a short
-// tail it means either the wrong key or a file somebody has altered, and
-// neither should pass silently. An error from visit ends the walk and is
-// returned.
+// A torn tail -- fewer than 4 bytes left, or a declared length running
+// past the end of the file as it stood when the read began -- ends the
+// walk silently and keeps everything before it: a crash mid-write, or a
+// write still in progress. A damaged length inside the file, or a frame
+// of good length that does not open, is an error naming the frame,
+// because it means either the wrong key or a file somebody has altered,
+// and neither should pass silently. An error from visit ends the walk
+// and is returned.
 func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64, plain []byte) error) error {
 	if key == nil {
 		return errors.New("retention: reading a framed file needs a key")
@@ -335,23 +362,32 @@ func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64
 	if err != nil {
 		return err
 	}
-	if _, err := f.Seek(int64(format.headerBytes()), io.SeekStart); err != nil {
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("retention: sizing %s: %w", path, err)
+	}
+	off := int64(format.headerBytes())
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return fmt.Errorf("retention: seeking %s: %w", path, err)
 	}
 
-	r := bufio.NewReader(f)
+	r := bufio.NewReader(io.LimitReader(f, size-off))
 	var lenBuf [4]byte
-	for seq := uint64(0); ; seq++ {
+	for seq := uint64(0); off+4 <= size; seq++ {
 		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
-			return nil // clean end, or a tail too short to be a frame
+			return fmt.Errorf("retention: reading %s frame %d: %w", filepath.Base(path), seq, err)
 		}
-		size := int(binary.BigEndian.Uint32(lenBuf[:]))
-		if size <= aead.NonceSize() || size > format.MaxFrameBytes {
+		n := int64(binary.BigEndian.Uint32(lenBuf[:]))
+		torn, err := checkFrameLength(filepath.Base(path), seq, off, size, n, format)
+		if err != nil {
+			return err
+		}
+		if torn {
 			return nil
 		}
-		frame := make([]byte, size)
+		frame := make([]byte, n)
 		if _, err := io.ReadFull(r, frame); err != nil {
-			return nil // partial frame: the crash tail case
+			return fmt.Errorf("retention: reading %s frame %d: %w", filepath.Base(path), seq, err)
 		}
 		plain, err := aead.Open(nil, frame[:aead.NonceSize()], frame[aead.NonceSize():], format.aad(seq))
 		if err != nil {
@@ -360,5 +396,7 @@ func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64
 		if err := visit(seq, plain); err != nil {
 			return err
 		}
+		off += 4 + n
 	}
+	return nil
 }
