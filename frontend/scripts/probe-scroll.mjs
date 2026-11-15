@@ -11,6 +11,7 @@
 // culprit shows up in numbers rather than being guessed at.
 
 import { chromium } from 'playwright'
+import { completeSecondFactor } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
@@ -28,6 +29,8 @@ await page.goto(URL_BASE, { waitUntil: 'networkidle' })
 await page.fill('input[autocomplete="username"]', USER)
 await page.fill('input[autocomplete="current-password"]', PASS)
 await page.click('button[type="submit"]')
+// Every local account needs a second factor since #1253 (#1429).
+await completeSecondFactor(page)
 await page.waitForSelector('#main-content', { timeout: 15000 })
 await page.setViewportSize({ width: 1280, height: 720 })
 
