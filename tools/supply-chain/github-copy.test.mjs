@@ -289,7 +289,12 @@ describe("#1472 step 3 countersign.yml: behaviour unchanged, header updated", ()
     assert.deepEqual(Object.keys(on), ["workflow_dispatch"]);
     assert.ok(on.workflow_dispatch.inputs?.digest?.required);
     const steps = stepsOf(doc);
-    const v = steps.findIndex((s) => /cosign verify\b/.test(runOf(s)) && /cosign\.pub/.test(runOf(s)));
+    // The verify step is either a direct `cosign verify --key cosign.pub` or
+    // scripts/verify-release-signature.sh, which itself verifies against cosign.pub.
+    const helper = readFileSync(join(root, "scripts/verify-release-signature.sh"), "utf8");
+    assert.match(helper, /verify --key "\$pubkey"/);
+    assert.match(helper, /cosign\.pub/);
+    const v = steps.findIndex((s) => (/cosign verify\b/.test(runOf(s)) && /cosign\.pub/.test(runOf(s))) || /verify-release-signature\.sh/.test(runOf(s)));
     const sign = steps.findIndex((s) => /cosign sign\b/.test(runOf(s)));
     assert.ok(v >= 0 && sign > v, "verify must precede the keyless sign");
   });

@@ -292,13 +292,8 @@ describe("#1472 job 8: record:upgrade-fixture pulls the GitLab digest", () => {
   });
 });
 
-describe("#1472 landing step 1 leaves GitHub workflows alone", () => {
-  it("no publish-from-gitlab.yml or release-on-tag.yml yet", () => {
-    for (const f of ["publish-from-gitlab.yml", "release-on-tag.yml"]) {
-      assert.throws(() => read(`.github/workflows/${f}`), /ENOENT/);
-    }
-  });
-});
+// (Step 1's "no publish-from-gitlab.yml / release-on-tag.yml yet" check is gone:
+// step 3 adds them, and github-copy.test.mjs covers them.)
 
 // publish:channel's "is this still preview's head" check, run for real: the
 // text from the `if [ -z "${CI_COMMIT_TAG:-}" ]` guard to the success echo is
