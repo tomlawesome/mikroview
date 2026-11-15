@@ -460,6 +460,15 @@ rewritten.
 
 ### Security
 
+- **GitLab builds, signs and publishes the image by digest** (#1472, step
+  1). A push to `preview` or a release tag builds the image once, tests
+  and scans those exact bytes, pushes them to the GitLab registry, signs
+  that digest with the release key and attests its SPDX SBOM, and names
+  it `preview` or `vX.Y.Z` only after the signature verifies. Preview
+  images are now signed too. GHCR is unchanged for now: GitHub still
+  publishes it until it switches to copying this digest, so do not tag a
+  release before then (docs/release-signing.md).
+
 - **CI pins Trivy by digest and now scans the built image and the
   container config** (#1462). Trivy moves to 0.76.2, pinned by its image
   digest rather than a tag. test:container scans the image it builds for

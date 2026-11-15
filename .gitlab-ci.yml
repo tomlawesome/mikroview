@@ -346,6 +346,20 @@ workflow:
     - !reference [.batch-intake, job_rule]
     - !reference [.dev_or_mr_code_frontend, rules]
 
+# #1472: the two pipelines that publish the product image -- a push to
+# preview (a dev -> preview promotion landing) and a push of a v* release
+# tag. Build once, test the built bytes, promote by digest: build:image
+# builds the image a single time, every later job handles that build's
+# image.tar, and publish:image / sign:release-digest / publish:channel put
+# exactly that digest into this project's registry. Jobs that also run on
+# merge requests and dev add these rules beside their .dev_or_mr* ones;
+# the publish jobs run on these alone. Not docs-gated: a release is never
+# skipped because its last commit touched prose.
+.publish_ref:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "preview"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+
 .git_safe: &git_safe
   before_script:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
@@ -1025,8 +1039,110 @@ test:postgres:
     name: ${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-cli@sha256:be132a9f282288de4afaf63379dff75711fda0147c6b72a9df44e51841402144
     pull_policy: if-not-present
 
+# #1472 job 1: the one build of the product image (build once, test the
+# built bytes, promote by digest). Every job after it -- test:container,
+# test:install-line, check:upgrade-fixture-recorder, release:check-version,
+# security:trivy-image and the publish jobs -- loads this job's image.tar
+# rather than building again, so what is scanned, smoke-tested, pushed and
+# signed is one set of bytes. (gate:image's `docker build` is a different
+# image: the live-check harness, built from live-check.Dockerfile and never
+# shipped.)
+#
+# No reuse gate: it always builds (orbit ADR-0028); the jobs after it keep
+# theirs. Its rules are the union of its consumers', so a job that needs
+# image.tar can never find it missing: the publishing refs, a merge
+# request into preview (check:upgrade-fixture-recorder, which is not
+# docs-gated), and the heavy code ladder test:container uses.
+#
+# --provenance=false --sbom=false: one plain manifest, no BuildKit
+# attestation index. The registry refused that index ("blob unknown to
+# registry", gate:image, pipeline 539), and a single manifest keeps a
+# registry-side retag on the same digest (#1407). The SBOM is made from
+# the built tar by security:trivy-image instead, and attested to the
+# pushed digest by sign:release-digest.
+#
+# VERSION is stamped into the binary and the frontend bundle (#1363), so a
+# release tag builds with the tag itself and every other pipeline with
+# preview:<short sha>, the same values .github/workflows/docker.yml passes
+# (owner decision #572: a release is built from its own tag, never by
+# retagging preview's bytes). image.source is the public GitHub repository,
+# as docker.yml's metadata-action sets it today, so the GHCR copy keeps
+# the label GHCR links the package by.
+#
+# No registry layer cache: a cache any developer pipeline could write
+# would feed the release build. One more build of an unchanged tree is the
+# cheaper risk; ai/agent-infra#17 can revisit it.
+build:image:
+  extends: .dind
+  stage: test
+  needs: []
+  rules:
+    - !reference [.publish_ref, rules]
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+    - !reference [.dev_or_mr_code_heavy, rules]
+  variables:
+    MV_CI_IMAGE: mikroview-ci:$CI_COMMIT_SHA
+  script:
+    - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
+    - |
+      set -eu
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        version="$CI_COMMIT_TAG"
+      else
+        version="preview:$(printf '%.7s' "$CI_COMMIT_SHA")"
+      fi
+      echo "build:image: building $MV_CI_IMAGE with VERSION=$version"
+      docker buildx build --load --provenance=false --sbom=false \
+        --build-arg VERSION="$version" \
+        --label org.opencontainers.image.revision="$CI_COMMIT_SHA" \
+        --label org.opencontainers.image.source="https://github.com/tomlawesome/mikroview" \
+        --label org.opencontainers.image.version="$version" \
+        --label org.opencontainers.image.created="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --tag "$MV_CI_IMAGE" .
+    - docker save -o image.tar "$MV_CI_IMAGE"
+    - ls -l image.tar
+  artifacts:
+    paths:
+      - image.tar
+    expire_in: 1 day
+
+# #1472 job 3: a release tag's own checks, the two .github/workflows/
+# docker.yml makes today before it publishes -- the tag must equal
+# v<VERSION> at the tagged commit (docs/decisions/release-versioning.md),
+# and the binary build:image stamped must report that same tag. Either
+# one failing means the tag names the wrong commit, or VERSION was not
+# bumped, and nothing may publish. Tag pipelines only; publish:image
+# needs it there (optional, so a preview push does not wait for it).
+release:check-version:
+  extends: .dind
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+  needs:
+    - job: build:image
+      artifacts: true
+  script:
+    - |
+      set -eu
+      want="v$(tr -d '[:space:]' < VERSION)"
+      if [ "$CI_COMMIT_TAG" != "$want" ]; then
+        echo "release:check-version: tag '$CI_COMMIT_TAG' but VERSION says '$want' -- tag the commit whose VERSION matches, or bump VERSION first" >&2
+        exit 1
+      fi
+    - docker load -i image.tar
+    - |
+      set -eu
+      got="$(docker run --rm --entrypoint /mikroview "mikroview-ci:$CI_COMMIT_SHA" -version)"
+      echo "binary reports: $got"
+      if [ "$got" != "$CI_COMMIT_TAG" ]; then
+        echo "release:check-version: binary reports '$got' but this release is '$CI_COMMIT_TAG'" >&2
+        exit 1
+      fi
+
 # Container smoke test, ported from GitHub's ci.yml (#942, the second
-# half). Builds the production image and runs it the way
+# half). Loads the production image build:image built (#1472) and runs it the way
 # deploy/docker-compose.yml runs it -- read-only root, tmpfs for /tmp and
 # the data directory, every capability dropped, no-new-privileges, pid,
 # memory and CPU limits -- and asks /api/healthz whether it came up.
@@ -1035,8 +1151,8 @@ test:postgres:
 # takes a throwaway one of its own from .dind above. Consequences this job
 # is written around:
 #
-# - The daemon is the dind service's, not this container's. `docker build`
-#   ships the checkout over TCP as its context, so paths inside this job
+# - The daemon is the dind service's, not this container's. `docker load`
+#   streams image.tar to it over TCP, so paths inside this job
 #   container do not matter; `--publish` would bind a port on the service
 #   container, which this container does not reach as 127.0.0.1, so nothing
 #   is published. The health check instead runs in a throwaway container
@@ -1055,10 +1171,20 @@ test:postgres:
 # `-k` on the health check: TLS is on by default (self-signed, generated
 # on first start -- internal/servertls), and this only asks whether the
 # server answers, not whether the chain verifies.
+#
+# On a publishing ref (#1472) the job runs in full: the reuse gate only
+# ever stands on an earlier run in a merge-request pipeline
+# (scripts/ci-reuse-gate.js, #1066), and a push to preview or a v* tag is
+# not one, so a publishing run always tests the bytes it ships.
 test:container:
   extends: .dind
   stage: test
-  <<: *dev_or_mr_code_heavy
+  rules:
+    - !reference [.publish_ref, rules]
+    - !reference [.dev_or_mr_code_heavy, rules]
+  needs:
+    - job: build:image
+      artifacts: true
   variables:
     APP: mikroview-test-$CI_JOB_ID
     TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
@@ -1076,7 +1202,8 @@ test:container:
     - apk add --no-cache nodejs >/dev/null
     - *reuse_gate
     - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
-    - docker build --tag "$APP" .
+    - docker load -i image.tar
+    - docker tag "mikroview-ci:$CI_COMMIT_SHA" "$APP"
     # From v0.7.0 the server refuses to start without a key (#1202, ruling
     # 2), so the job makes a throwaway one the way install.sh does: in a
     # volume, written by a helper container, mounted read-only. A volume
@@ -1111,18 +1238,17 @@ test:container:
           exit 1
         fi
       done
-    # Image scan (#1462): the image built above, for vulnerable OS packages
+    # Image scan (#1462): the image tested above, for vulnerable OS packages
     # and Go modules, without building it again. This job's image is the
     # Docker CLI, so trivy's static binary is copied out of the pinned
-    # Trivy image through the daemon. `docker save` writes the image into
-    # the job's own directory, where trivy reads it with --input; the
-    # daemon is the dind service's, so nothing here touches the runner's.
-    # Before *reuse_evidence, so a reused run stands on a scan that passed.
+    # Trivy image through the daemon. trivy reads build:image's image.tar
+    # (#1472) with --input -- the same bytes just loaded and smoke-tested,
+    # so no `docker save` is needed. Before *reuse_evidence, so a reused
+    # run stands on a scan that passed.
     - cid=$(docker create "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb")
     - docker cp "$cid:/usr/local/bin/trivy" /usr/local/bin/trivy
     - docker rm "$cid" >/dev/null
-    - docker save "$APP" -o mikroview-image.tar
-    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --input mikroview-image.tar
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --input image.tar
     - *reuse_evidence
   artifacts:
     paths:
@@ -1155,13 +1281,17 @@ test:install-line:
   extends: .dind
   stage: test
   <<: *dev_or_mr_code_heavy
+  # build:image's image.tar (#1472), not a second build of the same tree.
+  needs:
+    - job: build:image
+      artifacts: true
   variables:
     APP: mikroview-install-$CI_JOB_ID
-    IMG: mikroview-install-image-$CI_JOB_ID
+    IMG: mikroview-ci:$CI_COMMIT_SHA
   script:
     - apk add --no-cache nodejs >/dev/null
     - *reuse_gate
-    - docker build --tag "$IMG" .
+    - docker load -i image.tar
     - |
       HTTPS_PORT=$((20000 + CI_JOB_ID % 20000))
       SYSLOG_PORT=$((HTTPS_PORT + 1))
@@ -2143,6 +2273,31 @@ security:trivy-config:
   script:
     - trivy config --ignorefile .trivyignore.yaml --exit-code 1 --severity HIGH,CRITICAL .
 
+# #1472 job 4: the SBOM of the image build:image built, read straight from
+# its image.tar -- no daemon, no rebuild -- in SPDX JSON, kept 90 days as
+# the evidence sign:release-digest attests to the pushed digest (`cosign
+# attest --type spdxjson`). The second command is a vulnerability gate at
+# security:trivy-fs's policy (fixed-available HIGH or CRITICAL fails), on
+# the image rather than the checkout; test:container runs the same scan
+# (#1462), which is cheap, and this one is the one publish:image names.
+# Runs on merge requests and dev too, so a broken SBOM step shows up
+# before a promotion rather than on the push that should publish.
+security:trivy-image:
+  extends: .trivy
+  rules:
+    - !reference [.publish_ref, rules]
+    - !reference [.dev_or_mr_code_heavy, rules]
+  needs:
+    - job: build:image
+      artifacts: true
+  script:
+    - trivy image --input image.tar --format spdx-json -o image.spdx.json
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --input image.tar
+  artifacts:
+    paths:
+      - image.spdx.json
+    expire_in: 90 days
+
 # ---------------------------------------------------------------------------
 # SYNC — GitHub is a mirror of dev, preview and main, and of release tags.
 # After a push to any of the three (a merge here lands as a push),
@@ -2222,6 +2377,137 @@ sync:mirror-to-github:
     - git push github "HEAD:$MIRROR_REF"
 
 # ---------------------------------------------------------------------------
+# PUBLISH (#1472) -- GitLab builds, signs and publishes the product image;
+# GitHub, later, only copies the digest it is handed (landing step 2-3 of
+# #1472's design; .github/workflows/docker.yml still publishes GHCR until
+# then, untouched by this file).
+#
+# Build once, test the built bytes, promote by digest -- orbit's shape
+# (build_image -> record_image -> sign_evidence -> publish_channel):
+#
+#   build:image          the one build, saved as image.tar
+#   test:container,      smoke test, release checks and SBOM/vulnerability
+#   release:check-version, scan, all on that tar
+#   security:trivy-image
+#   publish:image        pushes the tar to $CI_REGISTRY_IMAGE:sha-<commit>,
+#                        records the digest it landed on (evidence JSON)
+#   sign:release-digest  key-based signature + SPDX attestation, on that digest
+#   publish:channel      verifies the signature, then gives the digest its
+#                        consumable name: :preview or :vX.Y.Z
+#
+# Registry scheme, registry.tomlawson.io/ai/mikroview: sha-<full sha>
+# (kept 7 days by the cleanup policy), preview and vX.Y.Z (kept). No
+# `latest` here: latest is GHCR's, moved on a release tag by GitHub
+# (owner, #1472). Nothing consumable exists before its signature verifies.
+# ---------------------------------------------------------------------------
+
+# #1472 job 5. The needs are the full bar on a publishing ref: every
+# test:* and security:* job that runs there (the rest run on the merge
+# request that was promoted), plus the release checks on a tag.
+#
+# The pushed digest is pulled back and its image ID compared with the
+# tested image's (orbit's publish-image.sh): the evidence then names the
+# bytes that were tested, not merely whatever the sha- tag resolved to.
+# The evidence is written the moment that check passes, before anything
+# else (scripts/gitlab-record-tested-image.sh says why). No channel tag
+# moves here; publish:channel does that once the signature verifies.
+publish:image:
+  extends: .dind
+  stage: sync
+  # Pushes to the registry -- never cut mid-write (#952).
+  interruptible: false
+  timeout: 20m
+  rules:
+    - !reference [.publish_ref, rules]
+  needs:
+    - job: build:image
+      artifacts: true
+    - job: release:check-version
+      optional: true
+    - job: test:container
+    - job: security:trivy-image
+  script:
+    - apk add --no-cache bash >/dev/null
+    - docker load -i image.tar
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      set -eu
+      tested_id="$(docker image inspect --format '{{.Id}}' "mikroview-ci:$CI_COMMIT_SHA")"
+      built_at="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' "mikroview-ci:$CI_COMMIT_SHA")"
+      docker tag "mikroview-ci:$CI_COMMIT_SHA" "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA"
+      docker push "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA"
+      digest="$(docker buildx imagetools inspect "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA" --format '{{.Manifest.Digest}}')"
+      case "$digest" in
+        sha256:????????????????????????????????????????????????????????????????) ;;
+        *) echo "publish:image: the registry returned no sha256 digest for sha-$CI_COMMIT_SHA (got '$digest')" >&2; exit 1 ;;
+      esac
+      docker pull "$CI_REGISTRY_IMAGE@$digest"
+      published_id="$(docker image inspect --format '{{.Id}}' "$CI_REGISTRY_IMAGE@$digest")"
+      if [ "$published_id" != "$tested_id" ]; then
+        echo "publish:image: $CI_REGISTRY_IMAGE@$digest is image $published_id, not the tested $tested_id" >&2
+        exit 1
+      fi
+      bash scripts/gitlab-record-tested-image.sh "$CI_REGISTRY_IMAGE@$digest" "$digest" "$built_at"
+      cat .mv-supply-chain/gitlab-tested-image.json
+  artifacts:
+    paths:
+      - .mv-supply-chain/gitlab-tested-image.json
+    expire_in: 90 days
+
+# #1472 job 7. Verifies the key-based signature on the recorded digest
+# against the committed cosign.pub -- the same classification
+# countersign.yml uses (scripts/verify-release-signature.sh: absence,
+# expiry, mismatch, ambiguity all refuse) -- and only then creates the
+# channel tag, registry-side (`imagetools create`: no bytes move, so the
+# digest cannot change between verification and publication).
+#
+# The source of the retag is the verified digest itself, not the sha- tag:
+# a tag is mutable, a digest is not. The sha- tag must still name that
+# digest (anything else means the registry moved under the pipeline and
+# nothing is published), and the channel tag is re-read afterwards and
+# must resolve to it (gate:image's pattern; --prefer-index=false keeps a
+# single manifest on its own digest, #1407).
+publish:channel:
+  extends: .dind
+  stage: sync
+  # Publishes a consumable name -- never cut mid-write (#952).
+  interruptible: false
+  timeout: 20m
+  rules:
+    - !reference [.publish_ref, rules]
+  needs:
+    - job: publish:image
+      artifacts: true
+    - job: sign:release-digest
+  script:
+    # bash for both scripts; curl and coreutils for ensure-cosign.sh's
+    # pinned, checksum-verified download; python3 for the evidence and
+    # for verify-release-signature.sh's JSON check.
+    - apk add --no-cache bash coreutils curl python3 >/dev/null
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      set -eu
+      digest="$(python3 -I scripts/gitlab-tested-image.py digest .mv-supply-chain/gitlab-tested-image.json "$CI_REGISTRY_IMAGE")"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        channel="$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+      else
+        channel="$CI_REGISTRY_IMAGE:preview"
+      fi
+      MV_COSIGN="$(bash scripts/ensure-cosign.sh)" bash scripts/verify-release-signature.sh "$CI_REGISTRY_IMAGE@$digest"
+      sha_digest="$(docker buildx imagetools inspect "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA" --format '{{.Manifest.Digest}}')"
+      if [ "$sha_digest" != "$digest" ]; then
+        echo "publish:channel: sha-$CI_COMMIT_SHA now names $sha_digest, not the signed $digest -- publishing nothing" >&2
+        exit 1
+      fi
+      docker buildx imagetools create --prefer-index=false -t "$channel" "$CI_REGISTRY_IMAGE@$digest"
+      got="$(docker buildx imagetools inspect "$channel" --format '{{.Manifest.Digest}}')"
+      if [ "$got" != "$digest" ]; then
+        echo "publish:channel: retag moved the digest: $channel is $got, expected $digest" >&2
+        exit 1
+      fi
+      echo "publish:channel: published $CI_REGISTRY_IMAGE@$digest as $channel"
+
+# ---------------------------------------------------------------------------
 # RECORD:UPGRADE-FIXTURE — #1247, the second half of the upgrade
 # framework (docs/decisions/upgrade-framework.md). Every release needs a
 # recording of what it actually wrote, so the next release's gate can
@@ -2229,37 +2515,35 @@ sync:mirror-to-github:
 # scripts/record-upgrade-fixture.sh by hand after every tag, and a
 # release nobody remembered is a release nothing tests.
 #
-# The wait is the whole reason this is a job of its own. The recording
-# boots the *released image*, which .github/workflows/docker.yml publishes
-# to GHCR from the same tag — so at the moment this pipeline starts, the
-# image usually does not exist yet. It polls for it rather than assuming
-# an ordering between two CI systems.
+# The recording boots the *released image*. Since #1472 that is the one
+# this same tag pipeline built, signed and published to this project's
+# registry, so the job simply needs publish:channel and pulls the exact
+# digest publish:image recorded -- no polling another CI system for it any
+# more. scripts/record-upgrade-fixture.sh is handed that reference through
+# MV_IMAGE_REF; by hand it still defaults to the GHCR tag.
 #
 # allow_failure is scoped to exit code 75 (EX_TEMPFAIL), deliberately,
-# not a blanket true (#1268 finding 6). A release that builds slowly, a
-# GHCR outage, or an image that never appears must not turn a tag
-# pipeline red: the tag is already cut and the artefacts already
-# published by then, so there is nothing to fix by failing -- the poll
-# loop below exits 75 for exactly that case, and only that case is
-# allowed to pass quietly. Any other failure -- a bug in
-# record-upgrade-fixture.sh or upgrade-fixture-session.py, a Docker
-# problem, pg_dump breaking -- exits some other code and blocks the
-# pipeline for real, because those mean the recording nobody is
-# watching for (see below) silently did not happen for a reason that
-# recurs on the next tag too. A red-but-allowed job (the 75 case) says
-# "run scripts/record-upgrade-fixture.sh <tag> by hand", which is
-# exactly the remedy.
+# not a blanket true (#1268 finding 6). The tag is already cut and the
+# image already published by the time this runs, so a registry pull that
+# fails is not worth a red tag pipeline -- the pull below exits 75 for
+# exactly that case, and only that case is allowed to pass quietly. Any
+# other failure -- a bug in record-upgrade-fixture.sh or
+# upgrade-fixture-session.py, a Docker problem, pg_dump breaking -- exits
+# some other code and blocks the pipeline for real, because those mean
+# the recording nobody is watching for (see below) silently did not
+# happen for a reason that recurs on the next tag too. A red-but-allowed
+# job (the 75 case) says "run scripts/record-upgrade-fixture.sh <tag> by
+# hand", which is exactly the remedy.
 #
 # Nothing in this job watches for either kind of failure and says so
 # out loud: check:upgrade-fixture-recorded below does (#1274), by
 # listing the registry against the committed fixtures on every push
 # to dev. This job only stopped lying about which failures are fine.
 #
-# Stage `sync`, beside the GitHub mirror: it is the same kind of work —
-# something published outside this pipeline once the commit is final. The
-# two stages after it exist only for the scheduled CHR and Renovate
-# lanes, which a release job has no business sitting in. `needs: []`
-# because it waits on GHCR, not on this pipeline's lint and test.
+# Stage `sync`, beside the GitHub mirror and the publish jobs: it is the
+# same kind of work — something published outside this pipeline once the
+# commit is final. The two stages after it exist only for the scheduled
+# CHR and Renovate lanes, which a release job has no business sitting in.
 #
 # Uploads use CI_JOB_TOKEN. That token can write a package and nothing
 # else — it cannot push a branch or open a merge request — which is why
@@ -2272,53 +2556,47 @@ sync:mirror-to-github:
 
 record:upgrade-fixture:
   stage: sync
-  # It waits, then runs three short-lived containers on a throwaway daemon
-  # of its own (.dind) -- read test:container's header for what that does
-  # and does not allow. Nothing here publishes a port, which is what makes
-  # that work: the recording drives the released container from inside its
-  # own network namespace (scripts/upgrade-fixture-session.py).
+  # Three short-lived containers on a throwaway daemon of its own (.dind)
+  # -- read test:container's header for what that does and does not
+  # allow. Nothing here publishes a port, which is what makes that work:
+  # the recording drives the released container from inside its own
+  # network namespace (scripts/upgrade-fixture-session.py).
   extends: .dind
-  needs: []
+  # The digest comes from publish:image's evidence; publish:channel is
+  # what says that digest verified and is now the release.
+  needs:
+    - job: publish:image
+      artifacts: true
+    - job: publish:channel
   # #952: this job uploads packages -- never cut mid-write.
   interruptible: false
-  # 75 (EX_TEMPFAIL) is only the "GHCR never published it in time" exit
+  # 75 (EX_TEMPFAIL) is only the "could not pull the released image" exit
   # below -- everything else fails the job for real. See the header
   # comment above for why a blanket true was wrong.
   allow_failure:
     exit_codes: 75
-  # 45 minutes of polling plus three container starts and a pg_dump.
-  timeout: 1h
+  # Three container starts and a pg_dump.
+  timeout: 30m
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
   script:
     # bash because both scripts are `#!/usr/bin/env bash` and Alpine
-    # ships ash; python3 for the manifest the recording writes; curl for
-    # the package upload; coreutils for `sort -V`, which busybox's sort
-    # does not have and the script's version comparison needs. No
-    # postgresql-client: pg_dump runs inside the Postgres container
-    # itself, so the client is always the server's own major version.
+    # ships ash; python3 for the manifest the recording writes and the
+    # evidence read below; curl for the package upload; coreutils for
+    # `sort -V`, which busybox's sort does not have and the script's
+    # version comparison needs. No postgresql-client: pg_dump runs inside
+    # the Postgres container itself, so the client is always the server's
+    # own major version.
     - apk add --no-cache bash coreutils curl python3 >/dev/null
-    # Q6-F3: this wait loop is copied (not shared) in
-    # scripts/sign-release-digest.sh's `sign:release-digest` job below,
-    # same shape and default budget, waiting on the same GHCR image. The
-    # two deliberately disagree on what exhausting it means: here it exits
-    # 75, tolerated by allow_failure above, because a tag already cut must
-    # not go red over best-effort fixture recording; there it fails the
-    # job outright, because a release signature is not best-effort. If you
-    # change this loop's shape or budget, check that copy too.
     - |
-      image="ghcr.io/tomlawesome/mikroview:$CI_COMMIT_TAG"
-      echo "waiting for $image on GHCR (every 60s, up to 45 minutes)"
-      found=0
-      for attempt in $(seq 1 45); do
-        if docker manifest inspect "$image" >/dev/null 2>&1; then found=1; break; fi
-        echo "  attempt $attempt/45: not published yet"
-        [ "$attempt" = 45 ] || sleep 60
-      done
+      digest="$(python3 -I scripts/gitlab-tested-image.py digest .mv-supply-chain/gitlab-tested-image.json "$CI_REGISTRY_IMAGE")" || exit 1
+      export MV_IMAGE_REF="$CI_REGISTRY_IMAGE@$digest"
       # 75 (EX_TEMPFAIL): the one exit code allow_failure above tolerates
       # -- see this job's header comment.
-      [ "$found" = 1 ] || { echo "$image never appeared -- record it by hand with scripts/record-upgrade-fixture.sh $CI_COMMIT_TAG"; exit 75; }
-      echo "$image is published"
+      echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY" &&
+        docker pull "$MV_IMAGE_REF" ||
+        { echo "could not pull $MV_IMAGE_REF -- record it by hand with scripts/record-upgrade-fixture.sh $CI_COMMIT_TAG"; exit 75; }
+      echo "recording $CI_COMMIT_TAG from $MV_IMAGE_REF"
     # The file backend's recording: uploads the tarball and the manifest.
     - bash scripts/record-upgrade-fixture.sh "$CI_COMMIT_TAG"
     # The database's: the same scripted session against a throwaway
@@ -2329,46 +2607,45 @@ record:upgrade-fixture:
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
 
 # #1358 item 3: record:upgrade-fixture above only ever runs on a v* tag,
-# against the image GitHub Actions has already published -- so the one
-# time the recorder's scripted session first runs against a real image is
-# after the release is cut. That is exactly how #1358 happened: v0.6.1
-# added a second-factor enrolment step the session did not do, and
-# nothing caught it before the tag because nothing exercised the session
-# any earlier.
+# against the released image -- so the one time the recorder's scripted
+# session first runs against a real image is after the release is cut.
+# That is exactly how #1358 happened: v0.6.1 added a second-factor
+# enrolment step the session did not do, and nothing caught it before the
+# tag because nothing exercised the session any earlier.
 #
 # There is no published image to point at on a dev -> preview merge
-# request -- GitHub's `docker` workflow only builds preview's image after
-# this MR merges (.github/workflows/docker.yml: `on: push: branches:
-# [preview]`), and dev deliberately publishes nothing. So this job builds
-# its own throwaway image from the same Dockerfile and checkout
-# test:container above builds from -- content-identical to what preview
-# will publish once this MR lands -- and hands it to
-# scripts/record-upgrade-fixture.sh --check, which runs the same session
-# against it and never uploads (enforced in the script itself, not just
-# by omitting a flag here). Nothing here pushes the image anywhere, and
-# nothing commits a fixture; a red job is only ever "the session broke."
+# request -- preview's image is only published after this MR merges, and
+# dev deliberately publishes nothing. So this job runs the session against
+# build:image's image.tar from this pipeline (#1472): the same Dockerfile
+# and checkout, content-identical to what preview will publish once this
+# MR lands bar the VERSION stamp. scripts/record-upgrade-fixture.sh
+# --check runs the same session against it and never uploads (enforced in
+# the script itself, not just by omitting a flag here). Nothing here
+# pushes the image anywhere, and nothing commits a fixture; a red job is
+# only ever "the session broke."
 check:upgrade-fixture-recorder:
   extends: .dind
   stage: test
-  needs: []
+  needs:
+    - job: build:image
+      artifacts: true
   rules:
     - !reference [.dev-landing, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
-  variables:
-    APP: mikroview-upgrade-check-$CI_JOB_ID
   timeout: 20m
   script:
     - apk add --no-cache bash coreutils python3 >/dev/null
-    - docker build --tag "$APP" .
-    - bash scripts/record-upgrade-fixture.sh --check "$APP"
+    - docker load -i image.tar
+    - bash scripts/record-upgrade-fixture.sh --check "mikroview-ci:$CI_COMMIT_SHA"
 
 # The GitLab half of #1309's two signatures, and the automatic one: this
-# job runs on every v* tag pipeline and adds a key-based signature from a
-# private key that exists only on this dedicated, protected
-# `mikroview-signing` runner's host, mounted read-only into its jobs. The
-# second, keyless (Sigstore/OIDC) signature is GitHub's, added by
-# .github/workflows/countersign.yml -- deliberately manual, started by
+# job runs on every publishing pipeline -- a push to preview and a v* tag
+# (owner, #1472: preview images are signed too) -- and adds a key-based
+# signature from a private key that exists only on this dedicated,
+# protected `mikroview-signing` runner's host, mounted read-only into its
+# jobs. The second, keyless (Sigstore/OIDC) signature is GitHub's, added
+# by .github/workflows/countersign.yml -- deliberately manual, started by
 # the owner by hand after it verifies this key-based signature against
 # the committed cosign.pub (docs/release-signing.md). Requiring the
 # owner's own GitHub login for that half is the point: compromising
@@ -2379,69 +2656,69 @@ check:upgrade-fixture-recorder:
 # environments or environment-scoped variables, so a CI/CD variable would
 # be readable by every job in a protected-branch pipeline.
 #
-# Waits for GHCR to have the image GitHub Actions publishes (same tag
-# pipeline, same 45-minute budget as record:upgrade-fixture above), then
-# resolves and signs its digest. All the logic is in the script -- unit
-# tested in scripts/sign-release-digest.test.sh against stubbed
-# docker/cosign, never the network -- so this job only installs what it
-# needs and calls it.
+# Since #1472 it signs the digest publish:image pushed to this project's
+# registry and recorded in its evidence, rather than waiting for GHCR,
+# and attests security:trivy-image's SPDX SBOM to the same digest
+# (`cosign attest --type spdxjson`). publish:channel verifies the
+# signature before anything gets a consumable name. All the logic is in
+# the script -- unit tested in scripts/sign-release-digest.test.sh
+# against stubbed docker/cosign, never the network -- so this job only
+# installs what it needs and calls it.
 sign:release-digest:
   stage: sync
   tags: [mikroview-signing]
   # No daemon and no dind, the same shape orbit's sign_evidence job uses:
-  # `docker manifest inspect`, `docker buildx imagetools inspect` and
-  # `docker login` are all registry operations the CLI performs itself over
-  # HTTPS, and cosign talks to the registry directly too. Verified against a
-  # real GHCR tag with DOCKER_HOST pointed at a socket that does not exist
-  # (2026-09-22). So this job needs no Docker socket mounted into it, which
-  # matters: the signing runner is the better-protected half of the pair,
-  # and handing it daemon access to earn a digest lookup would be a poor
-  # trade. Setting DOCKER_HOST here at all was misleading and is gone.
+  # `docker buildx imagetools inspect` and `docker login` are registry
+  # operations the CLI performs itself over HTTPS, and cosign talks to the
+  # registry directly too. Verified against a real GHCR tag with
+  # DOCKER_HOST pointed at a socket that does not exist (2026-09-22). So
+  # this job needs no Docker socket mounted into it, which matters: the
+  # signing runner is the better-protected half of the pair, and handing
+  # it daemon access to earn a digest lookup would be a poor trade.
   image: docker:29-cli
-  # Waits on GHCR, not on this pipeline's own lint/test/security -- same
-  # reasoning as record:upgrade-fixture's needs: [].
-  needs: []
-  # A cancelled signing run leaves a published release with only one of
-  # its two signatures and nothing to show why -- never cut mid-write.
+  # Optional only for the SIGN_TAG exercise pipeline below, which has
+  # neither job; in a publishing pipeline both are present and must pass.
+  needs:
+    - job: publish:image
+      artifacts: true
+      optional: true
+    - job: security:trivy-image
+      artifacts: true
+      optional: true
+  # A cancelled signing run leaves a published digest with only part of
+  # its signature and attestation and nothing to show why -- never cut
+  # mid-write.
   interruptible: false
-  timeout: 1h
+  timeout: 20m
   rules:
-    # A real release. The image is still being built by GitHub Actions when
-    # this starts, so it gets the full 45-minute wait budget.
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
-      variables:
-        MV_SIGN_WAIT_ATTEMPTS: "45"
-    # The exercise path (#1309). A v* tag on this project *is* a release --
-    # the mirror job pushes it to GitHub and GitHub's docker workflow
-    # publishes from it -- so there is no throwaway tag that exercises
-    # signing without also cutting a release. Instead the job is started by
-    # hand against an already-published tag, and SIGN_TAG is on the `never`
-    # lists above so triggering it does not re-run all of dev (#951).
+    # A publishing pipeline: preview or a v* tag. The script signs the
+    # digest in publish:image's evidence.
+    - !reference [.publish_ref, rules]
+    # The exercise path (#1309). A v* tag on this project *is* a release,
+    # so there is no throwaway tag that exercises signing without also
+    # cutting a release. Instead the job is started by hand against an
+    # already-published tag in this project's registry, and SIGN_TAG is on
+    # the `never` lists above so triggering it does not re-run all of dev
+    # (#951).
     #
     # SIGN_TAG is the only variable: naming a tag by hand is already
     # unambiguous intent, so a second SIGN_EXERCISE switch was one more name
     # to spell correctly and nothing else. It was misspelled on the first
     # attempt (pipeline 1483, 2026-09-22), which silently ran all of dev and
     # signed nothing.
-    #
-    # One attempt, not 45: an image being exercised is already published, so
-    # a tag that does not resolve is a mistake to report in seconds rather
-    # than wait three quarters of an hour for.
     - if: '$SIGN_TAG != "" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
-      variables:
-        MV_SIGN_WAIT_ATTEMPTS: "1"
   script:
     # bash because the script is `#!/usr/bin/env bash` and Alpine ships
     # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
-    # checksum verification inside it.
-    - apk add --no-cache bash coreutils curl >/dev/null
-    # SIGN_TAG only when exercising by hand; a tag pipeline has no SIGN_TAG
-    # and signs its own CI_COMMIT_TAG. If neither is set the script refuses
-    # rather than sign something it guessed.
-    - bash scripts/sign-release-digest.sh "${SIGN_TAG:-$CI_COMMIT_TAG}"
+    # checksum verification inside it; python3 to read the evidence.
+    - apk add --no-cache bash coreutils curl python3 >/dev/null
+    # No argument in a publishing pipeline: the script signs the recorded
+    # digest. SIGN_TAG only when exercising by hand: the script resolves
+    # that tag in $CI_REGISTRY_IMAGE instead.
+    - bash scripts/sign-release-digest.sh ${SIGN_TAG:+"$SIGN_TAG"}
 
-# record:upgrade-fixture above is allow_failure (a slow build or a GHCR
-# blip must not redden a tag already cut -- see its own header), so it
+# record:upgrade-fixture above is allow_failure (a registry pull failure
+# must not redden a tag already cut -- see its own header), so it
 # can fail unseen. This is #1274's automated replacement for the manual
 # "Promote to main" checklist line that used to be the only thing
 # catching that: it asserts every released v[0-9]* tag has a fixture

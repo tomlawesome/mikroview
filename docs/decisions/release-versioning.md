@@ -83,6 +83,9 @@ What changed:
 - `docker.yml` runs its release job on a `v*` tag push, and refuses unless
   the tag equals `v<VERSION>` at the tagged commit. A merge to `main` now
   only retags preview's tested digest as `latest`; it never releases.
+- Since #1472 (2026-11-15) GitLab makes the same check first, in
+  `release:check-version`, and also requires the built binary to report
+  the tag, before the tag pipeline publishes anything to its own registry.
 - A failed release is re-run on the same tag once the cause is fixed.
   Nothing is deleted or renumbered, because the tag never claimed the
   publish had happened — the registry does.
