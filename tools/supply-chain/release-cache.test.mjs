@@ -58,6 +58,8 @@ function cacheReason(step) {
     for (const k of ["cache", "cache-dependency-path"])
       if (input(step, k) !== null) return `actions/setup-node sets \`${k}\``;
   }
+  for (const k of ["cache-from", "cache-to"])
+    if (input(step, k) !== null) return `${action || "step"} sets \`${k}\` (a build cache)`;
   return null;
 }
 
@@ -69,7 +71,7 @@ describe("#1479: the release job turns no cache on", () => {
   });
 
   for (const j of signing) {
-    it(`${j.name} (id-token: write) has no step that turns a cache on`, () => {
+    it(`${j.name} (id-token: write) has no step that turns a cache on or pulls a build cache`, () => {
       const bad = steps(j).map(cacheReason).filter(Boolean);
       assert.deepEqual(bad, [], `${j.name} turns a cache on: ${bad.join("; ")}`);
     });
