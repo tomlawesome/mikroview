@@ -1,7 +1,7 @@
 // Screenshots for round 2 (#1360). Run from anywhere:
 //   node docs/design/screens/blocklist/round-2/capture.mjs
 // Playwright's chromium from the frontend's node_modules; the browser from /opt/pw-browsers.
-import { chromium } from '/home/user/projects/mikroview/frontend/node_modules/playwright/index.mjs';
+const { chromium } = await import(new URL('../../../../../frontend/node_modules/playwright/index.mjs', import.meta.url).href);
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

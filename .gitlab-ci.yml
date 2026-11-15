@@ -30,6 +30,15 @@ include:
   - project: ai/agent-infra
     ref: 1dca70057bd93f68ded22c6b159f315c987c1663  # dev-landing/v1
     file: scripts/dev-landing/ci-template.yml
+  # The shared check for personal details (ai/agent-infra#32, #1460). The
+  # ref is the commit the tag names, not the tag: a tag can be deleted and
+  # created again on other code, and this template is merged into every
+  # pipeline here. Adopt a new tag by moving this commit, the comment and
+  # PRIVATE_DETAILS_SHA (variables: below) together, so the script the job
+  # runs is the pinned one too.
+  - project: ai/agent-infra
+    ref: 7430d171259104c4623040c2360699585d601bf5  # private-details/v4
+    file: scripts/private-details/ci-template.yml
 
 stages:
   - lint
@@ -62,6 +71,8 @@ variables:
   # Go proxy or checksum database (resolving it there would publish the
   # version permanently). GOPRIVATE also sets GONOSUMDB.
   GOPRIVATE: "github.com/tomlawesome/gauntlet"
+  # Same commit as the private-details include above (#1460).
+  PRIVATE_DETAILS_SHA: 7430d171259104c4623040c2360699585d601bf5
 
 # #1091: the only thing this workflow:rules block exists for is to set
 # NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
@@ -585,6 +596,34 @@ lint:flake-check:
   <<: *dev_or_mr
   script:
     - sh scripts/ci/flake-check.sh --quarantined scripts/quarantine.txt docs/flakes.md
+
+# The shared check for personal details (ai/agent-infra#32, #1460): one set of
+# rules for every project, kept on the agent host and mounted read-only into
+# the job (/etc/private-details/rules.toml); no project carries its own copy.
+# The template defines the job; its stage, runner, rules and image pin are set
+# here. GitLab deep-merges an included job's mappings with this one, so the
+# image name is restated because this is where the project pins it: the
+# template names the tag only, and anyone who could repoint that tag would run
+# their image with the checkout, the mounted rules and the job token. Pinned
+# to the tag's OCI index digest through the image cache, like the Docker
+# images above. Blocking, like the other quick static checks, and on the same
+# rules as lint:flake-check. Invented test values that trip a rule are allowed
+# by rule and path in .private-details-allow.toml, never by commit.
+private-details:
+  stage: lint
+  tags: [light]
+  needs: []
+  <<: *dev_or_mr
+  image:
+    name: ${CI_IMAGE_CACHE_GHCR}/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    entrypoint: [""]
+  variables:
+    # The scan starts after this commit, the last on batch-b before the check
+    # was adopted (#1460): older history trips rules that no path entry can
+    # allow (AI credit lines, assistant account and branch names in merge
+    # commits and messages), and a full-history scan exhausts the runner's
+    # memory.
+    PRIVATE_DETAILS_SINCE: 36bcd936c4e1b617910fa2dc8d5a59c95076424a
 
 # #1068: both suites here test a script the pipeline itself leans on --
 # ci-changed-paths-guard.py decides whether a job is skipped, and
