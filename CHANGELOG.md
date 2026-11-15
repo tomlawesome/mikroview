@@ -458,6 +458,16 @@ rewritten.
 
 ### Security
 
+- **Minting the drop-list key asks for your password** (#1447). `POST
+  /api/droplist/key` now takes `password` and re-checks it in the same
+  per-account budget as router enrolment, so an admin session on its own
+  -- a stolen cookie, a cross-site request -- can no longer mint the key
+  every router fetches the list with. A wrong or missing password is a
+  401 and leaves the existing key working; an account that signs in only
+  through an identity provider gets a 409. Settings ▸ Engine room's drop
+  list group asks for the password before minting or replacing the key.
+  Scripts that call the route must now send the password.
+
 - **Accounts, tokens, recovery keys and the sign-in history are sealed
   under the key, and the authenticator-app secret is no longer in a plain
   file** (#1202, #1441). The accounts file holds each account's TOTP
