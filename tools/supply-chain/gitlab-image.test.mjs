@@ -4,7 +4,7 @@
 // the real .gitlab-ci.yml (and the two scripts it calls) as text, in the same
 // node:test style as trivy-scans.test.mjs.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -297,5 +297,60 @@ describe("#1472 landing step 1 leaves GitHub workflows alone", () => {
     for (const f of ["publish-from-gitlab.yml", "release-on-tag.yml"]) {
       assert.throws(() => read(`.github/workflows/${f}`), /ENOENT/);
     }
+  });
+});
+
+// publish:channel's "is this still preview's head" check, run for real: the
+// text from the `if [ -z "${CI_COMMIT_TAG:-}" ]` guard to the success echo is
+// extracted from .gitlab-ci.yml and run under bash with `git` and `docker`
+// stubbed on PATH. `git ls-remote` matches refs by suffix, so a branch named
+// zz/refs/heads/preview adds a second line; only the line whose ref is exactly
+// refs/heads/$CI_COMMIT_BRANCH may count.
+describe("publish:channel head check", () => {
+  const SHA = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+  const DIGEST = "sha256:" + "c".repeat(64);
+  function run(lsRemote, { fail = false } = {}) {
+    const lines = job("publish:channel").split("\n");
+    const from = lines.findIndex((l) => /^\s+if \[ -z "\$\{CI_COMMIT_TAG:-\}" \]; then\s*$/.test(l));
+    const to = lines.findIndex((l, i) => i > from && /echo "publish:channel: published/.test(l));
+    assert.ok(from >= 0 && to > from, "head check not found in publish:channel");
+    const indent = lines[from].match(/^\s*/)[0].length;
+    const body = lines.slice(from, to + 1).map((l) => l.slice(indent)).join("\n");
+    const dir = tmpdirSync();
+    const stub = (n, s) => { writeFileSync(join(dir, n), `#!/bin/bash\n${s}\n`); chmodSync(join(dir, n), 0o755); };
+    const log = join(dir, "docker.log");
+    stub("git", fail ? "exit 2" : `printf '%s' '${lsRemote}'`);
+    stub("docker", `echo "$*" >> '${log}'\ncase "$*" in *inspect*) echo '${DIGEST}';; esac`);
+    let status = 0;
+    try {
+      execFileSync("bash", ["-c", `set -eu\ndigest='${DIGEST}'\nchannel=reg/img:preview\n${body}`], {
+        env: { PATH: `${dir}:${process.env.PATH}`, CI_REPOSITORY_URL: "https://example.invalid/r.git",
+          CI_COMMIT_BRANCH: "preview", CI_COMMIT_SHA: SHA, CI_REGISTRY_IMAGE: "reg/img" },
+        stdio: "pipe",
+      });
+    } catch (e) { status = e.status; }
+    let calls = "";
+    try { calls = readFileSync(log, "utf8"); } catch { /* docker never called */ }
+    return { status, published: /imagetools create/.test(calls) };
+  }
+
+  it("publishes when the exact ref is this commit, despite a suffix-matching ref", () => {
+    const r = run(`${OTHER}\trefs/heads/zz/refs/heads/preview\n${SHA}\trefs/heads/preview\n`);
+    assert.deepEqual(r, { status: 0, published: true });
+  });
+  it("publishes when the exact ref is this commit and nothing else matches", () => {
+    assert.deepEqual(run(`${SHA}\trefs/heads/preview\n`), { status: 0, published: true });
+  });
+  it("refuses when the exact ref is at a different commit", () => {
+    const r = run(`${OTHER}\trefs/heads/preview\n${SHA}\trefs/heads/zz/refs/heads/preview\n`);
+    assert.deepEqual(r, { status: 1, published: false });
+  });
+  it("refuses when the exact ref is missing", () => {
+    const r = run(`${SHA}\trefs/heads/zz/refs/heads/preview\n`);
+    assert.deepEqual(r, { status: 1, published: false });
+  });
+  it("refuses when ls-remote fails", () => {
+    assert.deepEqual(run("", { fail: true }), { status: 1, published: false });
   });
 });
