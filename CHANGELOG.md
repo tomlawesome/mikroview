@@ -28,7 +28,8 @@ rewritten.
   starts empty:
   `mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`.
   `-backup` and `-restore` now need the key for the match log, and stop
-  with nothing changed without it.
+  with nothing changed without it. Nothing else in the data directory is
+  changed by the refused start.
 
 - **Admins need a passkey on an https domain** (#1202, owner ruling 1).
   With `auth.adminPasskey` unset and `publicUrl` an https domain name,
@@ -249,6 +250,9 @@ rewritten.
   not made with your key still never opens. A file sealed by an earlier
   release opens once at the path it was sealed at and is re-sealed the
   new way, which the log notes once per file; after that it can move.
+  The re-seal happens once the start has opened every store; a start
+  refused before then (a plaintext match log, say) leaves every file as
+  it was, so the release it came from still opens it.
 - **An open tab no longer keeps you signed in** (#1448). The live
   view's connection checked the session every 30 seconds, and each check
   counted as activity, so a tab left open stayed signed in until the

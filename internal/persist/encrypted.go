@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/retention"
@@ -61,6 +62,20 @@ type EncryptedFileBackend struct {
 	// noRebind makes Load leave a legacy file as it is (see
 	// WithoutRebind).
 	noRebind bool
+
+	mu sync.Mutex
+	// deferRebind makes Load leave a legacy file bound as it is, and Save
+	// keep that binding, until Rebind. A server start opens a dozen stores
+	// before the one that may refuse it (a plaintext match log, #1470).
+	// Re-sealing on Load rewrote every earlier file under the store-name
+	// binding, so a start refused later left files the release the data
+	// came from could no longer open, against finishSchemaUpgrade's
+	// promise. Deferred, the re-seal happens only once the start is
+	// committed.
+	deferRebind bool
+	// legacy reports that the last read opened only under legacyAAD and
+	// the file has not been re-sealed since.
+	legacy bool
 }
 
 // storeBindingPrefix is the domain separation in front of the store
@@ -117,11 +132,39 @@ func NewEncryptedFileBackendForPath(realPath, logicalPath, storeName string, key
 // the data directory -- -backup (#1450 S2). Load still opens a file
 // sealed under the pre-#1450 path binding, but hands its document back
 // without re-sealing it; the server re-binds it at its next start. Save
-// is unchanged.
+// is unchanged. It sets the mode on b itself and returns b; call it
+// before first use.
 func (b *EncryptedFileBackend) WithoutRebind() *EncryptedFileBackend {
-	c := *b
-	c.noRebind = true
-	return &c
+	b.noRebind = true
+	return b
+}
+
+// DeferRebind is this backend for the server's own stores
+// (storage.backendFor and authBackendFor): a file sealed under the
+// pre-#1450 path binding opens, and stays bound that way through any
+// Save, until Rebind is called once the start is committed. It sets the
+// mode on b itself and returns b; call it before first use.
+func (b *EncryptedFileBackend) DeferRebind() *EncryptedFileBackend {
+	b.deferRebind = true
+	return b
+}
+
+// Rebind commits a deferred re-seal: a file opened under its pre-#1450
+// path binding is re-sealed under its store name now, through Load's
+// ordinary route (version-checked atomic write under the store lock, one
+// retry on ErrConflict, best effort otherwise). A file already bound to
+// its name is left alone. Returns an error only if the file no longer
+// opens at all.
+func (b *EncryptedFileBackend) Rebind(ctx context.Context) error {
+	b.mu.Lock()
+	b.deferRebind = false
+	pending := b.legacy
+	b.mu.Unlock()
+	if !pending {
+		return nil
+	}
+	_, err := b.Load(ctx)
+	return err
 }
 
 func (b *EncryptedFileBackend) Describe() string { return b.inner.Describe() }
@@ -145,7 +188,8 @@ func (b *EncryptedFileBackend) ProtectedAtRest() bool { return true }
 // A file sealed before #1450, bound to its absolute path, opens here
 // only at that path, and is re-saved under the store-name binding
 // before Load returns, so the next open -- from wherever the data
-// directory has moved to -- needs nothing from the old binding.
+// directory has moved to -- needs nothing from the old binding --
+// unless DeferRebind was called, in which case Rebind does it.
 func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 	// Twice at most: a re-save that loses a race to another writer reads
 	// the file again, which that writer will have re-bound or replaced;
@@ -167,11 +211,18 @@ func (b *EncryptedFileBackend) Load(ctx context.Context) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("persist: store %q (%s): %w", b.store, b.inner.path, ErrPlaintextDocument)
 		}
 		out, legacy, err := b.unseal(snap)
-		if err != nil || !legacy || b.noRebind {
+		b.mu.Lock()
+		b.legacy = legacy && err == nil
+		deferred := b.deferRebind
+		b.mu.Unlock()
+		if err != nil || !legacy || b.noRebind || deferred {
 			return out, err
 		}
 		rebound, err := b.rebind(ctx, out)
 		if err == nil {
+			b.mu.Lock()
+			b.legacy = false
+			b.mu.Unlock()
 			return rebound, nil
 		}
 		if errors.Is(err, ErrConflict) && attempt == 0 {
@@ -231,7 +282,17 @@ func (b *EncryptedFileBackend) rebind(ctx context.Context, snap Snapshot) (Snaps
 // which still performs the version check against whatever ciphertext is
 // currently on disk.
 func (b *EncryptedFileBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
-	sealed, err := b.key.Seal(retention.StateStoreKeyInfo, b.aad, payload)
+	// A save made before the start is committed (a seed, a migration
+	// step) must not move a legacy file onto the new binding: a refusal
+	// later in the same start has to leave the file openable by the
+	// release that wrote it. Rebind moves it.
+	b.mu.Lock()
+	aad := b.aad
+	if b.legacy && b.deferRebind {
+		aad = b.legacyAAD
+	}
+	b.mu.Unlock()
+	sealed, err := b.key.Seal(retention.StateStoreKeyInfo, aad, payload)
 	if err != nil {
 		return 0, fmt.Errorf("persist: encrypting store %q (%s): %w", b.store, b.inner.path, err)
 	}
