@@ -340,6 +340,8 @@ store:
 # the defaults are already sensible. See docs/configuration.md's
 # "Watchlist" section.
 # watchlist:
+#   # Sealed under history.keyFile, one encrypted frame per match; the
+#   # .jsonl name is kept for compatibility, not because it holds JSON.
 #   matchLogPath: /var/lib/mikroview/matchlog.jsonl
 #   matchLogCapacity: 200000    # file backend only -- no ceiling on Postgres
 #   matchLogRetention: 168h     # 7 days -- Postgres backend only

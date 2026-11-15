@@ -632,6 +632,20 @@ means encrypted and tamper-checked: a file that fails the check, or that
 was sealed under a different key, is refused, never read as an empty
 store.
 
+**The watchlist match log is sealed too (#1470).** It is not one JSON
+document but an append-only log, so it has its own framing: a header
+(`MVMLG`, a version byte and a random per-file salt), then one
+AES-256-GCM frame per record or update, each bound to the store name and
+its position in the file -- the same framing the event history's day
+files use. A frame moved, dropped from the middle, copied from another
+file or opened with the wrong key is refused, never skipped; a frame cut
+short by a crash at the end of the file is dropped on the next start, as
+for the event history. The default name `matchlog.jsonl` is historical:
+the file has not held JSON lines since v0.7.0. A plaintext match log left
+by an earlier release is refused like any other plaintext store, and
+MikroView will not start until it is moved aside, for example with
+`mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`.
+
 **A key is required.** From v0.7.0 MikroView does not start without a
 usable key. That covers the server, setup-only mode and the four
 command-line tools that open the account stores
@@ -1245,7 +1259,10 @@ devices:
 `watchlist.matchLogPath` is empty. Unlike every other `storePath` in this
 file, the match log has no in-memory-only mode -- durability is the
 entire reason it exists -- so an empty value is treated the same as an
-unusable one rather than as a deliberate opt-out.
+unusable one rather than as a deliberate opt-out. The file is sealed
+under `history.keyFile`, one encrypted frame per match (#1470); the
+default's `.jsonl` name is kept for compatibility, not because it holds
+JSON lines.
 
 ```yaml
 watchlist:
@@ -2799,10 +2816,12 @@ Entries themselves are definitions and live in the definitions store
 
 ```yaml
 watchlist:
-  # Where matches are recorded, append-only. This has NO in-memory-only
-  # mode: durability is the entire reason this store exists (a match
-  # must survive a restart), so an empty value is treated as unusable
-  # rather than as an opt-out (CFG-0040).
+  # Where matches are recorded, append-only, sealed under
+  # history.keyFile -- one encrypted frame per match or repeat (#1470).
+  # The .jsonl name is kept for compatibility; the file is not JSON.
+  # This has NO in-memory-only mode: durability is the entire reason
+  # this store exists (a match must survive a restart), so an empty
+  # value is treated as unusable rather than as an opt-out (CFG-0040).
   matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
 
   # The match log's hard ceiling on distinct records -- once reached, a
@@ -2845,6 +2864,12 @@ recent matches across every entry, newest first -- for when you want to
 know what has broken recently without already knowing where to look. It
 is capped at 100 results by default and 5000 at most, so it is always a
 page of recent history rather than the whole log.
+
+**On the file backend the match log is sealed under `history.keyFile`**
+(#1470), one encrypted frame per match or repeat, so the file is not
+readable JSON lines whatever its name says; see
+[the state store](#the-state-store-sealed-under-the-key-853-1202) for the
+format and for what happens to a plaintext log from an earlier release.
 
 **On Postgres** (see [Postgres](#postgres-optional) below), the match
 log is a dedicated, indexed table rather than a row in the shared
@@ -4017,6 +4042,12 @@ unmigrated install and re-running migrations that already landed — and
 the router-backup vault (`backup.vaultDir`, #394) — every generation
 still encrypted exactly as it sits on disk, so a restore never needs the
 retention key to move it.
+
+The match log travels as plain JSON lines in the backup, like every other
+store's plain JSON, and is sealed again under the restoring deployment's
+key (#1452, #1470), so a v0.6 backup still restores. Both `-backup` of an
+install with a match log and `-restore` of a backup carrying one need
+`history.keyFile`, and stop with nothing changed without it.
 
 Three things are deliberately left out:
 
@@ -5383,11 +5414,16 @@ Three things worth knowing:
 - **One exception: the watchlist match log is not migrated.** Every
   other store's JSON document round-trips byte-identically into
   Postgres (the sealed account stores are opened from their files and
-  sealed again under their row's own label on the way in); the match log's append-only line format doesn't fit that
+  sealed again under their row's own label on the way in); the match log's append-only sealed log doesn't fit that
   path, and it starts empty on Postgres instead — said in the startup
-  log, not left to be discovered as missing history. The old
-  `matchlog.jsonl` is untouched and still readable if you revert
-  `postgres.dsnFile`. See [Watchlist](#watchlist-optional).
+  log, not left to be discovered as missing history. A sealed
+  `matchlog.jsonl` (from a v0.7.0 install on the file backend) is
+  untouched, and readable again with the key if you revert
+  `postgres.dsnFile`. A plaintext one, written before v0.7.0, is not read
+  either, but it still holds matched events in the clear; the start-up
+  warning names it, and you should move it off the data volume or delete
+  it, for example with
+  `mv /var/lib/mikroview/matchlog.jsonl /var/lib/mikroview/matchlog.jsonl.pre-0.7`. See [Watchlist](#watchlist-optional).
 
 ### Watching for schema changes on upgrade
 
