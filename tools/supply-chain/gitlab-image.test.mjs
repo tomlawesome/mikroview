@@ -3,12 +3,15 @@
 // Run with `node --test tools/supply-chain/gitlab-image.test.mjs`. They read
 // the real .gitlab-ci.yml (and the two scripts it calls) as text, in the same
 // node:test style as trivy-scans.test.mjs.
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+const tmpdirSync = () => mkdtempSync(join(tmpdir(), "gate-"));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 const ci = read(".gitlab-ci.yml");
@@ -28,6 +31,50 @@ function job(name) {
   const b = block(name);
   assert.ok(b, `no job ${name} in .gitlab-ci.yml`);
   return b;
+}
+
+// Run the leading part of a job's script (everything before its first
+// `docker version` / `docker load`) under bash, with node, apk and docker
+// stubbed, and report whether `node scripts/ci-reuse-gate.js gate` was
+// called. `- *reuse_gate` is replaced by the anchor's own body. The gate
+// stub always says "no earlier run", so the script carries on.
+function gateRuns(name, env) {
+  const anchor = ci.match(/^\.reuse_gate: &reuse_gate \|\n((?: {2}.*\n)+)/m);
+  assert.ok(anchor, "no .reuse_gate anchor");
+  const anchorBody = anchor[1].split("\n").map((l) => l.replace(/^ {2}/, "")).join("\n");
+  const lines = job(name).split("\n");
+  const at = lines.findIndex((l) => /^ {2}script:\s*$/.test(l));
+  assert.ok(at >= 0, `${name} has no script:`);
+  const out = [];
+  for (let i = at + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^ {2}\S/.test(l)) break;
+    const m = l.match(/^ {4}- (.*)$/);
+    if (!m) continue;
+    const item = m[1];
+    if (/^docker (version|load)\b/.test(item)) break;
+    if (item === "*reuse_gate") { out.push(anchorBody); continue; }
+    if (item === "|" || item === ">-") {
+      const body = [];
+      while (i + 1 < lines.length && (/^ {6}/.test(lines[i + 1]) || !lines[i + 1].trim())) body.push(lines[++i].replace(/^ {6}/, ""));
+      if (body.some((b) => /^docker (version|load)\b/.test(b.trim()))) break;
+      out.push(item === "|" ? body.join("\n") : body.join(" "));
+    } else out.push(item);
+  }
+  const log = join(tmpdirSync(), "gate.log");
+  const prog = [
+    "apk() { :; }",
+    `node() { echo "$*" >> '${log}'; return 1; }`,
+    ...out,
+  ].join("\n");
+  try {
+    execFileSync("bash", ["-c", prog], { env: { PATH: process.env.PATH, ...env }, stdio: "pipe" });
+  } catch (e) {
+    // a script that exits non-zero before the gate still counts as "gate not run"
+  }
+  let called = "";
+  try { called = readFileSync(log, "utf8"); } catch { /* never called */ }
+  return /ci-reuse-gate\.js gate/.test(called);
 }
 const needsOf = (b) => {
   const m = b.match(/^ {2}needs:\s*(\[[^\]]*\]|(?:\n {4}.*)+)/m);
@@ -90,8 +137,15 @@ describe("#1472 job 2: tests load the tar rather than rebuild", () => {
       assert.doesNotMatch(b, /docker (buildx )?build\b/);
     });
   }
-  it("test:container's reuse gate is skipped on .publish_ref", () => {
+  it("test:container's reuse gate is skipped on .publish_ref and kept on dev and merge requests", () => {
     assert.match(job("test:container"), /publish_ref/);
+    const gate = (env) => gateRuns("test:container", env);
+    // A publishing run tests what it ships: the gate must not run there.
+    assert.equal(gate({ CI_PIPELINE_SOURCE: "push", CI_COMMIT_BRANCH: "preview" }), false, "gate runs on a push to preview");
+    assert.equal(gate({ CI_PIPELINE_SOURCE: "push", CI_COMMIT_TAG: "v1.2.3" }), false, "gate runs on a v* tag push");
+    // ...and stays for the runs it was written for.
+    assert.equal(gate({ CI_PIPELINE_SOURCE: "push", CI_COMMIT_BRANCH: "dev" }), true, "gate is gone on dev");
+    assert.equal(gate({ CI_PIPELINE_SOURCE: "merge_request_event" }), true, "gate is gone on merge requests");
   });
 });
 
@@ -156,6 +210,11 @@ describe("#1472 job 6: sign:release-digest signs the GitLab digest", () => {
     assert.doesNotMatch(b, /MV_SIGN_WAIT_ATTEMPTS/);
     assert.doesNotMatch(b, /GHCR_PUBLISH_TOKEN|ghcr\.io/);
   });
+  it("pins the job image by digest", () => {
+    const m = job("sign:release-digest").match(/^ {2}image:\s*(\S+)/m);
+    assert.ok(m, "no image: on sign:release-digest");
+    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${m[1]} is not pinned by digest`);
+  });
   it("keeps the signing runner and no dind", () => {
     const b = job("sign:release-digest");
     assert.match(b, /tags:\s*\[mikroview-signing\]/);
@@ -191,6 +250,18 @@ describe("#1472 job 7: publish:channel retags only after the signature verifies"
     assert.ok(v >= 0, "no signature verification of the GitLab digest");
     assert.ok(c >= 0, "no imagetools create retag");
     assert.ok(v < c, "retag happens before the signature is verified");
+  });
+  it("has a resource_group so two publishing pipelines never retag at once", () => {
+    assert.match(job("publish:channel"), /^ {2}resource_group:\s*\S+/m);
+  });
+  it("checks the pipeline's commit is still the head of the ref before it retags", () => {
+    const b = job("publish:channel").replace(/\\\n\s*/g, " ");
+    const c = b.search(/imagetools create/);
+    assert.ok(c >= 0, "no retag");
+    const before = b.slice(0, c);
+    assert.match(before, /ls-remote|repository\/branches|\/branches\//, "no look-up of the ref's current head before the retag");
+    assert.match(before, /CI_COMMIT_SHA/);
+    assert.match(before, /preview|CI_COMMIT_BRANCH/);
   });
   it("retags :preview or the tag from the sha- tag and re-reads the digest", () => {
     const b = job("publish:channel");

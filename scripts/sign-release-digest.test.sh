@@ -240,13 +240,17 @@ check "$rc" "1" "evidence for another repository refuses"
 check "$([ -e "$COSIGN_CALL8" ] && echo called || echo not-called)" "not-called" "nothing is signed for another repository's evidence"
 
 # 9. Evidence from another commit's pipeline: refused.
+COSIGN_CALL9="$TMP/cosign-call-9"
 out9="$(run -- \
   MV_SIGNING_DIR="$KEYDIR" \
   CI_COMMIT_SHA="$(printf '2%.0s' $(seq 1 40))" \
   STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$COSIGN_CALL9" \
   2>&1)"
 rc=$?
 check "$rc" "1" "evidence from another commit refuses"
+grep -q "records commit .*this pipeline is" <<< "$out9" && echo "ok - the refusal says the evidence is another pipeline's commit" || { echo "FAIL - the refusal says the evidence is another pipeline's commit: $out9"; fail=1; }
+check "$([ -e "$COSIGN_CALL9" ] && echo called || echo not-called)" "not-called" "nothing is signed for another commit's evidence"
 
 # 10. No SBOM: refuse before signing, rather than leave a signed digest
 # with no attestation beside it.
@@ -272,12 +276,12 @@ check "$rc" "1" "a digest other than the recorded one refuses"
 grep -q "not the recorded $GOOD_DIGEST" <<< "$out11" && echo "ok - the refusal names the recorded digest" || { echo "FAIL - the refusal names the recorded digest: $out11"; fail=1; }
 
 # 12. The exercise path (#1309): a named tag resolves in the GitLab
-# registry and its digest is signed; there is no SBOM to attest.
+# registry and, only because it is the digest this pipeline's evidence
+# records, is signed; there is no SBOM to attest.
 COSIGN_CALL12="$TMP/cosign-call-12"
 INSPECT_CALLS12="$TMP/inspect-12"
 out12="$(run v9.9.9 -- \
   MV_SIGNING_DIR="$KEYDIR" \
-  MV_EVIDENCE="$TMP/no-such-evidence.json" \
   STUB_INSPECT_OUTPUT="$(single_platform_output)" \
   STUB_INSPECT_CALLS="$INSPECT_CALLS12" \
   STUB_COSIGN_CALL="$COSIGN_CALL12" \
@@ -289,5 +293,47 @@ grep -q "imagetools inspect ${REPO}:v9.9.9" "$INSPECT_CALLS12" 2>/dev/null &&
 grep -q -- "^sign --key ${KEYDIR}/cosign.key --yes ${REPO}@${GOOD_DIGEST}$" "$COSIGN_CALL12" 2>/dev/null &&
   echo "ok - the exercise path signs the tag's digest" || { echo "FAIL - the exercise path signs the tag's digest"; fail=1; }
 check "$(grep -c '^attest' "$COSIGN_CALL12" 2>/dev/null)" "0" "the exercise path attests nothing"
+
+# 13. Exercise path, no evidence: any merge-request job can push a tag into
+# the registry, so a tag is never signed on its own say-so.
+COSIGN_CALL13="$TMP/cosign-call-13"
+out13="$(run v9.9.9 -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  MV_EVIDENCE="$TMP/no-such-evidence.json" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output)" \
+  STUB_COSIGN_CALL="$COSIGN_CALL13" \
+  2>&1)"
+rc=$?
+check "$rc" "1" "the exercise path without evidence refuses"
+grep -q "publish:image must run and pass first" <<< "$out13" && echo "ok - the exercise refusal names publish:image" || { echo "FAIL - the exercise refusal names publish:image: $out13"; fail=1; }
+check "$([ -e "$COSIGN_CALL13" ] && echo called || echo not-called)" "not-called" "the exercise path signs nothing without evidence"
+
+# 14. Exercise path whose tag now names a digest this pipeline did not test.
+COSIGN_CALL14="$TMP/cosign-call-14"
+out14="$(run v9.9.9 -- \
+  MV_SIGNING_DIR="$KEYDIR" \
+  STUB_INSPECT_OUTPUT="$(single_platform_output "$OTHER_DIGEST")" \
+  STUB_COSIGN_CALL="$COSIGN_CALL14" \
+  2>&1)"
+rc=$?
+check "$rc" "1" "an exercise tag whose digest differs from the evidence refuses"
+grep -q "not the recorded $GOOD_DIGEST" <<< "$out14" && echo "ok - the exercise refusal names the recorded digest" || { echo "FAIL - the exercise refusal names the recorded digest: $out14"; fail=1; }
+check "$([ -e "$COSIGN_CALL14" ] && echo called || echo not-called)" "not-called" "the exercise path signs nothing for an untested digest"
+
+# 15. The GitLab job's predefined registry variables must be set.
+for var in CI_REGISTRY CI_REGISTRY_USER CI_REGISTRY_PASSWORD; do
+  cc="$TMP/cosign-call-15-$var"
+  o="$(run -- MV_SIGNING_DIR="$KEYDIR" "$var=" STUB_COSIGN_CALL="$cc" 2>&1)"
+  rc=$?
+  check "$rc" "1" "$var unset refuses"
+  grep -q "${var} is not set" <<< "$o" && echo "ok - the refusal names $var" || { echo "FAIL - the refusal names $var: $o"; fail=1; }
+  check "$([ -e "$cc" ] && echo called || echo not-called)" "not-called" "nothing is signed with $var unset"
+done
+cc="$TMP/cosign-call-15-image"
+o="$(run -- MV_SIGNING_DIR="$KEYDIR" CI_REGISTRY_IMAGE= STUB_COSIGN_CALL="$cc" 2>&1)"
+rc=$?
+check "$rc" "1" "no repository (CI_REGISTRY_IMAGE unset) refuses"
+grep -q "CI_REGISTRY_IMAGE (or MV_IMAGE) is not set" <<< "$o" && echo "ok - the refusal names CI_REGISTRY_IMAGE" || { echo "FAIL - the refusal names CI_REGISTRY_IMAGE: $o"; fail=1; }
+check "$([ -e "$cc" ] && echo called || echo not-called)" "not-called" "nothing is signed with no repository"
 
 exit "$fail"
