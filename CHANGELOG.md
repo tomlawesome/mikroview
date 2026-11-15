@@ -233,6 +233,8 @@ rewritten.
 
 ### Fixed
 
+- **A watchlist match with an oversized log line is now recorded** (#1471).
+  Its raw line is cut to the stored limit instead of the match being refused.
 - **`-backup` works on an install with a match log** (#1452). It read the
   match log as a sealed document, which it never was, and stopped. It now
   opens the sealed log with the key and carries its lines as plain JSON
