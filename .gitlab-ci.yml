@@ -1172,10 +1172,11 @@ release:check-version:
 # on first start -- internal/servertls), and this only asks whether the
 # server answers, not whether the chain verifies.
 #
-# On a publishing ref (#1472) the job runs in full: the reuse gate only
-# ever stands on an earlier run in a merge-request pipeline
-# (scripts/ci-reuse-gate.js, #1066), and a push to preview or a v* tag is
-# not one, so a publishing run always tests the bytes it ships.
+# On a publishing ref (#1472) -- a push to preview or a v* tag -- the
+# script skips the reuse gate outright and runs in full, so a publishing run
+# always tests the bytes it ships. That skip is in the script, not left to
+# ci-reuse-gate.js (#1066), so a change there cannot reopen it. Dev pushes and
+# merge requests still go through the gate.
 test:container:
   extends: .dind
   stage: test
@@ -1200,7 +1201,21 @@ test:container:
     # Node nor curl by default, and #1066's gate (scripts/ci-reuse-gate.js)
     # needs Node to run at all.
     - apk add --no-cache nodejs >/dev/null
-    - *reuse_gate
+    # The reuse gate, skipped outright on a publishing ref (#1472): a push
+    # to preview or a v* tag tests the bytes it ships, whatever
+    # scripts/ci-reuse-gate.js would decide. Same test as .publish_ref's
+    # rules; on dev and merge requests the gate runs as *reuse_gate does.
+    - |
+      publish_ref=false
+      if [ "${CI_PIPELINE_SOURCE:-}" = "push" ]; then
+        [ "${CI_COMMIT_BRANCH:-}" = "preview" ] && publish_ref=true
+        case "${CI_COMMIT_TAG:-}" in v[0-9]*) publish_ref=true ;; esac
+      fi
+      if [ "$publish_ref" = true ]; then
+        echo "test:container: publishing ref -- reuse gate skipped, testing the image this pipeline ships"
+      elif node scripts/ci-reuse-gate.js gate "$CI_JOB_NAME"; then
+        exit 0
+      fi
     - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
     - docker load -i image.tar
     - docker tag "mikroview-ci:$CI_COMMIT_SHA" "$APP"
@@ -2472,6 +2487,11 @@ publish:channel:
   stage: sync
   # Publishes a consumable name -- never cut mid-write (#952).
   interruptible: false
+  # #1472: one channel retag at a time, project-wide. GitLab runs a
+  # resource group's jobs one by one but not in pipeline order, so an
+  # older pipeline can still reach the retag after a newer one; the head
+  # check below is what stops that rolling :preview back.
+  resource_group: publish-channel
   timeout: 20m
   rules:
     - !reference [.publish_ref, rules]
@@ -2483,7 +2503,7 @@ publish:channel:
     # bash for both scripts; curl and coreutils for ensure-cosign.sh's
     # pinned, checksum-verified download; python3 for the evidence and
     # for verify-release-signature.sh's JSON check.
-    - apk add --no-cache bash coreutils curl python3 >/dev/null
+    - apk add --no-cache bash coreutils curl git python3 >/dev/null
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - |
       set -eu
@@ -2498,6 +2518,19 @@ publish:channel:
       if [ "$sha_digest" != "$digest" ]; then
         echo "publish:channel: sha-$CI_COMMIT_SHA now names $sha_digest, not the signed $digest -- publishing nothing" >&2
         exit 1
+      fi
+      # A preview push publishes only while its commit is still preview's
+      # head: a newer push's pipeline owns :preview from then on, and an
+      # older one finishing late must not move it back. Read through
+      # CI_REPOSITORY_URL (the job token's own read access); the URL
+      # carries that token, so it is never echoed. A v* tag names one
+      # commit for good, so tags skip the check.
+      if [ -z "${CI_COMMIT_TAG:-}" ]; then
+        head="$(git ls-remote "$CI_REPOSITORY_URL" "refs/heads/$CI_COMMIT_BRANCH" | cut -f1)"
+        if [ "$head" != "$CI_COMMIT_SHA" ]; then
+          echo "publish:channel: $CI_COMMIT_BRANCH is now at ${head:-<unknown>}, not this pipeline's $CI_COMMIT_SHA -- a newer pipeline publishes :preview; publishing nothing" >&2
+          exit 1
+        fi
       fi
       docker buildx imagetools create --prefer-index=false -t "$channel" "$CI_REGISTRY_IMAGE@$digest"
       got="$(docker buildx imagetools inspect "$channel" --format '{{.Manifest.Digest}}')"
@@ -2675,7 +2708,13 @@ sign:release-digest:
   # this job needs no Docker socket mounted into it, which matters: the
   # signing runner is the better-protected half of the pair, and handing
   # it daemon access to earn a digest lookup would be a poor trade.
-  image: docker:29-cli
+  #
+  # Pinned by digest (#1472): this job holds the signing key. Plain Docker
+  # Hub, not the image cache the dind jobs use, as before. 29.9.2 is the
+  # newest 29.x CLI at least 3 days old on 2026-11-15 (29.9.3's digest was
+  # two days old); the multi-arch index digest, as Docker Hub lists it.
+  # Change with supply-chain/pins-policy.json.
+  image: docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb
   # Optional only for the SIGN_TAG exercise pipeline below, which has
   # neither job; in a publishing pipeline both are present and must pass.
   needs:

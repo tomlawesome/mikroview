@@ -23,8 +23,9 @@
 # Usage:
 #   scripts/sign-release-digest.sh          sign the recorded digest
 #   scripts/sign-release-digest.sh <tag>    exercise path (#1309): sign
-#                                           ${MV_IMAGE}:<tag>, already
-#                                           published; no SBOM attestation
+#                                           ${MV_IMAGE}:<tag>, only if it
+#                                           resolves to the recorded
+#                                           digest; no SBOM attestation
 #
 # Inputs (environment):
 #   MV_SIGNING_DIR      The signing runner's read-only key mount. Must
@@ -104,12 +105,17 @@ fi
 export COSIGN_PASSWORD="$password"
 
 # --- what to sign: the recorded digest, or (exercise path) a named tag ---
-recorded=""
+#
+# Both paths sign only the digest this pipeline's own publish:image tested
+# and recorded. A tag is never signed on its own say-so: any job token
+# with push access -- a merge-request job included -- can move a tag in
+# the GitLab registry, so the exercise path's tag must resolve to the
+# recorded digest too. gitlab-tested-image.py refuses a record of another
+# repository or of another pipeline's commit, and a digest that is not
+# sha256:<64 hex>.
+recorded="$(python3 -I scripts/gitlab-tested-image.py digest "$evidence" "$repository")" ||
+  fail "no usable evidence at ${evidence} -- publish:image must run and pass first"
 if [[ -z "$tag" ]]; then
-  # gitlab-tested-image.py refuses a record of another repository or of
-  # another pipeline's commit, and a digest that is not sha256:<64 hex>.
-  recorded="$(python3 -I scripts/gitlab-tested-image.py digest "$evidence" "$repository")" ||
-    fail "no usable evidence at ${evidence} -- publish:image must run and pass first"
   # The SBOM is part of what a publishing run signs: refuse before the
   # signature rather than leave a signed digest with no attestation.
   [[ -s "$sbom" ]] || fail "no SBOM at ${sbom} -- security:trivy-image must run and pass first"
@@ -150,7 +156,7 @@ fi
 [[ "$top_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
   fail "resolved digest for $target is not sha256:<64 hex>: ${top_digest}"
 
-if [[ -n "$recorded" && "$top_digest" != "$recorded" ]]; then
+if [[ "$top_digest" != "$recorded" ]]; then
   fail "$target resolves to $top_digest, not the recorded $recorded -- refusing"
 fi
 
@@ -186,7 +192,7 @@ fi
 
 printf 'sign-release-digest: signed %s\n' "${repository}@${digest}"
 
-if [[ -n "$recorded" ]]; then
+if [[ -z "$tag" ]]; then
   "$cosign_cmd" attest \
     --key "$key_path" \
     --yes \

@@ -14,7 +14,7 @@ to be what publish:image wrote for *this* pipeline's image:
   - whose commit is $CI_COMMIT_SHA, whenever that is set, so an artifact
     from another pipeline's commit is refused too.
 
-Anything else exits 1 with the reason on stderr. The one reader for
+A file over 64 KiB is refused unread. Anything else exits 1 with the reason on stderr. The one reader for
 sign:release-digest, publish:channel and record:upgrade-fixture, so the
 three cannot come to disagree about what the evidence says.
 """
@@ -24,6 +24,9 @@ import re
 import sys
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+# The real record is a few hundred bytes. Anything over this is not one,
+# and is refused before it is parsed rather than read whole.
+MAX_BYTES = 64 * 1024
 
 
 def fail(message):
@@ -38,8 +41,11 @@ def main(argv):
     if not repository:
         fail("the expected repository is empty")
     try:
-        with open(path, encoding="utf-8") as f:
-            doc = json.load(f)
+        with open(path, "rb") as f:
+            raw = f.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            fail(f"{path} is over {MAX_BYTES} bytes -- not an evidence record")
+        doc = json.loads(raw.decode("utf-8"))
     except FileNotFoundError:
         fail(f"no evidence at {path} -- did publish:image run and pass?")
     except (OSError, ValueError) as e:

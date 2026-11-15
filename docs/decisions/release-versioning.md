@@ -95,6 +95,13 @@ and the bump is still part of the promotion diff. "Not a git tag pushed
 after the fact" above was about *deriving* the version from a tag; the
 tag now says when, the file still says what, and the two must agree.
 
+**No `v*` tag may be pushed until #1472's landing step 3 is in** (GitHub
+copying GitLab's signed digest to GHCR). Until then GitLab signs only its own
+registry's digest, while `docker.yml` publishes a separate rebuild to GHCR,
+so that release would reach GHCR with no key-based signature, and
+`countersign.yml` and `SECURITY.md`'s `cosign verify` would both refuse it
+(docs/release-signing.md).
+
 Release steps, in order: promote `preview` → `main`; wait for the
 promote job on GitHub; on GitLab, `git tag v<VERSION> <main sha>` and
 push it to `gitlab`; watch the tag pipeline's mirror job, then the

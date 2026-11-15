@@ -42,8 +42,21 @@ push to `preview` or a `v*` tag:
    `:preview` or `:vX.Y.Z`, registry-side, re-reading the digest afterwards.
 6. On a tag, `record:upgrade-fixture` records the fixture from that digest.
 
-So nothing in the GitLab registry gets a consumable name before its signature
-verifies. Preview images are signed as well as releases (owner, #1472).
+`publish:channel` does not move `:preview` or `:vX.Y.Z` before the signature
+verifies, but that is ordering, not protection. **The GitLab registry's
+channel tags are internal:** any job token with push access, a merge-request
+job's included, can push or move a tag there, so a tag in that registry proves
+nothing on its own. Operators pull from GHCR, never from here. Step 3 puts an
+image on GHCR only after GitHub has verified the key-based signature on the
+GitLab digest it copies, and that check is what operators rely on.
+Preview images are signed as well as releases (owner, #1472).
+
+`publish:channel` holds the `publish-channel` resource group, so two
+publishing pipelines never retag at once. GitLab does not run that group's
+jobs in pipeline order, so a preview push also checks that its commit is still
+`preview`'s head (`git ls-remote`) and fails, publishing nothing, when a newer
+push has superseded it. That is how an older pipeline is kept from rolling
+`:preview` back. Tags skip the check: a tag names one commit for good.
 `latest` is not a GitLab registry tag: it stays GHCR's, moved by GitHub on a
 release tag once landing step 3 below is in.
 
@@ -188,8 +201,16 @@ exercises signing without also cutting a release.
 
 Instead `sign:release-digest` can be started by hand against an
 already-published tag in this project's registry
-(`registry.tomlawson.io/ai/mikroview:<tag>`, since #1472). The exercise signs
-the tag's digest and attests no SBOM. `SIGN_TAG` is on the same `never` lists as
+(`registry.tomlawson.io/ai/mikroview:<tag>`, since #1472), and attests no SBOM.
+
+**Since #1472 it signs only the digest this pipeline's own `publish:image`
+tested and recorded.** A tag is never signed on its own say-so, because any job
+token can move a tag in that registry. It refuses without that evidence
+("publish:image must run and pass first") and refuses a tag that resolves to
+any other digest ("not the recorded …"). A hand-started `SIGN_TAG` pipeline
+runs no `publish:image`, so in practice the exercise now always refuses, and
+no longer proves anything beyond the key mount and the refusal itself. To
+re-sign an image, run a fresh publishing pipeline. `SIGN_TAG` is on the same `never` lists as
 `CHR_EXERCISE` and `CHR_WATCH`, so triggering it does not re-run all of dev
 (#951).
 
