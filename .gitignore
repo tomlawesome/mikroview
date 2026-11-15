@@ -60,3 +60,4 @@
 # Coverage counts from the real program, written when MIKROVIEW_COVERDIR
 # points here (#1451; CI's test:go and test:postgres). Run data, not content.
 /.coverdata/
+jscpd-report/

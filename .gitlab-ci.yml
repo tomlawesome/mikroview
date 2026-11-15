@@ -562,7 +562,8 @@ policy:release-surfaces:
 
 # ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
-# not introducing golangci-lint since mikroview doesn't use it today.
+# plus the report-only scanners added by #1462/#1463 (shellcheck, golangci-lint,
+# ruff, knip, jscpd; zizmor is in the security stage).
 # ---------------------------------------------------------------------------
 
 # Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
@@ -713,6 +714,136 @@ lint:frontend:
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
 
+# The approved scanners (#1462, #1463; owner answer 13, 2026-11-15), all
+# CI-only and never shipped: shellcheck (GPL-3.0), golangci-lint (GPL-3.0),
+# ruff (MIT), knip (ISC), jscpd (MIT), and zizmor in the security stage (MIT).
+# "Report first, then block" (#1462): each runs here in report mode --
+# allow_failure, full report kept as an artifact -- and a later change makes
+# them block once one pipeline's noise has been triaged. Each tool is pinned:
+# an image by digest (through the image cache, like gitleaks above), or an npm
+# package by exact version in frontend/package-lock.json. Renovate reads the
+# image: lines and the package.json pins; see docs/ci-scanners.md.
+
+# shellcheck on every *.sh, warning and up. koalaman/shellcheck-alpine has no
+# entrypoint, so the script runs as in any other job; find stands in for
+# git ls-files because the checkout is all there is and the image has no git.
+lint:shellcheck:
+  stage: lint
+  tags: [light]
+  image: ${CI_IMAGE_CACHE_DOCKERHUB}/koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002
+  needs: []
+  <<: *dev_or_mr_code
+  interruptible: true
+  # report-only until one pipeline's noise is triaged (#1462)
+  allow_failure: true
+  script:
+    - rc=0
+    - find . -name '*.sh' -not -path './.git/*' -not -path '*/node_modules/*' -print0 | xargs -0 shellcheck --severity=warning --format=gcc > shellcheck-report.txt || rc=$?
+    - cat shellcheck-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - shellcheck-report.txt
+    expire_in: 30 days
+
+# golangci-lint v2 with .golangci.yml (the standard set plus dupl; gosec is
+# off because security:gosec runs it). GOPRIVATE comes from the global
+# variables, as for lint:go.
+lint:golangci:
+  stage: lint
+  tags: [light]
+  image: ${CI_IMAGE_CACHE_DOCKERHUB}/golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
+  needs: []
+  <<: [*dev_or_mr_code, *git_safe]
+  interruptible: true
+  # report-only until one pipeline's noise is triaged (#1462)
+  allow_failure: true
+  script:
+    - rc=0
+    - golangci-lint run --output.text.path=golangci-report.txt ./... || rc=$?
+    - cat golangci-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - golangci-report.txt
+    expire_in: 30 days
+
+# ruff with ruff.toml: the defaults plus the S (security) rules, on the
+# checkout's *.py files (ruff skips what .gitignore ignores). The -alpine image
+# has a shell; its default command is ruff, which the script replaces.
+lint:ruff:
+  stage: lint
+  tags: [light]
+  image: ${CI_IMAGE_CACHE_GHCR}/astral-sh/ruff:0.17.4-alpine@sha256:7a717be3a7cfbef698a9b99e1555add93ec6b195242fe273997683e49b051f51
+  needs: []
+  <<: *dev_or_mr_code
+  interruptible: true
+  # report-only until one pipeline's noise is triaged (#1462)
+  allow_failure: true
+  script:
+    - rc=0
+    - ruff check --no-cache --output-format=concise . > ruff-report.txt || rc=$?
+    - cat ruff-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - ruff-report.txt
+    expire_in: 30 days
+
+# knip on frontend/ (unused files, exports and dependencies), configured by
+# frontend/knip.json; an exact-version devDependency, installed with npm ci.
+lint:knip:
+  stage: lint
+  tags: [light]
+  image: node:26-alpine
+  needs: []
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  interruptible: true
+  # report-only until one pipeline's noise is triaged (#1462)
+  allow_failure: true
+  script:
+    - cd frontend
+    - npm ci
+    - rc=0
+    - npx knip > ../knip-report.txt || rc=$?
+    - cat ../knip-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - knip-report.txt
+    expire_in: 30 days
+
+# jscpd on frontend/src (.jscpd.json). Two outcomes, on purpose (#1463): a
+# duplication finding is report-only (jscpd exits 3, which allow_failure
+# tolerates), but `npm audit signatures` -- the owner's condition for using
+# jscpd -- checks every installed package's registry signature and provenance
+# attestation and fails the job, with its own exit code, if one is invalid.
+lint:jscpd:
+  stage: lint
+  tags: [light]
+  image: node:26-alpine
+  needs: []
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  interruptible: true
+  # report-only until one pipeline's noise is triaged (#1462)
+  allow_failure:
+    exit_codes: [3]
+  script:
+    - cd frontend
+    - npm ci
+    - npm audit signatures
+    - cd ..
+    - frontend/node_modules/.bin/jscpd
+  artifacts:
+    when: always
+    paths:
+      - jscpd-report/
+    expire_in: 30 days
+
 lint:supply-chain-pins:
   stage: lint
   # Light lane (#949): reads two files and a policy, no install.
@@ -724,6 +855,8 @@ lint:supply-chain-pins:
     # supply-chain/pins-policy.json with its review date. Fails on a pin the
     # policy does not record, or a recorded pin CI no longer uses.
     - node --test tools/supply-chain/pins-policy.test.mjs
+    # #1462: the six scanner jobs are report-only and pinned.
+    - node --test tools/supply-chain/scanner-jobs.test.mjs
     - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------
@@ -2067,6 +2200,37 @@ security:fuzz:
     when: on_failure
     paths:
       - internal/*/testdata/fuzz/
+    expire_in: 30 days
+
+# zizmor (MIT) on .github/workflows/, offline (no GitHub token). It has no
+# release checksums file and its image sets an entrypoint a job script cannot
+# use, so the release tarball is fetched into node:26-bookworm and checked
+# with sha256sum -c; the sum is GitHub's recorded digest for the asset and was
+# checked against a download.
+security:zizmor:
+  stage: security
+  tags: [light]
+  image: node:26-bookworm
+  needs: []
+  <<: *dev_or_mr
+  interruptible: true
+  # report-only until one pipeline's noise is triaged (#1462)
+  allow_failure: true
+  variables:
+    ZIZMOR_VERSION: "1.32.0"
+    ZIZMOR_SHA256: bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+  script:
+    - curl -fsSL -o /tmp/zizmor.tgz "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+    - echo "${ZIZMOR_SHA256}  /tmp/zizmor.tgz" | sha256sum -c -
+    - tar -xzf /tmp/zizmor.tgz -C /tmp zizmor
+    - rc=0
+    - /tmp/zizmor --offline --format=plain .github/workflows/ > zizmor-report.txt || rc=$?
+    - cat zizmor-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - zizmor-report.txt
     expire_in: 30 days
 
 security:npm-audit:
