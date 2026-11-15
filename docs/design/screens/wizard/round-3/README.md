@@ -123,7 +123,7 @@ kills the server on exit.
 
 ```
 docker run -d --name mikroview-design-host -p 8307:80 \
-  -v /home/user/projects/.worktrees/mikroview/1374-round-3/docs/design:/usr/share/nginx/html:ro \
+  -v "$PWD/docs/design:/usr/share/nginx/html:ro" \
   nginx:alpine
 ```
 

@@ -1,4 +1,4 @@
-import { chromium } from '/home/user/projects/mikroview/frontend/node_modules/playwright/index.mjs';
+const { chromium } = await import(new URL('../../../../../frontend/node_modules/playwright/index.mjs', import.meta.url).href);
 import fs from 'node:fs';
 const candidates = ['/opt/pw-browsers/chromium', ...fs.existsSync('/opt/pw-browsers') ? fs.readdirSync('/opt/pw-browsers').filter(d => d.startsWith('chromium-')).map(d => `/opt/pw-browsers/${d}/chrome-linux/chrome`) : []];
 const executablePath = candidates.find(p => fs.existsSync(p));
