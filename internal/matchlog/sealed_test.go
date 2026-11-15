@@ -711,3 +711,46 @@ func TestTornHeaderRuleDoesNotTouchOtherFiles(t *testing.T) {
 		})
 	}
 }
+
+// O1-F1 fix review: torn lines in the middle, NUL-filled and several at
+// once are all left out; an all-torn log seals as an empty one; a torn
+// line never excuses a later line that decodes but is not a match log line.
+func TestWriteSealedTornLineEdgeCases(t *testing.T) {
+	key := testKey(t)
+	nul := strings.Repeat("\x00", 64)
+	ok := map[string]struct {
+		lines   string
+		records int
+		skipped int
+	}{
+		"torn line between whole lines": {tornR1 + "\n" + tornFragment + "\n" + tornR2 + "\n", 2, 1},
+		"NUL-filled line and CRLF":      {tornR1 + "\r\n" + nul + "\n" + tornR2 + "\r\n", 2, 1},
+		"several torn lines":            {tornFragment + "\n" + tornR1 + "\n" + "{broken\n" + tornFragment, 1, 3},
+		"every line torn":               {tornFragment + "\n{broken\n", 0, 2},
+	}
+	for name, c := range ok {
+		path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+		if err := WriteSealed(path, key, []byte(c.lines)); err != nil {
+			t.Fatalf("%s: WriteSealed: %v", name, err)
+		}
+		s, err := Open(path, 10, key)
+		if err != nil {
+			t.Fatalf("%s: Open: %v", name, err)
+		}
+		if got := collect(t, s, Query{Source: Identity{MAC: evMAC}}); len(got) != c.records {
+			t.Errorf("%s: %d records, want %d", name, len(got), c.records)
+		}
+		s.Close()
+		if n, err := validateLinesCount(t, []byte(c.lines)); err != nil || n != c.skipped {
+			t.Errorf("%s: ValidateLines = (%d, %v), want (%d, nil)", name, n, err, c.skipped)
+		}
+	}
+	bad := tornR1 + "\n" + tornFragment + "\n" + `{"kind":"wat","id":"x"}` + "\n"
+	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+	if err := WriteSealed(path, key, []byte(bad)); err == nil {
+		t.Error("a torn line excused a later line of the wrong kind")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("WriteSealed wrote a file for a refused log")
+	}
+}
