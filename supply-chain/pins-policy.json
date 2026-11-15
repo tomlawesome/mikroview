@@ -347,15 +347,15 @@
     },
     {
       "name": "Renovate dependency-update bot",
-      "reference": "renovate/renovate:44",
+      "reference": "renovate/renovate:44.222.2@sha256:227e723ed8c57f1b8b629066c7e0ad8d8f933d905f4a2f6fb4d597a74118637c",
       "shipped": false,
       "license": "AGPL-3.0-only",
       "source": "https://github.com/renovatebot/renovate",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "Distroless static runtime (production base image)",
