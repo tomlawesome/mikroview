@@ -2563,7 +2563,11 @@ chr-watch:run:
 
 renovate:run:
   stage: renovate
-  image: renovate/renovate:44
+  # Pinned by version and digest (#1434): this job holds RENOVATE_TOKEN, so
+  # whoever can publish a new image under a moving tag would run code with
+  # it. Renovate's gitlabci manager keeps both current, after the same
+  # 7-day wait as every other update.
+  image: renovate/renovate:44.222.2@sha256:227e723ed8c57f1b8b629066c7e0ad8d8f933d905f4a2f6fb4d597a74118637c
   needs: []
   # #952: opens and updates merge requests via the GitLab API -- never cut
   # mid-write.
