@@ -1259,7 +1259,10 @@ devices:
 `watchlist.matchLogPath` is empty. Unlike every other `storePath` in this
 file, the match log has no in-memory-only mode -- durability is the
 entire reason it exists -- so an empty value is treated the same as an
-unusable one rather than as a deliberate opt-out.
+unusable one rather than as a deliberate opt-out. The file is sealed
+under `history.keyFile`, one encrypted frame per match (#1470); the
+default's `.jsonl` name is kept for compatibility, not because it holds
+JSON lines.
 
 ```yaml
 watchlist:
@@ -2813,10 +2816,12 @@ Entries themselves are definitions and live in the definitions store
 
 ```yaml
 watchlist:
-  # Where matches are recorded, append-only. This has NO in-memory-only
-  # mode: durability is the entire reason this store exists (a match
-  # must survive a restart), so an empty value is treated as unusable
-  # rather than as an opt-out (CFG-0040).
+  # Where matches are recorded, append-only, sealed under
+  # history.keyFile -- one encrypted frame per match or repeat (#1470).
+  # The .jsonl name is kept for compatibility; the file is not JSON.
+  # This has NO in-memory-only mode: durability is the entire reason
+  # this store exists (a match must survive a restart), so an empty
+  # value is treated as unusable rather than as an opt-out (CFG-0040).
   matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
 
   # The match log's hard ceiling on distinct records -- once reached, a

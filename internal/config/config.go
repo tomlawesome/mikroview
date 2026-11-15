@@ -615,8 +615,11 @@ type Setup struct {
 // (CFG-0041) -- both a good default out of the box, not settings an
 // operator has to supply.
 type Watchlist struct {
-	// MatchLogPath is where internal/matchlog's append-only JSON-lines
-	// file lives.
+	// MatchLogPath is where internal/matchlog's append-only log lives: a
+	// sealed file of AES-256-GCM frames, one per match or repeat, under
+	// history.keyFile (#1470). The default's .jsonl name is kept for
+	// compatibility with existing configs and installs; the file has not
+	// held JSON lines since v0.7.0.
 	MatchLogPath string `yaml:"matchLogPath"`
 	// MatchLogCapacity is the match log's hard ceiling on distinct
 	// records -- #243 section 3 puts the file backend's realistic range
