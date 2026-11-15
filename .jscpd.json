@@ -3,7 +3,7 @@
   "path": ["frontend/src"],
   "format": ["typescript", "javascript"],
   "ignore": ["**/*.test.ts", "**/*.test.js", "**/node_modules/**"],
-  "threshold": 3,
+  "threshold": 1,
   "reporters": ["console", "json"],
   "output": "jscpd-report",
   "gitignore": true,
