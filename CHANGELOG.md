@@ -233,6 +233,9 @@ rewritten.
 
 ### Fixed
 
+- **`-restore` no longer refuses a v0.6 backup over a torn match-log
+  line** that v0.6 skipped; the line is left out and the restore says so.
+
 - **`-backup` works on an install with a match log** (#1452). It read the
   match log as a sealed document, which it never was, and stopped. It now
   opens the sealed log with the key and carries its lines as plain JSON
