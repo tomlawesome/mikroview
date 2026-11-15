@@ -82,6 +82,12 @@ type FrameLog struct {
 	// restart continues the sequence rather than repeating numbers a
 	// reader would then accept out of order.
 	frames uint64
+	// end is the offset the last whole frame ends at: where the next
+	// frame is written, and where a failed append is cut back to.
+	end int64
+	// broken is set when a failed append could not be cut back, so the
+	// file's tail is unknown; every later Append refuses with it.
+	broken error
 }
 
 // OpenFrameLog opens (or creates) the framed file at path for appending.
@@ -143,7 +149,7 @@ func OpenFrameLog(path string, key *Key, format FrameFormat) (*FrameLog, error) 
 		if err != nil {
 			return nil, err
 		}
-		l.aead, l.frames = aead, frames
+		l.aead, l.frames, l.end = aead, frames, end
 	}
 	ok = true
 	return l, nil
@@ -167,7 +173,7 @@ func (l *FrameLog) writeHeader() error {
 	if err != nil {
 		return err
 	}
-	l.aead, l.frames = aead, 0
+	l.aead, l.frames, l.end = aead, 0, int64(len(header))
 	return nil
 }
 
@@ -183,7 +189,16 @@ func (l *FrameLog) Frames() uint64 { return l.frames }
 // Sync so that what a reader can see matches what the writer has been
 // told it wrote: a log that loses its last entries to the page cache on
 // a hard reset would still report what it believed it held.
+//
+// A write or sync that fails is cut back to where the frame began, so a
+// failed append leaves neither a partial frame mid-file nor a whole one
+// the frame count does not know about (whose sequence number the next
+// append would reuse). If even that cut fails, the log refuses every
+// later append rather than guess at its own tail.
 func (l *FrameLog) Append(plain []byte) error {
+	if l.broken != nil {
+		return l.broken
+	}
 	nonce := make([]byte, l.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return fmt.Errorf("retention: generating nonce: %w", err)
@@ -195,13 +210,32 @@ func (l *FrameLog) Append(plain []byte) error {
 	frame = append(frame, nonce...)
 	frame = append(frame, sealed...)
 	if _, err := l.f.Write(frame); err != nil {
-		return fmt.Errorf("retention: appending to %s: %w", l.path, err)
+		return l.cutBack(fmt.Errorf("retention: appending to %s: %w", l.path, err))
 	}
 	if err := l.f.Sync(); err != nil {
-		return fmt.Errorf("retention: syncing %s: %w", l.path, err)
+		return l.cutBack(fmt.Errorf("retention: syncing %s: %w", l.path, err))
 	}
 	l.frames++
+	l.end += int64(len(frame))
 	return nil
+}
+
+// cutBack undoes a failed append: truncates the file to l.end and puts
+// the write position there. It returns cause, or, when the cut itself
+// fails, an error naming both that also marks the log broken.
+func (l *FrameLog) cutBack(cause error) error {
+	err := l.f.Truncate(l.end)
+	if err == nil {
+		_, err = l.f.Seek(l.end, io.SeekStart)
+	}
+	if err == nil {
+		err = l.f.Sync()
+	}
+	if err != nil {
+		l.broken = fmt.Errorf("%w; cutting %s back to %d bytes also failed (%v), so it takes no more writes until reopened", cause, l.path, l.end, err)
+		return l.broken
+	}
+	return cause
 }
 
 // Reset empties the file and starts it again under a fresh salt, with
@@ -215,7 +249,11 @@ func (l *FrameLog) Reset() error {
 	if _, err := l.f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("retention: rewinding %s: %w", l.path, err)
 	}
-	return l.writeHeader()
+	if err := l.writeHeader(); err != nil {
+		return err
+	}
+	l.broken = nil // the tail is known again: there is none
+	return nil
 }
 
 // Close closes the file. Closing a closed or nil log is a no-op.
