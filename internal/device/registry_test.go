@@ -650,3 +650,28 @@ func TestABareDeviceCarriesNoTimestamps(t *testing.T) {
 		}
 	}
 }
+
+// TestAcceptingAnEnrolLineRegistersTheRouter is #1493: registration
+// folds into acceptance. The moment TryEnrol accepts a router's line the
+// server stamps RegisteredAt, equal to EnrolledAt.
+func TestAcceptingAnEnrolLineRegistersTheRouter(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Create("hap-ax3", "hap-ax3", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	got := r.List()
+	if len(got) != 1 {
+		t.Fatalf("List() = %d devices, want 1", len(got))
+	}
+	if got[0].EnrolledAt.IsZero() {
+		t.Fatal("EnrolledAt is zero after a successful TryEnrol")
+	}
+	if got[0].RegisteredAt.IsZero() {
+		t.Error("RegisteredAt is zero after a successful TryEnrol, want it stamped on acceptance")
+	}
+	if !got[0].RegisteredAt.Equal(got[0].EnrolledAt) {
+		t.Errorf("RegisteredAt = %v, want it equal to EnrolledAt %v", got[0].RegisteredAt, got[0].EnrolledAt)
+	}
+}

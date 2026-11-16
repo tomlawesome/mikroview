@@ -649,6 +649,20 @@ func TestDeviceRegisterRequiresAdmin(t *testing.T) {
 	}
 }
 
+// TestDeviceRegistrationEndpointIsGone is #1493: registration is
+// acceptance of the enrol line, so no request registers a router.
+func TestDeviceRegistrationEndpointIsGone(t *testing.T) {
+	_, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/registration",
+		map[string]string{"name": "hap-ax3"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for the retired registration route", resp.StatusCode)
+	}
+}
+
 // TestDeviceEnrolmentRebindMovesTheWindowWithoutANewToken is ruling
 // 23a end to end: one click, no password, same token.
 func TestDeviceEnrolmentRebindMovesTheWindowWithoutANewToken(t *testing.T) {
