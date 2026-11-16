@@ -26,6 +26,7 @@ check() {
 
 # Paths that hold secret-shaped material and are gitignored for that
 # reason. Add here whenever .gitignore gains another such entry.
+# shellcheck disable=SC2043 # one path today; the comment above says more are added
 for path in .upgrade-fixtures; do
   ok=false
   grep -qxE "/?${path}/?" "$ROOT/.gitignore" && ok=true

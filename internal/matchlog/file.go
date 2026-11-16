@@ -29,9 +29,14 @@ const (
 // store.Event, whose Raw field is deliberately unclamped and can reach
 // the syslog TCP listener's 64KB line limit (see #244's memory_test.go,
 // worstCaseLine) -- JSON string-escaping can expand that further, so
-// this is set well above it. A line above it is refused at write time
-// rather than written as a frame every reader would stop at.
+// this is set well above it. A record above it is cut, not refused: its
+// Raw is clamped to store.MaxRawBytes and written. Ingest already cuts
+// Raw to that (main.go), so this only catches events stored before that
+// cut existed. A line still over the limit after the cut is refused at
+// write time rather than written as a frame every reader would stop at.
 const maxLineBytes = 256 * 1024
+
+var errLineTooLong = errors.New("line too long")
 
 // storeName is the match log's name among the stores -backup carries,
 // and is bound into every frame's additional data.
@@ -164,8 +169,9 @@ func Check(path string) error {
 }
 
 // sniff checks what is at path before anything opens it for writing,
-// and reports its size (-1 when absent). Absent, empty, or starting with
-// Format's magic is fine. A file that starts with '{' (after any
+// and reports its size (-1 when absent). Absent, empty, starting with
+// Format's magic, or a header torn by a crash (Format.TornHeader, which
+// OpenFrameLog starts again) is fine. A file that starts with '{' (after any
 // whitespace) is the JSON-lines log an earlier release wrote, and is
 // refused with persist.ErrPlaintextDocument; anything else is refused as
 // not a match log. Neither is changed.
@@ -189,7 +195,7 @@ func sniff(path string) (int64, error) {
 	}
 	head = head[:n]
 	switch {
-	case n == 0, Format.HasMagic(head):
+	case n == 0, Format.HasMagic(head), Format.TornHeader(head):
 		return fi.Size(), nil
 	case bytes.HasPrefix(bytes.TrimLeft(head, " \t\r\n"), []byte("{")):
 		return 0, fmt.Errorf("matchlog: store %q (%s): %w", storeName, path, persist.ErrPlaintextDocument)
@@ -245,10 +251,19 @@ func (s *FileStore) appendProvisional(entryID string, tuple Tuple, event store.E
 	}
 
 	id := newID()
-	if err := s.writeLineLocked(fileLine{
+	rec := fileLine{
 		Kind: kindRecord, ID: id, EntryID: entryID, Tuple: tuple, Event: event,
 		FirstSeen: t, LastSeen: t, Provisional: provisional,
-	}); err != nil {
+	}
+	err := s.writeLineLocked(rec)
+	if errors.Is(err, errLineTooLong) {
+		// Cut the raw line and retry once (#1471).
+		cut, was := store.ClampRaw(rec.Event.Raw)
+		rec.Event.Raw = cut
+		rec.Event.RawTruncated = rec.Event.RawTruncated || was
+		err = s.writeLineLocked(rec)
+	}
+	if err != nil {
 		return err
 	}
 	// Only added after a successful write: a failed write must not leave
@@ -268,7 +283,7 @@ func (s *FileStore) writeLineLocked(l fileLine) error {
 		return fmt.Errorf("matchlog: encoding a record: %w", err)
 	}
 	if len(b) > maxLineBytes {
-		return fmt.Errorf("matchlog: a record of %d bytes is over the %d-byte line limit", len(b), maxLineBytes)
+		return fmt.Errorf("matchlog: a record of %d bytes is over the %d-byte line limit: %w", len(b), maxLineBytes, errLineTooLong)
 	}
 	if err := s.log.Append(b); err != nil {
 		return fmt.Errorf("matchlog: %w", err)

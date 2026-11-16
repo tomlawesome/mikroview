@@ -798,6 +798,8 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('passkeys · 2')).toBeTruthy()
+    // alex has none: no pill at all, not one reading "passkeys · 0".
+    expect(screen.getAllByText(/^passkeys ·/)).toHaveLength(1)
   })
 
   it('clear passkeys asks for the admin\'s password before it acts, and only appears when there is one to clear', async () => {

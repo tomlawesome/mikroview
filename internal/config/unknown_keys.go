@@ -121,7 +121,7 @@ func yamlPathPrefixes() map[reflect.Type]string {
 	paths := map[reflect.Type]string{}
 	var walk func(t reflect.Type, prefix string)
 	walk = func(t reflect.Type, prefix string) {
-		for t.Kind() == reflect.Slice || t.Kind() == reflect.Ptr || t.Kind() == reflect.Array {
+		for t.Kind() == reflect.Slice || t.Kind() == reflect.Pointer || t.Kind() == reflect.Array {
 			t = t.Elem()
 		}
 		if t.Kind() != reflect.Struct {

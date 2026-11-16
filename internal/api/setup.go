@@ -438,7 +438,7 @@ func (s *Server) handleSetupAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Audit.Record(auditActor(r), "setup.address_set", req.Address, "")
-	writeJSON(w, http.StatusOK, setupAddressResponse{Address: req.Address})
+	writeJSON(w, http.StatusOK, setupAddressResponse(req))
 }
 
 // setupBackupTransportRequest is step 6's one choice (#955): "sftp" or
@@ -498,7 +498,7 @@ func (s *Server) handleSetupBackupTransport(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.Audit.Record(auditActor(r), "setup.backup_transport_set", req.Transport, "")
-	writeJSON(w, http.StatusOK, setupBackupTransportResponse{Transport: req.Transport})
+	writeJSON(w, http.StatusOK, setupBackupTransportResponse(req))
 }
 
 // SetupInstance is the running configuration the wizard needs to write

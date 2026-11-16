@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -443,14 +444,75 @@ func TestReadLinesOfAbsentOrHeaderOnlyLogIsEmpty(t *testing.T) {
 func TestWriteSealedRefusesALineThatIsNotAFileLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
 	good := `{"kind":"record","id":"aa","lastSeen":"2026-08-09T12:00:00Z"}`
-	for _, bad := range []string{"not json", good + "\n{broken"} {
+	overLimit := `{"kind":"record","id":"big","pad":"` + strings.Repeat("x", maxLineBytes) + `"}`
+	if len(overLimit) <= maxLineBytes {
+		t.Fatal("test line is not over the limit")
+	}
+	for _, bad := range []string{`{"kind":"wat","id":"x"}`, good + "\n" + overLimit} {
 		if err := WriteSealed(path, testKey(t), []byte(bad)); err == nil {
-			t.Errorf("WriteSealed accepted %q", bad)
+			t.Errorf("WriteSealed accepted %.60q", bad)
 		}
 		if _, err := os.Stat(path); err == nil {
-			t.Errorf("WriteSealed wrote a file for %q", bad)
+			t.Errorf("WriteSealed wrote a file for %.60q", bad)
 			os.Remove(path)
 		}
+	}
+}
+
+const tornR1 = `{"kind":"record","id":"r1","entryId":"e1","tuple":{"source":{"mac":"` + evMAC + `"},"destIp":"` + evDest + `","port":22},"event":{"raw":"raw-1"},"firstSeen":"2026-08-09T12:00:00Z","lastSeen":"2026-08-09T12:00:00Z"}`
+const tornR2 = `{"kind":"record","id":"r2","entryId":"e1","tuple":{"source":{"mac":"` + evMAC + `"},"destIp":"` + evDest + `","port":23},"event":{"raw":"raw-2"},"firstSeen":"2026-08-09T12:00:01Z","lastSeen":"2026-08-09T12:00:01Z"}`
+const tornFragment = `{"kind":"record","id":"r3","entryId":"e1","tu`
+
+// validateLinesCount calls ValidateLines through reflection so this file
+// compiles whether it returns (skipped, err) or only err; the tests then
+// fail on behaviour rather than on the build.
+func validateLinesCount(t *testing.T, lines []byte) (int, error) {
+	t.Helper()
+	out := reflect.ValueOf(ValidateLines).Call([]reflect.Value{reflect.ValueOf(lines)})
+	var err error
+	if e, ok := out[len(out)-1].Interface().(error); ok {
+		err = e
+	}
+	if len(out) < 2 {
+		t.Errorf("ValidateLines returns no skipped count; want (skipped int, err error)")
+		return 0, err
+	}
+	return int(out[0].Int()), err
+}
+
+// v0.6 skipped a line that did not decode (a torn write); a v0.6 backup
+// carries the raw file, so WriteSealed must leave such a line out rather
+// than refuse the log (v0.7.0 audit, O1-F1).
+func TestWriteSealedLeavesOutATornLineAsV06Did(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines string
+		want  int
+	}{
+		{"torn tail with no newline", tornR1 + "\n" + tornR2 + "\n" + tornFragment, 2},
+		{"torn fragment glued to the next record", tornR1 + "\n" + tornFragment + tornR2 + "\n", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			key := testKey(t)
+			path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+			if err := WriteSealed(path, key, []byte(c.lines)); err != nil {
+				t.Fatalf("WriteSealed refused a torn line v0.6 skipped: %v", err)
+			}
+			s, err := Open(path, 10, key)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer s.Close()
+			got := collect(t, s, Query{Source: Identity{MAC: evMAC}})
+			if len(got) != c.want {
+				t.Errorf("got %d records, want the %d whole ones", len(got), c.want)
+			}
+			skipped, err := validateLinesCount(t, []byte(c.lines))
+			if err != nil || skipped != 1 {
+				t.Errorf("ValidateLines = (%d, %v), want (1, nil)", skipped, err)
+			}
+		})
 	}
 }
 
@@ -483,4 +545,312 @@ func TestCapacityAccountingSurvivesReopen(t *testing.T) {
 	if err := s2.Append("e", secretTuple(1000), secretEvent(), t0.Add(time.Minute)); err != nil {
 		t.Errorf("repeat of an open tuple at capacity: %v, want it collapsed", err)
 	}
+}
+
+// A power loss mid-append can leave a zero-filled tail (the file extended,
+// the bytes not yet on disk). That is a crash tail, not damage (PROP-S2).
+func TestZeroFilledTailIsCutBackAsACrashTail(t *testing.T) {
+	for name, tail := range map[string]int{
+		"four zero bytes":          4,
+		"a frame's worth of zeros": 4 + Format.MaxFrameBytes,
+	} {
+		t.Run(name, func(t *testing.T) {
+			key := testKey(t)
+			path, bounds := writeN(t, key, 3)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Write(make([]byte, tail)); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			lines, err := ReadLines(path, key)
+			if err != nil {
+				t.Fatalf("ReadLines with a zero-filled tail: %v", err)
+			}
+			if n := bytes.Count(lines, []byte("\n")); n != 3 {
+				t.Errorf("ReadLines holds %d lines, want 3", n)
+			}
+			s, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("Open with a zero-filled tail: %v", err)
+			}
+			defer s.Close()
+			if got := allRecords(t, s); len(got) != 3 {
+				t.Fatalf("got %d records, want 3", len(got))
+			}
+			if n := size(t, path); n != bounds[3] {
+				t.Errorf("file is %d bytes after open, want the zeros cut to %d", n, bounds[3])
+			}
+			if err := s.Append(evEnt, secretTuple(2000), secretEvent(), time.Now()); err != nil {
+				t.Fatalf("Append after recovery: %v", err)
+			}
+			s.Close()
+			s2, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer s2.Close()
+			if got := allRecords(t, s2); len(got) != 4 {
+				t.Errorf("got %d records after reopen, want 4", len(got))
+			}
+		})
+	}
+
+	// Guard (passes now): a zero run longer than one frame can be stays damage.
+	t.Run("a zero run longer than a frame can be", func(t *testing.T) {
+		key := testKey(t)
+		path, _ := writeN(t, key, 3)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(make([]byte, 4+Format.MaxFrameBytes+1)); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustRefuse(t, "over-long zero run", path, key)
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Error("the file was changed by a refused open")
+		}
+	})
+}
+
+// A crash while the header is being written leaves a short, zero-filled
+// or prefix-only file. It holds no record, so it is started again (O1-R1).
+func TestTornHeaderIsStartedAgainAndTheLogKeepsWorking(t *testing.T) {
+	cases := map[string][]byte{
+		"22 zeros":              make([]byte, hdrEnd),
+		"11 zeros":              make([]byte, 11),
+		"magic version zeros":   append([]byte(sealedMagic+"\x01"), make([]byte, 16)...),
+		"a prefix of the magic": []byte("MVM"),
+	}
+	for name, torn := range cases {
+		t.Run(name, func(t *testing.T) {
+			key := testKey(t)
+			path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+			if err := os.WriteFile(path, torn, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := Check(path); err != nil {
+				t.Fatalf("Check of a torn header: %v", err)
+			}
+			if got, err := ReadLines(path, key); err != nil || len(got) != 0 {
+				t.Fatalf("ReadLines = %q, %v; want empty, nil", got, err)
+			}
+			s, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("Open of a torn header: %v", err)
+			}
+			defer s.Close()
+			if n := size(t, path); n != hdrEnd {
+				t.Errorf("file is %d bytes after open, want a fresh %d-byte header", n, hdrEnd)
+			}
+			if err := s.Append(evEnt, secretTuple(1000), secretEvent(), time.Now()); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			s.Close()
+			s2, err := Open(path, 100, key)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer s2.Close()
+			if got := allRecords(t, s2); len(got) != 1 {
+				t.Errorf("got %d records after reopen, want 1", len(got))
+			}
+		})
+	}
+}
+
+// Guards (pass now, must keep passing): a genuine header-only log keeps
+// its exact bytes on reopen; a 23-byte zero file and a foreign 22-byte
+// file are refused and left unchanged.
+func TestTornHeaderRuleDoesNotTouchOtherFiles(t *testing.T) {
+	key := testKey(t)
+	t.Run("genuine header-only log", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+		s, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		before, _ := os.ReadFile(path)
+		s, err = Open(path, 100, key)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		s.Close()
+		after, _ := os.ReadFile(path)
+		if !bytes.Equal(before, after) {
+			t.Error("a genuine header-only log was rewritten")
+		}
+	})
+	for name, body := range map[string][]byte{
+		"23 zero bytes":    make([]byte, hdrEnd+1),
+		"foreign 22 bytes": []byte("not a frame log at all"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			mustRefuse(t, name, path, key)
+			if got, _ := os.ReadFile(path); !bytes.Equal(got, body) {
+				t.Error("the refused file was changed")
+			}
+		})
+	}
+}
+
+// O1-F1 fix review: torn lines in the middle, NUL-filled and several at
+// once are all left out; an all-torn log seals as an empty one; a torn
+// line never excuses a later line that decodes but is not a match log line.
+func TestWriteSealedTornLineEdgeCases(t *testing.T) {
+	key := testKey(t)
+	nul := strings.Repeat("\x00", 64)
+	ok := map[string]struct {
+		lines   string
+		records int
+		skipped int
+	}{
+		"torn line between whole lines": {tornR1 + "\n" + tornFragment + "\n" + tornR2 + "\n", 2, 1},
+		"NUL-filled line and CRLF":      {tornR1 + "\r\n" + nul + "\n" + tornR2 + "\r\n", 2, 1},
+		"several torn lines":            {tornFragment + "\n" + tornR1 + "\n" + "{broken\n" + tornFragment, 1, 3},
+		"every line torn":               {tornFragment + "\n{broken\n", 0, 2},
+	}
+	for name, c := range ok {
+		path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+		if err := WriteSealed(path, key, []byte(c.lines)); err != nil {
+			t.Fatalf("%s: WriteSealed: %v", name, err)
+		}
+		s, err := Open(path, 10, key)
+		if err != nil {
+			t.Fatalf("%s: Open: %v", name, err)
+		}
+		if got := collect(t, s, Query{Source: Identity{MAC: evMAC}}); len(got) != c.records {
+			t.Errorf("%s: %d records, want %d", name, len(got), c.records)
+		}
+		s.Close()
+		if n, err := validateLinesCount(t, []byte(c.lines)); err != nil || n != c.skipped {
+			t.Errorf("%s: ValidateLines = (%d, %v), want (%d, nil)", name, n, err, c.skipped)
+		}
+	}
+	bad := tornR1 + "\n" + tornFragment + "\n" + `{"kind":"wat","id":"x"}` + "\n"
+	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+	if err := WriteSealed(path, key, []byte(bad)); err == nil {
+		t.Error("a torn line excused a later line of the wrong kind")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("WriteSealed wrote a file for a refused log")
+	}
+}
+
+// TestFixReviewZeroTailAndTornHeaderEdges tries to break the PROP-S2 and
+// O1-R1 rules: a zero tail longer than one read chunk, a late non-zero
+// byte past a chunk boundary, and a header-only file whose genuine salt
+// starts with zeros.
+func TestFixReviewZeroTailAndTornHeaderEdges(t *testing.T) {
+	appendBytes := func(t *testing.T, path string, b []byte) []byte {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(b); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		all, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return all
+	}
+
+	t.Run("a zero tail longer than the read chunk is cut and every real frame kept", func(t *testing.T) {
+		key := testKey(t)
+		path, bounds := writeN(t, key, 3)
+		appendBytes(t, path, make([]byte, 200<<10))
+		if _, err := ReadLines(path, key); err != nil {
+			t.Fatalf("ReadLines: %v", err)
+		}
+		s, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer s.Close()
+		if got := len(allRecords(t, s)); got != 3 {
+			t.Fatalf("%d records, want 3", got)
+		}
+		if got := size(t, path); got != bounds[3] {
+			t.Fatalf("size %d, want %d", got, bounds[3])
+		}
+	})
+
+	t.Run("one non-zero byte past the first chunk keeps the file refused and untouched", func(t *testing.T) {
+		key := testKey(t)
+		path, _ := writeN(t, key, 3)
+		tail := make([]byte, 100<<10)
+		tail[len(tail)-1] = 1
+		want := appendBytes(t, path, tail)
+		if s, err := Open(path, 100, key); err == nil {
+			s.Close()
+			t.Fatal("Open accepted zeros ending in a non-zero byte")
+		}
+		if _, err := ReadLines(path, key); err == nil {
+			t.Fatal("ReadLines accepted zeros ending in a non-zero byte")
+		}
+		got, _ := os.ReadFile(path)
+		if !bytes.Equal(got, want) {
+			t.Fatal("file was changed")
+		}
+	})
+
+	t.Run("a genuine header-only file with a mostly-zero salt keeps its bytes", func(t *testing.T) {
+		key := testKey(t)
+		path, _ := writeN(t, key, 0)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := len(b) - 16; i < len(b)-1; i++ {
+			b[i] = 0
+		}
+		b[len(b)-1] = 7
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := s.Append(evEnt, secretTuple(1), secretEvent(), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		got, _ := os.ReadFile(path)
+		if !bytes.HasPrefix(got, b) {
+			t.Fatal("the genuine header was rewritten")
+		}
+		s2, err := Open(path, 100, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s2.Close()
+		if n := len(allRecords(t, s2)); n != 1 {
+			t.Fatalf("%d records, want 1", n)
+		}
+	})
 }

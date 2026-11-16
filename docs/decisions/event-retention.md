@@ -229,8 +229,8 @@ cannot have that combine with a restart to silently wipe a router's list.
 ## Addendum, 2026-10-10: rule 6 and the drop-list exception end; the auth stores are the exception to "Postgres is unaffected" (#1202)
 
 **Status:** Decided (owner rulings 2, 11, 13 and 14 in
-`docs/decisions/gauntlet-adoption.md`, 2026-10-10). Built on
-`feat/1202-gauntlet` for v0.7.0, not yet merged.
+`docs/decisions/gauntlet-adoption.md`, 2026-10-10). Merged
+into `batch-a` for v0.7.0 (was built on `feat/1202-gauntlet`).
 
 Authentication moves onto the gauntlet library, and its account store
 refuses to open over a backend that would hold the document in the clear
@@ -286,7 +286,9 @@ log is refused at start-up, never read or sealed in place, and a frame of
 whole length that does not open is refused, never skipped.
 
 The same limit as the day files, said plainly: frames cut off the end
-are indistinguishable from a crash tail and are dropped as one, and the
+are indistinguishable from a crash tail and are dropped as one (and a
+zero-filled tail left by a power loss mid-append is cut back as one; a
+header torn by a crash before any frame is written is started again), and the
 whole file replaced by an older valid copy is not detected. An
 append-only file cannot bind "nothing comes after me" without a commit
 record kept elsewhere; the match log is bounded evidence, not account

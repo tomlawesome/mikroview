@@ -237,7 +237,7 @@
           <div class="wmain">
             <p class="lead">Have the router fetch and trust this MikroView's certificate, so the log stream can travel encrypted. <b>Run this on the router</b> — MikroView never connects to it.</p>
             <div class="cmd"><span class="cm"># RouterOS terminal</span>
-/tool fetch url="https://<span class="hi">192.0.2.30</span>/ca.crt" dst-path=mikroview-ca.crt
+/tool fetch url="https://<span class="hi">198.51.100.30</span>/ca.crt" dst-path=mikroview-ca.crt
 /certificate import file-name=mikroview-ca.crt</div>
             <span class="copy">Copy</span>
             <div class="obs waiting"><span class="st">●</span><span>Waiting — nothing has fetched the certificate yet.<span class="why">MikroView can only see what arrives; it will notice the fetch the moment it happens.</span></span><time>13:38:02</time></div>
@@ -276,7 +276,7 @@
               <p class="lead">Point the router's logging at this MikroView, TLS on:</p>
               <div class="cmd">/system logging action add \
     name=mikroview target=remote \
-    remote=<span class="hi">192.0.2.30</span> \
+    remote=<span class="hi">198.51.100.30</span> \
     remote-port=<span class="hi">6514</span> tls=yes
 /system logging add \
     topics=firewall action=mikroview</div>
@@ -305,12 +305,12 @@
               <p class="lead">Point the router's logging at this MikroView, TLS on:</p>
               <div class="cmd">/system logging action add \
     name=mikroview target=remote \
-    remote=<span class="hi">192.0.2.30</span> \
+    remote=<span class="hi">198.51.100.30</span> \
     remote-port=<span class="hi">6514</span> tls=yes
 /system logging add \
     topics=firewall action=mikroview</div>
               <span class="copy">Copy</span>
-              <div class="obs ok"><span class="st">✓</span><span><b>Logs are arriving.</b> TLS handshake complete; first line from 192.0.2.1.<span class="why">14 lines so far. This is observed arrival, not a probe — MikroView never connected out.</span></span><time>13:41:07</time></div>
+              <div class="obs ok"><span class="st">✓</span><span><b>Logs are arriving.</b> TLS handshake complete; first line from 198.51.100.1.<span class="why">14 lines so far. This is observed arrival, not a probe — MikroView never connected out.</span></span><time>13:41:07</time></div>
             </div>
           </div>
           <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="btn primary">Next</span></div>
@@ -340,7 +340,7 @@
               <div class="cmd"><span class="cm"># scheduled on the router;</span>
 <span class="cm"># full script below</span>
 /tool fetch http-method=post \
-    url="https://<span class="hi">192.0.2.30</span>\
+    url="https://<span class="hi">198.51.100.30</span>\
 /api/push/state" …</div>
               <div class="obs waiting"><span class="st">●</span><span>Waiting for the first push.<span class="why">The token exists; nothing has used it yet.</span></span><time>13:43:29</time></div>
             </div>
@@ -491,7 +491,7 @@
     <div class="anno"><b>Relaunch is the same door as first run</b> — Admin ▸ Run setup… is an action, not a page (ratified in the nav record); the modal it opens is this one, in whatever state the evidence is in. No separate "setup status" surface to drift out of sync.</div>
     <div class="anno"><b>Keyboard &amp; motion:</b> focus is trapped in the modal; Esc closes (explicit, like ✕); Tab order is steps → body → footer; the waiting dot's pulse stops under reduced motion; step changes are announced ("Step 4 of 5 — Push router state — waiting for the first push").</div>
   </div>
-  <p class="specnote"><b>Carried forward, untouched:</b> the Q V rail and its states, the first-run chrome (no badge before the first flag), and the #490 grammar (no wizard for viewers). <b>The data story is the same world, day one:</b> rb5009 at 192.0.2.1, MikroView at 192.0.2.30, cam-porch and nas already on the wire — this is the afternoon the navigation rounds' story begins; their "first in 41 days" quiet starts counting when this wizard's logs start arriving.</p>
+  <p class="specnote"><b>Carried forward, untouched:</b> the Q V rail and its states, the first-run chrome (no badge before the first flag), and the #490 grammar (no wizard for viewers). <b>The data story is the same world, day one:</b> rb5009 at 198.51.100.1, MikroView at 198.51.100.30, cam-porch and nas already on the wire — this is the afternoon the navigation rounds' story begins; their "first in 41 days" quiet starts counting when this wizard's logs start arriving.</p>
 </section>
 
 <script>

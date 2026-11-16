@@ -63,7 +63,7 @@ is added to the map for either — the map dims to the answer.
 Round 49's. 445/tcp: 2 lines, 14 drops, alex-desktop and laptop-anna,
 nas, cam-porch. The traced refusal is round 49's UNPLANNED flag
 (cam-porch → alex-desktop, #17, 14×). The traced accept is laptop-anna's
-off-baseline ssh out, 21:26, `srcnat → 203.0.113.7:51820`.
+off-baseline ssh out, 21:26, `srcnat → 192.0.2.7:51820`.
 
 ## For the build
 

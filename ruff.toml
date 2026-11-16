@@ -1,0 +1,21 @@
+# ruff, CI-only (lint:ruff, report-only until #1462/#1463 switch it to
+# blocking): the defaults plus the flake8-bandit security rules.
+extend-exclude = [
+  "docs/design/**", # design mock-up build scripts, never shipped
+]
+
+[lint]
+extend-select = ["S"]
+
+[lint.per-file-ignores]
+# demo-data generators: random is for fake traffic, never for security; the
+# literals are placeholder credentials for a throwaway demo instance; S108:
+# the fixed /tmp demo folder is made 0700 and its file 0600 before use
+"scripts/seed-demo.py" = ["S311", "S105", "S108"]
+"tools/screenshots/*" = ["S311"] # fake traffic for screenshots, not security use
+# fixed `git` calls with list arguments, no shell, inputs are CI SHAs
+"scripts/ci-changed-paths-guard.py" = ["S603", "S607"]
+# URL is the script's own https://127.0.0.1 base; the password is an obvious placeholder
+"scripts/upgrade-fixture-session.py" = ["S310", "S105"]
+"**/test_*.py" = ["S101"] # test asserts are the assertions
+"**/*_test.py" = ["S101"] # test asserts are the assertions

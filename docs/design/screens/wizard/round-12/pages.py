@@ -1,7 +1,8 @@
 # Generates the direction page from round 11's skeleton, so the wizard's
 # markup is round 10's AG exactly and only the door and the journey differ.
 import re
-sv = open('/home/user/projects/mikroview/frontend/src/components/Fullfall.svelte').read()
+import pathlib
+sv = (pathlib.Path(__file__).resolve().parents[5] / 'frontend/src/components/Fullfall.svelte').read_text()
 frag = '<div class="fullfall door" id="fullfall" aria-hidden="true">' + ''.join(re.findall(r'<i[^>]*></i>', sv)) + '</div>'
 page = """<div class="page" id="page" aria-hidden="true">
   <div class="bar"><span class="wm" id="barwm">MIKRO<em>VIEW</em></span><div class="chips" id="chips"></div><div class="right" id="barright"></div></div>

@@ -1592,7 +1592,8 @@ log:
 ASCII wordmark once (plain text, not a log line -- always shown,
 regardless of `level` or whether stdout is a terminal), followed by a
 `version` line identifying which build is running -- the short commit
-SHA it was built from (see `.github/workflows/docker.yml`), the
+SHA it was built from (GitLab's `build:image` job, see
+[docs/release-signing.md](release-signing.md)), the
 practical stand-in for a registry digest since a binary can't know its
 own digest at build time. If the persisted version marker
 (`/var/lib/mikroview/version`) doesn't match the running build, that
@@ -4045,7 +4046,9 @@ retention key to move it.
 
 The match log travels as plain JSON lines in the backup, like every other
 store's plain JSON, and is sealed again under the restoring deployment's
-key (#1452, #1470), so a v0.6 backup still restores. Both `-backup` of an
+key (#1452, #1470), so a v0.6 backup still restores; a torn line left by
+a crash under v0.6 is left out and reported in the log, as v0.6 itself
+skipped it. Both `-backup` of an
 install with a match log and `-restore` of a backup carrying one need
 `history.keyFile`, and stop with nothing changed without it.
 
@@ -4154,7 +4157,7 @@ names the new paths and the same `history.keyFile` key is in place.
 What is still refused at start-up, naming the store: a file not made
 with your key (forged, edited or plaintext), and one store's file put
 in another store's place. A file written by a release before v0.7.0 is
-bound to its old absolute path: start v0.7.0 once at the old path first
+bound to its old configured path: start v0.7.0 once at the old path first
 (each such file is re-sealed the new way when MikroView opens it, and
 the log says so once per file), then move it.
 
@@ -5241,13 +5244,14 @@ Override individual scalar settings without a mounted file:
 ## Checking your version
 
 What you see depends on which image you are running, because there are
-two kinds (see `.github/workflows/docker.yml`; pushing to `dev`
-deliberately publishes no image at all):
+two kinds, both built once by GitLab's `build:image` job and copied to
+GHCR unchanged (see [docs/release-signing.md](release-signing.md);
+pushing to `dev` deliberately publishes no image at all):
 
 - **A release build** -- `latest`, or an explicit `v0.1.0`-style tag --
   reports that semantic version, e.g. `v0.1.0`. The version comes from
-  the `VERSION` file in the repository, and merging to `main` with a
-  value that has no tag yet is what cuts the release.
+  the `VERSION` file in the repository, and pushing a `v<VERSION>` tag
+  is what cuts the release; merging to `main` does not.
 - **A preview build** -- `preview`, or `preview-<sha>` -- reports the
   short git commit SHA it was built from.
 

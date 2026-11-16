@@ -31,7 +31,10 @@ import (
 // Two formats use it: this package's day files ("MVEVT") and the
 // watchlist match log ("MVMLG", internal/matchlog, #1470). Not detected,
 // in either: frames cut off the end (indistinguishable from a crash tail
-// and handled as one) and the whole file replaced by an older valid copy.
+// and handled as one, and a zero-filled tail left by a power loss
+// mid-append, cut back as one) and the whole file replaced by an older
+// valid copy. A header torn by a crash before any frame is written is
+// started again (see TornHeader).
 // A middle frame's length damaged to a value within the ceiling that runs
 // past the end of the file is likewise indistinguishable from a torn tail
 // and is cut, as for the day files.
@@ -65,6 +68,32 @@ func (ff FrameFormat) aad(seq uint64) []byte {
 	aad := make([]byte, 0, len(ff.AADPrefix)+8)
 	aad = append(aad, ff.AADPrefix...)
 	return binary.BigEndian.AppendUint64(aad, seq)
+}
+
+// errTornHeader is scanFrames' report of a file no longer than a header
+// whose bytes TornHeader accepts.
+var errTornHeader = errors.New("retention: header torn by a crash while it was being written")
+
+// TornHeader reports whether b, the whole of a file, is a header torn by
+// a crash: 0 < len(b) <= the header's length, and every byte either zero
+// or the byte the writer puts at that index in Magic+Version. A header is
+// one Write then Sync; a crash between them leaves the file short,
+// zero-filled, or a prefix of magic and version then zeros. Such a file
+// can hold no frame, so nothing is lost by starting it again. A genuine
+// header-only file has a random salt, so it is not matched and keeps its
+// salt; anything longer than a header, or with a byte that is neither
+// zero nor ours, stays refused as damage or a foreign file (O1-R1).
+func (ff FrameFormat) TornHeader(b []byte) bool {
+	if len(b) == 0 || len(b) > ff.headerBytes() {
+		return false
+	}
+	ours := ff.Magic + string([]byte{ff.Version})
+	for i, c := range b {
+		if c != 0 && (i >= len(ours) || c != ours[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // HasMagic reports whether b begins with this format's magic.
@@ -135,6 +164,19 @@ func OpenFrameLog(path string, key *Key, format FrameFormat) (*FrameLog, error) 
 		}
 	default:
 		salt, frames, end, err := scanFrames(f, format)
+		if errors.Is(err, errTornHeader) {
+			// No frame was ever written: start the file again.
+			if err := f.Truncate(0); err != nil {
+				return nil, fmt.Errorf("retention: truncating torn header in %s: %w", path, err)
+			}
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return nil, fmt.Errorf("retention: seeking %s: %w", path, err)
+			}
+			if err := l.writeHeader(); err != nil {
+				return nil, err
+			}
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -311,21 +353,62 @@ func SealFrames(key *Key, format FrameFormat, plains [][]byte) ([]byte, error) {
 // offset off in a file of size bytes. A torn tail -- fewer than 4 bytes
 // left, or a declared length running past the end of the file -- is
 // reported as torn, for the caller to stop at (and the writer to cut
-// back). A length of zero, over the format's ceiling, or too short to
-// hold a nonce, with the whole of it inside the file, is an error: it is
-// damage, not a crash tail, and treating it as one would cut off every
-// whole frame after it.
+// back). A length of zero whose bytes and everything after them to the
+// end of the file are zero, no longer than one frame can be, is a torn
+// tail too (see zeroFilledTail). Any other zero length, or one over the
+// format's ceiling or too short to hold a nonce, with the whole of it
+// inside the file, is an error: it is damage, not a crash tail, and
+// treating it as one would cut off every whole frame after it.
 //
 // A length over the ceiling is never a torn tail, even past the end of
 // the file: the writer never declares one, so it is damage.
-func checkFrameLength(name string, seq uint64, off, size, n int64, format FrameFormat) (torn bool, err error) {
+func checkFrameLength(r io.ReaderAt, name string, seq uint64, off, size, n int64, format FrameFormat) (torn bool, err error) {
 	if n <= int64(format.MaxFrameBytes) && off+4+n > size {
 		return true, nil
+	}
+	if n == 0 {
+		zero, err := zeroFilledTail(r, off, size, format)
+		if err != nil {
+			return false, fmt.Errorf("retention: reading %s tail at offset %d: %w", name, off, err)
+		}
+		if zero {
+			return true, nil
+		}
 	}
 	if n <= nonceBytes || n > int64(format.MaxFrameBytes) {
 		return false, fmt.Errorf("retention: %s frame %d at offset %d declares length %d: %w", name, seq, off, n, ErrFrameDidNotOpen)
 	}
 	return false, nil
+}
+
+// zeroFilledTail reports whether every byte from off to the end of the
+// file is zero and the run is no longer than one frame can be. A power
+// loss while a frame is being appended can leave the file extended but
+// the bytes not yet on disk (ext4 data=writeback, XFS, flash cards and
+// write-back VM disks zero-fill such a region), which reads as a frame of
+// length 0. That is the crash tail, not damage: the writer never has more
+// than one frame in flight, so a zero run longer than 4+MaxFrameBytes, or
+// a zero length followed by anything non-zero, stays damage and is
+// refused. The same shape as a WAL reader treating a zero-filled trailer
+// as the end of the log (PROP-S2).
+func zeroFilledTail(r io.ReaderAt, off, size int64, format FrameFormat) (bool, error) {
+	if size-off > 4+int64(format.MaxFrameBytes) {
+		return false, nil
+	}
+	buf := make([]byte, min(64<<10, size-off))
+	for off < size {
+		n := min(int64(len(buf)), size-off)
+		if _, err := r.ReadAt(buf[:n], off); err != nil {
+			return false, err
+		}
+		for _, b := range buf[:n] {
+			if b != 0 {
+				return false, nil
+			}
+		}
+		off += n
+	}
+	return true, nil
 }
 
 // nonceBytes is the AES-GCM nonce size every frame starts with.
@@ -340,11 +423,19 @@ const nonceBytes = 12
 // treated as the end; a damaged length inside the file is an error (see
 // checkFrameLength).
 func scanFrames(f *os.File, format FrameFormat) (salt []byte, frames uint64, end int64, err error) {
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("retention: sizing file: %w", err)
+	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, 0, 0, fmt.Errorf("retention: seeking to header: %w", err)
 	}
 	header := make([]byte, format.headerBytes())
-	if _, err := io.ReadFull(f, header); err != nil {
+	n, err := io.ReadFull(f, header)
+	if (err == nil || errors.Is(err, io.ErrUnexpectedEOF)) && size <= int64(len(header)) && format.TornHeader(header[:n]) {
+		return nil, 0, 0, errTornHeader
+	}
+	if err != nil {
 		return nil, 0, 0, fmt.Errorf("retention: reading header: %w", err)
 	}
 	if !format.HasMagic(header) {
@@ -356,17 +447,13 @@ func scanFrames(f *os.File, format FrameFormat) (salt []byte, frames uint64, end
 	salt = header[len(format.Magic)+1:]
 
 	off := int64(format.headerBytes())
-	size, err := f.Seek(0, io.SeekEnd)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("retention: sizing file: %w", err)
-	}
 	var lenBuf [4]byte
 	for off+4 <= size {
 		if _, err := f.ReadAt(lenBuf[:], off); err != nil {
 			return nil, 0, 0, fmt.Errorf("retention: reading frame %d length: %w", frames, err)
 		}
 		n := int64(binary.BigEndian.Uint32(lenBuf[:]))
-		torn, err := checkFrameLength(filepath.Base(f.Name()), frames, off, size, n, format)
+		torn, err := checkFrameLength(f, filepath.Base(f.Name()), frames, off, size, n, format)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -401,6 +488,9 @@ func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64
 	defer f.Close()
 
 	salt, _, _, err := scanFrames(f, format)
+	if errors.Is(err, errTornHeader) {
+		return nil // no frame was ever written: an empty log
+	}
 	if err != nil {
 		return err
 	}
@@ -424,7 +514,7 @@ func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64
 			return fmt.Errorf("retention: reading %s frame %d: %w", filepath.Base(path), seq, err)
 		}
 		n := int64(binary.BigEndian.Uint32(lenBuf[:]))
-		torn, err := checkFrameLength(filepath.Base(path), seq, off, size, n, format)
+		torn, err := checkFrameLength(f, filepath.Base(path), seq, off, size, n, format)
 		if err != nil {
 			return err
 		}

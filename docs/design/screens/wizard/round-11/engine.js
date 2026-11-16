@@ -11,13 +11,13 @@
    Nothing here decides how anything looks. */
 window.MV = (() => {
   const story = {
-    mv: '192.0.2.15:8080', mvHost: '192.0.2.15', router: 'rb5009', addr: '192.0.2.1', other: '198.51.100.200',
+    mv: '198.51.100.15:8080', mvHost: '198.51.100.15', router: 'rb5009', addr: '198.51.100.1', other: '192.0.2.1',
     t0: 14 * 3600 + 2 * 60 + 50, tokenUntil: '14:17', token: 'demo0000demo0000demo',
     rules: 47, alreadyLog: ['in-ssh', 'est-rel', 'icmp'], leases: 31, peers: 3, interval: '20 min', reviewed: '7.24.2',
     suggestions: [
       { chain: 'forward', action: 'drop', comment: 'drop everything else', why: 'last rule on forward', prefix: 'fwd-drop' },
       { chain: 'input', action: 'drop', comment: 'drop from WAN', why: 'internet → router', prefix: 'wan-in' },
-      { chain: 'forward', action: 'accept', comment: 'port-forward 443 → .40', why: 'inbound accept across the boundary', prefix: 'nat' },
+      { chain: 'forward', action: 'accept', comment: 'port-forward 443 → .10', why: 'inbound accept across the boundary', prefix: 'nat' },
       { chain: 'forward', action: 'drop', comment: 'guest → LAN', why: 'guest wifi → LAN', prefix: 'guest-lan' },
       { chain: 'input', action: 'drop', comment: 'wg0 → input', why: 'VPN peer → router', prefix: 'wg-in' },
     ],
@@ -29,7 +29,7 @@ window.MV = (() => {
     boundaries: [
       { id: 'wan-in', name: 'ether1 · input', sub: 'internet → the router', logs: ['in-ssh'], sug: 1, lane: 'lan' },
       { id: 'fwd', name: 'bridge → ether1', sub: 'LAN to the internet', logs: ['est-rel'], sug: 0, lane: 'srv' },
-      { id: 'nat', name: 'ether1 → bridge', sub: 'port-forward 443 → .40', logs: [], sug: 2, lane: 'iot' },
+      { id: 'nat', name: 'ether1 → bridge', sub: 'port-forward 443 → .10', logs: [], sug: 2, lane: 'iot' },
       { id: 'guest', name: 'bridge-guest → bridge', sub: 'guest wifi → LAN', logs: [], sug: 3, lane: 'guest' },
       { id: 'wg', name: 'wg0 · input', sub: 'VPN peers → the router', logs: [], sug: 4, lane: '5' },
       { id: 'icmp', name: 'any · icmp', sub: 'pings, both ways', logs: ['icmp'], sug: null, lane: 'lan' },
@@ -50,7 +50,7 @@ window.MV = (() => {
      question owns one section of the block. */
   const questions = [
     { id: 'name', kind: 'text', title: 'Name this router', ask: 'What do you call this router?', hint: 'The name MikroView shows on the fall, the stream and Entities.', placeholder: 'rb5009', field: 'name' },
-    { id: 'addr', kind: 'text', title: 'Its address', ask: 'Which address will it send from?', hint: 'The router\u2019s own address on the network MikroView sits on. The enrolment window opens for this address alone, so the log port never opens to anyone else.', placeholder: '192.0.2.1', field: 'addr' },
+    { id: 'addr', kind: 'text', title: 'Its address', ask: 'Which address will it send from?', hint: 'The router\u2019s own address on the network MikroView sits on. The enrolment window opens for this address alone, so the log port never opens to anyone else.', placeholder: '198.51.100.1', field: 'addr' },
     { id: 'push', kind: 'yesno', title: 'Push router state', ask: 'Let the router push its rule table, address lists, leases and interfaces?', hint: 'Every 20 minutes the router runs a script that posts its own state to MikroView. With it the fall names its bands after your rules and Entities can count what it sees against what exists. Without it the fall still runs, address-only.', yes: 'Yes, every 20 minutes', no: 'Not now', gives: 'named bands on the fall · rules to tag · leases and interfaces on the map', without: 'the fall stays address-only' },
     { id: 'backup', kind: 'yesno', title: 'Back up the router', ask: 'Back the router up to MikroView every night?', hint: 'At 03:00 the router exports its configuration and posts it; MikroView keeps it encrypted under your key file. Nothing is fetched — the router sends.', yes: 'Yes, nightly at 03:00', no: 'Not now', gives: 'a nightly .backup and .rsc under your key', without: 'no backups kept here' },
     { id: 'pass', kind: 'password', title: 'Mint the token', ask: 'Your password, to mint this router\u2019s enrolment token', hint: 'Minting is what opens the log port for the address above, for 15 minutes, so it asks for your password at that moment. The token goes at the end of the block.', field: 'pass' },
@@ -118,7 +118,7 @@ window.MV = (() => {
   const fixSrc = () => `/system logging action set [find name=mikroview] src-address=${state.addr || story.addr}`;
 
   /* ---- the simulated router ---- */
-  const srcs = ['203.0.113.7', '198.51.100.23', '198.51.100.201', '198.51.100.202', '192.0.2.42', '192.0.2.77', '198.51.100.203', '198.51.100.204'];
+  const srcs = ['203.0.113.7', '203.0.113.23', '203.0.113.99', '203.0.113.35', '198.51.100.13', '198.51.100.17', '198.51.100.135', '203.0.113.12'];
   const ports = [22, 443, 3389, 23, 8080, 445, 5060, 1900, 53];
   const rnd = a => a[Math.floor(Math.random() * a.length)];
   const line = () => {
@@ -126,7 +126,7 @@ window.MV = (() => {
     const proto = pre === 'icmp' ? 'ICMP' : rnd(['TCP (SYN)', 'TCP (ACK)', 'UDP']);
     const iface = pre === 'wg-in' ? 'wg0' : pre === 'guest-lan' ? 'bridge-guest' : rnd(['ether1', 'ether1', 'bridge']);
     const chain = ['in-ssh', 'wan-in', 'wg-in'].includes(pre) ? 'input' : 'forward';
-    const dst = chain === 'input' ? '198.51.100.205' : rnd(['192.0.2.40', '192.0.2.12', '198.51.100.206', '198.51.100.207']);
+    const dst = chain === 'input' ? '192.0.2.140' : rnd(['198.51.100.10', '198.51.100.12', '203.0.113.53', '203.0.113.206']);
     const src = rnd(srcs);
     const action = pre === 'nat' || pre === 'est-rel' ? 'accept' : 'drop';
     return { t: hms(now()), pre, chain, iface, proto, src, dst, port: rnd(ports), action, text: `${pre} ${chain}: in:${iface} out:${chain === 'input' ? '(unknown 0)' : rnd(['ether1', 'bridge'])}, proto ${proto}, ${src}:${40000 + Math.floor(Math.random() * 20000)}->${dst}:${rnd(ports)}, len ${40 + Math.floor(Math.random() * 1400)}` };
