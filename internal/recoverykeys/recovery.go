@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -204,18 +205,42 @@ func loadOrCreatePepper(path string) ([]byte, error) {
 	}
 	// O_EXCL: never overwrite an existing pepper, even on a race. Losing
 	// it makes every stored digest unverifiable.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := openPepperFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
 			return loadOrCreatePepper(path) // lost the race; read theirs
 		}
 		return nil, err
 	}
-	defer f.Close()
-	if _, err := f.WriteString(hex.EncodeToString(p)); err != nil {
-		return nil, err
+	// Durable write (#1484): write, fsync, close, each error checked. The
+	// pepper is only returned once it is known to be on disk; on any
+	// failure the file this call created is removed, so the next start
+	// generates a fresh one rather than refusing on a short file.
+	_, err = f.WriteString(hex.EncodeToString(p))
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("auth: writing the recovery pepper %s: %w", path, err)
 	}
 	return p, nil
+}
+
+// pepperFile is what loadOrCreatePepper writes the pepper through; an
+// *os.File, or a test double whose Sync or Close fails.
+type pepperFile interface {
+	io.Writer
+	io.StringWriter
+	Sync() error
+	Close() error
+}
+
+var openPepperFile = func(name string, flag int, perm os.FileMode) (pepperFile, error) {
+	return os.OpenFile(name, flag, perm)
 }
 
 func (s *RecoveryStore) digest(key string) recoveryRecord {

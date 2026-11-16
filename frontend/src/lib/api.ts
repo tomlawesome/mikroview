@@ -2531,11 +2531,14 @@ export async function deleteDroplistEntry(cidr: string): Promise<string | null> 
 // the only place the key's cleartext value is ever returned, and only
 // once (#1225's one-time reveal). scheduler comes back with the real
 // key already filled in, unlike the placeholder version fetchDroplist's
-// own setup.scheduler carries.
+// own setup.scheduler carries. password is the admin's own, re-checked
+// by the server before anything is minted (#1447): a wrong one comes
+// back as the server's error text and leaves the old key working.
 export async function mintDroplistKey(
   address: string,
+  password: string,
 ): Promise<{ key: string; createdAt: string; scheduler: string } | string> {
-  const res = await postJSON('/api/droplist/key', { address })
+  const res = await postJSON('/api/droplist/key', { address, password })
   if (res.ok) return res.json()
   return (await errorText(res)).trim() || `mintDroplistKey: ${res.status}`
 }

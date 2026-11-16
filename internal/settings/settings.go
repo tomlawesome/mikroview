@@ -219,7 +219,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			if s.geo == nil {
 				s.geo = map[string]GeoKey{}
 			}
-			s.geo[name] = GeoKey{Sealed: k.Sealed, SetAt: k.SetAt, SetBy: k.SetBy}
+			s.geo[name] = GeoKey(k)
 		}
 		return nil
 	})
@@ -372,7 +372,7 @@ func (s *Store) persistLocked() error {
 	if len(s.geo) > 0 {
 		geo = make(map[string]geoKeySection, len(s.geo))
 		for name, k := range s.geo {
-			geo[name] = geoKeySection{Sealed: k.Sealed, SetAt: k.SetAt, SetBy: k.SetBy}
+			geo[name] = geoKeySection(k)
 		}
 	}
 	data, err := json.MarshalIndent(storeFile{

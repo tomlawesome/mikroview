@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "scripts/*.mjs",
+    "tests/**/*.mjs",
+    "src/dev/*.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,svelte}",
+    "scripts/**/*.mjs",
+    "tests/**"
+  ],
+  "ignoreBinaries": [],
+  "//": "jscpd runs from CI's shell, so no file imports it",
+  "ignoreDependencies": ["jscpd"]
+}

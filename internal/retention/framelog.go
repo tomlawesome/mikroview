@@ -147,7 +147,7 @@ func OpenFrameLog(path string, key *Key, format FrameFormat) (*FrameLog, error) 
 	ok := false
 	defer func() {
 		if !ok {
-			f.Close()
+			_ = f.Close()
 		}
 	}()
 
@@ -485,7 +485,7 @@ func ReadFrames(path string, key *Key, format FrameFormat, visit func(seq uint64
 	if err != nil {
 		return fmt.Errorf("retention: opening %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	salt, _, _, err := scanFrames(f, format)
 	if errors.Is(err, errTornHeader) {

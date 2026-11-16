@@ -155,9 +155,11 @@ What lives where:
   either the data directory (a tarball) or a `pg_dump`. Booting an old
   image happens here and nowhere else in the gate.
 - `record:upgrade-fixture` in `.gitlab-ci.yml` -- runs both of those on
-  every `v*` tag, after waiting up to 45 minutes for that version's
-  image to appear on GHCR. `allow_failure: true`, so a slow release
-  never reddens a tag pipeline; if it does fail, run the script by hand.
+  every `v*` tag, against the digest that tag's own pipeline built,
+  signed and published to the GitLab registry (#1472; the script's
+  `MV_IMAGE_REF`). A failed pull exits 75, which alone is allowed to
+  fail, so a registry blip never reddens a tag pipeline; if it does,
+  run the script by hand.
 
 The registry copy of the manifest is the fallback, not the source. A job
 token can upload a package but cannot push or open a merge request, so

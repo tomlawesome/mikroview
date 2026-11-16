@@ -93,7 +93,7 @@ Settings in muted ink (scene 6).
 ## Data story
 
 router `branch-e4a1` · 43 turned away · 24/24 slots · 38/s ·
-Dropped 812 · Rejected (undeclared) 2,867 · Oversized 7 from `198.51.100.1` ·
+Dropped 812 · Rejected (undeclared) 2,867 · Oversized 7 from `198.51.100.9` ·
 wsDropped 156. Multi-fire scenes are the flood scenario (61/s, drops 9%).
 
 Shots in `shots/`, one per scene plus `full-page.png`.

@@ -517,7 +517,7 @@ func joinOnShutdown(wg *sync.WaitGroup, ctx context.Context, shutdown func(conte
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		shutdown(shutdownCtx)
+		_ = shutdown(shutdownCtx)
 	}()
 }
 
@@ -1192,7 +1192,7 @@ func main() {
 		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and MikroView is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
-		defer ml.Close()
+		defer func() { _ = ml.Close() }()
 	}
 	// eng is the evaluation chassis (issue #398, part of the v0.3.0
 	// unification -- see docs/decisions/evaluation-engine.md): one
@@ -2246,7 +2246,7 @@ func main() {
 					routerState.NoteVersionHint(clientIP, hint, time.Now())
 				}
 				w.Header().Set("Content-Type", "application/x-pem-file")
-				w.Write(caCertPEM)
+				_, _ = w.Write(caCertPEM)
 			})
 		}
 	}
@@ -2455,11 +2455,7 @@ func startOIDC(ctx context.Context, cfg config.Config, authStore *gauntlet.Store
 			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
 		} else {
 			oidcClient, oidcState = client, state
-			if oidcPolicy.Restricted() {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
-			} else {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
-			}
+			oidcLog.Info(ssoActiveLogLine(cfg.OIDC.IssuerURL, oidcPolicy))
 			// "SSO is additive; keep a local admin" (#1252). Said out
 			// loud at every start while it is untrue, because the day it
 			// matters is the day the provider is down and nobody is
@@ -2495,7 +2491,7 @@ func frontendHandler() http.Handler {
 	// Either way it goes out through staticCacheHeaders (#347), so
 	// the "no frontend" page is itself revalidated rather than kept
 	// by a browser after a proper build is deployed.
-	var ui http.Handler = http.FileServer(http.FS(frontend))
+	ui := http.FileServer(http.FS(frontend))
 	if !web.HasUI() {
 		logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
 		ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3173,7 +3169,7 @@ func runHealthcheck() int {
 		logger.Error(err.Error())
 		return 1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		logger.Error(fmt.Sprintf("unexpected status %d", resp.StatusCode))
 		return 1
@@ -3867,4 +3863,20 @@ func (a eventRateSource) EventsPerSecond() float64 {
 		return 0
 	}
 	return a.st.EventsPerSecond()
+}
+
+// ssoActiveLogLine is the start-up line for working SSO. It says
+// "restricted" only when gauntlet's own rule, AllowIssuerWithPolicy,
+// says strangers are kept out at a shared issuer (the tenant is pinned).
+// A group or email allow-list alone does not do that there, so it is
+// described as a check, not as a closed door (#1480).
+func ssoActiveLogLine(issuer string, p goidc.Policy) string {
+	if goidc.IsMultiTenantIssuer(issuer) && goidc.AllowIssuerWithPolicy(issuer, p) == nil {
+		return fmt.Sprintf("SSO login active against %s, restricted to the configured tenant", issuer)
+	}
+	line := fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", issuer)
+	if len(p.AllowedGroups) > 0 || len(p.AllowedEmails) > 0 || len(p.AllowedEmailDomains) > 0 || len(p.RequiredClaims) > 0 {
+		line += ", then checked against the configured allow-list"
+	}
+	return line
 }

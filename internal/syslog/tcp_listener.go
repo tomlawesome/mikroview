@@ -814,11 +814,11 @@ func tcpIdleTimeout() time.Duration {
 // see #202 and handleTCPConn's comment. Split from ListenTCP so tests can
 // bind an ephemeral port and learn its address before dialing it.
 func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error {
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	// A buffered channel used purely as a counting semaphore: acquiring a
@@ -881,7 +881,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 				if total, ok := enrolmentRejectGate.Allow(); ok {
 					tcpLog.Warn(fmt.Sprintf("connection from an address that is neither a declared/enrolled router nor the address a pending enrolment token was minted for -- rejecting %s (%d such rejections since start or last clear)", host, total))
 				}
-				conn.Close()
+				_ = conn.Close()
 				continue
 			}
 		}
@@ -909,7 +909,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			if total, ok := perSourceRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached -- rejecting %s (%d such rejections since start or last clear)", perSourceLimit(), host, total))
 			}
-			conn.Close()
+			_ = conn.Close()
 			continue
 		}
 		if outOfUnreserved {
@@ -919,7 +919,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start or last clear)",
 					unreservedCap, reservedSlots(), maxTCPConns(), host, total))
 			}
-			conn.Close()
+			_ = conn.Close()
 			continue
 		}
 
@@ -952,7 +952,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			if total, ok := globalRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start or last clear)", maxTCPConns(), conn.RemoteAddr(), total))
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}
 }
@@ -1269,7 +1269,7 @@ func bsdTimestampPrefix(ts []byte) bool {
 }
 
 func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// done, closed when this function returns, lets the watcher below
 	// exit as soon as *this* connection ends -- not only on process
@@ -1283,7 +1283,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			conn.Close()
+			_ = conn.Close()
 		case <-done:
 		}
 	}()
@@ -1295,7 +1295,9 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// writes on this same conn, and honours whatever deadline is set on
 	// it -- so a connection that opens and then never completes (or
 	// never attempts) a handshake doesn't hold its slot forever.
-	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+	if err := conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout())); err != nil {
+		return
+	}
 
 	// noteConnection fires here, past a completed TLS handshake, not
 	// from ServeTCP's accept branch: tls.Listener.Accept negotiates the
@@ -1477,12 +1479,12 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 		}
 	}
 
-	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+	_ = conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
 			awaitingHeader = false
-			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+			_ = conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 
 			if oversized {
 				// Still discarding the tail of a message whose start was
@@ -1648,7 +1650,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				// resolves the boundary exactly, and if it never does
 				// the next timeout falls through to the flush below.
 				awaitingHeader = true
-				conn.SetReadDeadline(time.Now().Add(tcpHeaderCompletionWindow))
+				_ = conn.SetReadDeadline(time.Now().Add(tcpHeaderCompletionWindow))
 				continue
 			}
 
@@ -1664,7 +1666,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				// idle one: the sender simply finished a bare message
 				// rather than going idle. Flushed above; the
 				// connection stays open.
-				conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+				_ = conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 				continue
 			}
 			// Either a genuine idle timeout with nothing pending to
@@ -1677,9 +1679,9 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 			// pending holds an unresolved, newline-less fragment:
 			// tighten the deadline so a quiet spell resolves it quickly
 			// rather than waiting out the full idle timeout.
-			conn.SetReadDeadline(time.Now().Add(tcpQuiescence))
+			_ = conn.SetReadDeadline(time.Now().Add(tcpQuiescence))
 		} else {
-			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+			_ = conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 		}
 	}
 }

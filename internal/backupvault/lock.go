@@ -981,7 +981,7 @@ func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey, priv *ecdh.PrivateKey, b
 		}
 		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	stat, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("backupvault: reading %s while re-sealing: %w", path, err)

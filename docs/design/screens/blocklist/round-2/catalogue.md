@@ -47,7 +47,7 @@ once per hour!"; once a day is enough. The generated script keeps the
 credit in the address-list comment and the schedule never goes under
 six hours. **Format:** Spamhaus now recommends the JSON files
 (`drop_v4.json`, `drop_v6.json`: one object per line,
-`{"cidr":"198.51.100.1/20","sblid":"SBL256894","rir":"apnic"}`) and says
+`{"cidr":"203.0.113.0/24","sblid":"SBL000001","rir":"apnic"}`) and says
 of the text files "in time, these will be deprecated; users will be
 notified with ample notice". The builder writes for JSON from the
 start (`:deserialize from=json`, RouterOS 7.13 and later, so every

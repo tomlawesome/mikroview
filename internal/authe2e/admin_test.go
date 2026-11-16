@@ -249,7 +249,7 @@ func TestBearerTokensReachOnlyTheirOwnRoutes(t *testing.T) {
 	ing, r := w.mint(t, map[string]any{"name": "router-1", "kind": "ingest", "device": "core-router", "expiresAt": "never"})
 	wantStatus(t, "mint ingest", r, 201)
 	wantStatus(t, "add a drop-list entry", w.c.post("/api/droplist", map[string]string{"cidr": "203.0.114.0/24", "reason": "test entry"}), 201)
-	r = w.c.post("/api/droplist/key", map[string]any{})
+	r = w.c.post("/api/droplist/key", map[string]any{"password": w.admin.pass}) // #1447: minting re-checks the password
 	wantStatus(t, "mint droplist key", r, 201)
 	var dk struct{ Key string }
 	r.json(t, &dk)

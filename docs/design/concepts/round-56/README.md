@@ -54,7 +54,7 @@ Round 53's, with one correction and one addition:
   cam-porch → alex-desktop drop. A RouterOS forward-chain log names both
   interfaces; it now reads `in: iot → out: lan`, which is what puts
   the ✕ at the LAN end. `out: —` is an input-chain line.
-- **Addition.** The input drop: `192.0.2.61 → rb5009 (203.0.113.7)
+- **Addition.** The input drop: `203.0.113.61 → rb5009 (192.0.2.7)
   22/tcp`, `in: ether1`, no out, refused at `#1 input drop`, 22:03:58,
   41 more like it today — the SSH knocking behind round 49's
   "▲3.1× drops · wan-in".

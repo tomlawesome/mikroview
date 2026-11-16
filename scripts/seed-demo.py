@@ -65,6 +65,7 @@ import ssl
 import stat
 import struct
 import sys
+import tempfile
 import time
 
 import requests
@@ -1324,6 +1325,11 @@ def totp_code(secret_b32, counter):
     return f"{(struct.unpack('>I', mac[offset:offset + 4])[0] & 0x7FFFFFFF) % 1000000:06d}"
 
 
+# Lock age is judged on the real wall clock, bound at import so a test that
+# fakes `time` to skip the 30 s code step does not age live locks.
+_wall_clock = time.time
+
+
 def fresh_totp_code():
     """A code for a time step nobody has spent yet, waiting for the next
     step if need be. The server refuses a spent step as a replay and
@@ -1336,19 +1342,58 @@ def fresh_totp_code():
         sys.exit('seed-demo: MV_TOTP_SECRET unset -- run: eval "$(scripts/live-env.sh up)"')
     counter_file = os.path.join(os.environ["MV_DIR"], "totp-last-counter") if os.environ.get("MV_DIR") else None
     while True:
+        if counter_file:
+            code = _claim_step_locked(secret, counter_file)
+        else:
+            counter = int(time.time() // 30)
+            code = totp_code(secret, counter)
+        if code is not None:
+            return code
+        # +1s so the server's clock has certainly crossed the boundary too.
+        time.sleep(30 - time.time() % 30 + 1)
+
+
+def _claim_step_locked(secret, counter_file):
+    """Read-check-write of the counter file under the mkdir lock
+    `<counter_file>.lock` (#1466), shared with freshTotpCode in
+    live-browser.mjs. Returns the code, or None when the current step is
+    already spent. A lock older than 30 s (by its mtime) is stale."""
+    lock = counter_file + ".lock"
+    while True:
+        try:
+            os.mkdir(lock)
+            break
+        except FileExistsError:
+            try:
+                if _wall_clock() - os.stat(lock).st_mtime > 30:
+                    try:
+                        os.rmdir(lock)
+                    except OSError:
+                        pass
+                    continue
+            except OSError:
+                continue  # released between mkdir and stat
+            time.sleep(0.05)
+    try:
         counter = int(time.time() // 30)
         try:
             with open(counter_file) as f:
                 spent = int(f.read().strip())
-        except (TypeError, OSError, ValueError):
+        except (OSError, ValueError):
             spent = -1
-        if counter > spent:
-            if counter_file:
-                with open(counter_file, "w") as f:
-                    f.write(str(counter))
-            return totp_code(secret, counter)
-        # +1s so the server's clock has certainly crossed the boundary too.
-        time.sleep(30 - time.time() % 30 + 1)
+        if counter <= spent:
+            return None
+        fd, tmp = tempfile.mkstemp(prefix="totp-last-counter.", suffix=".tmp",
+                                   dir=os.path.dirname(counter_file))
+        with os.fdopen(fd, "w") as f:
+            f.write(str(counter))
+        os.rename(tmp, counter_file)
+        return totp_code(secret, counter)
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
 
 
 class API:

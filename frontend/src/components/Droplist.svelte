@@ -61,7 +61,34 @@
   let armedRevokeKey = $state(false)
   let armedReplaceKey = $state(false)
 
+  // #1447: minting asks for the admin's own password at that moment, as
+  // the wizard's mint step does (StepMint.svelte, #1291) -- the key lets
+  // any machine that holds it fetch the list, so an admin session alone
+  // is not enough. "mint key" and a confirmed "replace key" open this
+  // prompt; Enter (or its mint button) spends the password on the one
+  // call. A refusal reads back under the field and leaves the old key as
+  // it was -- the server checks before it touches anything.
+  let askingPassword = $state(false)
+  let password = $state('')
+  let passEl = $state<HTMLInputElement | null>(null)
+  $effect(() => {
+    passEl?.focus()
+  })
+
+  function askPassword() {
+    keyError = null
+    password = ''
+    askingPassword = true
+  }
+
+  function cancelPassword() {
+    askingPassword = false
+    password = ''
+    keyError = null
+  }
+
   async function mintKey() {
+    if (submittingKey) return
     keyError = null
     submittingKey = true
     // wizardState.address (#1213) is the operator's own saved answer to
@@ -70,12 +97,19 @@
     // copyRouterLines for the same rule applied to the ingest push
     // script. Reading it live at mint time rather than once, since the
     // operator may save it well after this card first mounted.
-    const result = await mintDroplistKey(wizardState.address)
+    const result = await mintDroplistKey(wizardState.address, password)
     submittingKey = false
     if (typeof result === 'string') {
       keyError = result
+      password = ''
+      // The field was disabled while the request ran, which drops focus:
+      // put the person back in it to try again.
+      await tick()
+      passEl?.focus()
       return
     }
+    askingPassword = false
+    password = ''
     justMinted = { key: result.key, scheduler: result.scheduler }
     await onrefresh()
   }
@@ -88,7 +122,7 @@
     e.stopPropagation()
     if (armedReplaceKey) {
       armedReplaceKey = false
-      void mintKey()
+      askPassword()
       return
     }
     disarmAll()
@@ -284,10 +318,32 @@
         </button>
       {:else}
         no key — the router cannot fetch the list until one is minted ·
-        <button type="button" class="olink" disabled={submittingKey} onclick={mintKey}>mint key</button>
+        <button type="button" class="olink" disabled={submittingKey} onclick={askPassword}>mint key</button>
       {/if}
     </span>
   </div>
+  {#if askingPassword}
+    <div class="dform passform">
+      <label class="lab">
+        your password, to mint the key
+        <input
+          type="password"
+          placeholder="password"
+          aria-label="Your password"
+          disabled={submittingKey}
+          bind:value={password}
+          bind:this={passEl}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') void mintKey()
+          }}
+        />
+      </label>
+      <button type="button" class="olink" disabled={submittingKey} onclick={mintKey}>
+        {submittingKey ? 'minting…' : 'mint'}
+      </button>
+      <button type="button" class="olink quiet" disabled={submittingKey} onclick={cancelPassword}>cancel</button>
+    </div>
+  {/if}
   {#if keyError}<p class="oghint err" role="alert">{keyError}</p>{/if}
 
   {#if justMinted}
@@ -595,6 +651,10 @@
     flex-wrap: wrap;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .dform.passform {
+    margin-top: 4px;
   }
 
   .dform .lab {

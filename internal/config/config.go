@@ -1656,7 +1656,7 @@ func loadYAML(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	dec := yaml.NewDecoder(f)
 	// KnownFields(true) (#1207): without it, a key the struct no longer
 	// has -- carried over from an old release, or simply mistyped -- is
@@ -2243,9 +2243,9 @@ func applyFlags(cfg *Config, args []string) error {
 	// standalone modes never reach this FlagSet, so nothing else can
 	// put them in front of an operator running `mikroview --help`.
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage of mikroview:")
+		_, _ = fmt.Fprintln(fs.Output(), "Usage of mikroview:")
 		fs.PrintDefaults()
-		fmt.Fprint(fs.Output(), OtherCommands)
+		_, _ = fmt.Fprint(fs.Output(), OtherCommands)
 	}
 
 	if err := fs.Parse(args); err != nil {

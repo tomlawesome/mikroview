@@ -234,6 +234,9 @@ rewritten.
 
 ### Fixed
 
+- **A watchlist match with an oversized log line is now recorded** (#1471).
+  Its raw line is cut to the stored limit instead of the match being refused.
+
 - **`-restore` no longer refuses a v0.6 backup over a torn match-log
   line** that v0.6 skipped; the line is left out and the restore says so.
 
@@ -244,7 +247,7 @@ rewritten.
   install's key, so a v0.6 backup still restores.
 
 - **The data directory can move to a new path** (#1450). Each sealed
-  store file was bound to its own absolute path, so a data directory
+  store file was bound to its own configured path, so a data directory
   copied or moved to a different path -- a bare-metal install, or a
   config naming a new directory -- was refused at start-up as altered.
   From v0.7.0 every install has a key, so this would have hit everyone.
@@ -464,6 +467,31 @@ rewritten.
   old trie's tie-break.
 
 ### Security
+
+- **GitLab builds, signs and publishes the image by digest** (#1472, step
+  1). A push to `preview` or a release tag builds the image once, tests
+  and scans those exact bytes, pushes them to the GitLab registry, signs
+  that digest with the release key and attests its SPDX SBOM, and names
+  it `preview` or `vX.Y.Z` only after the signature verifies. Preview
+  images are now signed too. GitHub now copies this digest to GHCR
+  instead of building its own image (#1472, step 3; docs/release-signing.md).
+
+- **CI pins Trivy by digest and now scans the built image and the
+  container config** (#1462). Trivy moves to 0.76.2, pinned by its image
+  digest rather than a tag. test:container scans the image it builds for
+  HIGH and CRITICAL vulnerabilities with a fix available, and
+  security:trivy-config checks the Dockerfiles and the compose file;
+  either fails the pipeline on a finding.
+
+- **Minting the drop-list key asks for your password** (#1447). `POST
+  /api/droplist/key` now takes `password` and re-checks it in the same
+  per-account budget as router enrolment, so an admin session on its own
+  -- a stolen cookie, a cross-site request -- can no longer mint the key
+  every router fetches the list with. A wrong or missing password is a
+  401 and leaves the existing key working; an account that signs in only
+  through an identity provider gets a 409. Settings ▸ Engine room's drop
+  list group asks for the password before minting or replacing the key.
+  Scripts that call the route must now send the password.
 
 - **Accounts, tokens, recovery keys and the sign-in history are sealed
   under the key, and the authenticator-app secret is no longer in a plain

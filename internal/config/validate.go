@@ -668,7 +668,7 @@ func (c *Config) validatePublicURL(warn warnFunc) {
 			// the silent failure the design rules out. http on
 			// localhost is the one exemption, because a browser counts
 			// it as a secure context.
-			if !(u.Scheme == "https" || (u.Scheme == "http" && u.Hostname() == "localhost")) {
+			if u.Scheme != "https" && (u.Scheme != "http" || u.Hostname() != "localhost") {
 				warn("CFG-0102", "publicUrl",
 					fmt.Sprintf("scheme is %q, and browsers only offer passkeys over https", u.Scheme),
 					`passkeys unavailable (status "insecure")`,

@@ -319,7 +319,7 @@ func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regex
 	if ipNet != nil {
 		src := net.ParseIP(e.SrcIP)
 		dst := net.ParseIP(e.DstIP)
-		if !(src != nil && ipNet.Contains(src)) && !(dst != nil && ipNet.Contains(dst)) {
+		if (src == nil || !ipNet.Contains(src)) && (dst == nil || !ipNet.Contains(dst)) {
 			return false
 		}
 	} else if ip != nil {

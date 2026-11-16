@@ -18,7 +18,7 @@ const shot = n => page.screenshot({ path: path.join(here, 'shots', `${d}-${n}.pn
 const url = 'file://' + path.join(here, d + '.html')
 const w = ms => page.waitForTimeout(ms)
 const router = async (push = 'yes', backup = 'yes') => {
-  await page.fill('[data-field=name]', 'rb5009'); await page.fill('[data-field=addr]', '192.0.2.1')
+  await page.fill('[data-field=name]', 'rb5009'); await page.fill('[data-field=addr]', '198.51.100.1')
   await page.click(`[data-act=set][data-q=push][data-v=${push}]`); await page.click(`[data-act=set][data-q=backup][data-v=${backup}]`); await w(150)
 }
 const mint = async () => { await page.click('[data-act=router-next]'); await w(250); await page.fill('[data-field=pass]', 'correct horse'); await page.press('[data-field=pass]', 'Enter'); await w(400) }
@@ -26,7 +26,7 @@ const mint = async () => { await page.click('[data-act=router-next]'); await w(2
 await page.goto(url); await w(600); await shot('01-door')
 await page.click('#enter'); await w(450); await shot('02-way-in-a'); await w(500); await shot('03-way-in-b'); await w(1100); await shot('04-router-step')
 await page.selectOption('#speed', '12'); await w(100)
-await page.fill('[data-field=addr]', '192.0.2.1:514'); await w(150); await shot('05-addr-problem')
+await page.fill('[data-field=addr]', '198.51.100.1:514'); await w(150); await shot('05-addr-problem')
 await router(); await shot('06-router-filled')
 await mint(); await shot('07-paste')
 await page.click('[data-act=copy]'); await w(900); await shot('08-watch-waiting')

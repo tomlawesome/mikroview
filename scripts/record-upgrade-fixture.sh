@@ -41,6 +41,10 @@
 #   scripts/record-upgrade-fixture.sh --postgres v0.3.0
 #   scripts/record-upgrade-fixture.sh --check <local-image>
 #
+# MV_IMAGE_REF overrides the released image a recording boots (see
+# where IMAGE is set below); record:upgrade-fixture passes the GitLab
+# registry digest its tag pipeline published.
+#
 # Requires docker. Uploading takes whichever credential the environment
 # offers:
 #
@@ -106,10 +110,16 @@ fi
 VERSION_BARE="${VERSION#v}"
 VERSION_BARE="${VERSION_BARE%-check}"
 
+# MV_IMAGE_REF (#1472): the exact image to record, overriding the GHCR
+# tag. record:upgrade-fixture sets it to the digest its own tag pipeline
+# built, signed and published ($CI_REGISTRY_IMAGE@sha256:...), so the
+# recording boots those bytes rather than whatever a tag names; by hand
+# the default -- the released GHCR tag -- is unchanged. --check ignores
+# it: a check run names its local image explicitly.
 if $CHECK; then
   IMAGE="$CHECK_IMAGE"
 else
-  IMAGE="ghcr.io/tomlawesome/mikroview:${VERSION}"
+  IMAGE="${MV_IMAGE_REF:-ghcr.io/tomlawesome/mikroview:${VERSION}}"
 fi
 # Pinned like every other image this repository runs (#711). Not in
 # supply-chain/pins-policy.json: that file records the pins CI itself

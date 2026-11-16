@@ -5,6 +5,7 @@ package routerstate_test
 import (
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,22 +36,28 @@ func TestPushedDataCannotTouchSuspicionMachinery(t *testing.T) {
 	assertNoImport := func(dir string, forbidden ...string) {
 		t.Helper()
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, dir, nil, parser.ImportsOnly)
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			t.Fatalf("parsing %s: %v", dir, err)
+			t.Fatalf("reading %s: %v", dir, err)
 		}
-		for name, pkg := range pkgs {
-			if strings.HasSuffix(name, "_test") {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatalf("parsing %s: %v", path, err)
+			}
+			if strings.HasSuffix(file.Name.Name, "_test") {
 				continue // test packages may import anything
 			}
-			for path, file := range pkg.Files {
-				for _, imp := range file.Imports {
-					got := strings.Trim(imp.Path.Value, `"`)
-					for _, bad := range forbidden {
-						if got == bad {
-							t.Errorf("%s imports %s -- pushed router data must not reach the suspicion machinery in either direction (#186 step 4d)",
-								filepath.Join(filepath.Base(dir), filepath.Base(path)), bad)
-						}
+			for _, imp := range file.Imports {
+				got := strings.Trim(imp.Path.Value, `"`)
+				for _, bad := range forbidden {
+					if got == bad {
+						t.Errorf("%s imports %s -- pushed router data must not reach the suspicion machinery in either direction (#186 step 4d)",
+							filepath.Join(filepath.Base(dir), entry.Name()), bad)
 					}
 				}
 			}

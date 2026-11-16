@@ -25,6 +25,7 @@ testing-and-ci skill (owner, 2026-09-08).
 ## live-topography-tunnel: the Topography rail entry is never found (30 s) under WebKit
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 4/4 · `page.click` timed out waiting for `.rail-name` `text=Topography` (`live-topography-tunnel.mjs:231`), after the tunnel checks had passed, so the scenario exited without a verdict. The second WebKit run passed shard 4/4 27/27.
+- 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4 --shard 4/4`, first rerun · a different symptom: the tunnel node was never drawn (`the tunnel is drawn as its own node beside Internet`, `the node names its interface and subnet (got null)`, `wg0 appears exactly once on the map, as the node (found 0)`, `the tunnel is joined to the router by its own line`). The full WebKit run before it and the second rerun passed the scenario. Second sighting.
 
 ## live-preferences-roam: a 401 reaches the console under WebKit
 
@@ -261,6 +262,8 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 1/4 · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-blocklist-tail.mjs:50`), before any check ran, so no verdict was printed. A rerun of shard 1/4 alone under WebKit passed 28/28. Same signature as the `live-decommission`, `live-city-reach` and `live-settings-doors` entries. First sighting.
 
-## live-topography-reach-compose: one Escape closes both the card and the composer under WebKit
+## live-topography-reach-compose: one Escape closes both the card and the composer under WebKit (#1491)
 
 - 2026-11-15 · 11bc210d (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4 · after the first Escape the composer was gone with the card (`live-topography-reach-compose.mjs:146`), and after the second the reach was gone too (`:149`): two rungs of Topography's Escape ladder for one press. Two reruns of shard 4/4 alone under WebKit passed 25/25.
+- 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4, full run · the same two checks: the composer gone with the card after the first Escape, the reach gone after the second. Second sighting.
+- 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4 --shard 4/4`, first rerun · the same two checks again. A second rerun passed 25/25. Third sighting: #1491, quarantined.

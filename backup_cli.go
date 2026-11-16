@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -633,12 +634,16 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 		}
 	}
 
-	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
-	if force {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	}
+	// O_EXCL is tried first even under --force, so created says exactly
+	// whether this run made the file: only then may a failure remove it.
+	created := true
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
-	f, err := os.OpenFile(dest, flags, 0o600)
+	f, err := openBackupFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil && os.IsExist(err) && force {
+		created = false
+		// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
+		f, err = openBackupFile(dest, os.O_WRONLY|os.O_TRUNC, 0o600)
+	}
 	if err != nil {
 		if os.IsExist(err) {
 			return fmt.Errorf("%s already exists -- refusing to overwrite it. "+
@@ -646,12 +651,42 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 		}
 		return err
 	}
-	defer f.Close()
+	// Durable write (#1483): write, fsync, close, each error checked, so
+	// success is only reported for a backup known to be on disk.
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
-	if err := os.Chmod(dest, 0o600); err != nil {
-		return err
+	err = os.Chmod(dest, 0o600)
+	if err == nil {
+		err = backup.Write(f, version, stores)
 	}
-	return backup.Write(f, version, stores)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		if created {
+			// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
+			if rmErr := os.Remove(dest); rmErr != nil {
+				return fmt.Errorf("the backup is incomplete and could not be removed (%v); delete %s and do not use it: %w", rmErr, dest, err)
+			}
+			return fmt.Errorf("the backup is incomplete and has been removed: %w", err)
+		}
+		return fmt.Errorf("the backup is incomplete -- do not use %s: %w", dest, err)
+	}
+	return nil
+}
+
+// backupFile is what writeBackup writes through; an *os.File, or a test
+// double whose Sync or Close fails.
+type backupFile interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+var openBackupFile = func(name string, flag int, perm os.FileMode) (backupFile, error) {
+	return os.OpenFile(name, flag, perm)
 }
 
 func runRestore(args []string) int {
@@ -689,7 +724,7 @@ func runRestore(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Parsed and fully validated before anything on disk is touched.
 	env, err := backup.Read(f)

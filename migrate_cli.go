@@ -485,7 +485,7 @@ func copyFile(src, dst string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %v", src, unwrapPathErr(err))
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -496,7 +496,7 @@ func copyFile(src, dst string) (string, error) {
 		}
 		return "", fmt.Errorf("creating %s: %v", dst, unwrapPathErr(err))
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(out, h), in); err != nil {
@@ -598,7 +598,7 @@ func checkDirUsable(dir string) error {
 		return &storeUnusable{Store: "destination", Path: dir, Dir: dir, Err: unwrapPathErr(err)}
 	}
 	name := probe.Name()
-	probe.Close()
+	_ = probe.Close()
 	// #nosec G703 -- removes the probe file this function just created under the operator's own destination.
 	return os.Remove(name)
 }
@@ -608,7 +608,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))

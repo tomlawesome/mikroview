@@ -41,7 +41,7 @@ Shared decisions, whichever direction wins:
 - **Passkeys unusable is a named state, never a hidden row**
   (PasskeysOverlay's own rule): the choice stays visible, disabled,
   with one line why — "passkeys need a web address, and you're
-  viewing MikroView at 198.51.100.1 — your authenticator app works
+  viewing MikroView at 198.51.100.10 — your authenticator app works
   everywhere."
 - **Recovery codes are part of the door's flow**: whichever factor
   activates first mints the ten codes, so the door shows them
@@ -52,7 +52,7 @@ Shared decisions, whichever direction wins:
 
 Data story, all directions: account `meredith` (viewer) on the
 instance at `https://view.brandt.example`; the `no-passkey` scene is
-the same instance reached at `198.51.100.1`. Fake secret
+the same instance reached at `198.51.100.10`. Fake secret
 `GQ4T MNZV G5UW K2LN MFRG YZLB OR2W CZ3F`, the same ten fake
 recovery codes everywhere. The QR tile is decorative (a drawn
 QR-lookalike, not an encoding of the fake secret).
