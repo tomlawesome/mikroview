@@ -389,12 +389,19 @@ up() {
   head -c 32 /dev/urandom | base64 > "$MV_DIR/history.key"
   chmod 600 "$MV_DIR/history.key"
 
+  # networks.home (#1481): the seeded estate's inside lives on
+  # documentation blocks (docs/design/sample-names.md), which read as
+  # outside by address alone. The first /27 of 192.0.2.0/24 (router WANs,
+  # design host) stays out: it is the outside part of the mixed block.
   cat > "$MV_DIR/cfg.yaml" <<EOF
 listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
 $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 publicUrl: "$MV_SCHEME://localhost:$HTTP_PORT"
+networks:
+  home: [198.51.100.0/24, 192.0.2.32/27, 192.0.2.64/27, 192.0.2.96/27, 192.0.2.128/27,
+    192.0.2.160/27, 192.0.2.192/27, 192.0.2.224/28, 192.0.2.240/29, 192.0.2.248/29]
 $DEVICES_BLOCK
 EOF
   # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset
