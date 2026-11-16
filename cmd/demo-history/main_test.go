@@ -186,7 +186,8 @@ func TestBuildRetainedEventsIsChronologicalAndEndsYesterday(t *testing.T) {
 }
 
 func TestCryptoSeedDiffers(t *testing.T) {
-	if cryptoSeed() == cryptoSeed() {
+	a, b := cryptoSeed(), cryptoSeed()
+	if a == b {
 		t.Error("two seeds were equal")
 	}
 }
