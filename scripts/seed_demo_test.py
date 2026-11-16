@@ -579,6 +579,12 @@ class DocumentationAddressTests(unittest.TestCase):
         blocks = _sample_names_blocks()
         for want in ("lan", "servers", "iot", "guest", "wg0", "workshop", "cams", "garage"):
             self.assertIn(want, blocks, f"{want} missing from the table")
+        # #1481: the 192.0.2.0/24 rows the seed already uses, one /27 per zone.
+        for want, cidr in (("staff", "192.0.2.32/27"), ("office", "192.0.2.64/27"),
+                           ("voip", "192.0.2.96/27"), ("wifi", "192.0.2.128/27"),
+                           ("mgmt", "192.0.2.160/27"), ("core", "192.0.2.192/27")):
+            self.assertIn(want, blocks, f"{want} missing from the table")
+            self.assertEqual(str(blocks[want]), cidr, f"{want} has the wrong block in the table")
         checked, bad = 0, []
         for n, line in enumerate(_PATH.read_text().splitlines(), 1):
             if line.lstrip().startswith("#"):
@@ -595,6 +601,65 @@ class DocumentationAddressTests(unittest.TestCase):
                     bad.append((n, tok, str(block)))
         self.assertEqual(bad, [], f"addresses outside their network's block (line, addr, block): {bad[:10]}")
         self.assertGreater(checked, 0, "no network-named address lines found; has the seed's layout changed?")
+
+
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_DEMO_HISTORY = _ROOT / "cmd" / "demo-history" / "main.go"
+_LIVE_ENV = _ROOT / "scripts" / "live-env.sh"
+
+
+def _demo_history_entries():
+    """[(name, ip, ports)] from the demoWatchlist literal in main.go."""
+    import re
+    text = _DEMO_HISTORY.read_text()
+    m = re.search(r"var demoWatchlist = \[\]demoEntry\{(.*?)\n\}", text, re.S)
+    assert m, "demoWatchlist literal not found in cmd/demo-history/main.go"
+    out = []
+    for row in re.finditer(r'\{"[^"]*",\s*"([^"]+)",\s*"([^"]+)",\s*\[\]int\{([^}]*)\}', m.group(1)):
+        ports = [int(p) for p in row.group(3).split(",") if p.strip()]
+        out.append((row.group(1), row.group(2), ports))
+    return out
+
+
+class DemoHistoryAddressTests(unittest.TestCase):
+    """#1481: cmd/demo-history seeds the same estate as seed-demo.py, on
+    documentation addresses only."""
+
+    def test_demo_history_entries_match_the_seeds_watchlist_entries(self):
+        want = [(e["name"], e["ip"], e["ports"]) for e in seed_demo.WATCHLIST_ENTRIES]
+        got = _demo_history_entries()
+        self.assertEqual(got, want, "cmd/demo-history demoWatchlist drifted from WATCHLIST_ENTRIES")
+
+    def test_every_address_in_demo_history_is_in_a_documentation_range(self):
+        import re
+        bad, seen = [], 0
+        for n, line in enumerate(_DEMO_HISTORY.read_text().splitlines(), 1):
+            for tok in re.findall(_V4_RE, line):
+                try:
+                    ip = ipaddress.ip_interface(tok).ip
+                except ValueError:
+                    continue
+                seen += 1
+                if not ip.is_loopback and not any(ip in net for net in _DOC_V4):
+                    bad.append((n, tok))
+        self.assertGreater(seen, 0, "no addresses found in cmd/demo-history/main.go")
+        self.assertEqual(bad, [], f"addresses outside the documentation ranges (line, addr): {bad[:10]}")
+
+
+class LiveEnvHomeNetworksTests(unittest.TestCase):
+    """#1481: the demo's cfg.yaml tells mikroview which blocks are inside."""
+
+    def test_live_env_demo_config_sets_networks_home_to_the_inside_blocks(self):
+        import re
+        text = _LIVE_ENV.read_text()
+        self.assertIn("networks", text, "scripts/live-env.sh sets no networks key in cfg.yaml")
+        got = set(re.findall(r"\b\d+\.\d+\.\d+\.\d+/\d+\b", text[text.index("networks"):]))
+        want = {"198.51.100.0/24", "192.0.2.32/27", "192.0.2.64/27", "192.0.2.96/27",
+                "192.0.2.128/27", "192.0.2.160/27", "192.0.2.192/27",
+                "192.0.2.224/28", "192.0.2.240/29", "192.0.2.248/29"}
+        self.assertTrue(want <= got, f"networks.home is missing {sorted(want - got)}")
+        self.assertNotIn("192.0.2.0/27", got, "192.0.2.0/27 holds the router WANs: it is outside")
+        self.assertIn("home", text[text.index("networks"):], "no home key under networks")
 
 
 if __name__ == "__main__":

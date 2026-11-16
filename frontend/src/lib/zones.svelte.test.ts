@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { appState } from './state.svelte'
 import { zonesState } from './zones.svelte'
 import { tunnelsState, type TunnelInterface } from './tunnels.svelte'
 import type { ClientEvent } from './types'
+import { setHomeNetworks } from './format'
 
 // A buffered event, as appState holds one -- receivedAt is the client
 // stamp appendLive adds, so a bare FirewallEvent is not one.
@@ -263,5 +264,31 @@ describe('the drawn tunnels leave the lane row (#877, #890)', () => {
     zonesState.pushed = [{ address: '10.99.0.1/24', network: '10.99.0.0', interface: 'wg0', comment: '' }]
 
     expect(zonesState.zones.map((z) => z.id)).not.toContain('wg0')
+  })
+})
+
+describe('zonesState deviceWans with home networks (#1481)', () => {
+  afterEach(() => setHomeNetworks([]))
+
+  // The demo's shape: rb5009's inside lives on documentation blocks, so
+  // by address alone the busy lane looks public and out-votes the WAN.
+  const lanBusier = () => [
+    event({ id: 1, deviceId: 'rb5009', inInterface: 'ether1', srcIp: '203.0.113.44' }),
+    event({ id: 2, deviceId: 'rb5009', inInterface: 'ether1', srcIp: '203.0.113.45' }),
+    event({ id: 3, deviceId: 'rb5009', inInterface: 'vlan10', srcIp: '192.0.2.33' }),
+    event({ id: 4, deviceId: 'rb5009', inInterface: 'vlan10', srcIp: '192.0.2.34' }),
+    event({ id: 5, deviceId: 'rb5009', inInterface: 'vlan10', srcIp: '192.0.2.35' }),
+    event({ id: 6, deviceId: 'rb5009', inInterface: 'vlan10', srcIp: '198.51.100.66' }),
+  ]
+
+  it('picks the busy inside lane as the WAN when no home networks are set (today)', () => {
+    appState.events = lanBusier()
+    expect(zonesState.deviceWans.get('rb5009')?.iface).toBe('vlan10')
+  })
+
+  it("names ether1 as rb5009's WAN once the demo home set is configured", () => {
+    setHomeNetworks(['198.51.100.0/24', '192.0.2.32/27', '192.0.2.64/27', '192.0.2.96/27'])
+    appState.events = lanBusier()
+    expect(zonesState.deviceWans.get('rb5009')).toEqual({ iface: 'ether1', count: 2 })
   })
 })
