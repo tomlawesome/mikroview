@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // #1485 #1489: the pepper path must only ever appear holding a complete
@@ -229,5 +230,37 @@ func TestPepperConcurrentFirstCreationAgrees(t *testing.T) {
 		return
 	}
 	assertFileHoldsPepper(t, path, peppers[0])
+	assertNoTempSiblings(t, path)
+}
+
+// A dangling symlink at the pepper path must produce an error, not an
+// endless create/lost-race/re-read loop, and must not create its target.
+func TestPepperDanglingSymlinkFailsInsteadOfLooping(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pepper")
+	target := filepath.Join(dir, "missing-target")
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	type result struct {
+		p   []byte
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		p, err := loadOrCreatePepper(path)
+		ch <- result{p, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err == nil {
+			t.Errorf("loadOrCreatePepper succeeded (%d bytes) on a dangling symlink, want an error", len(r.p))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("loadOrCreatePepper had not returned after 5s on a dangling symlink (looping)")
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Errorf("the symlink target was created (lstat err = %v)", err)
+	}
 	assertNoTempSiblings(t, path)
 }
