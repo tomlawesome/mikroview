@@ -634,14 +634,13 @@ means encrypted and tamper-checked: a file that fails the check, or that
 was sealed under a different key, is refused, never read as an empty
 store.
 
-**The watchlist match log is sealed too (#1470).** It is not one JSON
-document but an append-only log, so it has its own framing: a header
-(`MVMLG`, a version byte and a random per-file salt), then one
-AES-256-GCM frame per record or update, each bound to the store name and
-its position in the file -- the same framing the event history's day
-files use. A frame moved, dropped from the middle, copied from another
-file or opened with the wrong key is refused, never skipped; a frame cut
-short by a crash at the end of the file is dropped on the next start, as
+**The watchlist match log is sealed too (#1470).** The match log is an
+encrypted file, not text: open it only through MikroView, never by hand.
+It is a log that grows by one entry at a time rather than one JSON
+document, so each entry is sealed on its own and tied to its place in the
+file, the way the event history's day files are. An entry moved, dropped from
+the middle, copied from another file or opened with the wrong key is
+refused, never skipped; an entry cut short by a crash at the end of the file is dropped on the next start, as
 for the event history. The default name `matchlog.jsonl` is historical:
 the file has not held JSON lines since v0.7.0. A plaintext match log left
 by an earlier release is refused like any other plaintext store, and
