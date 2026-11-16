@@ -1592,7 +1592,8 @@ log:
 ASCII wordmark once (plain text, not a log line -- always shown,
 regardless of `level` or whether stdout is a terminal), followed by a
 `version` line identifying which build is running -- the short commit
-SHA it was built from (see `.github/workflows/docker.yml`), the
+SHA it was built from (GitLab's `build:image` job, see
+[docs/release-signing.md](release-signing.md)), the
 practical stand-in for a registry digest since a binary can't know its
 own digest at build time. If the persisted version marker
 (`/var/lib/mikroview/version`) doesn't match the running build, that
@@ -5243,13 +5244,14 @@ Override individual scalar settings without a mounted file:
 ## Checking your version
 
 What you see depends on which image you are running, because there are
-two kinds (see `.github/workflows/docker.yml`; pushing to `dev`
-deliberately publishes no image at all):
+two kinds, both built once by GitLab's `build:image` job and copied to
+GHCR unchanged (see [docs/release-signing.md](release-signing.md);
+pushing to `dev` deliberately publishes no image at all):
 
 - **A release build** -- `latest`, or an explicit `v0.1.0`-style tag --
   reports that semantic version, e.g. `v0.1.0`. The version comes from
-  the `VERSION` file in the repository, and merging to `main` with a
-  value that has no tag yet is what cuts the release.
+  the `VERSION` file in the repository, and pushing a `v<VERSION>` tag
+  is what cuts the release; merging to `main` does not.
 - **A preview build** -- `preview`, or `preview-<sha>` -- reports the
   short git commit SHA it was built from.
 

@@ -80,9 +80,12 @@ What changed:
 - `sync:mirror-to-github` pushes `v*` tags as well as the three branches.
   The tag must be protected on GitLab (`v*`), or the protected deploy-key
   variable is empty and the push fails on its first check.
-- `docker.yml` runs its release job on a `v*` tag push, and refuses unless
-  the tag equals `v<VERSION>` at the tagged commit. A merge to `main` now
-  only retags preview's tested digest as `latest`; it never releases.
+- A `v*` tag push releases, and the release refuses unless the tag equals
+  `v<VERSION>` at the tagged commit. A merge to `main` never releases. Since
+  #1472 step 3 GitHub builds nothing: `release-on-tag.yml` copies the digest
+  the tag's GitLab pipeline built, tested and signed to GHCR as `vX.Y.Z`,
+  and moves `latest` to it only when that tag is the highest `vX.Y.Z` in the
+  repository. `docker.yml`, which used to do both, is disabled.
 - Since #1472 (2026-11-15) GitLab makes the same check first, in
   `release:check-version`, and also requires the built binary to report
   the tag, before the tag pipeline publishes anything to its own registry.
@@ -95,17 +98,17 @@ and the bump is still part of the promotion diff. "Not a git tag pushed
 after the fact" above was about *deriving* the version from a tag; the
 tag now says when, the file still says what, and the two must agree.
 
-**No `v*` tag may be pushed until #1472's landing step 3 is in** (GitHub
-copying GitLab's signed digest to GHCR). Until then GitLab signs only its own
-registry's digest, while `docker.yml` publishes a separate rebuild to GHCR,
-so that release would reach GHCR with no key-based signature, and
-`countersign.yml` and `SECURITY.md`'s `cosign verify` would both refuse it
+The GHCR release digest is GitLab's own: GitHub verifies its key-based
+signature and SBOM attestation in the GitLab registry, copies the image only
+by digest (`docker buildx imagetools create`), and attests the copy;
+`countersign.yml` verifies at the same source before signing GHCR
 (docs/release-signing.md).
 
-Release steps, in order: promote `preview` → `main`; wait for the
-promote job on GitHub; on GitLab, `git tag v<VERSION> <main sha>` and
-push it to `gitlab`; watch the tag pipeline's mirror job, then the
-`docker` run on GitHub; back-merge `main` → `preview` → `dev`.
+Release steps, in order: promote `preview` → `main`; on GitLab,
+`git tag v<VERSION> <main sha>` and push it to `gitlab`; watch the tag
+pipeline (it builds, tests, signs and mirrors the tag), then the
+`release-on-tag` run on GitHub; countersign its digest with
+`countersign.yml`; back-merge `main` → `preview` → `dev`.
 
 ## Release surfaces (2026-09-10)
 

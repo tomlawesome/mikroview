@@ -233,6 +233,11 @@ describe("#1472 job 6: sign:release-digest signs the GitLab digest", () => {
   it("needs security:trivy-image for the SBOM it attests", () => {
     assert.match(needsOf(job("sign:release-digest")), /security:trivy-image/);
   });
+  // Review finding 6: two runs on one digest could both pass the
+  // already-signed check and both sign; a resource_group serialises them.
+  it("is serialised by a resource_group", () => {
+    assert.match(job("sign:release-digest"), /^ {2}resource_group:\s*\S+/m);
+  });
 });
 
 describe("#1472 job 7: publish:channel retags only after the signature verifies", () => {
@@ -292,13 +297,8 @@ describe("#1472 job 8: record:upgrade-fixture pulls the GitLab digest", () => {
   });
 });
 
-describe("#1472 landing step 1 leaves GitHub workflows alone", () => {
-  it("no publish-from-gitlab.yml or release-on-tag.yml yet", () => {
-    for (const f of ["publish-from-gitlab.yml", "release-on-tag.yml"]) {
-      assert.throws(() => read(`.github/workflows/${f}`), /ENOENT/);
-    }
-  });
-});
+// (Step 1's "no publish-from-gitlab.yml / release-on-tag.yml yet" check is gone:
+// step 3 adds them, and github-copy.test.mjs covers them.)
 
 // publish:channel's "is this still preview's head" check, run for real: the
 // text from the `if [ -z "${CI_COMMIT_TAG:-}" ]` guard to the success echo is

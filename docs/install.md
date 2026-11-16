@@ -14,13 +14,28 @@ The README's quickstart (`curl ... | sh`) is
 [`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
 running this same `docker run`. After pulling, it prints the exact image
 digest it just pulled (`ghcr.io/tomlawesome/mikroview@sha256:...`) --
-see [SECURITY.md](../SECURITY.md) for verifying that digest with
-`cosign verify` before you trust it. A release carries **two independent
-signatures**, one made by the GitLab tag pipeline with a held key and one
-made keyless on GitHub by hand, and a digest is only good if **both**
-verify -- treat either one missing as a reason not to trust it.
-SECURITY.md has both commands. If you'd rather run it yourself instead of
-fetching a script, make the key first (next section), then:
+check that digest before you trust it. Every image on GHCR carries
+GitHub's provenance and SBOM attestations, made when it was copied there; a
+release also carries the owner's keyless signature once it has been
+countersigned:
+
+```sh
+# every image: provenance and SBOM
+gh attestation verify oci://ghcr.io/tomlawesome/mikroview@sha256:... \
+    --repo tomlawesome/mikroview
+
+# a release, once countersigned
+cosign verify ghcr.io/tomlawesome/mikroview@sha256:... \
+    --certificate-identity-regexp '^https://github.com/tomlawesome/mikroview/' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Treat a release whose attestations or countersignature fail to verify, or
+are missing, as a reason not to trust it. GitLab's key-based signature is
+checked before the image is copied, and stays in the GitLab registry;
+[SECURITY.md](../SECURITY.md) has the details. If you'd rather run it
+yourself instead of fetching a script, make the key first (next section),
+then:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
