@@ -540,8 +540,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   a tag (a tag is a mutable pointer; signing one would let it
   later point at different content and still verify).
 
-  **A release carries two independent signatures, and both must verify.**
-  One is made automatically by the GitLab tag pipeline with a key held on
+  **A release carries two independent signatures, and one of them is
+  checked for you before the image reaches GHCR.**
+  One is made automatically by the GitLab publishing pipeline with a key held on
   its own runner; the other is made keyless on GitHub, by hand, only after
   the first has been checked. Two signatures from the same place would be
   one signature — whoever drives the first drives the second — so the
