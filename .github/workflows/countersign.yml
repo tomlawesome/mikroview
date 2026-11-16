@@ -27,6 +27,10 @@ name: countersign
 # project access token the publish workflows use, to read the GitLab
 # registry; plus the built-in GITHUB_TOKEN with id-token: write (keyless
 # signing) and packages: write (pushing the signature to our own package).
+#
+# No GitLab job replaces this, by design: it is the GitHub half of two
+# signatures.
+#   countersign -> none (second custody; GitLab's half is sign:release-digest)
 on:
   workflow_dispatch:
     inputs:

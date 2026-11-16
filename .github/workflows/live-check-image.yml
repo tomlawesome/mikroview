@@ -19,12 +19,11 @@ name: live-check image
 # same reasoning read the other way: a moving-target *product* image is
 # not worth shipping, but a gate that cannot run until something reaches
 # preview is a gate nobody uses.
+#
+# Dispatch only, under the mirror rule (#1464): GitLab's gate:image provides
+# the image the gate actually uses, so this mirror copy runs only by hand.
+#   publish -> gate:image
 on:
-  push:
-    branches: [dev]
-    paths:
-      - live-check.Dockerfile
-      - .github/workflows/live-check-image.yml
   workflow_dispatch: {}
 
 permissions:
