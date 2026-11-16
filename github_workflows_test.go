@@ -91,9 +91,25 @@ func TestMirrorWorkflowsMapJobsToGitLab(t *testing.T) {
 // TestMirrorWorkflowSet (#1464) pins the replacement of docker.yml by
 // publish-from-gitlab.yml (copies the GitLab-tested digest, never
 // rebuilds) and release-on-tag.yml, as orbit does.
+//
+// docker.yml may stay, retired, until two preview publishes and one
+// release have gone through the new path (#1472 ruling v2); while it
+// stays, every job must carry `if: false` so a dispatch builds nothing.
 func TestMirrorWorkflowSet(t *testing.T) {
-	if _, err := os.Stat(".github/workflows/docker.yml"); err == nil {
-		t.Error(".github/workflows/docker.yml still exists; the mirror rule replaces it with publish-from-gitlab.yml and release-on-tag.yml")
+	if data, err := os.ReadFile(".github/workflows/docker.yml"); err == nil {
+		var doc struct {
+			Jobs map[string]struct {
+				If string `yaml:"if"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("docker.yml: %v", err)
+		}
+		for id, j := range doc.Jobs {
+			if strings.TrimSpace(j.If) != "false" {
+				t.Errorf("docker.yml job %q is not retired with `if: false`; the mirror rule replaces it with publish-from-gitlab.yml and release-on-tag.yml", id)
+			}
+		}
 	}
 	for _, name := range []string{"publish-from-gitlab.yml", "release-on-tag.yml"} {
 		if _, err := os.Stat(filepath.Join(".github/workflows", name)); err != nil {

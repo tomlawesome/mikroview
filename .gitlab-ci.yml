@@ -2,9 +2,11 @@
 # GitLab is where mikroview is developed: branches, merge requests and
 # the dev -> preview -> main promotions all happen here, and this file is
 # the CI that gates them. GitHub is a read-only mirror of those three
-# branches -- the `sync` stage pushes each one after a merge -- and keeps
-# what already works there: CodeQL, the container registry and cosign
-# signing, Pages and secret scanning. #935 is the migration record; the
+# branches -- the `sync` stage pushes each one after a merge. Under the
+# mirror rule (#1464) only publish-from-gitlab, release-on-tag and CodeQL
+# run there by themselves, plus check-only secret scanning and the
+# RouterOS watcher; GitHub copies the image GitLab built and signed, and
+# everything else there runs by hand. #935 is the migration record; the
 # general model is in the gitlab-first-migration skill.
 #
 # The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
