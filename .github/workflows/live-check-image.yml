@@ -20,8 +20,8 @@ name: live-check image
 # not worth shipping, but a gate that cannot run until something reaches
 # preview is a gate nobody uses.
 #
-# Dispatch only, under the mirror rule (#1464): GitLab builds the image the
-# gate actually uses, so this mirror copy runs only by hand.
+# Dispatch only, under the mirror rule (#1464): GitLab's gate:image provides
+# the image the gate actually uses, so this mirror copy runs only by hand.
 #   publish -> gate:image
 on:
   workflow_dispatch: {}
