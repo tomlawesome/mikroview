@@ -666,6 +666,7 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 	}
 	if err != nil {
 		if created {
+			// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 			if rmErr := os.Remove(dest); rmErr != nil {
 				return fmt.Errorf("the backup is incomplete and could not be removed (%v); delete %s and do not use it: %w", rmErr, dest, err)
 			}
