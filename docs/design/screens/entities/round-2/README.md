@@ -67,7 +67,7 @@ planting a label where the thing stands.
 - **Spatial findings a list cannot make**: a stranger standing
   *inside* the fence (.17) reads differently from a visitor beyond
   it; 5000 stands in registered ground near winbox — bad company; the
-  unclaimed range .18–.31 is itself a finding.
+  unclaimed gaps between hosts are themselves a finding.
 - Filtered-empty dims the terrain to its contours (an empty map and a
   missing map are different facts) and the empty state below names
   both knobs, as in W.

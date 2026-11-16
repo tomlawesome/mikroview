@@ -1,7 +1,9 @@
 # Release signing: two independent signatures
 
-A release digest carries **two** signatures, and a consumer requires both
-(`SECURITY.md`). Two signatures made from one place would be one signature,
+A release digest carries **two** signatures, held in two registries. GitHub
+verifies the key-based one before it copies the digest. A consumer on GHCR
+checks the keyless one, and the key-based one too if they can read the GitLab
+registry (`SECURITY.md`). Two signatures made from one place would be one signature,
 because whoever can drive the first can drive the second.
 
 - **GitLab, automatic, key-based.** `sign:release-digest` on every

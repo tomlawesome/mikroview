@@ -1,6 +1,6 @@
 # Authentication moves onto gauntlet: what is replaced, what carries over, what changes
 
-**Status:** built on `feat/1202-gauntlet`, not yet merged (design
+**Status:** built on `feat/1202-gauntlet`, merged into `dev` 2026-11-13 (aec97729) (design
 2026-10-10; issue #1202, milestone v0.7.0; owner opened the work the same
 day: "Gauntlet has reached v0.4.1 with no issues left outstanding; it's
 ready to adopt"). The owner answered the ten design questions on
