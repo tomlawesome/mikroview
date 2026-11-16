@@ -105,7 +105,8 @@ else
 fi
 
 # MV_DEMO_DEVICES=1 declares the estate scripts/seed-demo.py feeds, which
-# is the only way its pushed tables can ever be read back (#709).
+# is the only way its pushed tables can ever be read back (#709). It also
+# sets networks.home to the estate's inside blocks (#1481), below.
 #
 # A pushed rule/NAT/address table is keyed by *device id*. seed-demo.py
 # mints its ingest tokens against the router names below and then streams

@@ -36,3 +36,20 @@ func TestQueryScopeInternalIncludesAConfiguredHomeRange(t *testing.T) {
 		t.Errorf("203.0.113.44 must stay external with the home scope set, got %d events", len(got.Events))
 	}
 }
+
+// A zoned address (2001:db8::1%eth0) matches neither the internal nor the
+// external filter, as before the netip move.
+func TestQueryScopeZonedAddressMatchesNeitherFilter(t *testing.T) {
+	s := New(100, time.Hour)
+	e := mkEvent(time.Now(), "core", ActionAccept)
+	e.SrcIP = "2001:db8::1%eth0"
+	s.Insert(e)
+	for _, sc := range []Scope{ScopeInternal, ScopeExternal} {
+		if got := s.Query(Query{SrcScope: sc, Limit: 10}); len(got.Events) != 0 {
+			t.Errorf("zoned source matched scope %v: %d events", sc, len(got.Events))
+		}
+	}
+	if got := s.Query(Query{SrcScope: ScopeAny, Limit: 10}); len(got.Events) != 1 {
+		t.Errorf("scope any must still match, got %d", len(got.Events))
+	}
+}

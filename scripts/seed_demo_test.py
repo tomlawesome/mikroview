@@ -652,14 +652,28 @@ class LiveEnvHomeNetworksTests(unittest.TestCase):
     def test_live_env_demo_config_sets_networks_home_to_the_inside_blocks(self):
         import re
         text = _LIVE_ENV.read_text()
-        self.assertIn("networks", text, "scripts/live-env.sh sets no networks key in cfg.yaml")
-        got = set(re.findall(r"\b\d+\.\d+\.\d+\.\d+/\d+\b", text[text.index("networks"):]))
+        # The block must sit inside the MV_DEMO_DEVICES=1 branch (demo only:
+        # the gate's scenarios use 198.51.100.0/24 as outside sources).
+        branch = re.search(
+            r'^if \[ "\$\{MV_DEMO_DEVICES:-\}" = "1" \]; then\n(.*?)^fi$',
+            text, re.S | re.M)
+        self.assertIsNotNone(branch, "no MV_DEMO_DEVICES=1 branch in scripts/live-env.sh")
+        assign = re.search(r"^[ \t]*NETWORKS_BLOCK='([^']*)'", branch.group(1), re.M)
+        self.assertIsNotNone(assign, "NETWORKS_BLOCK is not set inside the MV_DEMO_DEVICES=1 branch")
+        block = assign.group(1)
+        self.assertEqual(len(re.findall(r"NETWORKS_BLOCK='", text)), 1,
+                         "NETWORKS_BLOCK is assigned outside the MV_DEMO_DEVICES=1 branch")
+        self.assertRegex(block, r"\A\s*networks:\s*\n\s+home:\s*\[", "networks: must hold a home: list")
+        self.assertIn("${NETWORKS_BLOCK:-}", text, "cfg.yaml never emits NETWORKS_BLOCK")
+        home = block[block.index("home:"):]
+        got = set(re.findall(r"\b\d+\.\d+\.\d+\.\d+/\d+\b", block))
+        self.assertEqual(got, set(re.findall(r"\b\d+\.\d+\.\d+\.\d+/\d+\b", home)),
+                         "CIDRs outside the home: list")
         want = {"198.51.100.0/24", "192.0.2.32/27", "192.0.2.64/27", "192.0.2.96/27",
                 "192.0.2.128/27", "192.0.2.160/27", "192.0.2.192/27",
                 "192.0.2.224/28", "192.0.2.240/29", "192.0.2.248/29"}
         self.assertTrue(want <= got, f"networks.home is missing {sorted(want - got)}")
         self.assertNotIn("192.0.2.0/27", got, "192.0.2.0/27 holds the router WANs: it is outside")
-        self.assertIn("home", text[text.index("networks"):], "no home key under networks")
 
 
 if __name__ == "__main__":

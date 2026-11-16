@@ -368,7 +368,9 @@ func scopeMatches(home *ipscope.Scope, scope Scope, addr string) bool {
 		return true
 	}
 	ip, err := netip.ParseAddr(addr)
-	if err != nil {
+	// A zoned address (2001:db8::1%eth0) matches neither internal nor
+	// external, as it did under net.ParseIP, which refuses the zone.
+	if err != nil || ip.Zone() != "" {
 		return false
 	}
 	public := home.IsPublic(ip)

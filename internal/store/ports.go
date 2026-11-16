@@ -730,7 +730,7 @@ func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]
 			continue
 		}
 		ip, err := netip.ParseAddr(e.SrcIP)
-		if err != nil || !home.IsPublic(ip) {
+		if err != nil || ip.Zone() != "" || !home.IsPublic(ip) {
 			continue
 		}
 		proto := strings.ToLower(e.Protocol)

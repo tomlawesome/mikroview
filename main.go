@@ -568,6 +568,20 @@ func passkeyStartupRefusal(status gauntlet.PasskeyStatus, anyPasskeysExist bool)
 		status)
 }
 
+// installHomeScope builds the networks.home scope and hands it to the
+// package-level consumers (engine, hosts, dossier). The instance-held ones
+// (reputation, geoip, store) take the returned scope where they are built.
+func installHomeScope(home []string) (*ipscope.Scope, error) {
+	sc, err := ipscope.New(home)
+	if err != nil {
+		return nil, err
+	}
+	engine.SetHomeScope(sc)
+	hosts.SetHomeScope(sc)
+	dossier.SetHomeScope(sc)
+	return sc, nil
+}
+
 func main() {
 	// -version: prints the build-time-stamped commit SHA (see the
 	// `version` var above) and exits -- no config load, no network,
@@ -785,14 +799,11 @@ func main() {
 	// here is a bug, not an operator mistake -- stop rather than run with
 	// inside hosts reading as outside. Set on the engine before any
 	// definition is built, since each compiles the scope in.
-	homeScope, err := ipscope.New(cfg.Networks.Home)
+	homeScope, err := installHomeScope(cfg.Networks.Home)
 	if err != nil {
 		logging.New("config").Error("networks.home: " + err.Error())
 		os.Exit(1)
 	}
-	engine.SetHomeScope(homeScope)
-	hosts.SetHomeScope(homeScope)
-	dossier.SetHomeScope(homeScope)
 	// rep: always built (AbuseIPDBKey empty just means that one source
 	// inside it stays inert; Shodan InternetDB is free/keyless and
 	// always queried).
