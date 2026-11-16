@@ -451,7 +451,19 @@ class TotpClaimLockTests(unittest.TestCase):
         shim.time = fake_time
         shim.sleep = fake_sleep
         results = []
-        with mock.patch.object(seed_demo, "time", shim):
+
+        # Yield between the lock-protected read and write. With the lock
+        # held the pause costs only time; with no lock every claimer has
+        # read the old counter before any of them writes, so they share
+        # one and the test fails every run, not by luck of scheduling.
+        real_mkstemp = seed_demo.tempfile.mkstemp
+
+        def slow_mkstemp(*a, **kw):
+            real_sleep(0.1)
+            return real_mkstemp(*a, **kw)
+
+        with mock.patch.object(seed_demo, "time", shim), \
+                mock.patch.object(seed_demo.tempfile, "mkstemp", slow_mkstemp):
             threads = [self._claim_in_thread(results) for _ in range(8)]
             for t in threads:
                 t.join(60)
