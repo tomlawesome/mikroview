@@ -723,7 +723,7 @@ func runRestore(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Parsed and fully validated before anything on disk is touched.
 	env, err := backup.Read(f)

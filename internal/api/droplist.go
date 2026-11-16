@@ -493,5 +493,5 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	w.Write(droplist.Script(entries, now))
+	_, _ = w.Write(droplist.Script(entries, now))
 }

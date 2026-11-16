@@ -174,7 +174,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := backup.Write(f, *appVersion, stores); err != nil {
-		f.Close()
+		_ = f.Close()
 		fmt.Fprintf(os.Stderr, "writing the envelope: %v\n", err)
 		os.Exit(1)
 	}
@@ -203,7 +203,7 @@ func buildDefinitions(now time.Time) ([]byte, error) {
 		return nil, err
 	}
 	path := tmp.Name()
-	tmp.Close()
+	_ = tmp.Close()
 	// Removed rather than left empty: OpenDefinitionsStore treats a
 	// missing file as the expected first-run case but an existing,
 	// zero-byte one as a document that failed to parse -- see
@@ -211,7 +211,7 @@ func buildDefinitions(now time.Time) ([]byte, error) {
 	if err := os.Remove(path); err != nil {
 		return nil, err
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	defs, err := engine.OpenDefinitionsStore(path)
 	if err != nil {

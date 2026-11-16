@@ -247,7 +247,7 @@ func pgNewTestPool(t *testing.T) *persist.Pool {
 
 	schema := "test_wlchar_" + strings.ReplaceAll(strings.ToLower(t.Name()), "/", "_")
 	for _, r := range schema {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 			t.Fatalf("test name produces an unsafe schema identifier: %q", schema)
 		}
 	}

@@ -517,7 +517,7 @@ func joinOnShutdown(wg *sync.WaitGroup, ctx context.Context, shutdown func(conte
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		shutdown(shutdownCtx)
+		_ = shutdown(shutdownCtx)
 	}()
 }
 
@@ -1192,7 +1192,7 @@ func main() {
 		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and MikroView is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
-		defer ml.Close()
+		defer func() { _ = ml.Close() }()
 	}
 	// eng is the evaluation chassis (issue #398, part of the v0.3.0
 	// unification -- see docs/decisions/evaluation-engine.md): one
@@ -2246,7 +2246,7 @@ func main() {
 					routerState.NoteVersionHint(clientIP, hint, time.Now())
 				}
 				w.Header().Set("Content-Type", "application/x-pem-file")
-				w.Write(caCertPEM)
+				_, _ = w.Write(caCertPEM)
 			})
 		}
 	}
@@ -3169,7 +3169,7 @@ func runHealthcheck() int {
 		logger.Error(err.Error())
 		return 1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		logger.Error(fmt.Sprintf("unexpected status %d", resp.StatusCode))
 		return 1

@@ -112,7 +112,7 @@ func (l *sniffingListener) accept() {
 	for {
 		c, err := l.inner.Accept()
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			if te, ok := err.(interface{ Temporary() bool }); ok && te.Temporary() {
 				if backoff == 0 {
 					backoff = 5 * time.Millisecond
 				} else {
@@ -145,7 +145,7 @@ func (l *sniffingListener) accept() {
 					"%d connections have been dropped while waiting to identify themselves -- more than %d were pending at once",
 					total, maxConcurrentSniffs))
 			}
-			c.Close()
+			_ = c.Close()
 			continue
 		}
 		go func() {
@@ -157,13 +157,13 @@ func (l *sniffingListener) accept() {
 
 func (l *sniffingListener) classify(c net.Conn) {
 	if err := c.SetReadDeadline(time.Now().Add(sniffTimeout)); err != nil {
-		c.Close()
+		_ = c.Close()
 		return
 	}
 	br := bufio.NewReader(c)
 	first, err := br.Peek(1)
 	if err != nil || len(first) == 0 {
-		c.Close()
+		_ = c.Close()
 		return
 	}
 
@@ -171,18 +171,18 @@ func (l *sniffingListener) classify(c net.Conn) {
 		// Hand it on with the peeked byte replayed, and the deadline
 		// cleared -- from here the http.Server's own timeouts apply.
 		if err := c.SetReadDeadline(time.Time{}); err != nil {
-			c.Close()
+			_ = c.Close()
 			return
 		}
 		select {
 		case l.conns <- &replayConn{Conn: c, r: br}:
 		case <-l.done:
-			c.Close()
+			_ = c.Close()
 		}
 		return
 	}
 
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	l.redirect(c, br)
 }
 
@@ -231,7 +231,7 @@ func (l *sniffingListener) redirect(c net.Conn, br *bufio.Reader) {
 	// 308 rather than 301/302: it preserves the method and body, and is
 	// not cached as permanently as 301 by every browser that ever saw it
 	// -- which matters on an appliance whose address can change.
-	fmt.Fprintf(c, "HTTP/1.1 308 Permanent Redirect\r\n"+
+	_, _ = fmt.Fprintf(c, "HTTP/1.1 308 Permanent Redirect\r\n"+
 		"Location: %s\r\n"+
 		"Content-Type: text/plain; charset=utf-8\r\n"+
 		"Content-Length: %d\r\n"+
