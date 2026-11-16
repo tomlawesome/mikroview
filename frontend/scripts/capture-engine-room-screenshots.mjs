@@ -263,11 +263,14 @@ for (const scheme of ['light', 'dark']) {
   const { context, page } = await signedInPage('dark')
   const row = page.locator(`${PEOPLE} .prow:has-text("${EXTRA_USER}")`)
   if ((await row.count()) > 0) {
-    // Round 32's arm-then-confirm gesture (EngineRoom.svelte's
-    // onRemoveClick), not a native confirm() dialog -- the first click
-    // arms the button, the second (now reading "confirm...") removes.
+    // #1202: remove opens a password prompt under the row (not inside
+    // .prow) asking for the calling admin's own password; the confirm
+    // button is in that prompt. A second click on "remove" only
+    // reopens the prompt, so it never removed anything.
     await row.locator('button.remove').click()
-    await row.locator('button.remove').click()
+    const prompt = page.locator(`${PEOPLE} .pform:has(input[aria-label="your password"])`)
+    await prompt.locator('input[aria-label="your password"]').fill(PASS)
+    await prompt.locator('button:has-text("confirm")').click()
     await row.waitFor({ state: 'detached' })
     console.log(`removed "${EXTRA_USER}"`)
   }
