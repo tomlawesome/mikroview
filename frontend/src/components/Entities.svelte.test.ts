@@ -812,11 +812,11 @@ describe('Entities named-things table (#675)', () => {
     await settle()
     const input = container.querySelector('.rename-input') as HTMLInputElement
     expect(input).toBeTruthy()
-    await fireEvent.input(input, { target: { value: 'alexs-desktop' } })
+    await fireEvent.input(input, { target: { value: 'kais-desktop' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
     await settle()
 
-    expect(upsertEntity).toHaveBeenCalledWith({ type: 'host', key: '10.0.10.2', label: 'alexs-desktop', tags: ['trusted'] })
+    expect(upsertEntity).toHaveBeenCalledWith({ type: 'host', key: '10.0.10.2', label: 'kais-desktop', tags: ['trusted'] })
   })
 
   it('Esc cancels a rename without saving', async () => {
@@ -843,7 +843,7 @@ describe('Entities named-things table (#675)', () => {
     await fireEvent.click(getByText('alex-desktop'))
     await settle()
     let input = container.querySelector('.rename-input') as HTMLInputElement
-    await fireEvent.input(input, { target: { value: 'alexs-desktop' } })
+    await fireEvent.input(input, { target: { value: 'kais-desktop' } })
     await fireEvent.blur(input)
     await settle()
     expect(upsertEntity).toHaveBeenCalledTimes(1)

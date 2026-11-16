@@ -614,6 +614,11 @@ lint:flake-check:
   <<: *dev_or_mr
   script:
     - sh scripts/ci/flake-check.sh --quarantined scripts/quarantine.txt docs/flakes.md
+    # #1456: no tracked text file may spell the owner's name (sha256 only).
+    # Reads docs too, so it lives in this docs-inclusive job.
+    - apk add --no-cache git nodejs >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - node --test scripts/names-guard.test.mjs
 
 # The shared check for personal details (ai/agent-infra#32, #1460): one set of
 # rules for every project, kept on the agent host and mounted read-only into
