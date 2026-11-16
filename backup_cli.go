@@ -666,7 +666,9 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 	}
 	if err != nil {
 		if created {
-			_ = os.Remove(dest)
+			if rmErr := os.Remove(dest); rmErr != nil {
+				return fmt.Errorf("the backup is incomplete and could not be removed (%v); delete %s and do not use it: %w", rmErr, dest, err)
+			}
 			return fmt.Errorf("the backup is incomplete and has been removed: %w", err)
 		}
 		return fmt.Errorf("the backup is incomplete -- do not use %s: %w", dest, err)
