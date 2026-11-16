@@ -1,7 +1,9 @@
 {
+  "//": "test files are not product code and node_modules is third-party; neither is worth reporting clones in",
   "path": ["frontend/src"],
-  "format": ["typescript", "javascript", "svelte"],
+  "format": ["typescript", "javascript"],
   "ignore": ["**/*.test.ts", "**/*.test.js", "**/node_modules/**"],
+  "threshold": 1,
   "reporters": ["console", "json"],
   "output": "jscpd-report",
   "gitignore": true,

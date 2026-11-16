@@ -208,6 +208,7 @@ workflow:
   - "**/*.yml"
   - "**/*.yaml"
   - "**/*.toml"
+  - ".shellcheckrc"
   - "**/*.sh"
   - "**/*.bash"
   - "**/*.py"

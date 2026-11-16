@@ -451,7 +451,7 @@ func validEnrolToken(token string) bool {
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
 			return false
 		}
 	}
