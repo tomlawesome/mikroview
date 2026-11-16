@@ -624,7 +624,7 @@ def _demo_history_entries():
     """[(name, ip, ports)] from the demoWatchlist literal in main.go."""
     import re
     text = _DEMO_HISTORY.read_text()
-    m = re.search(r"var demoWatchlist = \[\]demoEntry\{(.*?)\n\}", text, re.S)
+    m = re.search(r"var demoWatchlist = \[\]demoEntry\{(.*?)\n\}", text, re.DOTALL)
     assert m, "demoWatchlist literal not found in cmd/demo-history/main.go"
     out = []
     for row in re.finditer(r'\{"[^"]*",\s*"([^"]+)",\s*"([^"]+)",\s*\[\]int\{([^}]*)\}', m.group(1)):
@@ -668,9 +668,9 @@ class LiveEnvHomeNetworksTests(unittest.TestCase):
         # the gate's scenarios use 198.51.100.0/24 as outside sources).
         branch = re.search(
             r'^if \[ "\$\{MV_DEMO_DEVICES:-\}" = "1" \]; then\n(.*?)^fi$',
-            text, re.S | re.M)
+            text, re.DOTALL | re.MULTILINE)
         self.assertIsNotNone(branch, "no MV_DEMO_DEVICES=1 branch in scripts/live-env.sh")
-        assign = re.search(r"^[ \t]*NETWORKS_BLOCK='([^']*)'", branch.group(1), re.M)
+        assign = re.search(r"^[ \t]*NETWORKS_BLOCK='([^']*)'", branch.group(1), re.MULTILINE)
         self.assertIsNotNone(assign, "NETWORKS_BLOCK is not set inside the MV_DEMO_DEVICES=1 branch")
         block = assign.group(1)
         self.assertEqual(len(re.findall(r"NETWORKS_BLOCK='", text)), 1,

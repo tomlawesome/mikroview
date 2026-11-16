@@ -788,8 +788,7 @@ lint:ruff:
   needs: []
   <<: *dev_or_mr_code
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   script:
     - rc=0
     - ruff check --no-cache --output-format=concise . > ruff-report.txt || rc=$?
