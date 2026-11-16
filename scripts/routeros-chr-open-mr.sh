@@ -56,7 +56,12 @@ append_out="$(go run ./scripts/routerosappendrow -version "$version" -date "$dat
 log "routeros-chr-open-mr: $append_out"
 
 mkdir -p "$(dirname "$log_dest")"
-cp "$log_file" "$log_dest"
+# A header first (#1495): without it, runs on different versions or dates
+# wrote byte-identical files and a reader could not tell them apart.
+{
+  printf '# RouterOS %s on CHR, exercised %s (UTC)\n\n' "$version" "$date"
+  cat "$log_file"
+} >"$log_dest"
 
 git config user.name "mikroview CHR exercise"
 git config user.email "chr-exercise@invalid"

@@ -672,6 +672,7 @@ lint:script-tests:
     - bash scripts/coverage-floor.test.sh
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
+    - bash scripts/routeros-chr-open-mr.test.sh
 
 lint:go:
   stage: lint
