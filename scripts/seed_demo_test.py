@@ -17,6 +17,7 @@ file is executed directly, never on import.
 """
 import argparse
 import importlib.util
+import ipaddress
 import os
 import pathlib
 import random
@@ -479,6 +480,112 @@ class TotpClaimLockTests(unittest.TestCase):
         t.join(5)
         self.assertFalse(t.is_alive(), "claimer proceeds once the lock is released")
         self.assertEqual(len(results), 1)
+
+
+_REPO = pathlib.Path(__file__).resolve().parent.parent
+_SAMPLE_NAMES = _REPO / "docs" / "design" / "sample-names.md"
+_V4_RE = r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\d.])"
+_V6_RE = r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:/\d{1,3})?(?![0-9A-Fa-f:])"
+_DOC_V4 = [ipaddress.ip_network(n) for n in
+           ("198.51.100.0/24", "192.0.2.0/24", "203.0.113.0/24")]
+_DOC_V6 = ipaddress.ip_network("2001:db8::/32")
+# RFC 1918, built from numbers so this file holds no private address text.
+_PRIVATE_V4 = [ipaddress.ip_network((a << 24 | b << 16, p))
+               for a, b, p in ((10, 0, 8), (172, 16, 12), (192, 168, 16))]
+
+
+def _source_v4():
+    """Every IPv4 address or CIDR in seed-demo.py's text (comments
+    included), as (line number, token) pairs."""
+    import re
+    out = []
+    for n, line in enumerate(_PATH.read_text().splitlines(), 1):
+        for tok in re.findall(_V4_RE, line):
+            try:
+                ipaddress.ip_interface(tok)
+            except ValueError:
+                continue  # e.g. a version number like 1.2.3.400
+            out.append((n, tok))
+    return out
+
+
+def _source_v6():
+    import re
+    out = []
+    for n, line in enumerate(_PATH.read_text().splitlines(), 1):
+        for tok in re.findall(_V6_RE, line):
+            try:
+                ipaddress.ip_interface(tok)
+            except ValueError:
+                continue  # e.g. a MAC address or a time of day
+            out.append((n, tok))
+    return out
+
+
+def _sample_names_blocks():
+    """{lower-cased network name: IPv4Network} from the Networks table in
+    docs/design/sample-names.md, one-block rows only."""
+    import re
+    blocks = {}
+    for line in _SAMPLE_NAMES.read_text().splitlines():
+        m = re.match(r"\|\s*([^|]+?)\s*\|\s*(\d+\.\d+\.\d+\.\d+/\d+)\s*\|", line)
+        if m:
+            blocks[m.group(1).lower()] = ipaddress.ip_network(m.group(2))
+    return blocks
+
+
+class DocumentationAddressTests(unittest.TestCase):
+    """#1481: the seed uses only the documentation ranges and per-network
+    blocks in docs/design/sample-names.md, never a private address."""
+
+    def test_no_private_ipv4_anywhere_in_the_source(self):
+        bad = [(n, tok) for n, tok in _source_v4()
+               if any(ipaddress.ip_interface(tok).ip in net for net in _PRIVATE_V4)]
+        self.assertEqual(bad, [], f"private addresses (line, token): {bad[:10]} ... {len(bad)} in all")
+
+    def test_every_address_is_in_a_documentation_range(self):
+        # 127.0.0.0/8 is exempt: each router's syslog/push leaves from its
+        # own loopback address (#1281, #1302), which is not a sample address.
+        bad = [(n, tok) for n, tok in _source_v4()
+               if not ipaddress.ip_interface(tok).ip.is_loopback
+               and not any(ipaddress.ip_interface(tok).ip in net for net in _DOC_V4)]
+        bad += [(n, tok) for n, tok in _source_v6()
+                if ipaddress.ip_interface(tok).ip not in _DOC_V6]
+        self.assertEqual(bad, [], f"addresses outside the documentation ranges: {bad[:10]} ... {len(bad)} in all")
+
+    def test_every_cidr_is_a_network_address(self):
+        bad = []
+        for n, tok in _source_v4() + _source_v6():
+            if "/" in tok and ipaddress.ip_interface(tok).ip != ipaddress.ip_interface(tok).network.network_address:
+                bad.append((n, tok))
+        self.assertEqual(bad, [], f"CIDRs with host bits set: {bad[:10]} ... {len(bad)} in all")
+
+    def test_named_networks_get_the_block_the_table_gives(self):
+        # A line that carries exactly one table name as a whole quoted
+        # string ("lan", comment="wg0", ...) and IPv4 addresses is taken
+        # to configure that network: each address must be in its block.
+        # Interface names such as vlan10 are not matched: they do not map
+        # to a table name clear-cut, so only quoted network names count.
+        import re
+        blocks = _sample_names_blocks()
+        for want in ("lan", "servers", "iot", "guest", "wg0", "workshop", "cams", "garage"):
+            self.assertIn(want, blocks, f"{want} missing from the table")
+        checked, bad = 0, []
+        for n, line in enumerate(_PATH.read_text().splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            quoted = {q.lower() for q in re.findall(r'"([^"]+)"', line)}
+            names = quoted & set(blocks)
+            toks = [t for m, t in _source_v4() if m == n]
+            if len(names) != 1 or not toks:
+                continue
+            block = blocks[names.pop()]
+            for tok in toks:
+                checked += 1
+                if ipaddress.ip_interface(tok).ip not in block:
+                    bad.append((n, tok, str(block)))
+        self.assertEqual(bad, [], f"addresses outside their network's block (line, addr, block): {bad[:10]}")
+        self.assertGreater(checked, 0, "no network-named address lines found; has the seed's layout changed?")
 
 
 if __name__ == "__main__":
