@@ -354,9 +354,10 @@ which already satisfies the replay contract.
 
 ### Who decided it
 
-effort on 2026-08-24, under explicit owner authorisation, departing
-from AGENTS.md's standing rule routing architecture calls to Fable
-5: Fable 5 had reached its account model limit, and the owner
-authorised Opus rather than wait for the reset. Worth recording
+The schema decision above was made on 2026-08-24, under explicit
+owner authorisation, departing from AGENTS.md's standing rule routing
+architecture calls to the top-tier model: that model had reached its
+account limit, and the owner authorised another rather than wait for
+the reset. Worth recording
 here because the decision shapes persisted data -- definitions
 created under it will exist in the field.

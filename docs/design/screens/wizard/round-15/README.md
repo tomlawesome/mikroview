@@ -58,3 +58,4 @@ reference; in a build the sparks do not exist). The wizard is round
 10's AG with this round's Yes / No change. The consolidated record is
 `../DESIGN.md`; the build issues are linked from #1374.
 
+Written 2026-09-27.

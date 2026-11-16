@@ -113,3 +113,4 @@ itself, not only the dressing around one form; and be three genuinely
 distinct concepts, not one theme in three coats. The Blueprint's drawing
 sheet is a rework of an earlier drawn-from-evidence concept, not new.
 
+Written 2026-09-26.

@@ -65,3 +65,4 @@ wave 2 does not, but it needs the store fields from wave 1.
 - Every new `User` field joins the backup envelope and must round-trip. There
   is a test for that pattern already; follow it.
 
+Written 2026-09-23.

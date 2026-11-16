@@ -440,6 +440,7 @@ message, and `D|drop|spamhaus|` is 16 characters.
 - IPv6 lists other than Spamhaus's; a per-router "which lists are on"
   on the fleet page (not drawn).
 
+Written 2026-10-01; catalogue copy and defaults added
 the same day.
 
 ## Built review (2026-10-02)
@@ -617,6 +618,7 @@ station and chip, the rail receipt.
   foot: the body scrolls; accepted.
 - No owner question arises from this review.
 
+Written 2026-10-02.
 
 ## Addendum — the rail's rows 1–4 on the tail (#1417, 2026-10-02)
 
@@ -666,3 +668,4 @@ What to build, without asking:
 - Screenshots: `tail-02` needs no recapture; the only visible change
   is that rows 1–4 no longer highlight on hover.
 
+Written 2026-10-02.

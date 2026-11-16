@@ -73,3 +73,4 @@ dots in every drop's ink — confetti. Round 15 (`../round-15/`) redraws
 them as sparks: white-hot, cooling to the tube's own ink, fast thin
 streaks, fewer; and offers `?nosparks` to compare against none.
 
+Written 2026-09-27.

@@ -376,4 +376,5 @@ was the screen, with a body⟷ledger flip.
 - The old wizard page's ephemeral, restart-from-scratch behaviour and
   its absence of close/skip affordances: replaced by the ledger model.
 
+Written 2026-09-27 (the modal design:
 2026-08-23; the router ledger: 2026-09-19).
