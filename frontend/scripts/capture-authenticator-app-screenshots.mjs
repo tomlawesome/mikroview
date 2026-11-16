@@ -8,11 +8,12 @@
 // capture-engine-room-screenshots.mjs, which it borrows its login
 // mechanics from.
 //
-// Produces three of docs/authenticator-app.md's own `> Screenshot: ...`
-// placeholders (#1249's page); see the update note below for why the
-// fourth, the account-menu "nothing set up yet" shot, is no longer one
-// of them:
+// Produces four of docs/authenticator-app.md's own screenshots (#1249's
+// page), the account-menu shot included -- see the update note below
+// for how that one is reached now:
 //
+//  - docs/screenshots/authenticator-menu-dark.png: the account menu open,
+//    with no authenticator app set up (a passkey stands in).
 //  - docs/screenshots/authenticator-enrol-dark.png: the enrolment
 //    screen -- QR code, the text secret beside it, the code box beneath.
 //  - docs/screenshots/authenticator-recovery-codes-dark.png: the ten
@@ -84,9 +85,11 @@
 // door (AuthEnrolFactor.svelte), a different component from the one
 // docs/authenticator-app.md's account-menu flow depicts. So:
 //
-//  - The account-menu "no factor yet" screenshot is no longer reachable
-//    from a signed-in session and is not recaptured here (it also isn't
-//    stale -- AccountMenu.svelte hasn't changed).
+//  - The account-menu "no authenticator yet" screenshot is not reachable
+//    with no factor at all, but is with a passkey standing in: once the
+//    throwaway passkey below is registered and TOTP turned off, the menu
+//    is captured open (authenticator-menu-dark.png), showing the
+//    "Authenticator app" row with no "· on" tag ("Passkeys · 1" beside it).
 //  - A throwaway passkey is registered first (below) purely so the
 //    admin's TOTP factor is never the *last* one when it's turned off --
 //    ClearTOTP then keeps the account signed in with the ordinary
@@ -336,13 +339,20 @@ await modal().locator('.actions button.danger:text-is("Turn off authenticator ap
 await modal().locator('.actions button.confirm:text-is("Close")').click()
 await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 })
 
-// --- 1. The enrolment screen: QR code, text secret, code box -------------
+// --- 0b. The account menu with no authenticator app set up ---------------
 //
-// The account-menu "nothing set up yet" screenshot (previously captured
-// here) is skipped -- see the update note above: with the throwaway
-// passkey present the menu now reads "Passkeys · 1", not the bare row
-// the docs depict, and that image isn't stale (AccountMenu.svelte
-// hasn't changed) so nothing needs it recaptured.
+// Passkey registered, TOTP just turned off: the menu's "Authenticator
+// app" row carries no "· on" tag. Full-viewport shot, menu left open.
+
+await page.click(`${ACTIVE} .account button.chip`)
+await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
+await page.waitForTimeout(500)
+await page.screenshot({ path: path.join(outDir, 'authenticator-menu-dark.png') })
+console.log('captured authenticator-menu-dark.png')
+await page.keyboard.press('Escape')
+await page.waitForSelector(`${ACTIVE} .account .menu`, { state: 'detached', timeout: 5000 }).catch(() => {})
+
+// --- 1. The enrolment screen: QR code, text secret, code box -------------
 
 await page.click(`${ACTIVE} .account button.chip`)
 await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
