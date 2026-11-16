@@ -565,8 +565,8 @@ policy:release-surfaces:
 
 # ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
-# plus the report-only scanners added by #1462/#1463 (shellcheck, golangci-lint,
-# ruff, knip, jscpd; zizmor is in the security stage).
+# plus the scanners added by #1462/#1463: shellcheck, golangci-lint and
+# zizmor (security stage) block; ruff, knip and jscpd are report-only.
 # ---------------------------------------------------------------------------
 
 # Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
