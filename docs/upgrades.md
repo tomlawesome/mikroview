@@ -112,14 +112,13 @@ Enrol it by hand:
    press **+ add a router** first if it has never pushed anything at all
    — routers that only send logs, never a push, have no entry to enrol
    until you add one by name).
-2. Press **Re-enrol…** to open the setup ledger at **Send logs**.
-3. Give the router's own address, and your password. MikroView opens
+2. Press **Re-enrol…** to open the setup wizard at **Mint the token**.
+3. Give your password. MikroView opens
    the syslog port for that one address while the token is pending, and
    asks who you are because minting the token is what opens it — holding
    an admin session is not enough on its own.
-4. Paste the one extra line the step shows — it is appended to the
-   syslog action commands you already have on the router — and let the
-   router run it once.
+4. Paste the block the wizard shows, whose last line is the enrol line,
+   and let the router run it once.
 5. The router's next log line carrying that token is what enrols it;
    everything after that is accepted normally.
 6. Finish the ledger's last step, **Register the router**, to record that
