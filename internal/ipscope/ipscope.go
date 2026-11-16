@@ -62,13 +62,21 @@ func (s *Scope) IsPublic(addr netip.Addr) bool {
 		addr.IsLinkLocalMulticast() {
 		return false
 	}
+	return !s.InHome(addr)
+}
+
+// InHome reports whether addr is in a configured home prefix, for the
+// callers that keep their own base rule (hosts mirrors the browser's,
+// the dossier counts multicast as local) and add only the home set.
+func (s *Scope) InHome(addr netip.Addr) bool {
 	if s == nil {
-		return true
+		return false
 	}
+	addr = addr.Unmap()
 	for _, p := range s.home {
 		if p.Contains(addr) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }

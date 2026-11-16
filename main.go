@@ -53,6 +53,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/dossier"
 	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -790,6 +791,8 @@ func main() {
 		os.Exit(1)
 	}
 	engine.SetHomeScope(homeScope)
+	hosts.SetHomeScope(homeScope)
+	dossier.SetHomeScope(homeScope)
 	// rep: always built (AbuseIPDBKey empty just means that one source
 	// inside it stays inert; Shodan InternetDB is free/keyless and
 	// always queried).
