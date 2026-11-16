@@ -27,6 +27,7 @@ import { portFilterState } from '../lib/portFilter.svelte'
 import { servingState } from '../lib/serving.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import type { TraceResponse } from '../lib/api'
+import { CARD_GRACE_MS } from '../lib/cardAnchor'
 import City from './City.svelte'
 
 // #915: twelve of these tests timed out on the GitLab runner against
@@ -1204,6 +1205,29 @@ describe('the reach’s line card (round 49, #1016)', () => {
       event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: 'default drop' }),
     ])
     expect(refused.container.querySelector('.lcard [data-draft-rule]')).not.toBeNull()
+  })
+
+  it('drafting a rule pins the line card, so it outlives the pointer (#1496)', () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = openLine([
+        event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: 'default drop' }),
+      ])
+      const card = container.querySelector('.lcard') as HTMLElement
+      expect(card.classList.contains('pinned'), 'the hover card opens unpinned').toBe(false)
+      fireEvent.click(card.querySelector('[data-draft-rule]') as Element)
+      flushSync()
+      expect(container.querySelector('.composer')).not.toBeNull()
+      expect(container.querySelector('.lcard')?.classList.contains('pinned')).toBe(true)
+
+      fireEvent.pointerLeave(container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element)
+      fireEvent.pointerLeave(card)
+      vi.advanceTimersByTime(CARD_GRACE_MS + 100)
+      flushSync()
+      expect(container.querySelector('.lcard'), 'the card closed under the composer').not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('pins, like every other card, and lets go when the pin is clicked again', () => {
