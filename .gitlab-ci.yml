@@ -738,8 +738,7 @@ lint:shellcheck:
   needs: []
   <<: *dev_or_mr_code
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   script:
     - rc=0
     - find . -name '*.sh' -not -path './.git/*' -not -path '*/node_modules/*' -print0 | xargs -0 shellcheck --severity=warning --format=gcc > shellcheck-report.txt || rc=$?
@@ -2219,8 +2218,7 @@ security:zizmor:
   needs: []
   <<: *dev_or_mr
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   variables:
     ZIZMOR_VERSION: "1.32.0"
     ZIZMOR_SHA256: bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
