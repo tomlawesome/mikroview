@@ -2920,6 +2920,17 @@
     lineCardPlace = null
   }
 
+  /** Drafting from the card pins it first (#1496): an action that opens
+   * a form from a card turns the hover card into one the operator keeps,
+   * as askHostMark and openExpectedForm do. */
+  function draftFromLineCard() {
+    const s = lineCardRefused
+    if (!s) return
+    lineGrace.hold()
+    lineCardPinned = true
+    openCompose(s)
+  }
+
   /** Every card pins (DESIGN.md "Cards"). */
   function pinLineCard() {
     lineCardPinned = !lineCardPinned
@@ -6902,15 +6913,11 @@
                before: mikroview observes, it never connects.
                Only on a host's reach: the line it prints names one
                machine as its source, and a zone's or a rib's refused
-               line is a statement about many (#1016). -->
-          <button
-            class="hot"
-            data-draft-rule
-            onclick={() => {
-              const s = lineCardRefused
-              if (s) openCompose(s)
-            }}>draft the rule ▸</button
-          >
+               line is a statement about many (#1016).
+               The door pins the card first, like askHostMark and
+               openExpectedForm, so the evidence stays beside the draft
+               (#1496). -->
+          <button class="hot" data-draft-rule onclick={draftFromLineCard}>draft the rule ▸</button>
         {/if}
         <button onclick={openLineStream}>stream ▸</button>
       </div>
