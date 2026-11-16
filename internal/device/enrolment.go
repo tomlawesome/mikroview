@@ -505,6 +505,7 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 
 	prevAcceptedIP := info.AcceptedIP
 	prevEnrolledAt := info.EnrolledAt
+	prevRegisteredAt := info.RegisteredAt
 	prevRefused, wasRefused := r.refused[key]
 
 	if info.AcceptedIP != "" {
@@ -512,6 +513,10 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	}
 	info.AcceptedIP = key
 	info.EnrolledAt = now
+	// Registration is acceptance (#1493): the operator confirmed this
+	// router when they minted its token with their password, so there is
+	// no second step to wait for.
+	info.RegisteredAt = now
 	r.byAcceptedIP[key] = info
 	// The router logged its own logging-action change before this line
 	// reached us, so its address is already in the refused list; leaving
@@ -528,6 +533,7 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 		delete(r.byAcceptedIP, key)
 		info.AcceptedIP = prevAcceptedIP
 		info.EnrolledAt = prevEnrolledAt
+		info.RegisteredAt = prevRegisteredAt
 		if prevAcceptedIP != "" {
 			r.byAcceptedIP[normalizeIP(prevAcceptedIP)] = info
 		}

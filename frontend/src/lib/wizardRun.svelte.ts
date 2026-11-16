@@ -415,7 +415,7 @@ class WizardRun {
   // begin is the run's start, every time the wizard opens: the answers
   // go back to fresh, then what the server already holds is read in so
   // reopening shows the ledger as it stands. A router the door named
-  // (Re-enrol…, Finish registering…) fills the name and the address; a
+  // (Re-enrol…) fills the name and the address; a
   // router already sending lands on the router's turn, or on the
   // ledger once everything that stands has arrived -- unless the door
   // was Re-enrol… (wizardState.reEnrolling), which lands on Mint the

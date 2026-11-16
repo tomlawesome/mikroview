@@ -582,7 +582,6 @@ func (s *Server) coreRoutes() []route {
 		// it is.
 		{http.MethodPost, "/api/devices", s.handleDeviceCreate},
 		{http.MethodDelete, "/api/devices/{id}", s.handleDeviceDelete},
-		{http.MethodPost, "/api/devices/{id}/registration", s.handleDeviceRegister},
 		{http.MethodPost, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentCreate},
 		{http.MethodPost, "/api/devices/{id}/enrolment/address", s.handleDeviceEnrolmentRebind},
 		{http.MethodDelete, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentDelete},

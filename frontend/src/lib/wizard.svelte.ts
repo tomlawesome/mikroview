@@ -24,7 +24,6 @@ import {
   markSetupStep,
   mintEnrolment,
   rebindEnrolment,
-  registerDevice,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
@@ -109,11 +108,6 @@ class WizardState {
   // again after minting.
   enrolRebinding = $state(false)
 
-  // registerError surfaces a refused Register step, and registering
-  // guards its button the same way enrolMinting does.
-  registerError = $state<string | null>(null)
-  registering = $state(false)
-
   // rebindError surfaces a refused rebind of the enrolment window
   // (#1291, ruling 23a).
   rebindError = $state<string | null>(null)
@@ -150,8 +144,8 @@ class WizardState {
   reEnrolling = $state(false)
 
   // addingRouter is true for a walk about one router, opened by a door
-  // that names it or will (+ add a router, Re-enrol…, Finish
-  // registering…, the ledger's forget): the fleet's other traffic is not
+  // that names it or will (+ add a router, Re-enrol…, the ledger's
+  // forget): the fleet's other traffic is not
   // its evidence (#1397). Only the first-run ledger (launch) reads the
   // fleet as a whole while no router is named.
   addingRouter = $state(false)
@@ -512,7 +506,6 @@ class WizardState {
     this.token = ''
     this.clearEnrolment()
     this.walkMintedAt = ''
-    this.clearRegister()
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null
@@ -538,21 +531,6 @@ class WizardState {
     this.enrolPassword = ''
     this.enrolMinting = false
     this.rebindError = null
-  }
-
-  // clearRegister wipes the Register step's own fields, the same reason
-  // and the same way clearEnrolment wipes enrolment's: registerError and
-  // registering were being cleared only by launch() and registerRouter()
-  // itself, so openRegister() (Entities.svelte's Finish registering…,
-  // which never goes through launch()) could open the Register pane
-  // still carrying a different router's refusal -- the operator hits an
-  // error on router A, closes the wizard, opens Finish registering… on
-  // router B, and A's message is sitting there before B's request has
-  // even been made. Called from every door onto a walk, same list as
-  // clearEnrolment().
-  clearRegister() {
-    this.registerError = null
-    this.registering = false
   }
 
   // reconcileEnrolment closes the gap the 2026-09-18 audit found
@@ -592,7 +570,6 @@ class WizardState {
     this.tokenDevice = ''
     this.clearEnrolment()
     this.walkMintedAt = ''
-    this.clearRegister()
     this.pane = 1
     this.showStepList = false
     this.lostRouterDevice = null
@@ -610,22 +587,6 @@ class WizardState {
     this.tokenDevice = device
     this.pane = this.steps.indexOf('syslog') + 1
     this.reEnrolling = true
-  }
-
-  // openRegister is a router row's Finish registering… (#1291's other
-  // unmet checklist item): the same ledger, opened at Register for a
-  // router that already enrolled, with its device and history kept and
-  // nothing minted. A router only short of the Register step does not
-  // need a fresh token to close it -- that is what Re-enrol… is for,
-  // and it stays offered alongside this for when the enrolment itself
-  // is the problem. openAddRouter's own clearEnrolment() and
-  // clearRegister() calls mean no stale password, address or register
-  // refusal rides along from whatever walk was open before.
-  openRegister(device: string) {
-    this.openAddRouter()
-    this.ledgerDevice = device
-    this.tokenDevice = device
-    this.pane = this.steps.indexOf('register') + 1
   }
 
   // createRouter is the name step's own act: naming a router is what
@@ -735,41 +696,6 @@ class WizardState {
     await this.refreshRefused()
   }
 
-  // registerRouter records the operator's confirmation -- the ledger's
-  // final step (#1291). It grants the router nothing: the server never
-  // sets an accepted address from this call, so the router's logs are
-  // still accepted only because its token arrived from its address.
-  async registerRouter(name = ''): Promise<void> {
-    if (!this.ledgerDevice) {
-      this.registerError = 'Name the router first.'
-      return
-    }
-    this.registerError = null
-    this.registering = true
-    // Same reasoning as mintEnrolmentToken's requestPane/requestDevice:
-    // a slow Register response must not land on a pane, or a router, the
-    // operator has already left (v0.6.0 audit Lows, F4).
-    const requestPane = this.pane
-    const requestDevice = this.ledgerDevice
-    let result: Device | string
-    try {
-      result = await registerDevice(this.ledgerDevice, name)
-    } catch (err) {
-      result = err instanceof Error ? err.message : String(err)
-    } finally {
-      this.registering = false
-    }
-    if (!this.open || this.pane !== requestPane || this.ledgerDevice !== requestDevice) return
-    if (typeof result === 'string') {
-      this.registerError = result
-      return
-    }
-    // Refresh rather than patch the row in place: the ledger reads the
-    // device list, and one row edited by hand here would be overwritten
-    // by the next 5s poll anyway.
-    await this.refresh()
-  }
-
   // refreshRefused reads the dropped-line addresses (#1281), polled
   // beside the status while the modal is open. A failure reads as
   // "nothing refused" rather than as a page-wide error: this list
@@ -809,10 +735,6 @@ class WizardState {
     // pre-fill the next router's.
     this.clearEnrolment()
     this.walkMintedAt = ''
-    // ...and whatever the Register step was told on this walk goes with
-    // it too -- a refusal here must not sit and wait for the next
-    // router's Register pane to open under it.
-    this.clearRegister()
     // A closed-without-minting Re-enrol… walk must not force Mint on
     // whatever this router's next, unrelated open turns out to be.
     this.reEnrolling = false
@@ -908,7 +830,6 @@ class WizardState {
     this.addingRouter = false
     this.clearEnrolment()
     this.walkMintedAt = ''
-    this.clearRegister()
     this.refused = []
     this.pane = 1
     this.status = null

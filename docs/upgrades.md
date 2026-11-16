@@ -137,11 +137,12 @@ own enrol line reach the port in the first place.
 
 ### Routers you enrolled before this release
 
-Registering was a separate wizard step in the release that added it. The
-current wizard has no Register step, and nothing in it records one: a
-router is accepted when its enrol line arrives. A router that was
-already enrolled when you upgraded to that release was treated as
-registered, dated when it enrolled.
+Registering was a separate wizard step in the release that added it.
+The current wizard has no Register step: a router is registered the
+moment its enrol line is accepted, dated when it enrolled, and that is
+what the earlier release's registration now means as well. A router
+that was already enrolled when you upgraded to that release was treated
+as registered, dated when it enrolled.
 
 ## Upgrading to 0.6.1: every local account needs a second factor
 
