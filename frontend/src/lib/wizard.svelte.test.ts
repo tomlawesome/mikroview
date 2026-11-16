@@ -451,12 +451,12 @@ describe('minting is one at a time whichever way it is asked for (#1291)', () =>
   })
 })
 
-// A slow mint or register response can still be in flight once the
+// A slow mint response can still be in flight once the
 // operator has clicked Back/Next, closed the modal, or opened a
 // different router's walk. Applying it then would flash a token or a
 // refusal onto a pane nobody is looking at any more. v0.6.0 audit Lows,
 // F4.
-describe('a stale enrol or register response is ignored once the operator has left (F4)', () => {
+describe('a stale enrol response is ignored once the operator has left (F4)', () => {
   it('mintEnrolmentToken drops a response that lands after the pane changed', async () => {
     wizardState.status = status()
     wizardState.openReEnrol('edge-1')
