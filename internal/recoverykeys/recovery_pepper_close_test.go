@@ -88,12 +88,17 @@ func TestPepperCreationFailureLeavesNoFile(t *testing.T) {
 				}
 				return &failingPepperFile{File: f, syncErr: tc.syncErr, closeErr: tc.closeErr}, nil
 			}
-			path := filepath.Join(t.TempDir(), "pepper")
+			dir := t.TempDir()
+			path := filepath.Join(dir, "pepper")
 			if _, err := loadOrCreatePepper(path); err == nil {
 				t.Fatal("expected error")
 			}
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Fatalf("pepper file still present after failure (stat err = %v)", err)
+			}
+			// #1489: the temp file is cleaned up too.
+			if left, _ := filepath.Glob(filepath.Join(dir, "*")); len(left) != 0 {
+				t.Fatalf("files left in the data dir after failure: %v", left)
 			}
 		})
 	}
