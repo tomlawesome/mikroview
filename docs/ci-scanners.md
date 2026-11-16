@@ -13,13 +13,20 @@ shipped with, the MikroView image or binary.
 | `lint:jscpd` | jscpd | MIT | `frontend/src`, `.jscpd.json` |
 | `security:zizmor` | zizmor | MIT | `.github/workflows/`, offline, no token |
 
-`lint:shellcheck`, `lint:golangci`, `lint:ruff` and `security:zizmor` block: a
-finding fails the pipeline (#1462). `lint:knip` and `lint:jscpd` are still
-report-only (`allow_failure`). Each job writes its full report to a file kept as
-an artifact for 30 days. The exception is the signature check in `lint:jscpd`: it runs
-`npm audit signatures` after `npm ci` and fails the job if a registry signature
-or provenance attestation is invalid. jscpd's own duplication result exits 3,
-the only code the job tolerates.
+Every scanner blocks: `lint:shellcheck`, `lint:golangci`, `lint:ruff`,
+`security:zizmor`, `lint:knip` and `lint:jscpd` fail the pipeline on a finding
+(#1462, #1463). Each job writes its full report to a file kept as an artifact
+for 30 days.
+
+`lint:knip` has no baseline: its findings are zero, so any unused export, file
+or dependency fails. `lint:jscpd` runs jscpd with exit code 0 and then
+`scripts/jscpd-baseline.mjs` compares the clone list with
+`frontend/.jscpd-baseline.txt` (each clone keyed by its two files, lines and
+tokens): a clone not listed fails, and so does a listed entry that matches no
+clone. The baseline only shrinks; fix a clone and delete its line. The job also
+runs `npm audit signatures` after `npm ci` and fails if a registry signature or
+provenance attestation is invalid. The baseline script's test
+(`scripts/jscpd-baseline.test.mjs`) runs in `lint:script-tests`.
 
 Pins: the shellcheck, golangci-lint and ruff images by digest (in
 `supply-chain/pins-policy.json`); zizmor by a `sha256sum -c` of the release
