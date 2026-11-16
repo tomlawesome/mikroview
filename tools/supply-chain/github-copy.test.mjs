@@ -100,6 +100,32 @@ const jobText = (job) => joinCont((job?.steps ?? []).map(stepText).join("\n"));
 
 const NEW = ["publish-from-gitlab.yml", "release-on-tag.yml"];
 
+// Why a run block would let a failing check pass, or null. Review finding 4:
+// `|| true` alone was not enough; `|| :` and `set +e` fail open too.
+function failOpen(t) {
+  if (/\|\|\s*(true|:)\b/.test(t)) return "|| true / || :";
+  return null;
+}
+describe("#1472 review 4: the fail-open guard", () => {
+  for (const bad of [
+    'scripts/verify-release-signature.sh "${SOURCE}" || true',
+    'scripts/verify-release-signature.sh "${SOURCE}" || :',
+    'cosign verify-attestation --key cosign.pub "${SOURCE}" > a.jsonl || :\nnext',
+    "set +e\nscripts/verify-release-signature.sh \"${SOURCE}\"",
+    "set +eu\ncosign verify-attestation x",
+    "set +o errexit\ncosign verify-attestation x",
+  ]) {
+    it(`catches ${JSON.stringify(bad)}`, () => assert.notEqual(failOpen(bad), null));
+  }
+  for (const good of [
+    'set -e\nscripts/verify-release-signature.sh "${SOURCE}"',
+    'set -euo pipefail\nx || exit 1',
+    'if [ "${count}" != 1 ]; then\n  exit 1\nfi',
+  ]) {
+    it(`passes ${JSON.stringify(good)}`, () => assert.equal(failOpen(good), null));
+  }
+});
+
 for (const name of NEW) {
   describe(`#1472 step 3 ${name}: shape`, () => {
     it("never installs Node or Go, and never builds", () => {
@@ -156,7 +182,8 @@ for (const name of NEW) {
       assert.ok(checks.length > 0, "no verify step in the gitlab job");
       for (const s of checks) {
         assert.ok(!s["continue-on-error"], "verify has continue-on-error");
-        assert.doesNotMatch(runOf(s), /\|\|\s*(true|:)\b/);
+        const why = failOpen(runOf(s));
+        assert.equal(why, null, `verify step fails open: ${why}`);
       }
     });
     it("copy needs gitlab, so nothing is written unless the gitlab job passed", () => {
@@ -232,6 +259,22 @@ describe("#1472 step 3 release-on-tag.yml: triggers and :latest", () => {
     const create = t.search(/imagetools create/);
     assert.match(t.slice(0, create) + steps.slice(0, lat).map(runOf).join("\n"), /imagetools inspect|crane digest|manifest inspect/, "no digest re-check before :latest");
     assert.match(t.slice(create), /imagetools inspect|crane digest|manifest inspect/, "no re-read of :latest after the write");
+  });
+  // Review finding 7: two tag runs can overlap (the concurrency group is per
+  // ref), so the highest-tag check is repeated just before the :latest write,
+  // after the version digest re-check, or an older tag could roll latest back.
+  it("re-checks that this tag is still the highest just before the :latest write", () => {
+    const { doc } = load("release-on-tag.yml");
+    const t = runOf(stepsOf(doc).find((s) => /imagetools create/.test(runOf(s)) && /mikroview:latest/.test(runOf(s))) ?? {});
+    const create = t.search(/imagetools create/);
+    assert.ok(create >= 0, "no :latest write");
+    const before = t.slice(0, create);
+    const lastInspect = before.lastIndexOf('imagetools inspect "ghcr.io/tomlawesome/mikroview:${VERSION}"');
+    assert.ok(lastInspect >= 0, "no version digest re-check before :latest");
+    const gap = before.slice(lastInspect);
+    assert.match(gap, /ls-remote[^\n]*--tags|\bhighest_tag\b/, "the highest tag is not read again after the digest re-check");
+    assert.match(gap, /"?\$\{?highest\}?"?\s*!=\s*"?\$\{?VERSION\}?"?/, "the re-read is not compared with VERSION");
+    assert.match(gap, /exit 0/, "a lost race does not stop before the write");
   });
   it("creates no GitHub Release", () => {
     const { doc, text } = load("release-on-tag.yml");
@@ -600,6 +643,15 @@ describe("ruling v2 item 12: docs describe the verify-at-source shape", () => {
     assert.match(b, /cosign verify ghcr\.io\/tomlawesome\/mikroview@\S+ --certificate-identity-regexp/);
     assert.match(b, /cosign verify --key cosign\.pub registry\.tomlawson\.io\/ai\/mikroview@/);
     assert.doesNotMatch(sec, /cosign verify --key cosign\.pub ghcr\.io/);
+  });
+  // Review finding 1: install.md told operators to verify two signatures
+  // on GHCR; the key-based one no longer lives there.
+  it("docs/install.md gives the GHCR checks, not the two-signature rule", () => {
+    const t = read("docs/install.md");
+    assert.match(t, /gh attestation verify oci:\/\/ghcr\.io\/tomlawesome\/mikroview@/);
+    assert.match(t, /cosign verify ghcr\.io\/tomlawesome\/mikroview@\S+ --certificate-identity-regexp/);
+    assert.doesNotMatch(t, /two independent signatures/i);
+    assert.doesNotMatch(t, /cosign verify --key cosign\.pub ghcr\.io/);
   });
   for (const p of ["docs/release-signing.md", "docs/decisions/release-versioning.md"]) {
     it(`${p} names neither cosign copy nor oras`, () => {

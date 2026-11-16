@@ -233,6 +233,11 @@ describe("#1472 job 6: sign:release-digest signs the GitLab digest", () => {
   it("needs security:trivy-image for the SBOM it attests", () => {
     assert.match(needsOf(job("sign:release-digest")), /security:trivy-image/);
   });
+  // Review finding 6: two runs on one digest could both pass the
+  // already-signed check and both sign; a resource_group serialises them.
+  it("is serialised by a resource_group", () => {
+    assert.match(job("sign:release-digest"), /^ {2}resource_group:\s*\S+/m);
+  });
 });
 
 describe("#1472 job 7: publish:channel retags only after the signature verifies", () => {

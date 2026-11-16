@@ -11,6 +11,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/sign-release-digest.sh"
+# The skip checks must verify against the repository's own cosign.pub, by
+# its repo-root path, never some other key (review finding 5).
+PUBKEY_RE="$(cd "$HERE/.." && pwd -P | sed 's/[][\.*^$+?(){}|]/\\&/g')/cosign\.pub"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -373,7 +376,7 @@ out16="$(run -- \
   2>"$TMP/err16")"
 rc=$?
 check "$rc" "0" "already signed: exits 0"
-grep -qE -- "^verify .*--key .*${REPO}@${GOOD_DIGEST}( |$)" "$CC16" 2>/dev/null &&
+grep -qE -- "^verify --key ${PUBKEY_RE} .*${REPO}@${GOOD_DIGEST}( |$)" "$CC16" 2>/dev/null &&
   echo "ok - already signed: verify --key is asked about the recorded digest" || { echo "FAIL - already signed: verify --key is asked about the recorded digest: $(cat "$CC16" 2>/dev/null)"; fail=1; }
 check "$(count_calls sign "$CC16")" "0" "already signed: no sign call"
 grep -q "already signed" <<< "$out16" && echo "ok - already signed: stdout says already signed" || { echo "FAIL - already signed: stdout says already signed: $out16"; fail=1; }
@@ -390,7 +393,7 @@ out17="$(run -- \
   2>"$TMP/err17")"
 rc=$?
 check "$rc" "0" "already attested: exits 0"
-grep -qE -- "^verify-attestation .*--type spdxjson.*${REPO}@${GOOD_DIGEST}( |$)" "$CC17" 2>/dev/null &&
+grep -qE -- "^verify-attestation --key ${PUBKEY_RE} --type spdxjson.*${REPO}@${GOOD_DIGEST}( |$)" "$CC17" 2>/dev/null &&
   echo "ok - already attested: verify-attestation --type spdxjson is asked about the recorded digest" || { echo "FAIL - already attested: verify-attestation --type spdxjson is asked about the recorded digest: $(cat "$CC17" 2>/dev/null)"; fail=1; }
 check "$(count_calls attest "$CC17")" "0" "already attested: no attest call"
 grep -q "already attested" <<< "$out17" && echo "ok - already attested: stdout says already attested" || { echo "FAIL - already attested: stdout says already attested: $out17"; fail=1; }
