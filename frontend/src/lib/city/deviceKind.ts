@@ -33,7 +33,7 @@
 import { DEVICE_KINDS, type DeviceKind } from './devices'
 
 /** What a host was seen doing, as far as the event buffer reaches. */
-export interface TrafficShape {
+interface TrafficShape {
   /** How many distinct hosts opened a connection to it in the window. */
   talkedToBy?: number
   /** The ports it was reached ON (destination ports), not the ones it used. */
@@ -60,7 +60,7 @@ export interface DeviceKindInput {
 }
 
 /** Where a shape came from, so a caller can say so rather than imply more. */
-export type DeviceKindSource = 'register' | 'gateway' | 'router' | 'name' | 'traffic' | 'fallback'
+type DeviceKindSource = 'register' | 'gateway' | 'router' | 'name' | 'traffic' | 'fallback'
 
 export interface DeviceKindVerdict {
   kind: DeviceKind

@@ -10,7 +10,7 @@ import { fetchRouterPPPActive, fetchRouterWireguard, type RouterPPPSession, type
 import { appState } from './state.svelte'
 import type { CityPeer } from './city/types'
 
-export type TunnelPeer = CityPeer
+type TunnelPeer = CityPeer
 
 export interface TunnelInterface {
   iface: string

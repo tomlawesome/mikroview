@@ -61,7 +61,7 @@ export function parsePortList(text: string): number[] | null {
 
 // Mirrors internal/api's maxSelectedPorts. The server refuses past it
 // too; this one is here so the field can say no without a round trip.
-export const MAX_PORTS = 64
+const MAX_PORTS = 64
 
 function isPort(n: number): boolean {
   return Number.isInteger(n) && n >= 1 && n <= 65535
@@ -286,9 +286,9 @@ export interface Point {
 // other and across whatever else is passing through. The span stops
 // short of both ends -- a door on the card is not on the boundary, and
 // a door at the waist is in the pile-up.
-export const DOOR_T_MIN = 0.3
-export const DOOR_T_MAX = 0.8
-export const DOOR_T_STEPS = 11
+const DOOR_T_MIN = 0.3
+const DOOR_T_MAX = 0.8
+const DOOR_T_STEPS = 11
 
 /** The fractions along a rib a door is tried at, lane end first. */
 export function doorTs(): number[] {

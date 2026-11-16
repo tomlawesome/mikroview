@@ -25,7 +25,7 @@ import { authState } from './auth.svelte'
 import { wizardState } from './wizard.svelte'
 import { reducedMotion } from './wizardJourney'
 
-export type JourneyPhase = 'idle' | 'in' | 'out'
+type JourneyPhase = 'idle' | 'in' | 'out'
 
 /** The reduced-motion crossfade's length: round-15's door.css fades the
  * door over 300ms and wizard.js's beat() caps every wait at 300ms. */

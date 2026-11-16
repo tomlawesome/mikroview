@@ -54,7 +54,7 @@ export interface Campaign {
   count: number
 }
 
-export const CAMPAIGN_WINDOW_MS = 30 * 60 * 1000
+const CAMPAIGN_WINDOW_MS = 30 * 60 * 1000
 
 // Folds flags into campaigns (#988): same source IP *and* each flag's
 // active window (firstSeen..lastSeen) overlapping, or sitting within 30

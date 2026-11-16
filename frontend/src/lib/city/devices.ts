@@ -74,7 +74,7 @@ export const SIG_ALARM = 'var(--alarm, #ff5470)'
 const SCREEN = 'var(--sig, #cfe0ff)'
 
 /** One drawn piece of a symbol. Rendered by CityDeviceDefs.svelte. */
-export interface DevicePart {
+interface DevicePart {
   shape: 'path' | 'circle' | 'ellipse'
   /** Path data, for shape 'path'. */
   d?: string

@@ -9,7 +9,7 @@
 // switch (appState.view is a bare string), so this is the one shared
 // slot a caller fills in before flipping to 'topography'; the scene
 // reads and clears it on arrival.
-export interface PendingDescend {
+interface PendingDescend {
   zoneId: string
   host: string
   ip: string
@@ -156,7 +156,7 @@ export interface PendingWatchDraft {
 // instead. Mirrors api.ts's TraceRequest, deliberately by hand rather
 // than by import: this module is the handoff contract between two
 // components and must not gain a dependency on the fetch layer.
-export interface PendingTrace {
+interface PendingTrace {
   event?: number
   in?: string
   out?: string

@@ -16,7 +16,7 @@
 import { TITLES } from './setupsteps'
 
 /** How the declared fleet stands against the current wizard (#1241). */
-export interface UpgradeRouters {
+interface UpgradeRouters {
   /** Routers not reporting the current setup -- including any that have never reported. */
   behind: number
   total: number

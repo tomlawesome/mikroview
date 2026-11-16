@@ -11,6 +11,12 @@
     "tests/**"
   ],
   "ignoreBinaries": [],
-  "//": "jscpd runs from CI's shell, so no file imports it",
-  "ignoreDependencies": ["jscpd"]
+  "ignoreDependencies": [
+    "jscpd"
+  ],
+  "ignoreIssues": {
+    "src/lib/ingestLossBanners.ts": [
+      "duplicates"
+    ]
+  }
 }

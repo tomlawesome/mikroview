@@ -19,7 +19,7 @@
 import { tick } from 'svelte'
 import { appState, type View } from './state.svelte'
 
-export const SECTION_TARGETS = {
+const SECTION_TARGETS = {
   // The anchor lives on EngineRoom.svelte's ingest .stsection.
   'engineroom/ingest': { view: 'engineroom', anchor: 'engineroom-ingest' },
   // #1225: a flag's "block…" action lands on the drop list group's own

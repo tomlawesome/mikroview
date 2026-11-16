@@ -41,7 +41,7 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
   return events.map((e) => ({ ...e, receivedAt }))
 }
 
-export type ConnState = 'connecting' | 'open' | 'closed'
+type ConnState = 'connecting' | 'open' | 'closed'
 
 // 'fall' (#616) is the ratified hero live view and landing page (see
 // Fall.svelte) -- a band per boundary, live spectrum on top, time
