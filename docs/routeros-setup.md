@@ -1092,6 +1092,8 @@ caveat below.
 Settings → router backups has a "drop box: closed / open on port N" row
 (#1361) — opening it re-checks your password and shows the trust caveat
 below; closing needs no password, since closing is the safe direction.
+The same group's **deliver by** row chooses between this SFTP drop box
+and the HTTPS path in 7c-ii.
 The setup wizard's first step, **The router**, offers the same control
 (**Open it now**) if you answer Yes to a nightly backup while the drop
 box is still closed. Skip this
@@ -1200,12 +1202,11 @@ up on, or never announced — costs a request like any other push.
 
 The wizard prints this path when the deployment's backup transport is
 set to `https`, with the script below and its scheduler entry carrying
-your own address and token. The wizard itself only asks Yes or No for a
-nightly backup; it has no control for the transport. The transport is
-stored on the MikroView side (`sftp` unless changed; it is set with
-`PUT /api/setup/backup-transport`, see
+your own address and token. The transport is chosen once for the
+deployment, in Settings → router backups' **deliver by** row (`sftp`
+unless changed; the row calls `PUT /api/setup/backup-transport`, see
 [configuration.md](configuration.md)), so every browser gets the same
-one. It does not wait on 7a, since there is no drop box to open. 4b's
+one. The wizard itself only asks Yes or No for a nightly backup. It does not wait on 7a, since there is no drop box to open. 4b's
 token is still what authenticates it.
 
 To paste it by hand instead:
@@ -1287,7 +1288,7 @@ in this repository render the exact script above, minus the SFTP-specific
 
 Settings' `router backups` group (admin-only) lists what has arrived
 per router, with `download .backup` / `.rsc` and a note of when each
-was last seen. A router that has pushed at least twice and then misses
+was last seen, and holds the drop box and deliver-by rows. A router that has pushed at least twice and then misses
 its usual interval shows an amber receipt there — MikroView learns the
 interval from the pushes themselves, never from this scheduler line,
 since an operator could change that on the router without MikroView

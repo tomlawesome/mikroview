@@ -599,6 +599,7 @@ describe('the drop box (#1361)', () => {
     return {
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp' as const,
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,

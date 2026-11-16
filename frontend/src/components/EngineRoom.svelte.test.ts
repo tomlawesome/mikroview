@@ -181,6 +181,7 @@ function backupsWith(device: string): RouterBackupsResponse {
   return {
     enabled: true,
     keyUnreadable: false,
+    transport: 'sftp',
     routers: [
       { device, generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 },
     ],
@@ -1136,6 +1137,7 @@ describe('The settings shelf (#633)', () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       port: ':2222',
       routers: [
         {
@@ -1570,6 +1572,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       port: ':2222',
       routers: [{ device: 'rb5009', generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 }],
       totalGenerations: 1,
@@ -1647,6 +1650,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: false,
       keyUnreadable: false,
+      transport: 'sftp',
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,

@@ -64,6 +64,7 @@
   import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
   import { portOf } from '../lib/setupsteps'
+  import { saveSetupBackupTransport } from '../lib/api'
   import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
   import type {
     RouterBackupDiffLine,
@@ -71,6 +72,7 @@
     RouterBackupRouter,
     RouterBackupsResponse,
     RouterBackupSwitchState,
+    BackupTransport,
     VaultLock,
   } from '../lib/types'
 
@@ -79,6 +81,7 @@
     fetchedAt,
     onopenlost,
     onswitchchanged,
+    ontransportchanged,
   }: {
     resp: RouterBackupsResponse
     /** When the request behind `resp` was issued (EngineRoom's own
@@ -93,6 +96,9 @@
      * banner (configProblemsState), which this component has no access
      * to on its own. */
     onswitchchanged?: (state: RouterBackupSwitchState) => void
+    /** The "deliver by" row (#1494) saved a new transport: EngineRoom
+     * folds it into its own copy of `resp`. */
+    ontransportchanged?: (transport: BackupTransport) => void
   } = $props()
 
   // A keep/release/comment control answers with the router's whole
@@ -265,6 +271,28 @@
       return
     }
     onswitchchanged?.(result)
+  }
+
+  // The "deliver by" row (#1494): the transport is a property of the
+  // deployment (#955), chosen here in one click -- no password, since
+  // switching opens no port and grants nothing; it only changes what the
+  // wizard prints from now on.
+  const httpsTransport = $derived(resp.transport === 'https')
+  let transportSubmitting = $state(false)
+  let transportError = $state<string | null>(null)
+
+  async function switchTransport() {
+    if (transportSubmitting) return
+    transportSubmitting = true
+    transportError = null
+    const next: BackupTransport = httpsTransport ? 'sftp' : 'https'
+    const err = await saveSetupBackupTransport(next)
+    transportSubmitting = false
+    if (err) {
+      transportError = err
+      return
+    }
+    ontransportchanged?.(next)
   }
 
   // 'keep' and 'edit' are the same one-field form (#1126): keeping a
@@ -607,6 +635,26 @@
   {#if switchError && !switchAsking}<p class="oghint err" role="alert">{switchError}</p>{/if}
 {/snippet}
 
+{#snippet deliverByRow()}
+  <div class="orow">
+    <span>deliver by</span>
+    <span class="ov">
+      {#if httpsTransport}
+        HTTPS through the ingest channel — no second port
+        · <button type="button" class="olink" disabled={transportSubmitting} onclick={switchTransport}>switch to SFTP…</button>
+      {:else}
+        SFTP to the drop box
+        · <button type="button" class="olink" disabled={transportSubmitting} onclick={switchTransport}>switch to HTTPS…</button>
+      {/if}
+    </span>
+  </div>
+  {#if transportError}<p class="oghint err" role="alert">{transportError}</p>{/if}
+  <p class="oghint">
+    Changes what the wizard prints from now on; a router already set up keeps its script. Pick HTTPS only when the
+    SFTP port cannot be opened — it sends the backup in many pieces.
+  </p>
+{/snippet}
+
 {#snippet passphraseRow()}
   <div class="orow">
     <span>passphrase</span>
@@ -628,6 +676,7 @@
 {#if !resp.enabled}
   <div class="wrows">
     {@render dropBoxRow()}
+    {@render deliverByRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov dim">nothing</span>
@@ -651,6 +700,7 @@
 {:else if resp.routers.length === 0}
   <div class="wrows">
     {@render dropBoxRow()}
+    {@render deliverByRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov dim">nothing — no router has pushed one yet · the wizard's step 6 prints the script</span>
@@ -658,7 +708,13 @@
     {#if resp.port}
       <div class="orow">
         <span>arrive by</span>
-        <span class="ov dim">SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of</span>
+        <span class="ov dim">
+          {#if httpsTransport}
+            HTTPS to the ingest channel — the drop box's port is not used
+          {:else}
+            SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of
+          {/if}
+        </span>
       </div>
     {/if}
     {@render passphraseRow()}
@@ -874,6 +930,7 @@
 
   <div class="wrows">
     {@render dropBoxRow()}
+    {@render deliverByRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov">
@@ -885,7 +942,13 @@
     {#if resp.port}
       <div class="orow">
         <span>arrive by</span>
-        <span class="ov dim">SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of</span>
+        <span class="ov dim">
+          {#if httpsTransport}
+            HTTPS to the ingest channel — the drop box's port is not used
+          {:else}
+            SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of
+          {/if}
+        </span>
       </div>
     {/if}
     <div class="orow">

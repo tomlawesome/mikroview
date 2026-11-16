@@ -1718,6 +1718,9 @@
               fetchedAt={routerBackupsFetchedAt}
               onopenlost={openLostRouter}
               onswitchchanged={routerBackupSwitchChanged}
+              ontransportchanged={(transport) => {
+                if (routerBackups) routerBackups = { ...routerBackups, transport }
+              }}
             />
           </div>
         {:else if routerBackupsUnanswered}

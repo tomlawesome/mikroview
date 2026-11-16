@@ -94,6 +94,10 @@ rewritten.
 
 ### Added
 
+- **Settings → router backups gains "deliver by"** (#1494). It chooses
+  between the SFTP drop box and the HTTPS slice push, and the wizard
+  prints whichever is chosen. Before, only the API could set it.
+
 - **`networks.home`: inside networks the address alone does not reveal**
   (#1481). List a routed public block or an IPv6 global prefix and its
   addresses classify as internal everywhere -- event filters, detections,

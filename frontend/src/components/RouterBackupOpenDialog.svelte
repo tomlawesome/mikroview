@@ -60,8 +60,8 @@
 <div class="dbox {look}">
   <p class="caveat">
     RouterOS never checks who it is sending to — anyone on the path between your router and MikroView could read the
-    backup and the ingest token. Only open this on a network you trust, or use the HTTPS-only alternative
-    (docs/routeros-setup.md, section 7c-ii), which needs no open port at all.
+    backup and the ingest token. Only open this on a network you trust, or use the HTTPS-only alternative:
+    choose HTTPS under deliver by in Settings → router backups, which needs no open port at all.
   </p>
   <label class="lab">
     your password
