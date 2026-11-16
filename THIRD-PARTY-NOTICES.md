@@ -261,7 +261,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### github.com/go-jose/go-jose/v4 v4.1.7
+### github.com/go-jose/go-jose/v4 v4.1.9
 
 <!-- LICENSE -->
 
@@ -1510,7 +1510,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/sys v0.49.0
+### golang.org/x/sys v0.50.0
 
 <!-- LICENSE -->
 

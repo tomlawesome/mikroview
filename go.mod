@@ -3,7 +3,7 @@ module github.com/tomlawesome/mikroview
 go 1.27.4
 
 require (
-	github.com/go-jose/go-jose/v4 v4.1.7
+	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.12.0
@@ -14,7 +14,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.6
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.47.0
 )
 
