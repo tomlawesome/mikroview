@@ -88,11 +88,17 @@ describe("#1462 steps 4-7: each scanner is pinned, never a bare tag", () => {
   }
 });
 
+// Jobs that reached zero findings and became blocking; scanner-config.test.mjs
+// checks they carry no allow_failure. They still keep their report.
+const blocking = new Set(["lint:shellcheck", "security:zizmor"]);
+
 describe("#1462 steps 4-7: report-only jobs keep a report as an artifact", () => {
   for (const j of jobs) {
-    it(`${j.name} is allow_failure with a when: always artifact and the report-only comment`, () => {
+    it(`${j.name} keeps a when: always artifact, and is report-only until it is blocking`, () => {
       const t = job(j.name, true);
-      if (j.name === "lint:jscpd") {
+      if (blocking.has(j.name)) {
+        // blocking: no report-only marking to check
+      } else if (j.name === "lint:jscpd") {
         // A bad registry signature must fail the job: only jscpd's own
         // duplication exit code (3) is tolerated.
         assert.doesNotMatch(t, /^ {2}allow_failure: true\s*$/m, "lint:jscpd must not be allow_failure: true");
@@ -100,7 +106,9 @@ describe("#1462 steps 4-7: report-only jobs keep a report as an artifact", () =>
       } else {
         assert.match(t, /^ {2}allow_failure: true\s*$/m, `${j.name} lacks allow_failure: true`);
       }
-      assert.match(t, /# report-only until one pipeline's noise is triaged \(#1462\)/, `${j.name} lacks the report-only comment`);
+      if (!blocking.has(j.name)) {
+        assert.match(t, /# report-only until one pipeline's noise is triaged \(#1462\)/, `${j.name} lacks the report-only comment`);
+      }
       const a = section(job(j.name), "artifacts");
       assert.ok(a, `${j.name} has no artifacts entry`);
       assert.match(a, /\bwhen: always\b/, `${j.name} artifacts lack when: always`);
