@@ -118,6 +118,11 @@ const refusedStrand = page.locator('[data-card="topography"] .strand-g:has(.stra
 await refusedStrand.waitFor({ timeout: 10000 })
 check((await hoverShape(refusedStrand)) !== null, 'the refused strand can be pointed at')
 await page.waitForSelector('[data-card="topography"] .line-card [data-draft-rule]', { timeout: 5000 })
+// Pin the card first: a hover card closes itself CARD_GRACE_MS after the
+// pointer leaves it, and the clicks into the composer below move the
+// pointer away. Unpinned, a slow run lost the card before the Escapes
+// and they took the composer and the reach instead (#1491).
+await page.click('[data-card="topography"] .line-card .pin')
 await page.click('[data-card="topography"] .line-card [data-draft-rule]')
 await page.waitForSelector('.composer', { timeout: 5000 })
 
@@ -141,6 +146,9 @@ check(noteText.includes('MikroView never touches the router'), 'the invariant is
 // onKeydown walks out the open card, then the composer, then the reach.
 // So the first Esc takes the card the composer was opened from and the
 // second takes the composer, with the reach still standing under both.
+// Wait past the hover grace so a card that was only hovered would be gone.
+await page.waitForTimeout(250)
+check(await page.isVisible('[data-card="topography"] .line-card'), 'the pinned card is still open before the first Escape')
 await page.keyboard.press('Escape')
 check(!(await page.isVisible('[data-card="topography"] .line-card')), 'Escape closes the open card first')
 check(await page.isVisible('.composer'), 'the composer that card opened is still there')
