@@ -113,7 +113,8 @@ async function signedInPage() {
 // #1381 replaced with the five-step full-screen Wizard.svelte: the
 // `.setup-wizard` selector no longer exists and there is no seven-step
 // ledger or standalone "Send logs" step to point at. Until those shots
-// are redesigned for the new wizard, the Entities shots below run alone.
+// are redesigned for the new wizard (#1492), the Entities shots below
+// run alone.
 const SKIP_WIZARD = process.env.MV_SKIP_WIZARD_SHOTS === '1'
 
 // --- The ledger: the path that enrols the first router ------------------
