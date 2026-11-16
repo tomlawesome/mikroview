@@ -1732,6 +1732,8 @@ export interface RouterBackupsResponse {
   // (#1361): absent while the drop box is closed, present the moment an
   // admin opens it from Settings, with no reload needed.
   port?: string
+  // The "deliver by" row (#1494): how the wizard's script delivers.
+  transport: BackupTransport
   lock: VaultLock
   // True while the vault's own filesystem is nearly full (#1125): every
   // arrival now replaces the oldest generation instead of adding one.
