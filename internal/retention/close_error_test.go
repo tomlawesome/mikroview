@@ -72,7 +72,7 @@ func TestRolloverLogsFailedCloseAndStillRolls(t *testing.T) {
 	if day != "2026-03-02" {
 		t.Fatalf("current day = %q, want 2026-03-02", day)
 	}
-	if out := buf.String(); !strings.Contains(out, "level=ERROR") && !strings.Contains(out, "level=WARN") {
+	if out := buf.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, `msg="closing retained day file"`) {
 		t.Fatalf("failed close at roll-over was not logged; log = %q", out)
 	}
 }
@@ -85,7 +85,7 @@ func TestStoreCloseLogsFailedCloseOfCurrentDay(t *testing.T) {
 	}
 	breakCurrent(t, s)
 	s.Close()
-	if out := buf.String(); !strings.Contains(out, "level=ERROR") && !strings.Contains(out, "level=WARN") {
+	if out := buf.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, `msg="closing retained day file"`) {
 		t.Fatalf("failed close at shutdown was not logged; log = %q", out)
 	}
 }
