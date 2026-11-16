@@ -108,8 +108,16 @@ async function signedInPage() {
   return { context, page }
 }
 
+// MV_SKIP_WIZARD_SHOTS=1 skips the two wizard shots (the ledger and the
+// Send logs step). They drive SetupWizard.svelte's seven-step modal, which
+// #1381 replaced with the five-step full-screen Wizard.svelte: the
+// `.setup-wizard` selector no longer exists and there is no seven-step
+// ledger or standalone "Send logs" step to point at. Until those shots
+// are redesigned for the new wizard, the Entities shots below run alone.
+const SKIP_WIZARD = process.env.MV_SKIP_WIZARD_SHOTS === '1'
+
 // --- The ledger: the path that enrols the first router ------------------
-{
+if (!SKIP_WIZARD) {
   const { context, page } = await signedInPage()
   await page.locator('.deck .card .account button').first().click()
   await page.waitForSelector('.account .menu')
@@ -193,7 +201,7 @@ async function signedInPage() {
 }
 
 // --- The mint: Send logs once a token is on the page --------------------
-{
+if (!SKIP_WIZARD) {
   const { context, page } = await signedInPage()
   await page.click('.roll-rail button.rail-name:text-is("Entities")')
   await page.waitForFunction(
