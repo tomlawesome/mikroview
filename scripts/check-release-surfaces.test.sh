@@ -318,6 +318,28 @@ check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a screenshot referenced b
 check "$(case "$out" in *"FAIL: docs/screenshots/stream-dark.png -- untracked (never committed)"*) echo true;; *) echo false;; esac)" \
   "and names it as untracked"
 
+# a screenshot used only by site/index.html (as img/<name>.png, which
+# the Pages job copies from docs/screenshots/) is checked too (#1456:
+# stream-dark.png was named by neither README.md nor docs/*.md, so its
+# staleness was never looked at)
+c6e="$TMP/case6e-site-only"
+cp -r "$shots" "$c6e"
+printf '<!doctype html><title>x</title>\n<img src="img/stream-dark.png" alt="s" />\n' >"$c6e/site/index.html"
+printf 'png-s1\n' >"$c6e/docs/screenshots/stream-dark.png"
+for f in components/EventRow.svelte components/LiveTable.svelte components/FilterBar.svelte lib/columns.svelte.ts lib/tokenBar.ts; do
+  printf 'export const v = 1;\n' >"$c6e/frontend/src/$f"
+done
+commit "$c6e" "2026-01-05T00:00:00" "add the site-only screenshot and its sources"
+run "$c6e"
+check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/stream-dark.png"*) echo true;; *) echo false;; esac)" \
+  "a site-only screenshot fresh against its sources is checked and passes"
+printf 'export const v = 2;\n' >"$c6e/frontend/src/components/EventRow.svelte"
+commit "$c6e" "2026-01-06T00:00:00" "move a component the site screenshot shows"
+run "$c6e"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a site-only screenshot whose source moved after capture fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/screenshots/stream-dark.png -- frontend/src/components/EventRow.svelte changed at"*) echo true;; *) echo false;; esac)" \
+  "and names the site-only screenshot and the moved source"
+
 # --- check 7: review records -----------------------------------------------
 
 # no record for VERSION -> FAIL, names the missing version
