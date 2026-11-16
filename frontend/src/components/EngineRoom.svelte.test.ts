@@ -21,6 +21,7 @@ import { cleanup, render, screen, fireEvent, within } from '@testing-library/sve
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
+  saveSetupBackupTransport: vi.fn(async () => null),
   fetchSetupStatus: vi.fn(async () => ({
     instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true },
     sources: [],
@@ -1630,6 +1631,44 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
       const backups = document.getElementById('bakg') as HTMLElement
       expect(within(backups).getByText('rb-newer')).toBeTruthy()
       expect(within(backups).queryByText('rb-older')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #1494: the same stale-poll rule for the "deliver by" save. A poll
+  // issued before the save and answered after it carries the old
+  // transport; it must not flip the row back.
+  it('a router-backups poll issued before a deliver-by save does not undo it (#1494)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: RouterBackupsResponse) => void)[] = []
+      const held = () => new Promise<RouterBackupsResponse>((resolve) => answer.push(resolve))
+      fetchRouterBackups.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The first poll lands, the operator switches, then the second
+      // (issued before the save) answers with the old transport.
+      answer[0](backupsWith('rb1'))
+      await settle()
+      const backups = document.getElementById('bakg') as HTMLElement
+      vi.advanceTimersByTime(5)
+      await fireEvent.click(within(backups).getByRole('button', { name: 'switch to HTTPS…' }))
+      await settle()
+      expect(within(backups).getByText(/HTTPS through the ingest channel/)).toBeTruthy()
+
+      answer[1](backupsWith('rb1'))
+      await settle()
+      await settle()
+      expect(within(backups).getByText(/HTTPS through the ingest channel/)).toBeTruthy()
+      expect(within(backups).queryByText(/SFTP to the drop box/)).toBeNull()
     } finally {
       vi.useRealTimers()
     }
