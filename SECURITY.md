@@ -545,12 +545,16 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   its own runner; the other is made keyless on GitHub, by hand, only after
   the first has been checked. Two signatures from the same place would be
   one signature — whoever drives the first drives the second — so the
-  second is a separate custody on two separate hosts. **Treat a digest as
-  good only if both verify. If either is missing, do not trust it**, and
-  do not fall back to the one that is present: a release missing the
-  key-based signature is a release that did not come from the tag
-  pipeline, which is exactly the case the second signature exists to
-  catch.
+  second is a separate custody on two separate hosts. The two live in
+  different registries: the key-based signature stays on the GitLab
+  digest, and the keyless one is on GHCR. GitHub copies a digest only
+  after the key-based signature verifies, so on GHCR you check the
+  keyless one (step 2); with read access to the GitLab registry you can
+  check both yourself (steps 2 and 3). **Treat a release as good only if
+  every check you can run verifies. If the keyless signature is missing
+  on GHCR, do not trust it**, and do not fall back to the attestations
+  alone: a release without the countersignature has not had its second,
+  separate check.
 
   `cosign.pub` is the public half of the key-based signature, committed at
   the root of this repository. Take it from the tag you are verifying, not

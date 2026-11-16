@@ -645,6 +645,9 @@ describe("ruling v2 item 12: docs describe the verify-at-source shape", () => {
     assert.match(b, /cosign verify ghcr\.io\/tomlawesome\/mikroview@\S+ --certificate-identity-regexp/);
     assert.match(b, /cosign verify --key cosign\.pub registry\.tomlawson\.io\/ai\/mikroview@/);
     assert.doesNotMatch(sec, /cosign verify --key cosign\.pub ghcr\.io/);
+    // Fix review: the paragraph after the verify intro still told readers
+    // to reject a GHCR digest missing the key-based signature.
+    assert.doesNotMatch(sec, /if either is missing/i);
   });
   // Review finding 1: install.md told operators to verify two signatures
   // on GHCR; the key-based one no longer lives there.
