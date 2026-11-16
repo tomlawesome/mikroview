@@ -25,7 +25,7 @@ Built here, all in `the-whole.html`:
 - **The first hour, storyboarded** — a new full scene after the
   door: three glass beats. Beat 1, run setup: one account made and
   kept here, then the two RouterOS lines printed for pasting
-  (fictional data-story address 198.51.100.1 — never a real host).
+  (fictional data-story address 198.51.100.37 — never a real host).
   Beat 2, listening: the brink lit, :16893 · TLS · listening,
   "nothing has arrived — a fact, not a fault", and how every card
   says its own empty. Beat 3, the map draws itself: rb5009 appears

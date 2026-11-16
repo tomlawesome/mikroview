@@ -44,6 +44,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -130,6 +132,8 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The tag is the trigger; the file is the check. A tag that does not
       # match VERSION at the tagged commit is a mistake, not a release.
@@ -250,6 +254,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Resolve which preview commit this merge promotes
@@ -272,9 +277,12 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Retag the exact preview digest as latest -- no rebuild
+        env:
+          REPO: ${{ github.repository }}
+          SHORT: ${{ steps.source.outputs.short }}
         run: |
-          src="ghcr.io/${{ github.repository }}:preview-${{ steps.source.outputs.short }}"
-          dst="ghcr.io/${{ github.repository }}:latest"
+          src="ghcr.io/${REPO}:preview-${SHORT}"
+          dst="ghcr.io/${REPO}:latest"
           echo "Promoting $src -> $dst (no rebuild)"
           # $src is built with provenance: mode=max and sbom: true, so it
           # is already an OCI index -- --prefer-index=false is a no-op

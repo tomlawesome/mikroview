@@ -102,7 +102,7 @@ question.
   own push. Rule keys stay verbatim from RouterOS; the census
   decorates keys with names, never rewrites them.
 - Accessibility: the plot column is spoken, not shown twice —
-  position is announced per row in words ("at .77, on LAN ground");
+  position is announced per row in words ("at .17, on LAN ground");
   arrows walk rows; nothing focusable pretends to be pressable.
 
 ## Superseded (considered and closed)

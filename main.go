@@ -2491,7 +2491,7 @@ func frontendHandler() http.Handler {
 	// Either way it goes out through staticCacheHeaders (#347), so
 	// the "no frontend" page is itself revalidated rather than kept
 	// by a browser after a proper build is deployed.
-	var ui http.Handler = http.FileServer(http.FS(frontend))
+	ui := http.FileServer(http.FS(frontend))
 	if !web.HasUI() {
 		logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
 		ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

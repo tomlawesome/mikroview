@@ -410,16 +410,3 @@ func (s *Store) tryPersistLocked() error {
 	s.version = version
 	return nil
 }
-
-// persistLocked writes the current state to disk if persistence is
-// configured. Write failures are swallowed rather than surfaced to the
-// caller: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than losing the mutation that
-// triggered this call -- same contract as every other store's
-// persistLocked in this codebase.
-func (s *Store) persistLocked() {
-	if err := s.tryPersistLocked(); err != nil {
-		entryPersistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
-	}
-}

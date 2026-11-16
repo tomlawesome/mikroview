@@ -3,18 +3,18 @@
    surface. Nothing here decides how anything looks. */
 window.MV = (() => {
   const story = {
-    mv: '192.0.2.15:8080', mvHost: '192.0.2.15', router: 'rb5009', addr: '192.0.2.1', other: '198.51.100.200',
+    mv: '198.51.100.15:8080', mvHost: '198.51.100.15', router: 'rb5009', addr: '198.51.100.1', other: '192.0.2.1',
     t0: 14 * 3600 + 2 * 60 + 50, tokenUntil: '14:17',
     rules: 47, alreadyLog: ['in-ssh', 'est-rel', 'icmp'], lists: 12, leases: 31, peers: 3, interval: '20 min',
     ifaces: [
-      { n: 'ether1', d: 'WAN', a: '198.51.100.201', wan: true },
-      { n: 'bridge', d: 'LAN', a: '192.0.2.1/24', leases: 31 },
-      { n: 'wg0', d: 'WireGuard', a: '198.51.100.202/24', peers: 3 },
+      { n: 'ether1', d: 'WAN', a: '192.0.2.140', wan: true },
+      { n: 'bridge', d: 'LAN', a: '198.51.100.1/27', leases: 31 },
+      { n: 'wg0', d: 'WireGuard', a: '198.51.100.129/27', peers: 3 },
     ],
     suggestions: [
       { chain: 'forward', action: 'drop', comment: 'drop everything else', why: 'last rule on forward', prefix: 'fwd-drop' },
       { chain: 'input', action: 'drop', comment: 'drop from WAN', why: 'internet → router', prefix: 'wan-in' },
-      { chain: 'forward', action: 'accept', comment: 'port-forward 443 → .40', why: 'inbound accept across the boundary', prefix: 'nat' },
+      { chain: 'forward', action: 'accept', comment: 'port-forward 443 → .10', why: 'inbound accept across the boundary', prefix: 'nat' },
       { chain: 'forward', action: 'drop', comment: 'guest → LAN', why: 'guest wifi → LAN', prefix: 'guest-lan' },
       { chain: 'input', action: 'drop', comment: 'wg0 → input', why: 'VPN peer → router', prefix: 'wg-in' },
     ],
@@ -71,7 +71,7 @@ window.MV = (() => {
   };
 
   /* ---- the simulated router ---- */
-  const srcs = ['203.0.113.7', '198.51.100.23', '198.51.100.203', '198.51.100.204', '192.0.2.42', '192.0.2.77', '198.51.100.205', '198.51.100.206'];
+  const srcs = ['203.0.113.7', '203.0.113.23', '203.0.113.99', '203.0.113.35', '198.51.100.13', '198.51.100.17', '198.51.100.135', '203.0.113.12'];
   const ports = [22, 443, 3389, 23, 8080, 445, 5060, 1900, 53];
   const rnd = a => a[Math.floor(Math.random() * a.length)];
   const line = () => {
@@ -79,7 +79,7 @@ window.MV = (() => {
     const proto = pre === 'icmp' ? 'ICMP' : rnd(['TCP (SYN)', 'TCP (ACK)', 'UDP']);
     const iface = pre === 'wg-in' ? 'wg0' : pre === 'guest-lan' ? 'bridge-guest' : rnd(['ether1', 'ether1', 'bridge']);
     const chain = ['in-ssh', 'wan-in', 'wg-in'].includes(pre) ? 'input' : 'forward';
-    const dst = chain === 'input' ? '198.51.100.201' : rnd(['192.0.2.40', '192.0.2.12', '198.51.100.207', '198.51.100.208']);
+    const dst = chain === 'input' ? '192.0.2.140' : rnd(['198.51.100.10', '198.51.100.12', '203.0.113.53', '203.0.113.206']);
     return { t: hms(now()), pre, text: `firewall,info ${pre} ${chain}: in:${iface} out:${chain === 'input' ? '(unknown 0)' : rnd(['ether1', 'bridge'])}, proto ${proto}, ${rnd(srcs)}:${40000 + Math.floor(Math.random() * 20000)}->${dst}:${rnd(ports)}, len ${40 + Math.floor(Math.random() * 1400)}` };
   };
   function startStream() {
