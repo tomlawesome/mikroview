@@ -554,9 +554,18 @@ class DocumentationAddressTests(unittest.TestCase):
         self.assertEqual(bad, [], f"addresses outside the documentation ranges: {bad[:10]} ... {len(bad)} in all")
 
     def test_every_cidr_is_a_network_address(self):
+        # An interface address is host/prefix by nature (RouterOS
+        # /ip/address), so `address=` and `wan_addr` values are exempt;
+        # every other CIDR names a network and must have no host bits.
+        import re
+        lines = _PATH.read_text().splitlines()
         bad = []
         for n, tok in _source_v4() + _source_v6():
-            if "/" in tok and ipaddress.ip_interface(tok).ip != ipaddress.ip_interface(tok).network.network_address:
+            if "/" not in tok:
+                continue
+            if re.search(r'(\baddress=|"(wan_addr|address)":\s*)"' + re.escape(tok) + '"', lines[n - 1]):
+                continue
+            if ipaddress.ip_interface(tok).ip != ipaddress.ip_interface(tok).network.network_address:
                 bad.append((n, tok))
         self.assertEqual(bad, [], f"CIDRs with host bits set: {bad[:10]} ... {len(bad)} in all")
 
