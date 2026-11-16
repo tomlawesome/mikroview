@@ -2721,17 +2721,19 @@ that endpoint's event-specific filters.
 
 ## Setup wizard ledger (optional)
 
-The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
-five steps. Most of what it shows is not stored anywhere: MikroView
+The guided setup wizard (**Admin ▸ Run setup…**) shows a ledger of
+what stands. Most of what it shows is not stored anywhere: MikroView
 never connects to your router, so each step's check is simply an
 observation of what arrived here -- a certificate fetch, a syslog
 connection, events carrying a decoded log-prefix, a pushed table -- and
 those are re-made from arriving traffic every time MikroView starts.
 
-What *is* stored is the other half: the steps you **skipped** or
-**forced past**, each with who decided it and when. Those are decisions,
-not observations, and they are what lets the rest of the interface
-explain itself -- an empty live view can say which setup step accounts
+What *is* stored is the other half: decisions rather than observations
+-- the steps someone **skipped** or **forced past**, each with who
+decided it and when, as older versions of the wizard recorded them (the
+current wizard does not write new ones; its Skip this step is not
+stored). What is stored is what lets the rest of the interface explain
+itself -- an empty live view can say which setup step accounts
 for the silence instead of just being empty. That explanation is most
 wanted right after a restart, which is when an upgrade happens, so it
 has to survive one.

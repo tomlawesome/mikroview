@@ -129,9 +129,11 @@ CA is presumably already trusted some other way.
 RouterOS's own list of trusted public roots changes between releases:
 7.24.3 removed GoDaddy Class 2. If you rely on a bought certificate
 rather than importing MikroView's, check its chain before upgrading a
-router past that release. The wizard says this beside the commands for
-each router that reports a version at or past 7.24.3, and names the
-steps it touches.
+router past that release. The wizard does not check for this. It does
+show an "Ahead of review" caution (and an amber chip in its top bar)
+when a router's push reports a RouterOS newer than the commands were
+reviewed on; the commands ran and the push arrived, and the caution
+says to suspect the newer version first if anything reads wrong.
 
 Then point the router's logging at MikroView:
 
@@ -435,9 +437,11 @@ not the address you declared as `sourceIp`. If pushes return `200` in
 the audit log but the "i" popups still say no data has been pushed,
 check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
-address is the most likely cause. The setup wizard's Send logs step names it
-when it sees it (a declared router that has sent nothing while an
-undeclared address streams). The fix is changing `sourceIp` in
+address is the most likely cause. The setup wizard does not compare
+addresses with `sourceIp`. What it does catch: when lines arrive from an
+address that is not the enrolled one, its **Paste once** step shows a
+"refused · <address>" chip and a warning box with the fix and the enrol
+line to paste again, or an **enrol at <address> instead** link. The fix is changing `sourceIp` in
 `config.yaml` to the address that's actually arriving, then restarting
 and reissuing any token minted for the old identity. Pinning the
 router's `src-address` to force it back onto the declared address isn't
@@ -1194,13 +1198,15 @@ declared plus eight retries, and is abandoned if more arrive; a piece
 naming a transfer MikroView is not holding — one already finished, given
 up on, or never announced — costs a request like any other push.
 
-The wizard offers this path. On step 6, the line above the script reads
-**The router sends its backup sftp · https** — pick `https` and the step
-prints the script below and its scheduler entry with your own address and
-token already in them. The choice is stored on the MikroView side rather
-than in your browser, so whoever opens the wizard next, on any machine,
-is offered the same one; and it does not wait on 7a, since there is no
-drop box to open. 4b's token is still what authenticates it.
+The wizard prints this path when the deployment's backup transport is
+set to `https`, with the script below and its scheduler entry carrying
+your own address and token. The wizard itself only asks Yes or No for a
+nightly backup; it has no control for the transport. The transport is
+stored on the MikroView side (`sftp` unless changed; it is set with
+`PUT /api/setup/backup-transport`, see
+[configuration.md](configuration.md)), so every browser gets the same
+one. It does not wait on 7a, since there is no drop box to open. 4b's
+token is still what authenticates it.
 
 To paste it by hand instead:
 
