@@ -468,7 +468,7 @@ func (s *Server) gateRoutes(routes http.Handler) http.Handler {
 		id := r.PathValue("id")
 		_, existed := s.Auth.Get(id)
 		return func(status int) {
-			if !success(status) && !(status == http.StatusInternalServerError && existed && accountGone(s.Auth, id)) {
+			if !success(status) && (status != http.StatusInternalServerError || !existed || !accountGone(s.Auth, id)) {
 				return
 			}
 			s.lockVaultForUser(id)

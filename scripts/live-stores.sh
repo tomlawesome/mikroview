@@ -95,4 +95,5 @@ mv_history_key_block() {
 # It must be https: gauntlet's blocklist refuses any other scheme, and the
 # server then exits at start-up, logging no setup code. Nothing listens on
 # port 9, so the fetch is refused at once.
+# shellcheck disable=SC2034 # read by the scripts that source this file
 MV_PASSWORDLIST_OFFLINE_URL="https://127.0.0.1:9/password-list-offline"

@@ -17,6 +17,7 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  checkBundledContent,
   checkShippedPackages,
   isLicenceAllowed,
   licenceExpressionFromDeclared,
@@ -491,5 +492,52 @@ describe("loadPolicy bundled-assets licence check", () => {
       () => loadText(["bundled-assets:", `${ENTRY} GPL-3.0`, "allow-licenses:", "  - MIT"]),
       /qrcode/u,
     );
+  });
+});
+
+// --- #1466: licence gate gaps ---------------------------------------------
+
+function bundledPolicy(dir) {
+  return writePolicy(dir, { allowLicenses: ["MIT"] });
+}
+
+function goFixture(dir, embedFiles) {
+  const moduleDir = join(dir, "mod");
+  mkdirSync(moduleDir, { recursive: true });
+  for (const f of embedFiles) writeFileSync(join(moduleDir, f), "x", "utf8");
+  return { importPath: "example.com/mod", dir: moduleDir, module: "example.com/mod", version: "v1.0.0", moduleDir, embedFiles };
+}
+
+function npmFixture(dir, files) {
+  const pkgDir = join(dir, "pkg");
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "pkg", version: "1.0.0", license: "MIT" }), "utf8");
+  for (const f of files) writeFileSync(join(pkgDir, f), "x", "utf8");
+  return { name: "pkg", version: "1.0.0", dir: pkgDir };
+}
+
+describe("Go //go:embed findings (#1466)", () => {
+  for (const name of ["data.json", "notes.txt", "blob.bin", "NOEXT"]) {
+    it(`flags an embedded ${name} whatever its extension`, () => {
+      const dir = scratchDir();
+      const result = checkBundledContent({ go: [goFixture(dir, [name])], policyPath: bundledPolicy(dir) });
+      assert.deepEqual(result.unreviewed.map((f) => f.path), [name]);
+    });
+  }
+});
+
+describe("npm bundled-asset extensions (#1466)", () => {
+  for (const ext of [".wasm", ".bin", ".dat", ".data", ".db", ".mmdb", ".xml", ".gz", ".zip", ".tar", ".tgz"]) {
+    it(`flags a shipped ${ext} file`, () => {
+      const dir = scratchDir();
+      const result = checkBundledContent({ npm: [npmFixture(dir, [`blob${ext}`])], policyPath: bundledPolicy(dir) });
+      assert.deepEqual(result.unreviewed.map((f) => f.path), [`blob${ext}`]);
+    });
+  }
+  it("still does not flag .json, .txt, .md or .map files", () => {
+    const dir = scratchDir();
+    const files = ["a.json", "b.txt", "c.md", "d.map"];
+    const result = checkBundledContent({ npm: [npmFixture(dir, files)], policyPath: bundledPolicy(dir) });
+    assert.deepEqual(result.unreviewed, []);
   });
 });

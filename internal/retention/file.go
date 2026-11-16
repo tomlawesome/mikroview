@@ -198,7 +198,7 @@ func visitBatch(plain []byte, visit func(store.Event)) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("retention: decompressing frame: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	dec := json.NewDecoder(gz)
 	n := 0
 	for {

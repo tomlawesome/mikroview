@@ -532,9 +532,12 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   to smuggle in code.
 
 - **Integrity is verified before the artefact runs, not by the artefact
-  itself.** Published images are signed with Sigstore/cosign and carry
-  SLSA build provenance and an SBOM, all bound to the image *digest*
-  rather than a tag (a tag is a mutable pointer; signing one would let it
+  itself.** Every image on GHCR carries GitHub's provenance and SBOM
+  attestations, and a release also carries the owner's keyless
+  Sigstore/cosign signature once `countersign.yml` has run; GitLab's
+  key-based signature and SBOM attestation stay on the same digest in the
+  GitLab registry. All of them are bound to the image *digest* rather than
+  a tag (a tag is a mutable pointer; signing one would let it
   later point at different content and still verify).
 
   **A release carries two independent signatures, and both must verify.**
@@ -542,46 +545,66 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   its own runner; the other is made keyless on GitHub, by hand, only after
   the first has been checked. Two signatures from the same place would be
   one signature — whoever drives the first drives the second — so the
-  second is a separate custody on two separate hosts. **Treat a digest as
-  good only if both verify. If either is missing, do not trust it**, and
-  do not fall back to the one that is present: a release missing the
-  key-based signature is a release that did not come from the tag
-  pipeline, which is exactly the case the second signature exists to
-  catch.
+  second is a separate custody on two separate hosts. The two live in
+  different registries: the key-based signature stays on the GitLab
+  digest, and the keyless one is on GHCR. GitHub copies a digest only
+  after the key-based signature verifies, so on GHCR you check the
+  keyless one (step 2); with read access to the GitLab registry you can
+  check both yourself (steps 2 and 3). **Treat a release as good only if
+  every check you can run verifies. If the keyless signature is missing
+  on GHCR, do not trust it**, and do not fall back to the attestations
+  alone: a release without the countersignature has not had its second,
+  separate check.
 
   `cosign.pub` is the public half of the key-based signature, committed at
   the root of this repository. Take it from the tag you are verifying, not
   from the default branch.
 
   ```sh
-  # 1. the key-based signature, made by the GitLab tag pipeline
-  cosign verify --key cosign.pub \
-    ghcr.io/tomlawesome/mikroview@sha256:...
+  # 1. provenance and SBOM, made by the GitHub publish workflow
+  gh attestation verify oci://ghcr.io/tomlawesome/mikroview@sha256:... \
+    --repo tomlawesome/mikroview
 
-  # 2. the keyless countersignature, started by hand on GitHub
+  # 2. the owner's keyless countersignature (releases only)
   cosign verify ghcr.io/tomlawesome/mikroview@sha256:... \
     --certificate-identity-regexp '^https://github.com/tomlawesome/mikroview/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-  # 3. provenance and SBOM
-  gh attestation verify oci://ghcr.io/tomlawesome/mikroview@sha256:... \
-    --repo tomlawesome/mikroview
+  # 3. GitLab's key-based signature and SBOM attestation live beside the
+  #    image in the GitLab registry, not on GHCR; needs read access to
+  #    registry.tomlawson.io/ai/mikroview.
+  cosign verify --key cosign.pub registry.tomlawson.io/ai/mikroview@sha256:...
+  cosign verify-attestation --key cosign.pub --type spdxjson \
+    registry.tomlawson.io/ai/mikroview@sha256:...
   ```
 
-  **Preview images carry the keyless signature only** (step 2). The second
-  custody is for releases: a preview is not something to trust, it is
-  something to test.
+  The key-based signature is not on GHCR. GitHub refuses to copy a digest
+  unless that signature and the SBOM attestation verify against
+  `cosign.pub` in the GitLab registry first, records the verification in the
+  publish run's uploaded evidence, and the signature is in the public Rekor
+  log; checking it yourself needs read access to the GitLab registry
+  (step 3).
 
-  **Releases are rebuilt, and re-earn what rebuilding costs.** A
-  `v<x.y.z>` binary has to be built from the release, so `main` cannot
-  simply retag preview's digest for it. Retagging existed to guarantee
-  that the exact bytes smoke-tested are the bytes that ship, so the
-  release job runs the container smoke test **against the image it just
-  built, before `latest` moves to it**, and additionally asserts the
-  binary reports the version being released. The guarantee is preserved,
-  just re-earned on the release artefact instead of inherited. The
-  release is tagged last, so a failure anywhere above leaves no tag
-  claiming a release happened. See
+  **Preview images carry the provenance and SBOM attestations** (step 1);
+  the key-based signature is on the GitLab digest. The second custody is
+  for releases: a preview is not something to trust, it is something to
+  test.
+
+  **GHCR holds GitLab's bytes, never a rebuild.** GitLab builds each
+  preview and release image once, runs the container tests and, for a
+  release, checks that the binary reports the tag being released, all
+  against that build; then it signs the digest. GitHub builds nothing: it
+  verifies GitLab's key-based signature and SBOM attestation against
+  `cosign.pub` on the GitLab registry digest, and only then copies the
+  image itself (manifest and layers, by digest, with `docker buildx
+  imagetools create`) to GHCR; the signature stays in the GitLab registry.
+  Each GHCR tag is read back and must resolve to the same digest. `latest`
+  moves only on the highest release tag, to that release's digest,
+  re-checked after the move. GitHub then attests provenance and the SBOM
+  (the one from GitLab's verified attestation) on the GHCR digest; the
+  provenance records the GitHub workflow that published the digest, and the
+  build itself is GitLab's, recorded by its signed evidence. See
+  [docs/release-signing.md](docs/release-signing.md) and
   [docs/decisions/release-versioning.md](docs/decisions/release-versioning.md).
 
   **Self-verification was considered and deliberately rejected** -- an
@@ -822,7 +845,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   (#1450), so the data directory can move to a new path and still open,
   while a genuine file put in another store's place (the tokens file
   copied over the accounts file, say) is refused, whatever the two files
-  are called. A file sealed before this change, bound to its absolute
+  are called. A file sealed before this change, bound to its configured
   path, opens once at that path and is re-sealed under its store name.
   Neither binding stops an older genuine copy of the same store's file
   being put back (a rollback) -- the path binding never did either, and

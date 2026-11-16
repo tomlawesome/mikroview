@@ -1,7 +1,8 @@
 # Generates the three direction pages from one skeleton, so the wizard's
 # markup is identical in each and only the door and the journey differ.
 import re
-sv = open('/home/user/projects/mikroview/frontend/src/components/Fullfall.svelte').read()
+import pathlib
+sv = (pathlib.Path(__file__).resolve().parents[5] / 'frontend/src/components/Fullfall.svelte').read_text()
 frag = '<div class="fullfall door" id="fullfall" aria-hidden="true">' + ''.join(re.findall(r'<i[^>]*></i>', sv)) + '</div>'
 bare = frag.replace('id="fullfall"', '')
 def plane(cls):

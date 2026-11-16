@@ -690,5 +690,5 @@ func (s *Server) handleThirdPartyNotices(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	io.WriteString(w, s.ThirdPartyNotices)
+	_, _ = io.WriteString(w, s.ThirdPartyNotices)
 }

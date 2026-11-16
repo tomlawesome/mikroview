@@ -7,7 +7,7 @@ actually, not just screen grabs". This round is one clickable prototype,
 direction **V**, driven by a simulated router.
 
 **Open it:** `first-light.html`, served at
-`http://198.51.100.200:8309/screens/wizard/round-5/first-light.html`.
+`http://192.0.2.30:8309/screens/wizard/round-5/first-light.html`.
 Type a name, an address and any password, click **Write the paste**,
 then **Copy**, and watch. The dashed strip bottom-right is prototype
 furniture: pick a scenario (happy path; router sends from another
@@ -76,8 +76,8 @@ frame, not copied as drawn.
 
 ## The data story
 
-Unchanged: MikroView at `192.0.2.15:8080`; the router `rb5009` at
-`192.0.2.1`, other address `198.51.100.201`; 14:02 onwards. The
+Unchanged: MikroView at `198.51.100.15:8080`; the router `rb5009` at
+`198.51.100.1`, other address `192.0.2.1`; 14:02 onwards. The
 router reports RouterOS **7.24.4** (7.25.1 in the ahead-of-review
 scenario). Its push: 47 filter rules of which 3 log (`in-ssh`,
 `est-rel`, `icmp`), interfaces `ether1` (WAN), `bridge` (LAN, 31

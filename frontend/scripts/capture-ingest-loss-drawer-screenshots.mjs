@@ -32,7 +32,7 @@
 //   cd frontend && node scripts/capture-ingest-loss-drawer-screenshots.mjs
 //   scripts/live-env.sh down   (from the repo root)
 
-import { launchBrowser, dismissSetupWizard, goTo } from './live-browser.mjs'
+import { launchBrowser, dismissSetupWizard, goTo, completeSecondFactor } from './live-browser.mjs'
 import { mkdirSync } from 'fs'
 import path from 'path'
 
@@ -98,6 +98,8 @@ await page.goto(URL_BASE, { waitUntil: 'networkidle' })
 await page.fill('input[autocomplete="username"]', USER)
 await page.fill('input[autocomplete="current-password"]', PASS)
 await page.click('button[type="submit"]')
+// Every local account needs a second factor since #1253 (#1429).
+await completeSecondFactor(page)
 await page.waitForSelector('#main-content', { timeout: 15000 })
 await dismissSetupWizard(page)
 await goTo(page, 'Stream')

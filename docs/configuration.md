@@ -1592,7 +1592,8 @@ log:
 ASCII wordmark once (plain text, not a log line -- always shown,
 regardless of `level` or whether stdout is a terminal), followed by a
 `version` line identifying which build is running -- the short commit
-SHA it was built from (see `.github/workflows/docker.yml`), the
+SHA it was built from (GitLab's `build:image` job, see
+[docs/release-signing.md](release-signing.md)), the
 practical stand-in for a registry digest since a binary can't know its
 own digest at build time. If the persisted version marker
 (`/var/lib/mikroview/version`) doesn't match the running build, that
@@ -1914,7 +1915,7 @@ key -- imports nothing at all, so the last successfully-imported list
 stays in force; nothing is ever left half-applied.
 
 The key reads the drop list and nothing else: minting one (`POST
-/api/droplist/key`) mints a `droplist-pull` bearer token good for exactly
+/api/droplist/key`, which asks for your password, #1447) mints a `droplist-pull` bearer token good for exactly
 one route, `GET /api/droplist.rsc`, the same structural, separate-mux
 guarantee the read-only and ingest tokens carry (see [API
 tokens](#api-tokens-read-only)). Minting again **replaces** the existing
@@ -4156,7 +4157,7 @@ names the new paths and the same `history.keyFile` key is in place.
 What is still refused at start-up, naming the store: a file not made
 with your key (forged, edited or plaintext), and one store's file put
 in another store's place. A file written by a release before v0.7.0 is
-bound to its old absolute path: start v0.7.0 once at the old path first
+bound to its old configured path: start v0.7.0 once at the old path first
 (each such file is re-sealed the new way when MikroView opens it, and
 the log says so once per file), then move it.
 
@@ -5243,13 +5244,14 @@ Override individual scalar settings without a mounted file:
 ## Checking your version
 
 What you see depends on which image you are running, because there are
-two kinds (see `.github/workflows/docker.yml`; pushing to `dev`
-deliberately publishes no image at all):
+two kinds, both built once by GitLab's `build:image` job and copied to
+GHCR unchanged (see [docs/release-signing.md](release-signing.md);
+pushing to `dev` deliberately publishes no image at all):
 
 - **A release build** -- `latest`, or an explicit `v0.1.0`-style tag --
   reports that semantic version, e.g. `v0.1.0`. The version comes from
-  the `VERSION` file in the repository, and merging to `main` with a
-  value that has no tag yet is what cuts the release.
+  the `VERSION` file in the repository, and pushing a `v<VERSION>` tag
+  is what cuts the release; merging to `main` does not.
 - **A preview build** -- `preview`, or `preview-<sha>` -- reports the
   short git commit SHA it was built from.
 
@@ -5620,7 +5622,7 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/droplist` | admin-only: every drop-list entry (`cidr`, `addedBy`, `addedAt`, `reason`, `flagID` if raised from a flag) plus the pull key's own status (`key.present`, and when present `createdAt`/`createdBy`/`lastUsedAt`); `ownRangesKnown` (#1224); and, for #1225, `routers` (one `{device, held, total, confirmedAt}` per device that has ever pushed an address-list snapshot, `held` being how many of the drop list's entries that snapshot actually holds) plus `setup` (the four RouterOS commands rendered for the `address` query parameter, falling back to the request's own Host, with the key placeholder `<DROP-LIST-KEY>`) (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)) |
 | `POST /api/droplist` | admin-only: add an entry, given `{"cidr": "...", "reason": "...", "flagID": "..."}` (`flagID` optional). 201 with the stored entry, plus a `warning` string when no router has ever reported its own addresses yet -- the range still could not be checked against the router's own ranges, so the entry is stored anyway (refusing would break first-time setup) but the operator is told the check did not actually run. 400 for a range `internal/droplist.Validate` refuses (too broad, not public, or the router's own range), naming the specific rule in the response body; 400 if `flagID` names no flag; 409 for a duplicate of an existing entry |
 | `DELETE /api/droplist/{cidr}` | admin-only: remove the entry for `cidr` (e.g. `DELETE /api/droplist/203.0.113.0/24`). 204 on success, 404 if no entry matches |
-| `POST /api/droplist/key` | admin-only: mint the droplist-pull key a router's scheduled fetch presents at `GET /api/droplist.rsc` -- an optional body `{"address": "..."}` (empty body still allowed, same fallback to Host as `GET /api/droplist`'s `address` parameter) sets what the returned `scheduler` command fetches from. Returns `{"key": "...", "createdAt": ..., "scheduler": "..."}`, the raw key and the filled-in scheduler command both shown exactly once (#1225). Minting again **replaces** any existing key rather than adding a second one, since every router fetches the same feed with the same credential; audited as `droplist.key_minted` |
+| `POST /api/droplist/key` | admin-only, and re-checks your password (#1447): mint the droplist-pull key a router's scheduled fetch presents at `GET /api/droplist.rsc`. Body `{"password": "...", "address": "..."}`: `password` is your own, checked in the same per-account re-check budget as `POST /api/devices/{id}/enrolment` -- missing or wrong is 401 (429 once the budget is spent) and leaves any existing key working; an account that signs in only through an identity provider gets 409. `address` is optional, same fallback to Host as `GET /api/droplist`'s `address` parameter, and sets what the returned `scheduler` command fetches from. Returns `{"key": "...", "createdAt": ..., "scheduler": "..."}`, the raw key and the filled-in scheduler command both shown exactly once (#1225). Minting again **replaces** any existing key rather than adding a second one, since every router fetches the same feed with the same credential; audited as `droplist.key_minted` |
 | `DELETE /api/droplist/key` | admin-only: revoke the droplist-pull key. 204 on success, 404 if none exists. Audited as `droplist.key_revoked` |
 | `GET /api/droplist.rsc` | droplist-pull-token-only, not session-gated and not reachable with any other token kind (#1224) -- the RouterOS-importable script a router's own scheduled `/tool fetch` pulls: a staging-list build followed by a live-list swap, so a fetch or import failure never leaves the live list empty (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)). `Cache-Control: no-store`; 401 (carrying `WWW-Authenticate: Bearer realm="mikroview"`, RFC 9110 §15.5.2, so RouterOS's own `/tool fetch` can parse the refusal instead of erroring on the missing header) with no key or an invalid/revoked one, 429 over the same per-token rate limit ingest pushes use. Never audited per pull -- the key's own `lastUsedAt` (visible on `GET /api/droplist`) is the record |
 | `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-issue-394) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |

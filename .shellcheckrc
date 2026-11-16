@@ -1,0 +1,2 @@
+# CDPATH= cd -- ... is the documented way to run cd without CDPATH (SC1007 is a false alarm)
+disable=SC1007

@@ -1,30 +1,28 @@
 name: docker
 
-# dev deliberately publishes nothing -- keeps dev cheap/fast, and a
-# moving-target image built from unreviewed dev work isn't something
-# worth shipping to the registry. preview publishes the actual release
-# candidate -- see .gitlab-ci.yml's test:container job and its
-# security stage (security:semgrep, security:gosec,
-# security:govulncheck, security:fuzz, security:npm-audit,
-# security:licence-policy, security:gitleaks, security:trivy-fs),
-# which carry that work now that ci.yml is retired.
+# RETIRED (#1472 step 3, #1464): GitHub no longer builds the product image.
+# GitLab builds it once, tests, signs and publishes it, and GitHub only
+# copies that digest to GHCR. This file is kept, workflow_dispatch only, until
+# two preview publishes and one release have gone through the new path; then
+# it is deleted. Its push and tag triggers are gone in the same commit that
+# added the copying workflows, so GHCR `:preview` and `:latest` are never
+# written by two workflows. Every job carries a hard `if: false`, so a
+# manual dispatch on preview or a tag cannot build or push anything.
 #
-# main does one thing: retags preview's exact already-tested digest as
-# latest. No rebuild, no release.
-#
-# A release is a `v*` tag, created on GitLab (the source of truth) and
-# pushed here by sync:mirror-to-github. The tag must equal `v<VERSION>`
-# at the tagged commit, so the version bump is still part of the
-# promotion diff (docs/decisions/release-versioning.md); the tag says
-# *when*, the file says *what*. The release job builds a fresh image,
-# smoke-tests that build, then moves latest to it. The rebuild is
-# deliberate, not a bug -- see the comment on the release job for why.
-# A failed release is re-run on the same tag once the cause is fixed;
-# nothing is retagged or renumbered (owner decision on #572, 2026-09-10).
+# Where each old job went:
+#   publish-preview  -> GitLab build:image, test:container, security:*
+#                       (security:trivy-image writes the SBOM), publish:image,
+#                       sign:release-digest, publish:channel; then GitHub's
+#                       publish-from-gitlab.yml copies the digest to
+#                       ghcr.io as preview-<short7> and preview.
+#   release          -> GitLab release:check-version (tag equals v<VERSION>,
+#                       binary reports it), plus the same build:image,
+#                       test:container, security:* and publish:* jobs on the
+#                       tag; then GitHub's release-on-tag.yml copies the
+#                       digest to ghcr.io as vX.Y.Z.
+#   promote-to-main  -> release-on-tag.yml's `latest` move, on the release tag
+#                       rather than the main merge.
 on:
-  push:
-    branches: [preview, main]
-    tags: ['v*']
   workflow_dispatch: {}
 
 permissions:
@@ -33,7 +31,7 @@ permissions:
 jobs:
   publish-preview:
     name: Build + publish preview image
-    if: github.ref_name == 'preview'
+    if: false  # retired (#1472): was github.ref_name == 'preview'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -46,17 +44,20 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.4'
+          # A signing job builds from a clean state: no cache another run
+          # could have written (#1479).
+          cache: false
       - run: go test ./...
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
       - run: |
           cd frontend
           npm ci
@@ -90,8 +91,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=preview:${{ steps.sha.outputs.short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           # Records how the image was built (source, workflow, inputs)
           # in a form a verifier can check without trusting the image.
           provenance: mode=max
@@ -101,6 +100,8 @@ jobs:
       # tag is a mutable pointer -- signing one would let it be moved to
       # different content afterwards and still verify.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
 
       - name: Sign the image
         env:
@@ -116,7 +117,7 @@ jobs:
 
   release:
     name: Build, test and publish the release
-    if: github.ref_type == 'tag'
+    if: false  # retired (#1472): was github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -131,6 +132,8 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The tag is the trigger; the file is the check. A tag that does not
       # match VERSION at the tagged commit is a mistake, not a release.
@@ -161,7 +164,6 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           build-args: |
             VERSION=${{ github.ref_name }}
-          cache-from: type=gha
           provenance: mode=max
           sbom: true
 
@@ -244,7 +246,7 @@ jobs:
 
   promote-to-main:
     name: Promote the tested preview image to latest
-    if: github.ref_name == 'main'
+    if: false  # retired (#1472): was github.ref_name == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -252,6 +254,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Resolve which preview commit this merge promotes
@@ -274,9 +277,12 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Retag the exact preview digest as latest -- no rebuild
+        env:
+          REPO: ${{ github.repository }}
+          SHORT: ${{ steps.source.outputs.short }}
         run: |
-          src="ghcr.io/${{ github.repository }}:preview-${{ steps.source.outputs.short }}"
-          dst="ghcr.io/${{ github.repository }}:latest"
+          src="ghcr.io/${REPO}:preview-${SHORT}"
+          dst="ghcr.io/${REPO}:latest"
           echo "Promoting $src -> $dst (no rebuild)"
           # $src is built with provenance: mode=max and sbom: true, so it
           # is already an OCI index -- --prefer-index=false is a no-op

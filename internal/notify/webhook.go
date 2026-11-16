@@ -133,7 +133,7 @@ func (n *WebhookNotifier) Send(batch []flags.Flag) error {
 	if err != nil {
 		return fmt.Errorf("notify/webhook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// 2xx is treated as success across the board rather than requiring
 	// exactly 200 (unlike PushoverNotifier's fixed API contract) -- the
 	// receivers this targets (ntfy, Discord, Slack, Home Assistant, n8n,

@@ -74,7 +74,7 @@ import path from 'path'
 // on purpose, matching capture-engine-room-screenshots.mjs: this is a
 // one-off tool, not a scenario, and importing session()/check()/done()
 // would pull in a contract it doesn't use.
-import { feedRawFrom } from './live-browser.mjs'
+import { feedRawFrom, completeSecondFactor } from './live-browser.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
@@ -101,6 +101,8 @@ async function signedInPage() {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
+  // Every local account needs a second factor since #1253 (#1429).
+  await completeSecondFactor(page)
   await page.waitForSelector('#main-content', { timeout: 15000 })
   await page.waitForTimeout(2000)
   return { context, page }

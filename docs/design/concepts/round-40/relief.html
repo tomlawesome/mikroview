@@ -384,11 +384,11 @@
       <button class="who">alex (admin)</button>
     </span>
   </div>
-  <div class="plaque" style="top:94px;left:26px">street level · <span style="color:var(--ink-3)">LAN 198.51.100.1/24 · 4 buildings · rings are the contour of importance</span></div>
+  <div class="plaque" style="top:94px;left:26px">street level · <span style="color:var(--ink-3)">LAN 198.51.100.0/27 · 4 buildings · rings are the contour of importance</span></div>
   <div class="planwrap"><div class="plan street" data-scene="street"></div></div>
   <div class="hovercard" style="left:712px;top:116px" role="note" aria-label="Card for alex-desktop">
     <i class="leader"></i>
-    <div class="hn">alex-desktop <em>198.51.100.2</em></div>
+    <div class="hn">alex-desktop <em>198.51.100.21</em></div>
     <div class="hr"><b>3 roads</b> · servers :445 :5001 · dns :53 · wan</div>
     <div class="hr"><span class="hw">watch &#9673;</span> <b>· depended-on 6 · flags 0</b></div>
   </div>
@@ -409,7 +409,7 @@
       <button class="who">alex (admin)</button>
     </span>
   </div>
-  <div class="plaque" style="top:94px;left:26px">2 boroughs · <span style="color:var(--ink-3)">rb5009 · 41 rules &nbsp;&nbsp;|&nbsp;&nbsp; hap-ax3 · 12 rules · its ether1 carries 198.51.100.3, inside LAN</span></div>
+  <div class="plaque" style="top:94px;left:26px">2 boroughs · <span style="color:var(--ink-3)">rb5009 · 41 rules &nbsp;&nbsp;|&nbsp;&nbsp; hap-ax3 · 12 rules · its ether1 carries 198.51.100.9, inside LAN</span></div>
   <div class="planwrap"><div class="plan est" data-scene="estate"></div></div>
   <div class="wlens2"><span class="on">traffic</span><span>policy</span><span class="on">coverage</span><span class="fl">flags 6</span><span>watch</span></div>
   <div class="alt"><span>CLIENTS</span><span class="altwrap"><i class="track"></i><i class="tick" style="left:3%"></i><i class="tick" style="left:34.3%"></i><i class="tick" style="left:65.7%"></i><i class="tick survey" style="left:97%"></i><i class="knob" style="left:65.7%"></i><span class="stopname" style="left:65.7%">zones</span></span><span>SURVEY</span></div>
@@ -457,20 +457,20 @@ const INK = {
 };
 
 const PLATES = [
-  { id:'guest', name:'Guest', cidr:'198.51.100.4/24', ink:'guest', x:20,  y:235, w:130, h:198,
+  { id:'guest', name:'Guest', cidr:'198.51.100.96/27', ink:'guest', x:20,  y:235, w:130, h:198,
     cov:'DARK — no log rule on this boundary', covShort:'DARK', covCls:'cov-d', cnt:'' },
-  { id:'iot', name:'IoT', cidr:'198.51.100.5/24', ink:'iot', x:176, y:235, w:248, h:198,
+  { id:'iot', name:'IoT', cidr:'198.51.100.64/27', ink:'iot', x:176, y:235, w:248, h:198,
     cov:'DARK TOWARD WAN', covShort:'DARK &#8594; WAN', covCls:'cov-d',
     cnt:'<span class="wp">&#9673;1</span> <span class="fc">&#10033;3</span>',
     more:{ t:'+4 more buildings', x:6, y:372 } },
-  { id:'servers', name:'Servers', cidr:'198.51.100.6/24', ink:'srv', x:450, y:235, w:184, h:198,
+  { id:'servers', name:'Servers', cidr:'198.51.100.32/27', ink:'srv', x:450, y:235, w:184, h:198,
     cov:'LOGGED BOTH WAYS', covShort:'LOGGED', covCls:'cov-l', cnt:'<span class="wp">&#9673;2</span>' },
-  { id:'lan', name:'LAN', cidr:'198.51.100.1/24', ink:'lan', x:660, y:235, w:244, h:198,
+  { id:'lan', name:'LAN', cidr:'198.51.100.0/27', ink:'lan', x:660, y:235, w:244, h:198,
     cov:'LOGGED BOTH WAYS', covShort:'LOGGED', covCls:'cov-l',
     cnt:'<span class="wp">&#9673;2</span> <span class="fc">&#10033;2</span>' },
-  { id:'workshop', name:'Workshop', cidr:'198.51.100.7/24', ink:'wsp', x:976, y:282, w:240, h:100,
+  { id:'workshop', name:'Workshop', cidr:'198.51.100.160/27', ink:'wsp', x:976, y:282, w:240, h:100,
     cov:'LOGGED BOTH WAYS', covShort:'LOGGED', covCls:'cov-l', cnt:'' },
-  { id:'cams', name:'Cams', cidr:'198.51.100.8/24', ink:'cams', x:976, y:392, w:240, h:90,
+  { id:'cams', name:'Cams', cidr:'198.51.100.192/27', ink:'cams', x:976, y:392, w:240, h:90,
     cov:'DARK — no log rule on this boundary', covShort:'DARK', covCls:'cov-d', cnt:'<span class="fc">&#10033;1</span>' }
 ];
 
@@ -483,19 +483,19 @@ const B = [
   /* --- the town edge: WAN gates --- */
   { id:'ether1', name:'ether1', dist:'wan', ink:'core', x:250, y:58, w:96, h:42,
     hd:84, hw:22, idp:0.42, iw:0.12, civic:1, gate:1,
-    aria:'WAN gate ether1 to the Internet, 203.0.113.7, coverage logged' },
+    aria:'WAN gate ether1 to the Internet, 192.0.2.7, coverage logged' },
   { id:'wg0', name:'wg0', dist:'wan', ink:'core', x:900, y:42, w:68, h:34,
     hd:50, hw:135, idp:0.24, iw:0.55, civic:1, gate:1,
-    aria:'WireGuard gate wg0, 198.51.100.9/24, quiet, one watcher' },
+    aria:'WireGuard gate wg0, 198.51.100.128/27, quiet, one watcher' },
   /* --- the civic buildings: the routers --- */
   { id:'rb5009', name:'rb5009', dist:'core', ink:'core', x:400, y:122, w:300, h:66,
     hd:230, hw:90, idp:1, iw:0.28, civic:1, sub:'RouterOS 7.20.1 · 41 rules',
     aria:'rb5009, the primary router and the tallest building: every district depends on it' },
   { id:'hap-ax3', name:'hap-ax3', dist:'core2', ink:'core', x:992, y:210, w:208, h:52,
     hd:128, hw:30, idp:0.50, iw:0.14, civic:1, sub:'RouterOS 7.20.1 · 12 rules',
-    aria:'hap-ax3, the second router, its ether1 carries 198.51.100.3 inside the LAN' },
+    aria:'hap-ax3, the second router, its ether1 carries 198.51.100.9 inside the LAN' },
   /* --- LAN --- */
-  { id:'alex-desktop', name:'alex-desktop', dist:'lan', ink:'lan', x:666, y:241, w:110, h:64, hd:100, hw:78, idp:0.40, iw:0.38, aria:'alex-desktop, 198.51.100.2, in the LAN district, 3 roads, watched' },
+  { id:'alex-desktop', name:'alex-desktop', dist:'lan', ink:'lan', x:666, y:241, w:110, h:64, hd:100, hw:78, idp:0.40, iw:0.38, aria:'alex-desktop, 198.51.100.21, in the LAN district, 3 roads, watched' },
   { id:'phone-alex',   name:'phone-alex',   dist:'lan', ink:'lan', x:788, y:241, w:110, h:64, hd:54, hw:18, idp:0.21, iw:0.10, aria:'phone-alex in the LAN district' },
   { id:'laptop-anna', name:'laptop-anna', dist:'lan', ink:'lan', x:666, y:313, w:110, h:64, hd:62, hw:22, idp:0.23, iw:0.12, aria:'laptop-anna in the LAN district' },
   { id:'tv-lounge',   name:'tv-lounge',   dist:'lan', ink:'lan', x:788, y:313, w:110, h:64, hd:38, hw:16, idp:0.15, iw:0.07, aria:'tv-lounge in the LAN district' },
@@ -534,7 +534,7 @@ const ROADS = [
   { d:'M412 188 C 316 190, 176 222, 86 237',  w:5,  c:'var(--accept)', a:'rb5009 to the Guest district: wan only, and dark' },
   { d:'M628 309 H 668', w:11, c:'var(--accept)', a:'LAN to Servers, the heavy local road: dns, smb and time' },
   { d:'M424 306 C 442 306, 434 342, 450 342', w:5, c:'var(--accept)', a:'IoT to Servers, modest' },
-  { d:'M904 282 C 940 282, 962 244, 992 238', w:9, c:'var(--accept)', road:'hap', a:'LAN to hap-ax3: its ether1 carries 198.51.100.3, inside the LAN' },
+  { d:'M904 282 C 940 282, 962 244, 992 238', w:9, c:'var(--accept)', road:'hap', a:'LAN to hap-ax3: its ether1 carries 198.51.100.9, inside the LAN' },
   { d:'M1096 262 V 284', w:4, c:'var(--accept)', a:'hap-ax3 to the Workshop district' },
   { d:'M1170 262 C 1226 276, 1226 356, 1204 392', w:5, c:'var(--accept)', a:'hap-ax3 to the Cams district' }
 ];
@@ -614,13 +614,13 @@ function planHTML() {
 
   /* chips: open ground only, never over a plate or a road */
   h += '<svg class="chips" viewBox="0 0 1250 560" aria-hidden="true">' +
-    '<text class="big" x="360" y="20">INTERNET &#183; 203.0.113.7</text>' +
+    '<text class="big" x="360" y="20">INTERNET &#183; 192.0.2.7</text>' +
     '<text class="ok" x="360" y="35">LOGGED</text>' +
     '<text class="warn" x="360" y="51" font-size="10">&#9650; 3.1&#215; drops &#183; wan-in</text>' +
     '<text x="382" y="106">any &#8594; wan &#183; 9/s</text>' +
-    '<text class="k" x="978" y="34">wg0 &#183; 198.51.100.9/24 &#183; QUIET &#183; &#9673;1</text>' +
+    '<text class="k" x="978" y="34">wg0 &#183; 198.51.100.128/27 &#183; QUIET &#183; &#9673;1</text>' +
     '<text class="k" x="46" y="204">wan only &#183; dark</text>' +
-    '<text class="k" x="806" y="222">ether1 &#183; 198.51.100.3</text>' +
+    '<text class="k" x="806" y="222">ether1 &#183; 198.51.100.9</text>' +
     /* street-only: the port labels that run along the avenue */
     '<text class="port" transform="rotate(-90 645 428)" x="645" y="428">:53 :123 &#183; :445 :5001</text>' +
     '<text class="port" x="910" y="318">:445 backups</text>' +

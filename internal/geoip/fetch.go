@@ -234,7 +234,7 @@ func (m *Manager) download(ctx context.Context, req request, dst io.Writer) (res
 	if err != nil {
 		return response{}, errors.New(cleanErr(err, req.secrets))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusNotModified:
@@ -312,7 +312,7 @@ func extractMaybeGzip(body io.Reader, dst io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("gzip: %w", err)
 		}
-		defer zr.Close()
+		defer func() { _ = zr.Close() }()
 		return copyCapped(dst, zr)
 	}
 	return copyCapped(dst, br)
@@ -327,7 +327,7 @@ func extractTarGz(body io.Reader, dst io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	tr := tar.NewReader(zr)
 	found := false
 	for i := 0; ; i++ {

@@ -159,20 +159,20 @@ func (r *Registry) saveCache() {
 		return
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename below succeeds
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename below succeeds
 
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		r.log.Warn(fmt.Sprintf("IEEE MA-L registry: cannot set cache permissions (%v) -- cache not written", err))
 		return
 	}
 	if err := json.NewEncoder(tmp).Encode(cf); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		r.log.Warn(fmt.Sprintf("IEEE MA-L registry: cannot encode the cache (%v) -- cache not written", err))
 		return
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		r.log.Warn(fmt.Sprintf("IEEE MA-L registry: cannot flush the cache (%v) -- cache not written", err))
 		return
 	}

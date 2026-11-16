@@ -414,9 +414,9 @@
       <span class="close">◂ release — back to the fall</span>
     </div>
     <div class="filterbar">
-      <div class="ff"><label>Source — name, IP or CIDR</label><input value="198.51.100.1/24"></div>
+      <div class="ff"><label>Source — name, IP or CIDR</label><input value="198.51.100.64/27"></div>
       <button class="swap" aria-label="Swap source and destination filters">⇄</button>
-      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="198.51.100.2/24"></div>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="198.51.100.0/27"></div>
       <div class="ff"><label>Chain</label><select><option>forward</option></select></div>
       <div class="ff small"><label>Port — number or service</label><input value="445"></div>
       <div class="ff small"><label>Rule</label><input></div>
@@ -447,24 +447,24 @@
         <thead><tr><th>time</th><th>chain</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
         <tbody>
           <tr><td class="t">14:02:11.482</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
-            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.3</span></td>
-            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.4</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.42</span></td>
             <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
           <tr><td class="t">14:01:58.104</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
-            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.3</span></td>
-            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.4</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.42</span></td>
             <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
           <tr><td class="t">14:01:43.771</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
-            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.3</span></td>
-            <td class="arrow">→</td><td><span class="ld" style="background:var(--lan)"></span><span class="host">alex-desktop</span><span class="ip">198.51.100.5</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--lan)"></span><span class="host">alex-desktop</span><span class="ip">198.51.100.21</span></td>
             <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
           <tr><td class="t">14:01:29.310</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
-            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.3</span></td>
-            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.4</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.42</span></td>
             <td>tcp/139 <span class="cc">netbios</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
           <tr><td class="t">14:01:12.089</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
-            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.3</span></td>
-            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.4</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">198.51.100.42</span></td>
             <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
         </tbody>
       </table>

@@ -29,7 +29,7 @@ for (const [k, d] of Object.entries(DIRS)) {
   await page.clock.runFor(1500)
   // the wizard, quickly, to Finish
   await page.selectOption('#speed', '12'); await w(100)
-  await page.fill('[data-field=name]', 'rb5009'); await page.fill('[data-field=addr]', '192.0.2.1')
+  await page.fill('[data-field=name]', 'rb5009'); await page.fill('[data-field=addr]', '198.51.100.1')
   await page.click('[data-act=set][data-q=push][data-v=yes]'); await page.click('[data-act=set][data-q=backup][data-v=yes]'); await w(150); await shot('09-router-filled')
   await page.click('[data-act=router-next]'); await w(250); await page.fill('[data-field=pass]', 'correct horse'); await page.press('[data-field=pass]', 'Enter'); await w(400)
   await page.click('[data-act=copy]'); await w(4600); await shot('10-arrived')

@@ -12,7 +12,7 @@ the catch, the wipe, the landing or the groups' order has changed.
 
 | | Concept | Open |
 |---|---|---|
-| **AM** | **The neon** | `http://198.51.100.1:8309/screens/wizard/round-14/am-neon.html` |
+| **AM** | **The neon** | `http://192.0.2.30:8309/screens/wizard/round-14/am-neon.html` |
 
 Start at the door: Enter (or ⏎). Fill the one router step, Next, your
 password, Copy, watch, tag, Finish. `?skipdoor` opens on the wizard.

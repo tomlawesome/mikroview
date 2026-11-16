@@ -92,7 +92,7 @@ func newTestPool(t *testing.T) *Pool {
 	// [a-z0-9_] below so the shape of this can't drift into something
 	// that takes outside text.
 	for _, r := range schema {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 			t.Fatalf("test name produces an unsafe schema identifier: %q", schema)
 		}
 	}

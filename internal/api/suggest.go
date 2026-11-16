@@ -241,7 +241,7 @@ func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) 
 		// 500 for a destructive action that already happened.
 		apiLog.Error("saving the suggestion reset failed: " + err.Error())
 	}
-	s.Suggest.Sync(suggest.Generate(s.RouterState))
+	_ = s.Suggest.Sync(suggest.Generate(s.RouterState))
 
 	s.Audit.Record(auditActor(r), "definition.suggestion.reset", "", fmt.Sprintf("%d entries removed", wiped))
 	writeJSON(w, http.StatusOK, map[string]any{"candidates": s.Suggest.List()})

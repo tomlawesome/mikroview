@@ -52,7 +52,7 @@ func lockStore(path string) (func(), error) {
 		return func() {}, nil
 	}
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("persist: locking %s: %w", path+LockFileSuffix, err)
 	}
 	return func() {
@@ -145,9 +145,9 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmp := f.Name()
 	cleanup := func() {
-		f.Close()
+		_ = f.Close()
 		// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 	}
 	if err := f.Chmod(perm); err != nil {
 		cleanup()
@@ -163,12 +163,12 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.

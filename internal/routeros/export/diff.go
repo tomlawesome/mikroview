@@ -125,9 +125,7 @@ func diffSides(text string) []diffSide {
 // wholesaleText) avoid diffSides' per-line []diffSide allocation
 // entirely.
 func forEachLine(text string, f func(line int, text string)) {
-	if strings.HasSuffix(text, "\n") {
-		text = text[:len(text)-1]
-	}
+	text = strings.TrimSuffix(text, "\n")
 	if text == "" {
 		return
 	}

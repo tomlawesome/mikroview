@@ -217,7 +217,7 @@ func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, device, ext))
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // The keep controls (#1126, owner ruling 2026-09-11). An admin marks a

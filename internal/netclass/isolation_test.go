@@ -5,6 +5,7 @@ package netclass_test
 import (
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,23 +31,29 @@ func TestNetClassDoesNotImportSuspicionMachinery(t *testing.T) {
 	}
 
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.ImportsOnly)
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parsing package: %v", err)
+		t.Fatalf("reading package directory: %v", err)
 	}
 
-	for name, pkg := range pkgs {
-		if strings.HasSuffix(name, "_test") {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		path := entry.Name()
+		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		if strings.HasSuffix(file.Name.Name, "_test") {
 			continue // the test package itself may import anything
 		}
-		for path, file := range pkg.Files {
-			for _, imp := range file.Imports {
-				got := strings.Trim(imp.Path.Value, `"`)
-				for _, bad := range forbidden {
-					if got == bad {
-						t.Errorf("%s imports %s -- netclass must not reach the suspicion machinery; a match is display context, not a score (#114)",
-							filepath.Base(path), bad)
-					}
+		for _, imp := range file.Imports {
+			got := strings.Trim(imp.Path.Value, `"`)
+			for _, bad := range forbidden {
+				if got == bad {
+					t.Errorf("%s imports %s -- netclass must not reach the suspicion machinery; a match is display context, not a score (#114)",
+						filepath.Base(path), bad)
 				}
 			}
 		}
