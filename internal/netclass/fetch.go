@@ -104,7 +104,7 @@ func (fc *fetchClient) fetch(ctx context.Context, c *Classifier, src Source, url
 	if err != nil {
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
 		return nil, true, nil

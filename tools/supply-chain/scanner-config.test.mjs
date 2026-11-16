@@ -357,9 +357,9 @@ function stripAll(text) { return text.split("\n").map(stripComment).join("\n"); 
 // ---- #1462: blocking scanner jobs --------------------------------------------
 // A job is blocking when neither it nor any `extends:` template or `<<: *anchor`
 // merge it pulls in carries `allow_failure`. Extend BLOCKING_JOBS as each
-// report-only scanner (lint:ruff, lint:golangci, lint:knip, lint:jscpd) is
+// report-only scanner (lint:ruff, lint:knip, lint:jscpd) is
 // promoted.
-const BLOCKING_JOBS = ["lint:shellcheck", "security:zizmor"];
+const BLOCKING_JOBS = ["lint:shellcheck", "lint:golangci", "security:zizmor"];
 
 // Text of a top-level key of .gitlab-ci.yml without comment lines, or null.
 function ciBlock(text, name) {

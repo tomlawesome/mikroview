@@ -1,5 +1,5 @@
-# golangci-lint v2, CI-only (lint:golangci, report-only until #1462/#1463
-# switch it to blocking). The standard set is errcheck, govet, ineffassign,
+# golangci-lint v2, CI-only (lint:golangci, blocking since its findings
+# reached zero, #1462). The standard set is errcheck, govet, ineffassign,
 # staticcheck and unused; dupl is added on top. gosec stays off: the
 # security:gosec job already runs it.
 version: "2"
