@@ -181,6 +181,13 @@ func OpenRecoveryWithBackend(b persist.Backend, pepperPath string) (*RecoverySto
 }
 
 func loadOrCreatePepper(path string) ([]byte, error) {
+	return loadOrCreatePepperOnce(path, false)
+}
+
+// loadOrCreatePepperOnce re-reads at most once after losing the create
+// race: a second EEXIST means the name exists but cannot be read, such as a
+// dangling symlink, and retrying would loop forever.
+func loadOrCreatePepperOnce(path string, retried bool) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("auth: recovery pepper path is not configured")
 	}
@@ -236,7 +243,10 @@ func loadOrCreatePepper(path string) ([]byte, error) {
 	_ = os.Remove(tmp)
 	if err != nil {
 		if os.IsExist(err) {
-			return loadOrCreatePepper(path) // lost the race; read theirs
+			if retried {
+				return nil, fmt.Errorf("auth: recovery pepper %s exists but cannot be read", path)
+			}
+			return loadOrCreatePepperOnce(path, true) // lost the race; read theirs
 		}
 		return nil, fmt.Errorf("auth: publishing the recovery pepper %s: %w", path, err)
 	}
