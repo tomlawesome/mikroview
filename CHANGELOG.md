@@ -385,6 +385,10 @@ rewritten.
 
 ### Changed
 
+- **Drafting a rule keeps its line card open** (#1496). On the map and in
+  the city, `draft the rule ▸` pins the card it was clicked on, so the
+  ports and counts stay beside the draft; unpin or Escape closes it.
+
 - **Authentication runs on gauntlet** (#1202), the sign-in library shared
   with the author's other projects. What you will notice, beyond the
   breaking changes above:
