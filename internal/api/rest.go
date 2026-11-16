@@ -357,6 +357,16 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleNetworks serves networks.home (#1481). An unset list is [] not
+// null: the frontend iterates it.
+func (s *Server) handleNetworks(w http.ResponseWriter, _ *http.Request) {
+	home := s.HomeNetworks
+	if home == nil {
+		home = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"home": home})
+}
+
 // deviceStatus computes info's fleet-health status as of now -- see
 // deviceView.Status for what each value means. A device with no events
 // yet is "never_seen" regardless of DeviceStaleAfter (there's no elapsed

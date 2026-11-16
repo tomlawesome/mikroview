@@ -1010,6 +1010,19 @@ type NetClass struct {
 	Sources []string `yaml:"sources"`
 }
 
+// Networks holds deployment facts about the networks MikroView watches.
+//
+// Home (#1481) lists inside networks the address alone does not reveal:
+// a routed public block on the LAN, an IPv6 global prefix. Addresses in
+// it classify as internal on top of the built-in rule (private,
+// loopback, link-local and unspecified are always internal), the way an
+// IDS's HOME_NET does. Empty, the default, changes nothing. A home entry
+// only ever makes addresses internal, never public, so it cannot widen
+// what MikroView dials out to.
+type Networks struct {
+	Home []string `yaml:"home"`
+}
+
 // OUI configures internal/oui's MAC-vendor lookups: the IEEE MA-L
 // registry that turns a hardware address' first three octets into the
 // organisation that registered them (issue #410's device dossier).
@@ -1295,6 +1308,7 @@ type Config struct {
 	Droplist       Droplist       `yaml:"droplist"`
 	Prefs          Prefs          `yaml:"prefs"`
 	NetClass       NetClass       `yaml:"netClass"`
+	Networks       Networks       `yaml:"networks"`
 	OUI            OUI            `yaml:"oui"`
 	Engine         Engine         `yaml:"engine"`
 	Snapshot       Snapshot       `yaml:"snapshot"`

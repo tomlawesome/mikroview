@@ -285,6 +285,10 @@ var authzMatrix = []routeExpectation{
 			"The gate the issue asks for is the same gate the existing query carries. The mode learns nothing new in kind: a token that already reaches GET /api/events reads the live feed for every device, and a bounded page of matches is a strictly smaller view of the same traffic. And it is bounded by construction, not by the caller -- matchlog.RecentQuery clamps the limit to 5000 (100 by default) before either backend runs, which is the property that stops an all-entries read on an unrate-limited route being an arbitrarily large response. " +
 			"What did NOT change: the per-identity path still refuses an empty identity (matchlog.ErrEmptyIdentity), and entries=all refuses to be combined with mac/ip, so 'no identity' can never silently mean 'every device'"},
 	{http.MethodGet, "/api/rules", accessViewer, "core read"},
+	{http.MethodGet, "/api/networks", accessViewer,
+		"the configured home networks (networks.home, #1481), so the browser classifies inside/outside the " +
+			"way the server does -- any signed-in caller, like /api/devices: it is a deployment fact the events " +
+			"already imply, and carries no credential"},
 	{http.MethodGet, "/api/me/preferences", accessViewer,
 		"reads the caller's own preferences record (#1283) -- same reasoning as gauntlet's /api/auth/password: it acts " +
 			"only on the session's own account, there is no id in the request that could point it at someone else's, " +

@@ -501,6 +501,15 @@ export async function fetchDevices(): Promise<Device[]> {
   return body.devices ?? []
 }
 
+// fetchNetworks reads networks.home (#1481), the configured inside
+// ranges isPublicIp honours alongside the private ones.
+export async function fetchNetworks(): Promise<string[]> {
+  const res = await fetch('/api/networks')
+  if (!res.ok) throw new ApiError(`fetchNetworks: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.home ?? []
+}
+
 // createDevice is the router ledger's first step (#1284): naming a
 // router is what creates it, so the name field and the create are one
 // act. Admin-only server-side, same gate as every other write here.

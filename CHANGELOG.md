@@ -94,6 +94,14 @@ rewritten.
 
 ### Added
 
+- **`networks.home`: inside networks the address alone does not reveal**
+  (#1481). List a routed public block or an IPv6 global prefix and its
+  addresses classify as internal everywhere -- event filters, detections,
+  each router's WAN, geolocation and reputation lookups (home addresses
+  are no longer sent). Empty by default, which changes nothing; a `/0` or
+  an unparsable entry stops start-up (CFG-0105). The demo's config now
+  lists its documentation-range inside blocks.
+
 - **Block known-bad addresses on the router** (#1360, round 2 ratified
   2026-10-01). Settings ▸ drop list ▸ "Block known-bad addresses…" opens
   a page that builds one RouterOS block making the router fetch

@@ -1572,6 +1572,20 @@ so this is only a nudge to set it yourself if that is what you meant.
 publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ
 ```
 
+#### CFG-0105
+
+A `networks.home` entry is not a CIDR prefix, or it is a `/0`. MikroView
+refuses to start rather than skip it: a skipped entry would leave inside
+hosts reading as outside, and a `/0` would make every address inside and
+switch off every outside-facing detection. See
+[Home networks](#home-networks-optional).
+
+```yaml
+networks:
+  home:
+    - 198.51.100.0/24  # each inside network as a CIDR prefix, never /0
+```
+
 ## Logging
 
 MikroView's own server output (not event data -- see `store.retention`
@@ -2102,6 +2116,33 @@ and its space is already covered by `x4b_datacenter`.
 
 Refresh cadence is not configurable, for the same over-polling reason as
 the blocklist.
+
+## Home networks (optional)
+
+MikroView decides whether an address is inside or outside from the
+address alone: private (RFC 1918, IPv6 ULA), loopback, link-local and
+unspecified addresses are inside, everything else is outside. That is
+wrong for an inside network that is not private -- a routed public block
+on your LAN, an IPv6 global prefix. List those under `networks.home`,
+the way an IDS's `HOME_NET` works:
+
+```yaml
+networks:
+  home:
+    - 198.51.100.0/24
+    - 2001:db8:1::/48
+```
+
+An address in a listed prefix is inside everywhere MikroView classifies:
+the internal/external event filters, the detections that look at
+internal or external addresses, the WAN chosen for each router, and which
+addresses are geolocated or sent to reputation lookups (home addresses
+are not). The list only ever adds inside networks: it cannot make a
+private address outside, and it never widens which addresses MikroView
+itself connects to. Each entry must be a CIDR prefix; a `/0` is refused
+([CFG-0105](#cfg-0105)). Empty, the default, changes nothing. Read at
+start-up; restart after changing it. Not yet editable in Settings, and
+the browser applies IPv4 entries only for now.
 
 ## MAC vendor lookups (optional, on by default)
 
