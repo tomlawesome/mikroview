@@ -1,5 +1,4 @@
-# ruff, CI-only (lint:ruff, report-only until #1462/#1463 switch it to
-# blocking): the defaults plus the flake8-bandit security rules.
+# ruff, CI-only (lint:ruff, blocking since its findings reached zero, #1462): the defaults plus the flake8-bandit security rules.
 extend-exclude = [
   "docs/design/**", # design mock-up build scripts, never shipped
 ]
@@ -11,7 +10,9 @@ extend-select = ["S"]
 # demo-data generators: random is for fake traffic, never for security; the
 # literals are placeholder credentials for a throwaway demo instance; S108:
 # the fixed /tmp demo folder is made 0700 and its file 0600 before use
-"scripts/seed-demo.py" = ["S311", "S105", "S108"]
+# seed-demo.py also: C408 dict(key=...) rows are the readable table form for the
+# demo data; BLE001 the demo feeder must survive any send error; PLC0206 lookup by key is clear
+"scripts/seed-demo.py" = ["S311", "S105", "S108", "C408", "BLE001", "PLC0206"]
 "tools/screenshots/*" = ["S311"] # fake traffic for screenshots, not security use
 # fixed `git` calls with list arguments, no shell, inputs are CI SHAs
 "scripts/ci-changed-paths-guard.py" = ["S603", "S607"]

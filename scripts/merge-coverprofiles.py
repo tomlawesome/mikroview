@@ -69,8 +69,7 @@ def main(argv):
     mode, counts = merge(argv[1:])
     with open(argv[0], "w") as out:
         out.write(mode + "\n")
-        for key, count in counts.items():
-            out.write(f"{key} {count}\n")
+        out.writelines(f"{key} {count}\n" for key, count in counts.items())
     return 0
 
 

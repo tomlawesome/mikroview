@@ -8,13 +8,13 @@ shipped with, the MikroView image or binary.
 | --- | --- | --- | --- |
 | `lint:shellcheck` | shellcheck | GPL-3.0 | every `*.sh`, warning and up |
 | `lint:golangci` | golangci-lint v2 | GPL-3.0 | Go, `.golangci.yml` (standard set plus `dupl`; `gosec` stays with `security:gosec`) |
-| `lint:ruff` | ruff | MIT | Python, `ruff.toml` (defaults plus the `S` security rules) |
+| `lint:ruff` | ruff | MIT | Python, `ruff.toml` (defaults plus the `S` security rules; narrow per-file ignores, each with a reason) |
 | `lint:knip` | knip | ISC | `frontend/`, `frontend/knip.json` |
 | `lint:jscpd` | jscpd | MIT | `frontend/src`, `.jscpd.json` |
 | `security:zizmor` | zizmor | MIT | `.github/workflows/`, offline, no token |
 
-`lint:shellcheck`, `lint:golangci` and `security:zizmor` block: a finding fails
-the pipeline (#1462). `lint:ruff`, `lint:knip` and `lint:jscpd` are still
+`lint:shellcheck`, `lint:golangci`, `lint:ruff` and `security:zizmor` block: a
+finding fails the pipeline (#1462). `lint:knip` and `lint:jscpd` are still
 report-only (`allow_failure`). Each job writes its full report to a file kept as
 an artifact for 30 days. The exception is the signature check in `lint:jscpd`: it runs
 `npm audit signatures` after `npm ci` and fails the job if a registry signature
