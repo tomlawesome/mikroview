@@ -72,3 +72,29 @@ func TestPepperCreationFailsWhenSyncOrCloseFails(t *testing.T) {
 		})
 	}
 }
+
+func TestPepperCreationFailureLeavesNoFile(t *testing.T) {
+	for name, tc := range map[string]struct{ syncErr, closeErr error }{
+		"close": {nil, errors.New("close failed")},
+		"sync":  {errors.New("sync failed"), nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			orig := openPepperFile
+			t.Cleanup(func() { openPepperFile = orig })
+			openPepperFile = func(n string, flag int, perm os.FileMode) (pepperFile, error) {
+				f, err := os.OpenFile(n, flag, perm)
+				if err != nil {
+					return nil, err
+				}
+				return &failingPepperFile{File: f, syncErr: tc.syncErr, closeErr: tc.closeErr}, nil
+			}
+			path := filepath.Join(t.TempDir(), "pepper")
+			if _, err := loadOrCreatePepper(path); err == nil {
+				t.Fatal("expected error")
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("pepper file still present after failure (stat err = %v)", err)
+			}
+		})
+	}
+}
