@@ -150,19 +150,6 @@ own rather than swelling that entry's count.
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 3/4, job 8449 · `goTo("Settings") timed out waiting for card "engineroom"`, `offsetFromDeckTop: 1440` (card mounted, roll never reached it — #1011's shape, the opposite sign to live-memory-slider's), at `live-browser.mjs:385` from `live-settings-doors.mjs:27`; 776's 3/4 (job 8474) passed on the same commit.
 - 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shard 3/4`, rerun of the shard · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-settings-doors.mjs:22`), before any check ran, so no verdict was printed. The full four-shard WebKit run on the same commit just before had passed it. Same WebKit reload signature as the `live-decommission`, `live-city-reach` and `live-blocklist-tail` entries. Second sighting.
 
-## Scenarios exit 1 without a result when two gate stages overlap on the runner (host) — #1458, ai/agent-infra#9
-
-Pipeline 770 (!1003, 237d4d84) had its gate stage running at the same time as
-pipeline 773's on the same host. Five scenarios across three shards died
-`exited 1 without printing a result`; all five passed in 773. One sighting
-each, recorded together because the cause is shared (#831's contention):
-
-- 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 2/4 · `live-history-control`, `live-memory-slider`
-- 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 3/4 · `live-metrics-views` (and `live-rule-regex`, counted above)
-- 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
-- 2026-09-10 · 5265a1f8 (!1012) · pipeline 881, gate:scenarios 4/4 · `live-watchlist-manage` exited 1 without printing a result; pipelines 879-882 shared the runner
-- 2026-09-12 · 43a3f55c (!1036, local workstation) · shard 3/4 rerun · `live-log-every-rule` (`page.goto` 30 s on networkidle), `live-routeros-ingest` (15 s waiting for `#main-content` to be visible, which the log shows already visible) and `live-memory-slider` (`g.mcut` never marked on a proposed shrink) all died before or without a verdict, while a peer agent's vitest ran in another worktree and load average sat near 80. Pipeline 1005's gate:scenarios 3/4 passed all three on this exact commit; the two it did fail are the ones !1036 fixes. The skill's rule holds — a browser-phase failure on a shared host is not evidence until it is reproduced alone.
-
 ## live-watchlist-manage: the fenced button never reads "learn again"
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
