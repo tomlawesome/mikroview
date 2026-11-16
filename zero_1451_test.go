@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -67,11 +68,12 @@ func healthcheckConfig(t *testing.T, yaml string) {
 }
 
 func TestRunHealthcheckReportsTheHealthEndpoint(t *testing.T) {
-	status := http.StatusOK
-	var path string
+	var status atomic.Int32
+	status.Store(http.StatusOK)
+	var path atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		w.WriteHeader(status)
+		path.Store(r.URL.Path)
+		w.WriteHeader(int(status.Load()))
 	}))
 	defer srv.Close()
 	healthcheckConfig(t, "tls:\n  enabled: false\nlisten:\n  http: \""+strings.TrimPrefix(srv.URL, "http://")+"\"\n")
@@ -79,10 +81,10 @@ func TestRunHealthcheckReportsTheHealthEndpoint(t *testing.T) {
 	if code := runHealthcheck(); code != 0 {
 		t.Fatalf("healthy server: runHealthcheck() = %d, want 0", code)
 	}
-	if path != "/api/healthz" {
-		t.Errorf("probed %q, want /api/healthz", path)
+	if got, _ := path.Load().(string); got != "/api/healthz" {
+		t.Errorf("probed %q, want /api/healthz", got)
 	}
-	status = http.StatusServiceUnavailable
+	status.Store(http.StatusServiceUnavailable)
 	if code := runHealthcheck(); code != 1 {
 		t.Errorf("503 from the server: runHealthcheck() = %d, want 1", code)
 	}

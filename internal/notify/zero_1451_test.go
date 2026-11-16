@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -56,8 +57,8 @@ func TestRefuseCrossOriginRedirectPolicy(t *testing.T) {
 }
 
 func TestWebhookSendDoesNotFollowARedirectToAnotherHost(t *testing.T) {
-	var leaked bool
-	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked = true }))
+	var leaked atomic.Bool
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked.Store(true) }))
 	defer evil.Close()
 	// Different Host value (hostname vs loopback IP) so it is cross-origin.
 	target := strings.Replace(evil.URL, "127.0.0.1", "localhost", 1)
@@ -71,7 +72,7 @@ func TestWebhookSendDoesNotFollowARedirectToAnotherHost(t *testing.T) {
 	if err == nil {
 		t.Error("Send succeeded through a cross-origin redirect")
 	}
-	if leaked {
+	if leaked.Load() {
 		t.Error("the redirect target was contacted")
 	}
 }
