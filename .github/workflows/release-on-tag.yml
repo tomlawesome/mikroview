@@ -189,9 +189,12 @@ jobs:
           DIGEST: ${{ needs.gitlab.outputs.digest }}
         run: |
           # The highest vX.Y.Z tag on the remote now, by version order.
-          highest="$(git ls-remote --tags --refs "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" 'refs/tags/v*' \
-            | awk '{ sub("^refs/tags/", "", $2); print $2 }' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+          highest_tag() {
+            git ls-remote --tags --refs "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" 'refs/tags/v*' \
+              | awk '{ sub("^refs/tags/", "", $2); print $2 }' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1
+          }
+          highest="$(highest_tag)"
           if [ "${highest}" != "${VERSION}" ]; then
             echo "::notice::latest not moved: ${VERSION} is not the highest release tag (${highest:-none} is)"
             printf 'moved=false\n' >> "${GITHUB_OUTPUT}"
@@ -203,6 +206,15 @@ jobs:
           if [ "${got}" != "${DIGEST}" ]; then
             echo "::error::ghcr.io/tomlawesome/mikroview:${VERSION} is now ${got}, expected ${DIGEST}; latest not moved"
             exit 1
+          fi
+          # Tag runs overlap (the concurrency group is per ref): a higher tag
+          # pushed since the check above must win, so ask again just before
+          # the write rather than roll latest back.
+          highest="$(highest_tag)"
+          if [ "${highest}" != "${VERSION}" ]; then
+            echo "::notice::latest not moved: ${highest:-none} was tagged while ${VERSION} was copied"
+            printf 'moved=false\n' >> "${GITHUB_OUTPUT}"
+            exit 0
           fi
           # --prefer-index=false: a single-manifest source is not wrapped in a
           # new index under a different digest (#1407).

@@ -2896,6 +2896,11 @@ sign:release-digest:
   # its signature and attestation and nothing to show why -- never cut
   # mid-write.
   interruptible: false
+  # One signing run at a time, across pipelines (GitLab's standard way to
+  # serialise a job): two runs on one digest could otherwise both pass the
+  # script's already-signed check and both sign, which
+  # verify-release-signature.sh then refuses as ambiguous.
+  resource_group: sign-release-digest
   timeout: 20m
   rules:
     # A publishing pipeline: preview or a v* tag. The script signs the

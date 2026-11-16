@@ -103,7 +103,9 @@ const NEW = ["publish-from-gitlab.yml", "release-on-tag.yml"];
 // Why a run block would let a failing check pass, or null. Review finding 4:
 // `|| true` alone was not enough; `|| :` and `set +e` fail open too.
 function failOpen(t) {
-  if (/\|\|\s*(true|:)\b/.test(t)) return "|| true / || :";
+  if (/\|\|\s*(true|:)(?=[\s;)&|]|$)/m.test(t)) return "|| true / || :";
+  if (/(^|[;&|(]\s*)set\s+(-\w+\s+)*\+\w*e/m.test(t)) return "set +e";
+  if (/\bset\s+\+o\s+errexit\b/.test(t)) return "set +o errexit";
   return null;
 }
 describe("#1472 review 4: the fail-open guard", () => {

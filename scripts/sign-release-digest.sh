@@ -190,7 +190,7 @@ fi
 # that already verifies (`attest --replace` does not replace in cosign
 # 3.1.3). Only a verify that exits 0 *and* returns what a verification
 # returns counts: anything else is "not yet", and signing proceeds.
-pubkey="cosign.pub"
+pubkey="${repo_root}/cosign.pub"
 
 already_signed() {
   local out

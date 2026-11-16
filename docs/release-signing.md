@@ -265,11 +265,16 @@ On a publishing pipeline there is no `SIGN_TAG` and the job signs the digest
 `publish:image` recorded; without that evidence the script refuses rather than
 sign something it guessed.
 
-Signing a digest a second time adds a second key-based signature, and
-`scripts/verify-release-signature.sh` refuses more than one as ambiguous. So
-do not exercise a digest that `publish:channel` or `countersign.yml` has yet
-to verify, and if `sign:release-digest` fails after its signature was pushed
-(say at the attestation), re-run the whole pipeline rather than that job.
+A retry is a no-op, not a second signature: before signing, the script asks
+`cosign verify --key cosign.pub` about the digest and skips with `already
+signed, skipping` if a signature verifies; before attesting, it does the same
+with `verify-attestation --type spdxjson` (`already attested, skipping`). So if
+`sign:release-digest` fails after its signature was pushed (say at the
+attestation), re-run that job: it adds only what is missing. Exercising an
+already-signed digest signs nothing. The job's `resource_group` runs one
+signing job at a time, so two pipelines on the same digest cannot both pass
+the check and both sign; a second key-based signature would make
+`scripts/verify-release-signature.sh` refuse the digest as ambiguous.
 
 ## The exercise that was run, 2026-09-23
 

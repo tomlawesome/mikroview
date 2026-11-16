@@ -532,9 +532,12 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   to smuggle in code.
 
 - **Integrity is verified before the artefact runs, not by the artefact
-  itself.** Published images are signed with Sigstore/cosign and carry
-  a provenance attestation and an SBOM, all bound to the image *digest*
-  rather than a tag (a tag is a mutable pointer; signing one would let it
+  itself.** Every image on GHCR carries GitHub's provenance and SBOM
+  attestations, and a release also carries the owner's keyless
+  Sigstore/cosign signature once `countersign.yml` has run; GitLab's
+  key-based signature and SBOM attestation stay on the same digest in the
+  GitLab registry. All of them are bound to the image *digest* rather than
+  a tag (a tag is a mutable pointer; signing one would let it
   later point at different content and still verify).
 
   **A release carries two independent signatures, and both must verify.**
