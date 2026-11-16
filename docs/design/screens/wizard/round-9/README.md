@@ -122,3 +122,4 @@ AF is dropped."
   transition from first login into the wizard and out to the finished
   fall, in the spirit of Orbit's login/logout journeys.
 
+Written 2026-09-27.

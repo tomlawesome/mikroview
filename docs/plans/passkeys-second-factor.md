@@ -313,3 +313,4 @@ Follow-up worth its own issue, not built here: a "regenerate recovery codes"
 action — today the only path is remove-and-re-add a factor, which #1249 also
 lives with, but with two factor kinds that workaround gets clumsier.
 
+Written 2026-09-23.

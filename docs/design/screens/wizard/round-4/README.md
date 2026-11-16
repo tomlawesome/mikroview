@@ -336,3 +336,4 @@ What survives as a feature idea, whatever round 5 looks like: the
 the reported-version check (§6), Connect the router as one paste (§7),
 the folded block with one prominent Copy (§8).
 
+Written 2026-09-26.

@@ -130,3 +130,4 @@ picture drawn from evidence, the evidence ledger with Undo). What goes:
 the sentence-form entry, the chatty headlines and leads, the oversized
 controls, the "First light" flourish.
 
+Written 2026-09-26.
