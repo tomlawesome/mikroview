@@ -261,9 +261,3 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-blocklist-tail: page.reload throws a WebKit internal error
 
 - 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 1/4 · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-blocklist-tail.mjs:50`), before any check ran, so no verdict was printed. A rerun of shard 1/4 alone under WebKit passed 28/28. Same signature as the `live-decommission`, `live-city-reach` and `live-settings-doors` entries. First sighting.
-
-## live-topography-reach-compose: one Escape closes both the card and the composer under WebKit (#1491)
-
-- 2026-11-15 · 11bc210d (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4 · after the first Escape the composer was gone with the card (`live-topography-reach-compose.mjs:146`), and after the second the reach was gone too (`:149`): two rungs of Topography's Escape ladder for one press. Two reruns of shard 4/4 alone under WebKit passed 25/25.
-- 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 4/4, full run · the same two checks: the composer gone with the card after the first Escape, the reach gone after the second. Second sighting.
-- 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4 --shard 4/4`, first rerun · the same two checks again. A second rerun passed 25/25. Third sighting: #1491, quarantined.
