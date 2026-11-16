@@ -13,9 +13,10 @@ shipped with, the MikroView image or binary.
 | `lint:jscpd` | jscpd | MIT | `frontend/src`, `.jscpd.json` |
 | `security:zizmor` | zizmor | MIT | `.github/workflows/`, offline, no token |
 
-Each job is report-only until #1462/#1463 switch it to blocking: it is
-`allow_failure`, and writes its full report to a file kept as an artifact for
-30 days. The exception is the signature check in `lint:jscpd`: it runs
+`lint:shellcheck`, `lint:golangci` and `security:zizmor` block: a finding fails
+the pipeline (#1462). `lint:ruff`, `lint:knip` and `lint:jscpd` are still
+report-only (`allow_failure`). Each job writes its full report to a file kept as
+an artifact for 30 days. The exception is the signature check in `lint:jscpd`: it runs
 `npm audit signatures` after `npm ci` and fails the job if a registry signature
 or provenance attestation is invalid. jscpd's own duplication result exits 3,
 the only code the job tolerates.

@@ -473,9 +473,8 @@ rewritten.
   and scans those exact bytes, pushes them to the GitLab registry, signs
   that digest with the release key and attests its SPDX SBOM, and names
   it `preview` or `vX.Y.Z` only after the signature verifies. Preview
-  images are now signed too. GHCR is unchanged for now: GitHub still
-  publishes it until it switches to copying this digest, so do not tag a
-  release before then (docs/release-signing.md).
+  images are now signed too. GitHub now copies this digest to GHCR
+  instead of building its own image (#1472, step 3; docs/release-signing.md).
 
 - **CI pins Trivy by digest and now scans the built image and the
   container config** (#1462). Trivy moves to 0.76.2, pinned by its image

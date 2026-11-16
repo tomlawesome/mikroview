@@ -94,7 +94,18 @@ func TestStartOIDCDoesNotUseRestricted(t *testing.T) {
 	if strings.Contains(string(src), ".Restricted()") {
 		t.Error("main.go still calls the deprecated oidc.Policy.Restricted()")
 	}
-	if !strings.Contains(string(src), "ssoActiveLogLine(") {
-		t.Error("main.go does not log the SSO start-up line through ssoActiveLogLine")
+	// Look only inside startOIDC's body: the helper's own declaration
+	// in main.go also contains "ssoActiveLogLine(".
+	text := string(src)
+	start := strings.Index(text, "\nfunc startOIDC(")
+	if start < 0 {
+		t.Fatal("startOIDC not found in main.go")
+	}
+	body := text[start+1:]
+	if end := strings.Index(body, "\n}\n"); end >= 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "ssoActiveLogLine(") {
+		t.Error("startOIDC does not log the SSO start-up line through ssoActiveLogLine")
 	}
 }
