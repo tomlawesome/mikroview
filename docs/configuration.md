@@ -119,7 +119,7 @@ devices:
   which device a syslog source address belongs to, strongest evidence
   first: (a) a `devices[].sourceIp` you set above — you said so, so that
   wins outright; (b) failing that, the address the router enrolled from
-  — you minted it an enrolment token (the setup ledger's "Send logs"
+  — you minted it an enrolment token (the setup wizard's **Mint the token**
   step, or **Re-enrol…** on its card) and the token's line arrived from
   that address (#1281; see
   [routeros-setup.md](routeros-setup.md#the-wizards-enrol-line)). There
@@ -2721,17 +2721,19 @@ that endpoint's event-specific filters.
 
 ## Setup wizard ledger (optional)
 
-The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
-seven steps. Most of what it shows is not stored anywhere: MikroView
+The guided setup wizard (**Admin ▸ Run setup…**) shows a ledger of
+what stands. Most of what it shows is not stored anywhere: MikroView
 never connects to your router, so each step's check is simply an
 observation of what arrived here -- a certificate fetch, a syslog
 connection, events carrying a decoded log-prefix, a pushed table -- and
 those are re-made from arriving traffic every time MikroView starts.
 
-What *is* stored is the other half: the steps you **skipped** or
-**forced past**, each with who decided it and when. Those are decisions,
-not observations, and they are what lets the rest of the interface
-explain itself -- an empty live view can say which setup step accounts
+What *is* stored is the other half: decisions rather than observations
+-- the steps someone **skipped** or **forced past**, each with who
+decided it and when, as older versions of the wizard recorded them (the
+current wizard does not write new ones; its Skip this step is not
+stored). What is stored is what lets the rest of the interface explain
+itself -- an empty live view can say which setup step accounts
 for the silence instead of just being empty. That explanation is most
 wanted right after a restart, which is when an upgrade happens, so it
 has to survive one.
@@ -5546,10 +5548,10 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `POST /api/devices` | admin-only (#1281): declare a syslog-only router by name, with no address yet -- the same thing the Entities screen's "+ add router" does. It exists so a router with no ingest token and no `devices[].sourceIp` can still be enrolled |
 | `DELETE /api/devices/{id}` | admin-only: remove a device that was declared through `POST /api/devices`, along with its enrolled address and any pending token. A device declared in `config.yaml` refuses with 400 -- it would only come back at the next restart |
-| `POST /api/devices/{id}/enrolment` | admin-only, and re-checks your password (#1291): mint (or reroll) the device's one-time enrolment token, 15-minute life, bound to the address you name. The response is the token and its expiry; `POST /api/setup/commands` renders it into the `/log info "mikroview-enrol …"` line the ledger shows |
+| `POST /api/devices/{id}/enrolment` | admin-only, and re-checks your password (#1291): mint (or reroll) the device's one-time enrolment token, 15-minute life, bound to the address you name. The response is the token and its expiry; `POST /api/setup/commands` renders it into the `/log info "mikroview-enrol …"` line the wizard shows |
 | `DELETE /api/devices/{id}/enrolment` | admin-only: revoke a pending enrolment token before it is redeemed |
 | `POST /api/devices/{id}/enrolment/address` | admin-only (#1291): point a pending token at a different address without rerolling it -- the way back when the address you named was wrong and the router was turned away. Only an address already in the refused-senders list is accepted |
-| `POST /api/devices/{id}/registration` | admin-only (#1291): record that you have confirmed this router -- the ledger's final Register step. Grants nothing; it stamps the device with a name and a date |
+| `POST /api/devices/{id}/registration` | admin-only (#1291): record that you have confirmed this router -- the old wizard's final Register step; the current wizard does not call it (#1493). Grants nothing; it stamps the device with a name and a date |
 | `GET /api/devices/refused` | admin-only (#1281): every syslog source address the listener has refused a line from -- `ip`, `firstSeen`, `lastSeen` and a `lines` count. These addresses have proven nothing about themselves, so this sits at the audit-log tier rather than the fleet's own |
 | `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC MikroView has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
 | `GET /api/rules` | every rule label MikroView has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what MikroView actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |

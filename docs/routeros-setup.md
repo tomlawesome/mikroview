@@ -1,33 +1,37 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open **your account menu ▸ Run setup…**. It names and
-> enrols the router for you, generates every command below with your own
-> address and port, and tells you as each step lands, because each one
-> ends with your router arriving at MikroView. It asks you for two
-> things: the router's own address, which is the only address the syslog
-> port opens to while its token is pending, and your password, because
-> minting that token is what opens the port.
+> an admin and open **your account menu ▸ Run setup…**. It is a
+> full-screen wizard. It names and enrols the router for you, generates
+> every command below with your own address and port, and tells you as
+> each part lands, because each one ends with your router arriving at
+> MikroView. It asks you for four things on its first step: the router's
+> name, the router's own address (the only address the syslog port opens
+> to while its token is pending), and a Yes or No each for pushing router
+> state and for a nightly backup. It asks for your password on the next
+> step, because minting the token is what opens the port.
 >
-> Its seven steps, in order: **Trust the certificate**, **Name your
-> router**, **Send logs**, **Tag firewall rules**, **Push router
-> state**, **Back up the router**, **Register the router**. They do not
-> line up one-to-one with
-> this page's numbered sections below, so where a step is named here it
-> is named in full rather than by number.
+> Its five steps, in order: **The router**, **Mint the token**, **Paste
+> once**, **Tag firewall rules**, **Where setup stands**. They do not
+> line up with this page's numbered sections. **Paste once** gives you
+> one block with the parts you chose (the certificate, then the push,
+> the backup and the logging action, then the enrol line), and the
+> numbers on that block are the block's own. Where the wizard is named
+> here, it is named by its step or by its part of the block, not by a
+> number.
 >
 > This page remains the reference: what the wizard emits, and why. Use it
 > if you prefer working from documentation, if you are scripting a fleet,
 > or when you want the reasoning behind a step.
 
-![The wizard's ledger opened at step 1: the seven steps down the left, "Trust the certificate" open beside them](screenshots/setup-wizard-ledger.png)
+![The wizard on its first step, The router: the five steps down the left, with the router's name, address and Yes or No answers beside them](screenshots/setup-wizard-ledger.png)
 
 MikroView never talks to RouterOS's API and never holds a RouterOS
 credential. Instead, RouterOS pushes to MikroView: firewall log lines
 over syslog (steps 1–3, required), optionally a copy of its own config
 for host names and rule lookups (step 4), and optionally a nightly
 config backup MikroView keeps encrypted (step 7, issue #394). The
-wizard's version of **Send logs** adds one line this page's does not — see
+wizard's logging part adds one line this page's does not — see
 "The wizard's enrol line" there. The optional
 pushes carry an ingest token MikroView mints for that device — a
 MikroView credential on the router, never a router credential in
@@ -125,9 +129,11 @@ CA is presumably already trusted some other way.
 RouterOS's own list of trusted public roots changes between releases:
 7.24.3 removed GoDaddy Class 2. If you rely on a bought certificate
 rather than importing MikroView's, check its chain before upgrading a
-router past that release. The wizard says this beside the commands for
-each router that reports a version at or past 7.24.3, and names the
-steps it touches.
+router past that release. The wizard does not check for this. It does
+show an "Ahead of review" caution (and an amber chip in its top bar)
+when a router's push reports a RouterOS newer than the commands were
+reviewed on; the commands ran and the push arrived, and the caution
+says to suspect the newer version first if anything reads wrong.
 
 Then point the router's logging at MikroView:
 
@@ -185,10 +191,10 @@ block, with a live token already filled in:
 /log info "mikroview-enrol <token>"
 ```
 
-![The wizard's Send logs step just after minting a token: the command block above, its last line blanked out, and the token's expiry beside a Reroll control beneath it](screenshots/setup-wizard-send-logs.png)
+![The end of the wizard's Paste once block just after minting a token: the logging part, then the enrol line with its token blanked out, and the token's expiry beside Copy and Reroll beneath it](screenshots/setup-wizard-send-logs.png)
 
 Before it mints that token the wizard asks for the router's own address
-and for your password. The address is the only one MikroView opens the
+(on **The router**) and for your password (on **Mint the token**). The address is the only one MikroView opens the
 syslog port to while the token is pending — a pending token does not
 leave the port reachable by everything else on your network — and the
 password is asked for because minting is what opens it, so being signed
@@ -431,13 +437,15 @@ not the address you declared as `sourceIp`. If pushes return `200` in
 the audit log but the "i" popups still say no data has been pushed,
 check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
-address is the most likely cause. The setup wizard's Send logs step names it
-when it sees it (a declared router that has sent nothing while an
-undeclared address streams). The fix is changing `sourceIp` in
+address is the most likely cause. The setup wizard does not compare
+addresses with `sourceIp`. What it does catch: when lines arrive from an
+address that is not the enrolled one, its **Paste once** step shows a
+"refused · <address>" chip and a warning box with the fix and the enrol
+line to paste again, or an **enrol at <address> instead** link. The fix is changing `sourceIp` in
 `config.yaml` to the address that's actually arriving, then restarting
 and reissuing any token minted for the old identity. Pinning the
 router's `src-address` to force it back onto the declared address isn't
-the fix any more (#1370): the Send logs block now always sets
+the fix any more (#1370): the wizard's logging part now always sets
 `src-address=0.0.0.0` — RouterOS picks the address itself, the same way
 `/tool fetch` already does for the HTTPS pushes — so a pinned value only
 survives until the block is pasted again.
@@ -825,7 +833,7 @@ script RouterOS saves still has one command per line. This is exactly
 what the wizard does to the same blocks.
 
 If you would rather not do it by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**,
-its Push router state step) prints these three lines as one block with
+with Push router state answered Yes) prints these three lines as one block with
 your host, your token and the escaping already in it — copy, paste,
 done. WinBox's script dialog
 is the other way out: its **Source** field takes the script body as
@@ -1037,7 +1045,7 @@ they are safe to run on a router that was never bitten:
 /ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
 ```
 
-Those same two lines now end the wizard's Tag firewall rules step, so
+Those same two lines now end the wizard's **Tag firewall rules** step, so
 re-running it repairs the router as well as tagging it. One line per term rather than
 one with `or`: two `~` tests in a single `find` is the form checked
 against a real router.
@@ -1084,8 +1092,9 @@ caveat below.
 Settings → router backups has a "drop box: closed / open on port N" row
 (#1361) — opening it re-checks your password and shows the trust caveat
 below; closing needs no password, since closing is the safe direction.
-The setup wizard's Back up the router step offers the same control
-directly if the drop box is still closed when you get there. Skip this
+The setup wizard's first step, **The router**, offers the same control
+(**Open it now**) if you answer Yes to a nightly backup while the drop
+box is still closed. Skip this
 section entirely if you are taking the HTTPS-only path in 7c-ii: it
 needs no second port, and so nothing to turn on here.
 
@@ -1189,13 +1198,15 @@ declared plus eight retries, and is abandoned if more arrive; a piece
 naming a transfer MikroView is not holding — one already finished, given
 up on, or never announced — costs a request like any other push.
 
-The wizard offers this path. On step 6, the line above the script reads
-**The router sends its backup sftp · https** — pick `https` and the step
-prints the script below and its scheduler entry with your own address and
-token already in them. The choice is stored on the MikroView side rather
-than in your browser, so whoever opens the wizard next, on any machine,
-is offered the same one; and it does not wait on 7a, since there is no
-drop box to open. 4b's token is still what authenticates it.
+The wizard prints this path when the deployment's backup transport is
+set to `https`, with the script below and its scheduler entry carrying
+your own address and token. The wizard itself only asks Yes or No for a
+nightly backup; it has no control for the transport. The transport is
+stored on the MikroView side (`sftp` unless changed; it is set with
+`PUT /api/setup/backup-transport`, see
+[configuration.md](configuration.md)), so every browser gets the same
+one. It does not wait on 7a, since there is no drop box to open. 4b's
+token is still what authenticates it.
 
 To paste it by hand instead:
 
@@ -1299,7 +1310,7 @@ one; it only ever reads the header to confirm what arrived.
 ## 8. Block known-bad addresses (optional)
 
 MikroView's blocklist page (Settings ▸ drop list ▸ **Block known-bad
-addresses…**, or the wizard's optional last row on first run) builds a
+addresses…**, or the wizard's optional offer on its last step on first run) builds a
 block that makes this router fetch published known-bad lists from their
 own sources and drop what is on them in raw prerouting. Paste it like
 the blocks above; it re-sets the push from step 4 with the two kinds in
@@ -1313,15 +1324,15 @@ It needs RouterOS 7.18 or later; checked end to end on real 7.18.2,
 ## Adding another router
 
 In the app, the Entities screen's "+ add a router" berth opens the same
-ledger at **Name your router**. That is the screen an administrator gets
+wizard on **The router**. That is the screen an administrator gets
 for the fleet, so everything below is there; the standalone Fleet screen
 a read-only account sees carries the same router cards without the
 actions.
 
 ![The Entities routers row: a card per router already enrolled, and "+ add a router" as the last berth](screenshots/entities-add-a-router.png)
 
-Each router's card also carries **Re-enrol…**, which opens the ledger at
-**Send logs** with a fresh token for that router — for a router you have
+Each router's card also carries **Re-enrol…**, which opens the wizard at
+**Mint the token** for that router — for a router you have
 replaced or given a new address, where the old token's address no longer
 applies. Beside the routers, a card per refused sender appears whenever
 there is something to show — an address that has sent lines without a
@@ -1331,8 +1342,8 @@ accepts an address: a router is accepted only by presenting a token.
 
 ![A refused-sender card beside a router card on Entities: an address whose lines have no enrolled router, with no control that would accept it](screenshots/entities-refused-sender.png)
 
-**Run setup…** is unchanged: it still opens the first-run ledger with
-**Trust the certificate** in front.
+**Run setup…** is unchanged: it still opens the wizard where your setup
+stands, which on a first run is **The router**.
 
 Working from this document instead of the wizard: repeat steps 1–3
 above for the new router, and give it whatever name you use when you

@@ -112,18 +112,15 @@ Enrol it by hand:
    press **+ add a router** first if it has never pushed anything at all
    — routers that only send logs, never a push, have no entry to enrol
    until you add one by name).
-2. Press **Re-enrol…** to open the setup ledger at **Send logs**.
-3. Give the router's own address, and your password. MikroView opens
+2. Press **Re-enrol…** to open the setup wizard at **Mint the token**.
+3. Give your password. MikroView opens
    the syslog port for that one address while the token is pending, and
    asks who you are because minting the token is what opens it — holding
    an admin session is not enough on its own.
-4. Paste the one extra line the step shows — it is appended to the
-   syslog action commands you already have on the router — and let the
-   router run it once.
+4. Paste the block the wizard shows, whose last line is the enrol line,
+   and let the router run it once.
 5. The router's next log line carrying that token is what enrols it;
    everything after that is accepted normally.
-6. Finish the ledger's last step, **Register the router**, to record that
-   this is a router you meant to add.
 
 If you gave the wrong address, the router is turned away and its real
 address is listed under the step's refused senders. Press it to point
@@ -140,13 +137,11 @@ own enrol line reach the port in the first place.
 
 ### Routers you enrolled before this release
 
-Registering (step 6 above) is new in this release. A router that was
-already enrolled when you upgraded is treated as registered, dated when
-it enrolled: its operator did everything the ledger asked of them at the
-time, and reopening the ledger on it would be asking for work that did
-not exist yet. A router that never enrolled is not swept along with it —
-there is no evidence anyone confirmed it, so it still has the Register
-step to walk.
+Registering was a separate wizard step in the release that added it. The
+current wizard has no Register step, and nothing in it records one: a
+router is accepted when its enrol line arrives. A router that was
+already enrolled when you upgraded to that release was treated as
+registered, dated when it enrolled.
 
 ## Upgrading to 0.6.1: every local account needs a second factor
 
