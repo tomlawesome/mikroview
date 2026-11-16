@@ -16,6 +16,13 @@ import { setRouterBackupSwitch } from '../lib/api'
 import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
 
 describe('RouterBackupOpenDialog (#1361)', () => {
+  it('the caveat points at the deliver-by row in Settings → router backups (#1494)', () => {
+    render(RouterBackupOpenDialog, { props: { onopened: vi.fn(), oncancel: vi.fn() } })
+    const caveat = document.querySelector('.caveat')?.textContent ?? ''
+    expect(caveat).toMatch(/choose HTTPS under deliver by in Settings → router backups, which needs no open port at all/)
+    expect(caveat).not.toMatch(/7c-ii/)
+  })
+
   beforeEach(() => {
     vi.mocked(setRouterBackupSwitch).mockReset()
   })
