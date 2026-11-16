@@ -123,7 +123,7 @@ func Write(w io.Writer, appVersion string, stores map[string][]byte) error {
 	enc := json.NewEncoder(zw)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(env); err != nil {
-		zw.Close()
+		_ = zw.Close()
 		return fmt.Errorf("backup: encoding: %w", err)
 	}
 	return zw.Close()
@@ -176,7 +176,7 @@ func Read(r io.Reader) (Envelope, error) {
 	if err != nil {
 		return env, fmt.Errorf("backup: not a gzip stream: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	zr.Multistream(false)
 
 	data, err := readCapped(zr, MaxDecompressed)

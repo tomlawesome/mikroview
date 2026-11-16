@@ -162,7 +162,7 @@ func PrintBanner() {
 	}
 	b.WriteString(rule(bannerBottomRule))
 
-	fmt.Fprintln(os.Stdout, b.String())
+	_, _ = fmt.Fprintln(os.Stdout, b.String())
 }
 
 // colorGlyphs colours each rune of line by its entry in glyphColors,

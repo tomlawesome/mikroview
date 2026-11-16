@@ -269,7 +269,7 @@ func runSetupOnly(result config.Result, problems int) int {
 		log.Error(err.Error())
 		return 1
 	}
-	defer signIns.Close()
+	defer func() { _ = signIns.Close() }()
 	auditStore := openOptionalStore(ctx, log, st, "audit", cfg.Audit.StorePath, audit.OpenWithBackend)
 	prefsStore := openOptionalStore(ctx, log, st, "prefs", cfg.Prefs.StorePath, prefs.OpenWithBackend)
 	if auditStore == nil || prefsStore == nil {

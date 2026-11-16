@@ -220,7 +220,7 @@ func restoreDump(t *testing.T, adminDSN, version, dumpPath string) string {
 	// mapped to [a-z0-9_] above and checked again here -- a dump named
 	// anything else is refused rather than concatenated.
 	for _, r := range database {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 			t.Fatalf("recorded version %q does not map to a safe database identifier (%q)", version, database)
 		}
 	}

@@ -646,7 +646,7 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
 	if err := os.Chmod(dest, 0o600); err != nil {
 		return err
@@ -689,7 +689,7 @@ func runRestore(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Parsed and fully validated before anything on disk is touched.
 	env, err := backup.Read(f)

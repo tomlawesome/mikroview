@@ -234,7 +234,7 @@ func (r *backupRuntime) Stop() {
 		return
 	}
 	r.cancel()
-	r.ln.Close()
+	_ = r.ln.Close()
 	r.ln = nil
 	r.cancel = nil
 }

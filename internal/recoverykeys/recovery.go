@@ -211,7 +211,7 @@ func loadOrCreatePepper(path string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(hex.EncodeToString(p)); err != nil {
 		return nil, err
 	}

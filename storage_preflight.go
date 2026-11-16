@@ -134,7 +134,7 @@ func (e *storeUnusable) Unwrap() error { return e.Err }
 func checkPathUsable(path string) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err == nil {
-		f.Close()
+		_ = f.Close()
 		return nil
 	}
 	if !os.IsNotExist(err) {
@@ -162,8 +162,8 @@ func checkPathUsable(path string) error {
 		return &storeUnusable{Path: path, Dir: dir, Err: unwrapPathErr(err)}
 	}
 	name := probe.Name()
-	probe.Close()
-	os.Remove(name)
+	_ = probe.Close()
+	_ = os.Remove(name)
 	return nil
 }
 

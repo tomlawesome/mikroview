@@ -95,12 +95,16 @@ func (f *FakeAuthenticator) RegisterResponse(creation *protocol.CredentialCreati
 		return nil, err
 	}
 
+	rawKey, err := f.key.PublicKey.Bytes() // 0x04 || X || Y for P-256
+	if err != nil {
+		return nil, fmt.Errorf("fake authenticator: encoding credential public key: %w", err)
+	}
 	publicKey, err := webauthncbor.Marshal(map[int64]any{
 		1:  int64(webauthncose.EllipticKey),
 		3:  int64(webauthncose.AlgES256),
 		-1: int64(webauthncose.P256),
-		-2: f.key.PublicKey.X.FillBytes(make([]byte, 32)),
-		-3: f.key.PublicKey.Y.FillBytes(make([]byte, 32)),
+		-2: rawKey[1:33],
+		-3: rawKey[33:65],
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fake authenticator: encoding credential public key: %w", err)

@@ -760,8 +760,7 @@ lint:golangci:
   needs: []
   <<: [*dev_or_mr_code, *git_safe]
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   script:
     - rc=0
     - golangci-lint run --output.text.path=golangci-report.txt ./... || rc=$?

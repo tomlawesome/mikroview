@@ -229,7 +229,7 @@ func fetchShodan(ctx context.Context, client *http.Client, ip string) Result {
 	if err != nil {
 		return Result{}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return Result{}
 	}
@@ -262,7 +262,7 @@ func fetchAbuseIPDB(ctx context.Context, client *http.Client, key, ip string) Re
 	if err != nil {
 		return Result{}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return Result{}
 	}

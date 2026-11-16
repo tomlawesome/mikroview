@@ -164,7 +164,7 @@ func (fc *fetchClient) fetch(ctx context.Context, r *Registry) ([]byte, string, 
 	if err != nil {
 		return nil, "", false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
 		return nil, prevETag, true, nil
