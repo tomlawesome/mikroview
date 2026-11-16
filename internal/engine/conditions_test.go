@@ -20,7 +20,7 @@ func (m fakeMembers) InAddressList(device, list, ip string) bool {
 
 func mustCompile(t *testing.T, c Condition) conditionMatcher {
 	t.Helper()
-	fn, err := compileCondition(c)
+	fn, err := compileCondition(c, nil)
 	if err != nil {
 		t.Fatalf("compileCondition(%+v): %v", c, err)
 	}
@@ -322,7 +322,7 @@ func TestCompileConditionsANDsAcrossFields(t *testing.T) {
 	cs, err := compileConditions([]Condition{
 		{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}},
 		{Field: FieldAction, Operator: OpEquals, Values: []string{string(store.ActionDrop)}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("compileConditions: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestCompileConditionsANDsAcrossFields(t *testing.T) {
 }
 
 func TestCompileConditionsRejectsEmptyList(t *testing.T) {
-	if _, err := compileConditions(nil); err == nil {
+	if _, err := compileConditions(nil, nil); err == nil {
 		t.Fatal("compileConditions succeeded on an empty condition list, want a hard failure")
 	}
 }
@@ -344,7 +344,7 @@ func TestCompileConditionsRejectsDuplicateField(t *testing.T) {
 	_, err := compileConditions([]Condition{
 		{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}},
 		{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"23"}},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("compileConditions succeeded with two conditions on the same field, want a hard failure")
 	}

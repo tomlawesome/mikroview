@@ -283,7 +283,7 @@ func TestScopeMatches(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := scopeMatches(c.scope, c.addr); got != c.want {
+			if got := scopeMatches(nil, c.scope, c.addr); got != c.want {
 				t.Errorf("scopeMatches(%q, %q) = %v, want %v", c.scope, c.addr, got, c.want)
 			}
 		})

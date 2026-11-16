@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { clearIngestLoss as clearIngestLossApi, fetchDevices, fetchEvents, fetchStats } from './api'
+import { clearIngestLoss as clearIngestLossApi, fetchDevices, fetchEvents, fetchNetworks, fetchStats } from './api'
 import { matchesAddressQuery, type AddressCandidate } from './addressMatch'
 import { MAX_CLIENT_EVENTS } from './constants'
 import { LANDING_BY_CARD } from './deckCards'
 import { deckOrderState } from './deckOrder.svelte'
 import { matchesCountry, UNKNOWN_COUNTRY } from './countryMatch'
-import { countryFlag, isPublicIp } from './format'
+import { countryFlag, isPublicIp, setHomeNetworks } from './format'
 import {
   EMPTY_LOSS_EPISODE,
   EMPTY_WS_DROPPED_EPISODE,
@@ -798,12 +798,26 @@ class AppState {
     // the URL's query string (if present) before calling loadInitial(), so
     // a shared/bookmarked filtered link loads pre-filtered instead of
     // fetching everything and only filtering after the fact.
+    // networks.home (#1481) is fetched alongside, not ahead, so it costs
+    // no extra round trip, and installed before the events land so they
+    // are classified with it. A failure keeps the address-only default:
+    // it only mislabels a routed inside block, which is no reason to
+    // fail the whole load.
+    const homeNetworks = (async () => {
+      try {
+        return await fetchNetworks()
+      } catch {
+        return null
+      }
+    })()
     try {
-      const [events, devices, stats] = await Promise.all([
+      const [events, devices, stats, home] = await Promise.all([
         this.fetchEventsRelabelSafe(),
         fetchDevices(),
         fetchStats(),
+        homeNetworks,
       ])
+      if (home) setHomeNetworks(home)
       this.setInitialEvents(events)
       this.devices = devices
       this.setStats(stats)

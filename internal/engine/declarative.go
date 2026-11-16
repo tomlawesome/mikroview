@@ -304,7 +304,7 @@ func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*Declarativ
 	if err := def.Validate(); err != nil {
 		return nil, err
 	}
-	compiled, err := compileConditions(spec.Conditions)
+	compiled, err := compileConditions(spec.Conditions, homeScope.Load())
 	if err != nil {
 		return nil, fmt.Errorf("engine: definition %q: %w", def.ID, err)
 	}

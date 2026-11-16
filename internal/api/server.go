@@ -48,6 +48,10 @@ type Server struct {
 	Devices    *device.Registry
 	Hub        *hub.Hub
 	Reputation *reputation.Client
+	// HomeNetworks is networks.home as configured (#1481), served by GET
+	// /api/networks so the browser classifies inside/outside as the
+	// server does. Already validated at start-up.
+	HomeNetworks []string
 	// MACRegistry is the persisted MAC-address first/last-seen history
 	// (internal/device.MACRegistry) that already backs the new-device
 	// detector -- read-only here, for GET /api/devices/macs (issue #675):
@@ -584,6 +588,7 @@ func (s *Server) coreRoutes() []route {
 		{http.MethodDelete, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentDelete},
 		{http.MethodGet, "/api/devices/refused", s.handleDevicesRefused},
 		{http.MethodGet, "/api/rules", s.handleRules},
+		{http.MethodGet, "/api/networks", s.handleNetworks},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push
 		// endpoint itself, which lives on ingestRoutes' own mux and is

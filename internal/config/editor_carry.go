@@ -57,7 +57,7 @@ var layoutSections = []struct {
 			"#  OPTIONAL FEATURES -- uncomment a block to use it\n" +
 			rulerLine,
 		Keys: []string{
-			"ui", "geoip", "reputation", "history", "backup", "blocklist", "netClass", "oui",
+			"ui", "geoip", "reputation", "history", "backup", "blocklist", "netClass", "networks", "oui",
 			"ruleNames", "hostNames", "publicUrl", "notify", "oidc", "postgres",
 		},
 	},

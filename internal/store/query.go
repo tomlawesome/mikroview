@@ -4,9 +4,12 @@ package store
 
 import (
 	"net"
+	"net/netip"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 )
 
 const (
@@ -179,6 +182,7 @@ func (s *Store) Query(q Query) Result {
 	defer s.mu.RUnlock()
 
 	limit := clampLimit(q.Limit)
+	home := s.home.Load()
 
 	now := time.Now()
 	windowStart := now.Add(-s.window)
@@ -283,7 +287,7 @@ func (s *Store) Query(q Query) Result {
 		if !q.Until.IsZero() && e.ReceivedAt.After(q.Until) {
 			continue
 		}
-		if !matchesFilters(e, q, ipNet, ip, ruleRe) {
+		if !matchesFilters(home, e, q, ipNet, ip, ruleRe) {
 			continue
 		}
 		if len(matched) >= limit {
@@ -300,7 +304,7 @@ func (s *Store) Query(q Query) Result {
 	return Result{Events: matched, HasMore: hasMore, CursorEvicted: cursorEvicted, WindowStart: windowStart, ServerTime: now}
 }
 
-func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regexp.Regexp) bool {
+func matchesFilters(home *ipscope.Scope, e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regexp.Regexp) bool {
 	if q.Device != "" && e.DeviceID != q.Device {
 		return false
 	}
@@ -334,7 +338,7 @@ func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regex
 	if q.Port != 0 && e.SrcPort != q.Port && e.DstPort != q.Port {
 		return false
 	}
-	if !scopeMatches(q.SrcScope, e.SrcIP) || !scopeMatches(q.DstScope, e.DstIP) {
+	if !scopeMatches(home, q.SrcScope, e.SrcIP) || !scopeMatches(home, q.DstScope, e.DstIP) {
 		return false
 	}
 	if q.Rule != "" {
@@ -359,29 +363,17 @@ func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regex
 // address that can't be parsed at all, rather than guessing: an
 // unclassifiable address shouldn't satisfy "only show me internal" or
 // "only show me external."
-func scopeMatches(scope Scope, addr string) bool {
+func scopeMatches(home *ipscope.Scope, scope Scope, addr string) bool {
 	if scope == ScopeAny {
 		return true
 	}
-	ip := net.ParseIP(addr)
-	if ip == nil {
+	ip, err := netip.ParseAddr(addr)
+	if err != nil {
 		return false
 	}
-	public := isPublicIP(ip)
+	public := home.IsPublic(ip)
 	if scope == ScopeInternal {
 		return !public
 	}
 	return public // ScopeExternal
-}
-
-// isPublicIP mirrors the same small check every other package that needs
-// it (internal/geoip, internal/reputation, internal/detect) keeps its own
-// copy of, rather than sharing one -- consistent with how this codebase
-// already does it.
-func isPublicIP(ip net.IP) bool {
-	return !ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsUnspecified() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast()
 }
