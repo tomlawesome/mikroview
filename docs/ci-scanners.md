@@ -9,7 +9,7 @@ shipped with, the MikroView image or binary.
 | `lint:shellcheck` | shellcheck | GPL-3.0 | every `*.sh`, warning and up |
 | `lint:golangci` | golangci-lint v2 | GPL-3.0 | Go, `.golangci.yml` (standard set plus `dupl`; `gosec` stays with `security:gosec`) |
 | `lint:ruff` | ruff | MIT | Python, `ruff.toml` (defaults plus the `S` security rules; narrow per-file ignores, each with a reason) |
-| `lint:knip` | knip | ISC | `frontend/`, `frontend/knip.json` |
+| `lint:knip` | knip | ISC | `frontend/`, `frontend/knip.jsonc` |
 | `lint:jscpd` | jscpd | MIT | `frontend/src`, `.jscpd.json` |
 | `security:zizmor` | zizmor | MIT | `.github/workflows/`, offline, no token |
 

@@ -1,3 +1,6 @@
+// knip, CI-only (lint:knip). Every ignore entry carries a reason on the
+// line above it; tools/supply-chain/scanner-config.test.mjs checks that.
+// knip rejects unknown keys, so reasons live in comments (#1463).
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
@@ -12,9 +15,11 @@
   ],
   "ignoreBinaries": [],
   "ignoreDependencies": [
+    // jscpd runs from CI's shell, so no file imports it
     "jscpd"
   ],
   "ignoreIssues": {
+    // its three alias exports are names real callers import
     "src/lib/ingestLossBanners.ts": [
       "duplicates"
     ]

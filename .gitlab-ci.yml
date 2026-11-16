@@ -802,7 +802,7 @@ lint:ruff:
     expire_in: 30 days
 
 # knip on frontend/ (unused files, exports and dependencies), configured by
-# frontend/knip.json; an exact-version devDependency, installed with npm ci.
+# frontend/knip.jsonc; an exact-version devDependency, installed with npm ci.
 lint:knip:
   stage: lint
   tags: [light]
