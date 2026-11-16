@@ -109,7 +109,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	s.log.Info(fmt.Sprintf("router backup drop box listening on %s", ln.Addr()))
@@ -131,7 +131,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 // authenticate and carried in sconn.Permissions for the life of the
 // connection.
 func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
-	defer nc.Close()
+	defer func() { _ = nc.Close() }()
 	// Covers this goroutine's own code (the handshake and the channel
 	// dispatch loop below); it does not reach into pkg/sftp's own
 	// request-worker goroutines started inside handleSession -- see
@@ -143,7 +143,7 @@ func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 		s.log.Warn(fmt.Sprintf("SFTP handshake from %s failed: %v", nc.RemoteAddr(), err))
 		return
 	}
-	defer sconn.Close()
+	defer func() { _ = sconn.Close() }()
 	device := sconn.Permissions.Extensions["device"]
 
 	// Global requests (e.g. keepalives) get a blanket "no" -- there is
@@ -158,7 +158,7 @@ func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 		// #394 requires no forwarding, and refusing the channel type is
 		// what makes that true structurally rather than by convention.
 		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "only an SFTP session is accepted")
+			_ = newChan.Reject(ssh.UnknownChannelType, "only an SFTP session is accepted")
 			continue
 		}
 		ch, chReqs, err := newChan.Accept()
@@ -180,11 +180,11 @@ func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 // else a client might ask a session channel to do -- is refused, which
 // is what makes "no shell or exec" true rather than merely unused.
 func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, device string) {
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 	for req := range reqs {
 		ok := isSFTPSubsystemRequest(req)
 		if req.WantReply {
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 		}
 		if !ok {
 			continue
@@ -197,7 +197,7 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, device 
 		}
 		server := sftp.NewRequestServer(ch, handlers)
 		_ = server.Serve()
-		server.Close()
+		_ = server.Close()
 		return
 	}
 }
@@ -358,7 +358,7 @@ func recoverAndClose(log *slog.Logger, device, op string, closeConn func() error
 		log.Error(fmt.Sprintf("recovered from a panic in %s for %s -- closing the connection: %v\n%s", op, device, r, debug.Stack()))
 		*errp = fmt.Errorf("backupsftp: internal error")
 		if closeConn != nil {
-			closeConn()
+			_ = closeConn()
 		}
 	}
 }

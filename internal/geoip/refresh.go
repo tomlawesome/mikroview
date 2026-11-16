@@ -231,9 +231,9 @@ func (m *Manager) fetchInto(ctx context.Context, id SourceID, req request, month
 			return response{}, fmt.Errorf("cannot write to the cache directory: %w", err)
 		}
 		tmp, tmpName, dst = f, f.Name(), f
-		defer os.Remove(tmpName) // no-op once the rename below succeeds
+		defer func() { _ = os.Remove(tmpName) }() // no-op once the rename below succeeds
 		if err := tmp.Chmod(0o600); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			return response{}, fmt.Errorf("cannot set cache file permissions: %w", err)
 		}
 	} else {
@@ -462,17 +462,17 @@ func (m *Manager) saveState() {
 		return
 	}
 	name := tmp.Name()
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return
 	}
 	if err := tmp.Close(); err != nil {

@@ -19,12 +19,11 @@ name: live-check image
 # same reasoning read the other way: a moving-target *product* image is
 # not worth shipping, but a gate that cannot run until something reaches
 # preview is a gate nobody uses.
+#
+# Dispatch only, under the mirror rule (#1464): GitLab's gate:image provides
+# the image the gate actually uses, so this mirror copy runs only by hand.
+#   publish -> gate:image
 on:
-  push:
-    branches: [dev]
-    paths:
-      - live-check.Dockerfile
-      - .github/workflows/live-check-image.yml
   workflow_dispatch: {}
 
 permissions:
@@ -87,6 +86,8 @@ jobs:
       # signing one would let it be moved to different content and still
       # verify.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
 
       - name: Sign the image
         env:

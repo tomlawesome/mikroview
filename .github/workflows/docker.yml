@@ -1,30 +1,28 @@
 name: docker
 
-# dev deliberately publishes nothing -- keeps dev cheap/fast, and a
-# moving-target image built from unreviewed dev work isn't something
-# worth shipping to the registry. preview publishes the actual release
-# candidate -- see .gitlab-ci.yml's test:container job and its
-# security stage (security:semgrep, security:gosec,
-# security:govulncheck, security:fuzz, security:npm-audit,
-# security:licence-policy, security:gitleaks, security:trivy-fs),
-# which carry that work now that ci.yml is retired.
+# RETIRED (#1472 step 3, #1464): GitHub no longer builds the product image.
+# GitLab builds it once, tests, signs and publishes it, and GitHub only
+# copies that digest to GHCR. This file is kept, workflow_dispatch only, until
+# two preview publishes and one release have gone through the new path; then
+# it is deleted. Its push and tag triggers are gone in the same commit that
+# added the copying workflows, so GHCR `:preview` and `:latest` are never
+# written by two workflows. Every job carries a hard `if: false`, so a
+# manual dispatch on preview or a tag cannot build or push anything.
 #
-# main does one thing: retags preview's exact already-tested digest as
-# latest. No rebuild, no release.
-#
-# A release is a `v*` tag, created on GitLab (the source of truth) and
-# pushed here by sync:mirror-to-github. The tag must equal `v<VERSION>`
-# at the tagged commit, so the version bump is still part of the
-# promotion diff (docs/decisions/release-versioning.md); the tag says
-# *when*, the file says *what*. The release job builds a fresh image,
-# smoke-tests that build, then moves latest to it. The rebuild is
-# deliberate, not a bug -- see the comment on the release job for why.
-# A failed release is re-run on the same tag once the cause is fixed;
-# nothing is retagged or renumbered (owner decision on #572, 2026-09-10).
+# Where each old job went:
+#   publish-preview  -> GitLab build:image, test:container, security:*
+#                       (security:trivy-image writes the SBOM), publish:image,
+#                       sign:release-digest, publish:channel; then GitHub's
+#                       publish-from-gitlab.yml copies the digest to
+#                       ghcr.io as preview-<short7> and preview.
+#   release          -> GitLab release:check-version (tag equals v<VERSION>,
+#                       binary reports it), plus the same build:image,
+#                       test:container, security:* and publish:* jobs on the
+#                       tag; then GitHub's release-on-tag.yml copies the
+#                       digest to ghcr.io as vX.Y.Z.
+#   promote-to-main  -> release-on-tag.yml's `latest` move, on the release tag
+#                       rather than the main merge.
 on:
-  push:
-    branches: [preview, main]
-    tags: ['v*']
   workflow_dispatch: {}
 
 permissions:
@@ -33,7 +31,7 @@ permissions:
 jobs:
   publish-preview:
     name: Build + publish preview image
-    if: github.ref_name == 'preview'
+    if: false  # retired (#1472): was github.ref_name == 'preview'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,6 +100,8 @@ jobs:
       # tag is a mutable pointer -- signing one would let it be moved to
       # different content afterwards and still verify.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
 
       - name: Sign the image
         env:
@@ -117,7 +117,7 @@ jobs:
 
   release:
     name: Build, test and publish the release
-    if: github.ref_type == 'tag'
+    if: false  # retired (#1472): was github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -246,7 +246,7 @@ jobs:
 
   promote-to-main:
     name: Promote the tested preview image to latest
-    if: github.ref_name == 'main'
+    if: false  # retired (#1472): was github.ref_name == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: read

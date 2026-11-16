@@ -104,7 +104,7 @@ type wsEnvelope struct {
 // a code and reason a client-side log or future diagnostic can read,
 // rather than looking identical to a network blip.
 func closeRevoked(conn *websocket.Conn) {
-	conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 	msg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "session no longer valid")
 	_ = conn.WriteMessage(websocket.CloseMessage, msg)
 }
@@ -176,11 +176,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
 		return nil
 	})
 
@@ -208,7 +208,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if len(batch) == 0 {
 			return true
 		}
-		conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 		// Dropped is the cumulative total for this connection, not a delta
 		// -- the client just needs to know "have I ever missed events,"
 		// not track deltas itself.
@@ -233,7 +233,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// a quiet network produces no batches at all, and a pushed
 			// table arriving on an instance nothing is currently
 			// logging is exactly when the screen most needs telling.
-			conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			if err := conn.WriteJSON(wsEnvelope{Type: "changed", Change: change}); err != nil {
 				return
 			}
@@ -260,7 +260,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

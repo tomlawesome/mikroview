@@ -2,9 +2,11 @@
 # GitLab is where mikroview is developed: branches, merge requests and
 # the dev -> preview -> main promotions all happen here, and this file is
 # the CI that gates them. GitHub is a read-only mirror of those three
-# branches -- the `sync` stage pushes each one after a merge -- and keeps
-# what already works there: CodeQL, the container registry and cosign
-# signing, Pages and secret scanning. #935 is the migration record; the
+# branches -- the `sync` stage pushes each one after a merge. Under the
+# mirror rule (#1464) only publish-from-gitlab, release-on-tag and CodeQL
+# run there by themselves, plus check-only secret scanning and the
+# RouterOS watcher; GitHub copies the image GitLab built and signed, and
+# everything else there runs by hand. #935 is the migration record; the
 # general model is in the gitlab-first-migration skill.
 #
 # The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
@@ -563,8 +565,8 @@ policy:release-surfaces:
 
 # ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
-# plus the report-only scanners added by #1462/#1463 (shellcheck, golangci-lint,
-# ruff, knip, jscpd; zizmor is in the security stage).
+# plus the scanners added by #1462/#1463: shellcheck, golangci-lint and
+# zizmor (security stage) block; ruff, knip and jscpd are report-only.
 # ---------------------------------------------------------------------------
 
 # Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
@@ -662,13 +664,14 @@ lint:script-tests:
   needs: []
   <<: *dev_or_mr_code
   script:
-    - apk add --no-cache bash git python3 py3-yaml nodejs >/dev/null
+    - apk add --no-cache bash git python3 py3-yaml nodejs coreutils >/dev/null
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash scripts/ci-changed-paths-guard.test.sh
     - bash scripts/ci-reuse-gate.test.sh
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
     - bash scripts/merge-coverprofiles.test.sh
+    - bash scripts/ci/gitlab-await-tested-image.test.sh
 
 lint:go:
   stage: lint
@@ -735,8 +738,7 @@ lint:shellcheck:
   needs: []
   <<: *dev_or_mr_code
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   script:
     - rc=0
     - find . -name '*.sh' -not -path './.git/*' -not -path '*/node_modules/*' -print0 | xargs -0 shellcheck --severity=warning --format=gcc > shellcheck-report.txt || rc=$?
@@ -758,8 +760,7 @@ lint:golangci:
   needs: []
   <<: [*dev_or_mr_code, *git_safe]
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   script:
     - rc=0
     - golangci-lint run --output.text.path=golangci-report.txt ./... || rc=$?
@@ -2216,8 +2217,7 @@ security:zizmor:
   needs: []
   <<: *dev_or_mr
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   variables:
     ZIZMOR_VERSION: "1.32.0"
     ZIZMOR_SHA256: bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
@@ -2559,9 +2559,9 @@ sync:mirror-to-github:
 
 # ---------------------------------------------------------------------------
 # PUBLISH (#1472) -- GitLab builds, signs and publishes the product image;
-# GitHub, later, only copies the digest it is handed (landing step 2-3 of
-# #1472's design; .github/workflows/docker.yml still publishes GHCR until
-# then, untouched by this file).
+# GitHub only copies the signed digest to GHCR (.github/workflows/
+# publish-from-gitlab.yml on preview, release-on-tag.yml on a v* tag;
+# docker.yml no longer builds).
 #
 # Build once, test the built bytes, promote by digest -- orbit's shape
 # (build_image -> record_image -> sign_evidence -> publish_channel):
@@ -2578,8 +2578,8 @@ sync:mirror-to-github:
 #
 # Registry scheme, registry.tomlawson.io/ai/mikroview: sha-<full sha>
 # (kept 7 days by the cleanup policy), preview and vX.Y.Z (kept). No
-# `latest` here: latest is GHCR's, moved on a release tag by GitHub
-# (owner, #1472). Nothing consumable exists before its signature verifies.
+# `latest` here: latest is GHCR's, moved by GitHub on the highest release
+# tag (owner, #1472). Nothing consumable exists before its signature verifies.
 # ---------------------------------------------------------------------------
 
 # #1472 job 5. The needs are the full bar on a publishing ref: every
@@ -2896,6 +2896,11 @@ sign:release-digest:
   # its signature and attestation and nothing to show why -- never cut
   # mid-write.
   interruptible: false
+  # One signing run at a time, across pipelines (GitLab's standard way to
+  # serialise a job): two runs on one digest could otherwise both pass the
+  # script's already-signed check and both sign, which
+  # verify-release-signature.sh then refuses as ambiguous.
+  resource_group: sign-release-digest
   timeout: 20m
   rules:
     # A publishing pipeline: preview or a v* tag. The script signs the

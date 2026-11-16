@@ -54,7 +54,7 @@ func (n *SMTPNotifier) Send(batch []flags.Flag) error {
 	if err != nil {
 		return fmt.Errorf("notify/smtp: dial %s: %w", addr, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if n.cfg.Username != "" {
 		auth := smtp.PlainAuth("", n.cfg.Username, n.cfg.Password, n.cfg.Host)
@@ -77,7 +77,7 @@ func (n *SMTPNotifier) Send(batch []flags.Flag) error {
 		return fmt.Errorf("notify/smtp: DATA: %w", err)
 	}
 	if _, err := wc.Write([]byte(n.message(batch))); err != nil {
-		wc.Close()
+		_ = wc.Close()
 		return fmt.Errorf("notify/smtp: writing message: %w", err)
 	}
 	if err := wc.Close(); err != nil {
@@ -107,7 +107,7 @@ func (n *SMTPNotifier) SendNotice(subject, body string) error {
 	if err != nil {
 		return fmt.Errorf("notify/smtp: dial %s: %w", addr, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if n.cfg.Username != "" {
 		auth := smtp.PlainAuth("", n.cfg.Username, n.cfg.Password, n.cfg.Host)
@@ -130,7 +130,7 @@ func (n *SMTPNotifier) SendNotice(subject, body string) error {
 		return fmt.Errorf("notify/smtp: DATA: %w", err)
 	}
 	if _, err := wc.Write([]byte(n.noticeMessage(subject, body))); err != nil {
-		wc.Close()
+		_ = wc.Close()
 		return fmt.Errorf("notify/smtp: writing message: %w", err)
 	}
 	if err := wc.Close(); err != nil {
@@ -178,7 +178,7 @@ func (n *SMTPNotifier) dial(addr string) (*smtp.Client, error) {
 	}
 	if n.cfg.TLSMode == TLSStartTLS {
 		if err := client.StartTLS(&tls.Config{ServerName: n.cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-			client.Close()
+			_ = client.Close()
 			return nil, err
 		}
 	}

@@ -30,6 +30,19 @@
   "updateOwner": "mikroview maintainers",
   "ciActions": [
     {
+      "name": "actions/attest",
+      "commit": "1e69f48acb82d1966a394da916b4c1698aa569d6",
+      "version": "v4.2.2",
+      "license": "MIT",
+      "source": "https://github.com/actions/attest",
+      "locations": [
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
       "name": "actions/attest-build-provenance",
       "commit": "4d101475d8b20a2381f78447822ac1eab6504dd8",
       "version": "v4.2.2",
@@ -54,7 +67,9 @@
         ".github/workflows/routeros-freshness.yml",
         ".github/workflows/pages.yml",
         ".github/workflows/docker.yml",
-        ".github/workflows/secret-scan.yml"
+        ".github/workflows/secret-scan.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
@@ -97,6 +112,32 @@
       "reviewBy": "2026-11-05"
     },
     {
+      "name": "actions/download-artifact",
+      "commit": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+      "version": "v8.0.2",
+      "license": "MIT",
+      "source": "https://github.com/actions/download-artifact",
+      "locations": [
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
+      "name": "actions/upload-artifact",
+      "commit": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "version": "v7.0.2",
+      "license": "MIT",
+      "source": "https://github.com/actions/upload-artifact",
+      "locations": [
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
       "name": "actions/upload-pages-artifact",
       "commit": "fc324d3547104276b827a68afc52ff2a11cc49c9",
       "version": "v5.0.0",
@@ -129,7 +170,10 @@
       "source": "https://github.com/docker/login-action",
       "locations": [
         ".github/workflows/live-check-image.yml",
-        ".github/workflows/docker.yml"
+        ".github/workflows/docker.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml",
+        ".github/workflows/countersign.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
@@ -155,7 +199,9 @@
       "source": "https://github.com/docker/setup-buildx-action",
       "locations": [
         ".github/workflows/docker.yml",
-        ".github/workflows/live-check-image.yml"
+        ".github/workflows/live-check-image.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
@@ -192,7 +238,10 @@
       "source": "https://github.com/sigstore/cosign-installer",
       "locations": [
         ".github/workflows/docker.yml",
-        ".github/workflows/live-check-image.yml"
+        ".github/workflows/live-check-image.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml",
+        ".github/workflows/countersign.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"

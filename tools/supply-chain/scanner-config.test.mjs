@@ -353,3 +353,65 @@ describe("#1462 step 3: workflow checkouts keep no token", () => {
 });
 
 function stripAll(text) { return text.split("\n").map(stripComment).join("\n"); }
+
+// ---- #1462: blocking scanner jobs --------------------------------------------
+// A job is blocking when neither it nor any `extends:` template or `<<: *anchor`
+// merge it pulls in carries `allow_failure`. Extend BLOCKING_JOBS as each
+// report-only scanner (lint:ruff, lint:knip, lint:jscpd) is
+// promoted.
+const BLOCKING_JOBS = ["lint:shellcheck", "lint:golangci", "security:zizmor"];
+
+// Text of a top-level key of .gitlab-ci.yml without comment lines, or null.
+function ciBlock(text, name) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.startsWith(`${name}:`) || l.startsWith(`${name} `) && l.includes(":"));
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^[^\s#-][^\n]*:/.test(lines[i])) { end = i; break; }
+  }
+  return lines.slice(start, end).filter((l) => !isComment(l)).map(stripComment).join("\n");
+}
+// Every place `name` could get allow_failure from: its own block, then each
+// extended template and merged anchor, recursively. Returns offending names.
+function allowFailureSources(text, name, seen = new Set()) {
+  if (seen.has(name)) return [];
+  seen.add(name);
+  const b = ciBlock(text, name);
+  assert.ok(b, `no job or template ${name} in .gitlab-ci.yml`);
+  const out = /^\s*allow_failure:/m.test(b) ? [name] : [];
+  const refs = [];
+  for (const m of b.matchAll(/^\s*extends:\s*(.+)$/gm)) {
+    for (const r of m[1].replace(/[\[\]]/g, "").split(",")) if (r.trim()) refs.push(r.trim());
+  }
+  for (const m of b.matchAll(/^\s*extends:\s*\n((?:\s+-\s*\S+\n?)+)/gm)) {
+    for (const r of m[1].matchAll(/-\s*(\S+)/g)) refs.push(r[1]);
+  }
+  for (const m of b.matchAll(/<<:\s*(?:\[([^\]]*)\]|(\*\S+))/g)) {
+    for (const a of (m[1] ?? m[2]).split(",")) {
+      const anchor = a.trim().replace(/^\*/, "");
+      if (!anchor) continue;
+      // anchor names are defined as `.template: &anchor`
+      const def = text.split("\n").find((l) => new RegExp(`^\\S[^#]*:\\s*&${anchor}\\b`).test(l));
+      if (def) refs.push(def.slice(0, def.indexOf(":")));
+    }
+  }
+  for (const r of refs) out.push(...allowFailureSources(text, r, seen));
+  return out;
+}
+
+describe("#1462: scanner jobs that are blocking carry no allow_failure", () => {
+  const ci = readFileSync(join(root, ".gitlab-ci.yml"), "utf8");
+  it("the helper sees allow_failure through extends and anchors", () => {
+    const fx = ".t: &t\n  allow_failure: true\nA:\n  script: x\nB:\n  extends: .t\nC:\n  <<: *t\nD:\n  # allow_failure: true\n  script: x\n";
+    assert.deepEqual(allowFailureSources(fx, "A"), []);
+    assert.deepEqual(allowFailureSources(fx, "B"), [".t"]);
+    assert.deepEqual(allowFailureSources(fx, "C"), [".t"]);
+    assert.deepEqual(allowFailureSources(fx, "D"), []);
+  });
+  for (const name of BLOCKING_JOBS) {
+    it(`${name} has no allow_failure`, () => {
+      assert.deepEqual(allowFailureSources(ci, name), [], `${name} is still report-only (allow_failure)`);
+    });
+  }
+});

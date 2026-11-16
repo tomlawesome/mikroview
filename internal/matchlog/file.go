@@ -151,7 +151,7 @@ func Open(path string, capacity int, key *retention.Key) (*FileStore, error) {
 	}
 	s := &FileStore{path: path, key: key, log: l, capacity: capacity, index: make(map[string]string)}
 	if err := s.replay(); err != nil {
-		l.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	return s, nil
@@ -183,7 +183,7 @@ func sniff(path string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("matchlog: opening %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
 		return 0, fmt.Errorf("matchlog: stat %s: %w", path, err)
