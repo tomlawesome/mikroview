@@ -536,17 +536,6 @@ export async function mintEnrolment(
   return (await errorText(res)) || `mintEnrolment: ${res.status}`
 }
 
-// registerDevice records the operator's confirmation of a router --
-// the ledger's final Register step (#1291). It grants the router
-// nothing: the server never sets acceptedIp from this call, so an
-// address is still only accepted when a valid token arrives over
-// syslog from it. Answers the updated device.
-export async function registerDevice(device: string, name: string): Promise<Device | string> {
-  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/registration`, { name })
-  if (res.ok) return res.json()
-  return (await errorText(res)) || `registerDevice: ${res.status}`
-}
-
 // rebindEnrolment points a pending enrolment window at a different
 // address without touching the token (#1291, ruling 23a) -- the
 // one-click recovery when the operator named the wrong address and

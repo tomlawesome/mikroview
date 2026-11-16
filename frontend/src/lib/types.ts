@@ -132,13 +132,10 @@ export interface Device {
   // minted and waiting to be used, and when it lapses. Absent on a
   // router nobody is currently enrolling.
   enrolment?: DeviceEnrolment
-  // registeredAt (#1291) is when the operator confirmed this router on
-  // the device itself -- the ledger's final Register step. Absent until
-  // they do, and independent of acceptedIp: registering records intent
-  // and grants nothing, so a router can be registered without being
-  // enrolled, or enrolled without being registered. The pair is how the
-  // fleet tells a finished setup from one someone walked away from part
-  // way through.
+  // registeredAt is when the router was accepted: since #1493 it is set
+  // together with acceptedIp and enrolledAt, and always equals
+  // enrolledAt. No longer independent of acceptedIp -- the old Register
+  // step (#1291) folded into acceptance of the enrol line.
   registeredAt?: string
   // loggingLeftovers (#1373) is what else this router last reported
   // sending logs to MikroView from -- another action, or a RouterOS

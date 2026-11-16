@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// The operator-requested writes -- Create, Register, Delete -- must
+// The operator-requested writes -- Create, Delete -- must
 // report a failed save and leave the registry exactly as it was
 // (#1303). Each test builds its starting state with no backend, then
 // swaps in one that always fails, so only the write under test hits it.
@@ -30,25 +30,6 @@ func TestCreateRollsBackWhenPersistFails(t *testing.T) {
 	r.backend = nil
 	if _, err := r.Create("hap-ax3", "hap-ax3", time.Now()); err != nil {
 		t.Errorf("Create() retry after rollback = %v, want nil", err)
-	}
-}
-
-func TestRegisterRollsBackWhenPersistFails(t *testing.T) {
-	r, err := OpenRegistryWithBackend(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Create("hap-ax3", "old-name", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	r.backend = &failingSaveBackend{}
-	_, err = r.Register("hap-ax3", "new-name", time.Now())
-	if !errors.Is(err, ErrPersistFailed) {
-		t.Fatalf("Register() error = %v, want ErrPersistFailed", err)
-	}
-	got := r.List()
-	if len(got) != 1 || got[0].Name != "old-name" || !got[0].RegisteredAt.IsZero() {
-		t.Errorf("device after a failed Register = %+v, want old-name and no RegisteredAt", got)
 	}
 }
 

@@ -371,6 +371,13 @@ rewritten.
   mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
   refuses to start and names the card. Remove the key.
 
+- **The Register step is gone for good** (#1493). A router is registered
+  the moment its enrol line is accepted: minting its token with your
+  password already confirmed it. Entities no longer reports an
+  unfinished Register step or offers **Finish registering…**, and
+  `POST /api/devices/{id}/registration` is removed. `registeredAt` is
+  still reported in `/api/devices` and now always equals `enrolledAt`.
+
 ### Changed
 
 - **Authentication runs on gauntlet** (#1202), the sign-in library shared
