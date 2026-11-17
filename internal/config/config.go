@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
 )

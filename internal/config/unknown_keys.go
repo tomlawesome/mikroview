@@ -3,13 +3,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // removedKey documents a configuration key that once existed and no
@@ -99,19 +99,20 @@ var removedOrRenamedKeys = map[string]removedKey{
 	},
 }
 
-// unknownFieldPattern matches one line of a yaml.v3 *yaml.TypeError
-// produced by KnownFields(true): "line N: field X not found in type
-// pkg.Type". Confirmed against go.yaml.in/yaml/v3 (see explainYAMLError's
-// doc comment) rather than assumed -- a decoder upgrade that changes
-// this wording would fall back to the library's own generic error text
-// via the "no match" branch below, not silently mis-parse.
-var unknownFieldPattern = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
+// unknownFieldPattern matches the Message of one *yaml.LoadError
+// produced by KnownFields(true): "field X not found in type pkg.Type"
+// (the line is in its Mark). Confirmed against go.yaml.in/yaml/v4
+// v4.0.0, whose wording is unchanged from v3 (#1498), rather than
+// assumed -- a decoder upgrade that changes this wording would fall
+// back to the library's own text via the "no match" branch below, not
+// silently mis-parse.
+var unknownFieldPattern = regexp.MustCompile(`^field (\S+) not found in type (\S+)$`)
 
 // yamlPathPrefixes maps every struct type reachable from Config to the
 // dotted yaml path it sits at, e.g. reflect.TypeOf(Webhook{}) ->
 // "notify.webhook". Built once by walking Config's own field tags.
 //
-// This is what turns a yaml.v3 error -- which names only the immediate
+// This is what turns a yaml error -- which names only the immediate
 // Go type ("config.Webhook") and the bare offending field ("bogus") --
 // into the full path ("notify.webhook.bogus") an operator can actually
 // find in their file. Reflection over the live struct tags rather than
@@ -148,12 +149,12 @@ func yamlPathPrefixes() map[reflect.Type]string {
 	return paths
 }
 
-// keyIssue is one decode problem yaml.v3 reported, pulled apart so the
+// keyIssue is one decode problem the yaml decoder reported, pulled apart so the
 // start-up refusal (explainYAMLError) and the config editor's Problems
 // rail (ValidateText, #1347) word it identically: the rail adds the line
 // as a field, the refusal as a "path line N:" prefix.
 type keyIssue struct {
-	// Line is the 1-based line yaml.v3 named, 0 when it named none.
+	// Line is the 1-based line the decoder named, 0 when it named none.
 	Line int
 	// Key is the full dotted path of an unknown key, empty for any
 	// other kind of decode error.
@@ -165,31 +166,32 @@ type keyIssue struct {
 	Raw bool
 }
 
-// yamlLinePattern pulls the line number out of any yaml.v3 message
-// shaped "line N: ...", which both its TypeError entries and its syntax
-// errors ("yaml: line N: ...") use.
+// yamlLinePattern pulls the line number out of any yaml message shaped
+// "line N: ...", which its syntax errors ("yaml: line N: ...") use.
 var yamlLinePattern = regexp.MustCompile(`line (\d+):`)
 
-// keyIssues explains every entry of a *yaml.TypeError: an unknown key by
-// its full dotted path, and -- for a key removedOrRenamedKeys knows
+// keyIssues explains every entry of a *yaml.LoadErrors: an unknown key
+// by its full dotted path, and -- for a key removedOrRenamedKeys knows
 // about -- what changed and what to use instead. Every other entry
 // passes through as the library worded it.
-func keyIssues(typeErr *yaml.TypeError) []keyIssue {
+func keyIssues(loadErr *yaml.LoadErrors) []keyIssue {
 	prefixes := yamlPathPrefixes()
 	var issues []keyIssue
-	for _, e := range typeErr.Errors {
-		m := unknownFieldPattern.FindStringSubmatch(e)
+	for _, e := range loadErr.Errors {
+		line := e.Mark.Line
+		m := unknownFieldPattern.FindStringSubmatch(e.Message)
 		if m == nil {
-			// Some other *yaml.TypeError shape (a type mismatch, for
-			// instance) -- pass it through rather than guess at it.
-			issue := keyIssue{Msg: e, Raw: true}
-			if lm := yamlLinePattern.FindStringSubmatch(e); lm != nil {
-				issue.Line, _ = strconv.Atoi(lm[1])
+			// Some other decode failure (a type mismatch, for
+			// instance) -- pass it through rather than guess at it,
+			// in the library's own "line N: ..." entry form.
+			msg := e.Message
+			if line > 0 {
+				msg = fmt.Sprintf("line %d: %s", line, msg)
 			}
-			issues = append(issues, issue)
+			issues = append(issues, keyIssue{Line: line, Msg: msg, Raw: true})
 			continue
 		}
-		lineNo, field, goType := m[1], m[2], m[3]
+		field, goType := m[1], m[2]
 
 		prefix := ""
 		found := false
@@ -203,8 +205,6 @@ func keyIssues(typeErr *yaml.TypeError) []keyIssue {
 		if found && prefix != "" {
 			key = prefix + "." + field
 		}
-		line, _ := strconv.Atoi(lineNo)
-
 		if removed, ok := removedOrRenamedKeys[key]; ok {
 			issues = append(issues, keyIssue{Line: line, Key: key, Msg: fmt.Sprintf(
 				"unknown key %q -- %s was removed in %s: %s", key, key, removed.Version, removed.Why)})
@@ -217,15 +217,17 @@ func keyIssues(typeErr *yaml.TypeError) []keyIssue {
 	return issues
 }
 
-// explainYAMLError turns a yaml.v3 decode error into one that names the
+// explainYAMLError turns a yaml decode error into one that names the
 // offending key by its full dotted path, the line it's on, and -- for a
 // key removedOrRenamedKeys knows about -- what changed and what to use
 // instead. Every other decode error (a type mismatch, bad indentation,
 // and so on) passes through unchanged: this only rewrites the specific
 // "field not found" shape KnownFields(true) produces.
 func explainYAMLError(path string, err error) error {
-	typeErr, ok := err.(*yaml.TypeError)
-	if !ok {
+	// yaml/v4 reports decode failures as *yaml.LoadErrors; v3's
+	// *yaml.TypeError is deprecated there (#1498).
+	var loadErr *yaml.LoadErrors
+	if !errors.As(err, &loadErr) {
 		// Not the KnownFields(true) shape -- a syntax error or a type
 		// mismatch. The caller (load) already wraps this in "loading
 		// config file %s: %w", so leave it as-is rather than naming the
@@ -234,7 +236,7 @@ func explainYAMLError(path string, err error) error {
 	}
 
 	var lines []string
-	for _, issue := range keyIssues(typeErr) {
+	for _, issue := range keyIssues(loadErr) {
 		if issue.Raw {
 			lines = append(lines, issue.Msg)
 			continue
