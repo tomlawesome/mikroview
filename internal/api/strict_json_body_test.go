@@ -8,8 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/tomlawesome/mikroview/internal/device"
 )
 
 // Tests for #1500: a route that reads a JSON body refuses a field it does
@@ -111,7 +109,7 @@ func TestStrictJSONDeviceCreateKnownFieldsStillWork(t *testing.T) {
 	if code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body %s", code, body)
 	}
-	var found []device.Info = s.Devices.List()
+	found := s.Devices.List()
 	if len(found) != 1 {
 		t.Errorf("devices = %d, want 1", len(found))
 	}
