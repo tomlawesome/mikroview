@@ -70,7 +70,7 @@ export function natFactsFromEvent(e: FirewallEvent): NatEventFacts {
 // an error: it is what keeps a rule in the could-have set.
 type Outcome = 'contradicts' | 'consistent' | 'unknown'
 
-export interface NatRuleVerdict {
+interface NatRuleVerdict {
   rule: RouterNatRule
   // ruledOut is the one clause naming the contradiction ("protocol udp ≠
   // tcp"), or null when nothing the event states contradicts this rule.

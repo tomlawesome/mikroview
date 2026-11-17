@@ -678,6 +678,7 @@ lint:script-tests:
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
     - bash scripts/routeros-chr-open-mr.test.sh
+    - node --test scripts/jscpd-baseline.test.mjs
 
 lint:go:
   stage: lint
@@ -801,7 +802,7 @@ lint:ruff:
     expire_in: 30 days
 
 # knip on frontend/ (unused files, exports and dependencies), configured by
-# frontend/knip.json; an exact-version devDependency, installed with npm ci.
+# frontend/knip.jsonc; an exact-version devDependency, installed with npm ci.
 lint:knip:
   stage: lint
   tags: [light]
@@ -809,8 +810,7 @@ lint:knip:
   needs: []
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1463)
   script:
     - cd frontend
     - npm ci
@@ -824,11 +824,13 @@ lint:knip:
       - knip-report.txt
     expire_in: 30 days
 
-# jscpd on frontend/src (.jscpd.json). Two outcomes, on purpose (#1463): a
-# duplication finding is report-only (jscpd exits 3, which allow_failure
-# tolerates), but `npm audit signatures` -- the owner's condition for using
-# jscpd -- checks every installed package's registry signature and provenance
-# attestation and fails the job, with its own exit code, if one is invalid.
+# jscpd on frontend/src (.jscpd.json). Blocking on new findings (#1463):
+# jscpd runs with exit code 0 and scripts/jscpd-baseline.mjs compares its
+# report with frontend/.jscpd-baseline.txt, failing on a clone not listed and
+# on a listed entry that no longer matches, so the baseline only shrinks. Also
+# `npm audit signatures` -- the owner's condition for using jscpd -- checks
+# every installed package's registry signature and provenance attestation and
+# fails the job if one is invalid.
 lint:jscpd:
   stage: lint
   tags: [light]
@@ -836,15 +838,13 @@ lint:jscpd:
   needs: []
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure:
-    exit_codes: [3]
   script:
     - cd frontend
     - npm ci
     - npm audit signatures
     - cd ..
-    - frontend/node_modules/.bin/jscpd
+    - frontend/node_modules/.bin/jscpd --exit-code 0
+    - node scripts/jscpd-baseline.mjs jscpd-report/jscpd-report.json frontend/.jscpd-baseline.txt
   artifacts:
     when: always
     paths:

@@ -15,7 +15,7 @@
 // than one common meaning (e.g. 53 is both TCP and UDP DNS; 8080 is heavily
 // overloaded across unrelated apps) -- lookupPort returns all of them.
 
-export type PortCategory =
+type PortCategory =
   | 'standard'
   | 'database'
   | 'self-hosted'

@@ -6,7 +6,7 @@
 import type { GeoLookup, GeoSourceName } from './types'
 
 /** Each source's name as the card and its top line write it. */
-export const GEO_SOURCE_NAMES: Record<GeoSourceName, string> = {
+const GEO_SOURCE_NAMES: Record<GeoSourceName, string> = {
   dbip: 'DB-IP Lite',
   ipinfo: 'IPinfo Lite',
   maxmind: 'MaxMind GeoLite2',

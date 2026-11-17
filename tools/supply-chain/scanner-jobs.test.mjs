@@ -90,7 +90,7 @@ describe("#1462 steps 4-7: each scanner is pinned, never a bare tag", () => {
 
 // Jobs that reached zero findings and became blocking; scanner-config.test.mjs
 // checks they carry no allow_failure. They still keep their report.
-const blocking = new Set(["lint:shellcheck", "lint:golangci", "lint:ruff", "security:zizmor"]);
+const blocking = new Set(["lint:shellcheck", "lint:golangci", "lint:ruff", "lint:knip", "lint:jscpd", "security:zizmor"]);
 
 describe("#1462 steps 4-7: report-only jobs keep a report as an artifact", () => {
   for (const j of jobs) {

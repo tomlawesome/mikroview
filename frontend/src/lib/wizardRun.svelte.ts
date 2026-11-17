@@ -49,7 +49,7 @@ import type { TuneRule } from './wizardTune'
 // vocabulary the rail and the fleet ledger already use) and the
 // commands the server rendered for it. Built, never hand-written --
 // see WizardRun.blockSections' own comment.
-export interface BlockSection {
+interface BlockSection {
   id: 'ca' | 'push' | 'backup' | 'syslog'
   title: string
   commands: string

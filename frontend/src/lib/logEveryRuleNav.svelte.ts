@@ -10,7 +10,7 @@
 // param to carry a target across the switch. This one runs the opposite
 // direction (out of the topography, not into it), which is why it is a
 // module of its own rather than a field added to that one.
-export interface PendingLogEveryRule {
+interface PendingLogEveryRule {
   device: string
   /** PolicyEdge.key form, `${from}|${to}` -- the dark pair that was clicked. */
   boundaryKey: string

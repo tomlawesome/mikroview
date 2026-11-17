@@ -119,7 +119,7 @@ export const FLAG_TYPE_SHORT_LABELS: Record<FlagType, string> = {
 }
 
 /** One traffic action, as a rate per minute across the hour. */
-export interface RateSeries {
+interface RateSeries {
   key: Action
   label: string
   ink: ChartInk
@@ -134,7 +134,7 @@ export interface RateSeries {
 }
 
 /** One flag type, as discrete episodes raised per minute. */
-export interface EpisodeSeries {
+interface EpisodeSeries {
   key: FlagType
   label: string
   short: string
@@ -153,7 +153,7 @@ export interface EpisodeSeries {
  * way the table shows an honest em dash, never a number that might be
  * short.
  */
-export interface MinuteTop {
+interface MinuteTop {
   talker?: string
   port?: string
   complete: boolean

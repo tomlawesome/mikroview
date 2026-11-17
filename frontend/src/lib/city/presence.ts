@@ -74,12 +74,12 @@ export interface HostMarks {
 }
 
 /** Nothing is behind this address: no mark is drawn at all. */
-export const NO_MARKS: HostMarks = { flags: 0, watch: 0, spike: false }
+const NO_MARKS: HostMarks = { flags: 0, watch: 0, spike: false }
 
 /** The one flag type whose mark pulses (round 46, #981): activity is
  * the only flag kind that is happening now, so motion fits it and
  * nothing else. */
-export const SPIKE_FLAG_TYPE = 'activity_spike'
+const SPIKE_FLAG_TYPE = 'activity_spike'
 
 /**
  * Every marked address, from the two lists that carry the marks.

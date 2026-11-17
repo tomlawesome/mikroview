@@ -18,9 +18,7 @@ import type { CityPeer, CityRuleDrop } from './types'
 
 export type { CityHost, HostMarks } from './presence'
 
-export type { CityGate } from './gates'
-
-export interface CityRouter {
+interface CityRouter {
   id: string
   name: string
   /** The device the 2D stops centre on: most recently seen, configured. */
@@ -92,7 +90,7 @@ export interface CityEdge {
  * bridgeStateFor reads exactly like the API's own 'unknown': a footbridge
  * with no state, never a guessed down.
  */
-export interface CityTunnel {
+interface CityTunnel {
   iface: string
   /** Which router's own endpoint this tunnel's state came from, or the
    * event-attributed router when it has none (see routerOf below). */
@@ -145,7 +143,7 @@ export interface CityInput {
 
 /** Interface names that are tunnels, not zones: the far side is another
  * site, so the road crosses the river. */
-export const TUNNEL_RE = /^(wg|wireguard|l2tp|pptp|sstp|ovpn|ipsec|gre|eoip|zerotier|vxlan)/i
+const TUNNEL_RE = /^(wg|wireguard|l2tp|pptp|sstp|ovpn|ipsec|gre|eoip|zerotier|vxlan)/i
 
 export const isTunnel = (iface: string): boolean => TUNNEL_RE.test(iface)
 
