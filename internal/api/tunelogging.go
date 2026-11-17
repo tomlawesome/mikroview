@@ -3,7 +3,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,7 +28,7 @@ const tuneLoggingMaxBodyBytes = 2 * 1024 * 1024
 // in place of the shared cap -- see that constant's doc comment.
 func decodeTuneLoggingBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, tuneLoggingMaxBodyBytes)
-	return json.NewDecoder(r.Body).Decode(v)
+	return strictDecode(r.Body, v)
 }
 
 // tuneLoggingObserving is #435 decision 5's honesty bound: the page is

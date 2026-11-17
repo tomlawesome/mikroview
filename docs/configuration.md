@@ -5541,6 +5541,11 @@ starting the server. `mikroview -h` lists them too. See
 
 ## API reference
 
+A JSON request body may carry only the fields its route reads. A field the
+route doesn't know, such as a misspelt name, is refused with 400, the same
+answer as malformed JSON, rather than silently ignored (#1500). Objects a
+route keeps as-is, such as the preferences document, accept any keys.
+
 | Endpoint | Description |
 |---|---|
 | `GET /api/healthz` | liveness/uptime/version check; carries `"mode": "setup-only"` when the config was refused (see [Setup-only mode](#setup-only-mode-when-the-config-is-refused)) |
