@@ -1,0 +1,8 @@
+[
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "No fixed release exists, and only build and dev tools use picomatch, matching patterns from our own config.",
+    "expires": "2026-12-17"
+  }
+]

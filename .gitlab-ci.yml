@@ -2268,7 +2268,15 @@ security:npm-audit:
     # runs, so the image's own bundled version never gets a say.
     - npm install -g npm@12.0.2
     - npm ci
-    - npm audit --audit-level=high
+    # #1505: `npm audit --audit-level=high` cannot express a time-limited
+    # exemption. Write the JSON report (npm exits non-zero when it finds
+    # anything, which is tolerated here), and let the script decide:
+    # it also refuses a file that is not a report. Exemptions live in
+    # supply-chain/npm-audit-exemptions.json.
+    - npm audit --json > /tmp/npm-audit.json || true
+    - cd ..
+    - node tools/supply-chain/npm-audit.mjs /tmp/npm-audit.json
+    - node --test tools/supply-chain/npm-audit.test.mjs
 
 # Checks the licence of every dependency mikroview actually ships -- Go
 # modules and the frontend's bundled npm packages, the same inventory
