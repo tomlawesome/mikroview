@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
@@ -72,6 +74,20 @@ type setupInstance struct {
 	// certificate covers localhost/127.0.0.1 only, which is the single
 	// most common reason a router's first fetch fails.
 	Hosts []string `json:"hosts"`
+	// EffectiveHosts is the list the certificate is actually issued for:
+	// Hosts, or the generated defaults when Hosts is empty (#1507).
+	EffectiveHosts []string `json:"effectiveHosts"`
+	// CertificateCoversAddress is Go's answer (#1507, decision #1437) to
+	// "does the certificate cover the address the wizard is using":
+	// names compare case-insensitively, a bare IPv6 literal is not cut at
+	// its last colon, and it is true when there is no address yet or when
+	// neither HTTP TLS nor syslog TLS is on (no certificate is in play,
+	// #374).
+	CertificateCoversAddress bool `json:"certificateCoversAddress"`
+	// AddressHost is the stored setup address with any port removed
+	// (routeros.Hostname), empty when there is no address (#1507). The
+	// front end never splits an address itself.
+	AddressHost string `json:"addressHost"`
 	// SyslogPort is the port routers should send syslog to, taken from
 	// the running configuration rather than assumed to be 6514.
 	SyslogPort string `json:"syslogPort"`
@@ -215,15 +231,23 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		address = s.Setup.Address()
 		backupTransport = s.Setup.BackupTransport()
 	}
+	addressHost := ""
+	if address != "" {
+		addressHost = routeros.Hostname(address)
+	}
+	effectiveHosts := servertls.EffectiveHosts(s.SetupInstance.Hosts)
 	writeJSON(w, http.StatusOK, setupStatus{
 		Instance: setupInstance{
-			TLSEnabled:        s.SetupInstance.TLSEnabled,
-			Hosts:             nonNilStrings(s.SetupInstance.Hosts),
-			SyslogPort:        s.SetupInstance.SyslogPort,
-			SyslogEnabled:     s.SetupInstance.SyslogPort != "",
-			Address:           address,
-			AddressCandidates: nonNilStrings(s.SetupInstance.Candidates),
-			BackupTransport:   backupTransport,
+			TLSEnabled:               s.SetupInstance.TLSEnabled,
+			Hosts:                    nonNilStrings(s.SetupInstance.Hosts),
+			EffectiveHosts:           effectiveHosts,
+			AddressHost:              addressHost,
+			CertificateCoversAddress: certificateCovers(s.SetupInstance, effectiveHosts, address),
+			SyslogPort:               s.SetupInstance.SyslogPort,
+			SyslogEnabled:            s.SetupInstance.SyslogPort != "",
+			Address:                  address,
+			AddressCandidates:        nonNilStrings(s.SetupInstance.Candidates),
+			BackupTransport:          backupTransport,
 		},
 		Sources:   sources,
 		Devices:   devices,
@@ -231,6 +255,22 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Marks:     marks,
 		Witnesses: witnesses,
 	})
+}
+
+// certificateCovers reports whether the certificate claims the address the
+// wizard is using (#1507). With no address yet there is nothing to check,
+// and with neither HTTP TLS nor syslog TLS on no certificate is in play.
+func certificateCovers(si SetupInstance, effective []string, address string) bool {
+	if address == "" || (!si.TLSEnabled && si.SyslogPort == "") {
+		return true
+	}
+	host := routeros.Hostname(address)
+	for _, h := range effective {
+		if strings.EqualFold(h, host) {
+			return true
+		}
+	}
+	return false
 }
 
 // caSatisfied and its three siblings below decide, from the same data

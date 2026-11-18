@@ -304,3 +304,13 @@ export function formatLastHeard(iso: string, nowMs: number): string {
 export function rawTooltip(raw: string, truncated?: boolean): string {
   return truncated ? `${raw}\n\n[truncated — the line sent was longer than MikroView stores]` : raw
 }
+
+// listenPort takes the port out of one of the server's own listen
+// addresses -- ":6514", "0.0.0.0:6514", "[::]:6514" -- where the router
+// needs the port, not the bind address. For those only: never for the
+// operator's setup address, which can be a bare IPv6 literal with no port;
+// the server splits that one (instance.addressHost, #1507).
+export function listenPort(listenAddr: string): string {
+  const colon = listenAddr.lastIndexOf(':')
+  return colon === -1 ? listenAddr : listenAddr.slice(colon + 1)
+}

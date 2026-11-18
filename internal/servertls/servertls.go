@@ -46,6 +46,17 @@ const (
 
 var defaultHosts = []string{"localhost", "127.0.0.1"}
 
+// EffectiveHosts is the list a generated certificate is issued for: the
+// configured hosts, or the defaults when none are configured (#1507 -- the
+// one place that fallback lives, so the setup wizard does not retype it).
+// The result is a copy.
+func EffectiveHosts(configured []string) []string {
+	if len(configured) == 0 {
+		return slices.Clone(defaultHosts)
+	}
+	return slices.Clone(configured)
+}
+
 // Config is what the caller (main.go) already has in hand from
 // internal/config.TLS.
 type Config struct {

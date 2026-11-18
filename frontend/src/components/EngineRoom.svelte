@@ -73,7 +73,7 @@
   import { tokensState } from '../lib/tokens.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
-  import { portOf } from '../lib/setupsteps'
+  import { listenPort } from '../lib/format'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
   import type {
     SetupStatus,
@@ -1174,7 +1174,7 @@
             <circle cx="372" cy="45" r="4" fill="var(--accept)" />
             {#if status}
               <text x="396" y="41" class="sp-k">
-                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
+                {listenPort(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
               </text>
             {/if}
             {#if epsText}
@@ -1188,7 +1188,7 @@
             <div class="orow">
               <span>syslog listener</span>
               <span class="ov">
-                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
+                {listenPort(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
                 <span class="yaml">set in config.yaml; the page shows what is, the file decides</span>
               </span>
             </div>

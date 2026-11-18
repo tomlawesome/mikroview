@@ -4,6 +4,7 @@ package routeros
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/blcatalogue"
@@ -117,31 +118,30 @@ func SchedulerAdd(name, settings string) string {
 }
 
 // Hostname strips a port. Certificate names never carry one, so this is
-// what tls.hosts is compared against.
+// what tls.hosts is compared against. It handles every form
+// validSetupAddress accepts: bare host, host:port, [ipv6]:port, and a bare
+// IPv6 literal with no port (#1507) -- which net.SplitHostPort rejects for
+// its extra colons, so the input comes back unchanged rather than cut at
+// its last group.
 func Hostname(hostPort string) string {
-	// IPv6 literals arrive as [::1]:8080.
-	if strings.HasPrefix(hostPort, "[") {
-		end := strings.Index(hostPort, "]")
-		if end == -1 {
-			return hostPort
-		}
-		return hostPort[1:end]
+	if host, _, err := net.SplitHostPort(hostPort); err == nil {
+		return host
 	}
-	colon := strings.LastIndex(hostPort, ":")
-	if colon == -1 {
-		return hostPort
+	// A bracketed IPv6 literal with no port.
+	if len(hostPort) > 2 && hostPort[0] == '[' && hostPort[len(hostPort)-1] == ']' {
+		return hostPort[1 : len(hostPort)-1]
 	}
-	return hostPort[:colon]
+	return hostPort
 }
 
 // PortOf takes the port out of a listen address like ":6514" or
 // "0.0.0.0:6514" -- the router needs the port, not the bind address.
+// An input with no splittable port comes back unchanged.
 func PortOf(listenAddr string) string {
-	colon := strings.LastIndex(listenAddr, ":")
-	if colon == -1 {
-		return listenAddr
+	if _, port, err := net.SplitHostPort(listenAddr); err == nil {
+		return port
 	}
-	return listenAddr[colon+1:]
+	return listenAddr
 }
 
 // CaTrustCommands is step 1: fetch mikroview's certificate authority and

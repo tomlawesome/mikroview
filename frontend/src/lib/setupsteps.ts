@@ -14,6 +14,7 @@
 // wasn't" would be worse than no wizard at all.
 
 import { formatSize } from './memory'
+import { listenPort } from './format'
 import type {
   BackupTransport,
   Device,
@@ -51,48 +52,6 @@ export interface StepStatus {
   pasteBlock?: string
 }
 
-// hostname strips a port. Certificate names never carry one, so this is
-// what tls.hosts is compared against.
-export function hostname(hostPort: string): string {
-  // IPv6 literals arrive as [::1]:8080.
-  if (hostPort.startsWith('[')) {
-    const end = hostPort.indexOf(']')
-    return end === -1 ? hostPort : hostPort.slice(1, end)
-  }
-  const colon = hostPort.lastIndexOf(':')
-  return colon === -1 ? hostPort : hostPort.slice(0, colon)
-}
-
-// certificateCovers reports whether the running certificate claims the
-// address the operator is using. This is step 0, and it exists because
-// getting it wrong produces a failure three steps later
-// ("name verification failed") whose cause is on MikroView's side, not
-// the router's.
-//
-// tls.enabled only turns HTTPS off on the API port -- it does not stop
-// a certificate from being loaded. main.go loads/generates one whenever
-// cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "", and hands that same
-// certificate to the syslog TLS listener regardless of tls.enabled
-// (#374). So the check only skips entirely when neither HTTP TLS nor
-// syslog TLS is on -- matching main.go's own condition for when a
-// certificate is even in play.
-export function certificateCovers(status: SetupStatus, address: string): boolean {
-  if (!status.instance.tlsEnabled && !status.instance.syslogEnabled) return true
-  const host = hostname(address)
-  const hosts = status.instance.hosts
-  // An empty list means the generated certificate covers
-  // localhost/127.0.0.1 only -- see internal/servertls.defaultHosts.
-  const effective = hosts.length > 0 ? hosts : ['localhost', '127.0.0.1']
-  return effective.includes(host)
-}
-
-// portOf takes the port out of a listen address like ":6514" or
-// "0.0.0.0:6514" -- the router needs the port, not the bind address.
-export function portOf(listenAddr: string): string {
-  const colon = listenAddr.lastIndexOf(':')
-  return colon === -1 ? listenAddr : listenAddr.slice(colon + 1)
-}
-
 // deviceStanza is what an operator pastes into config.yaml to give a
 // router a name of their choosing. Emitted rather than written by
 // MikroView: the sourceIp -> id mapping decides who an event stream is
@@ -110,7 +69,7 @@ function deviceStanza(sourceIp: string, name: string): string {
 // existing entry, and never lists the missing address twice if it is
 // somehow already there.
 export function tlsHostsBlock(existingHosts: string[], missing: string): string {
-  const hosts = existingHosts.includes(missing) ? existingHosts : [...existingHosts, missing]
+  const hosts = existingHosts.some((h) => h.toLowerCase() === missing.toLowerCase()) ? existingHosts : [...existingHosts, missing]
   return `hosts: [${hosts.map((h) => JSON.stringify(h)).join(', ')}]`
 }
 
@@ -122,8 +81,12 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
   // check yet, not a wrong answer. It falls through to the ordinary
   // waiting/done read below, the same as it would before any address
   // existed to check at all.
-  if (address && !certificateCovers(status, address)) {
-    const shown = hostname(address)
+  // The server owns the verdict (#1507): it splits the address and
+  // compares names case-insensitively. addressHost is the stored
+  // address without its port; the typed address is the fallback only
+  // for a status that carries none.
+  if (address && status.instance.certificateCoversAddress === false) {
+    const shown = status.instance.addressHost || address
     return {
       state: 'blocked',
       detail:
@@ -131,7 +94,7 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
         `("name verification failed"). Paste the block below into config.yaml's tls: section, ` +
         `replacing its tls.hosts line, and restart mikroview, then come back — the router needs ` +
         `no change, the same CA signs the new certificate.`,
-      pasteBlock: tlsHostsBlock(status.instance.hosts, shown),
+      pasteBlock: tlsHostsBlock(status.instance.effectiveHosts ?? status.instance.hosts, shown),
     }
   }
   if (status.sources.some((s) => s.caFetchedAt)) {
@@ -289,7 +252,7 @@ export function backupStep(
     // install (#955) pushes over the address the router already reaches,
     // so naming a drop box port here would send the operator to check
     // something this deployment does not use.
-    const port = transport === 'sftp' && backups?.port ? portOf(backups.port) : null
+    const port = transport === 'sftp' && backups?.port ? listenPort(backups.port) : null
     return {
       state: 'waiting',
       detail: port

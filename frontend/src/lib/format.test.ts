@@ -13,6 +13,7 @@ import {
   formatLastHeard,
   isPublicIp,
   setHomeNetworks,
+  listenPort,
 } from './format'
 
 describe('formatTimeMs', () => {
@@ -304,5 +305,13 @@ describe('isPublicIp with home networks (#1481)', () => {
     setHomeNetworks(demoHome)
     setHomeNetworks([])
     expect(isPublicIp('198.51.100.66')).toBe(true)
+  })
+})
+
+describe('listenPort', () => {
+  it('takes the port off the server\'s own listen addresses', () => {
+    expect(listenPort(':8080')).toBe('8080')
+    expect(listenPort('0.0.0.0:8080')).toBe('8080')
+    expect(listenPort('[::]:8080')).toBe('8080')
   })
 })
