@@ -195,7 +195,7 @@ func runMigrateData(args []string) int {
 	logger := logging.New("migrate-data")
 	dest, ok := firstNonFlag(args)
 	if !ok {
-		logger.Error("usage: mikroview -migrate-data <destination-directory> [--force]")
+		logger.Error("usage: mikroview -migrate-data <destination-directory> [-force]")
 		logger.Error(fmt.Sprintf("in a container, mount the new location at %s and pass that -- "+
 			"a fresh named volume mounted anywhere else arrives owned by root and cannot be written to. "+
 			"See docs/configuration.md, \"Moving the data directory\"", migrationMountPoint))
@@ -208,7 +208,7 @@ func runMigrateData(args []string) int {
 		return 1
 	}
 
-	plan, err := planMigration(cfg, dest, hasFlag(args, "--force"))
+	plan, err := planMigration(cfg, dest, forceFlag(args))
 	if err != nil {
 		logger.Error(err.Error())
 		var unusable *storeUnusable
@@ -372,7 +372,7 @@ func prepareDest(dest string, force bool) error {
 	if len(entries) > 0 && !force {
 		return fmt.Errorf("%s is not empty (%d entr(y/ies)) -- refusing to merge two deployments' data "+
 			"into one directory, where a leftover users.json would silently outlive the move. "+
-			"Empty it, choose another destination, or pass --force if you are certain it is a "+
+			"Empty it, choose another destination, or pass -force if you are certain it is a "+
 			"partial copy of this same deployment", dest, len(entries))
 	}
 	return nil
@@ -478,7 +478,7 @@ func copyTree(src, dst string) (map[string]string, error) {
 // copyFile writes one file and returns the SHA-256 of what it wrote.
 //
 // O_EXCL, so a destination that turned out to hold this file already --
-// a --force run over a partial copy -- fails loudly instead of leaving
+// a -force run over a partial copy -- fails loudly instead of leaving
 // half of one version and half of another.
 func copyFile(src, dst string) (string, error) {
 	in, err := os.Open(src)
@@ -519,7 +519,7 @@ func copyFile(src, dst string) (string, error) {
 //  1. Is every file there, byte for byte? Re-read and re-hashed off the
 //     destination, so a short write or a filesystem that accepted bytes
 //     it did not keep is caught here.
-//  2. Is there anything extra? A --force run over an older copy can
+//  2. Is there anything extra? A -force run over an older copy can
 //     leave a stale file the move never wrote, and on the accounts store
 //     that is an account list coming back from the dead.
 //  3. Can mikroview actually use it? Ownership is right by construction
