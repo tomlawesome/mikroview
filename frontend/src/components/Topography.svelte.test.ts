@@ -5273,7 +5273,10 @@ describe('the reach, drawn to round 49 (#1016)', () => {
       const titleBefore = container.querySelector('.line-card .n')!.textContent
       expect(titleBefore).toContain('Servers')
 
-      const other = strands(container).findIndex((_, i) => i !== at)
+      // A strand to a different counterpart: one to the drafted card's own
+      // counterpart returns before the pin guard is reached.
+      const other = strands(container).findIndex((g) => g.getAttribute('aria-label')?.includes('DMZ'))
+      expect(other, 'a strand to the DMZ is drawn').toBeGreaterThanOrEqual(0)
       strands(container)[other].dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
       flushSync()
 

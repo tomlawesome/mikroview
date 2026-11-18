@@ -186,50 +186,53 @@ describe("exemptions in use", () => {
 });
 
 describe("invalid exemptions file", () => {
+  // Every case pairs an advisory with an exemption that would cover it were it
+  // accepted, and the verdict is read from the problem the validation itself
+  // prints, so a case cannot pass on an unrelated failure.
+  function rejected(exemptionsContent, message, options) {
+    const r = run(highReport(), exemptionsContent, options);
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, message);
+    assert.doesNotMatch(r.out, /has no exemption|expired on|stale exemption/);
+  }
+
+  it("accepts the same exemption when it is valid", () => {
+    const r = run(highReport(), [exemption(GHSA_A, "foo")]);
+    assert.equal(r.status, 0, r.out);
+  });
+
   for (const field of ["id", "package", "reason", "expires"]) {
     it(`fails when ${field} is missing`, () => {
       const e = exemption(GHSA_A, "foo");
       delete e[field];
-      const r = run(highReport(), [e]);
-      assert.notEqual(r.status, 0);
-      assert.match(r.out, new RegExp(field));
+      rejected([e], new RegExp(`field "${field}" is missing or empty`));
     });
 
     it(`fails when ${field} is empty`, () => {
       const e = exemption(GHSA_A, "foo");
-      e[field] = "";
-      const r = run(highReport(), [e]);
-      assert.notEqual(r.status, 0);
-      assert.match(r.out, new RegExp(field));
+      e[field] = "  ";
+      rejected([e], new RegExp(`field "${field}" is missing or empty`));
     });
   }
 
-  it("fails on an impossible calendar date", () => {
-    const r = run(highReport(), [exemption(GHSA_A, "foo", "2026-02-30")]);
-    assert.notEqual(r.status, 0);
-    assert.match(r.out, /2026-02-30|expires|date/i);
+  it("fails on an impossible calendar date that is still in the future", () => {
+    rejected([exemption(GHSA_A, "foo", "2027-02-30")], /"expires" is not a valid YYYY-MM-DD date: 2027-02-30/);
   });
 
-  it("fails on a malformed date", () => {
-    const r = run(highReport(), [exemption(GHSA_A, "foo", "17/12/2026")]);
-    assert.notEqual(r.status, 0);
+  it("fails on a malformed date that sorts after today", () => {
+    rejected([exemption(GHSA_A, "foo", "30/12/2027")], /"expires" is not a valid YYYY-MM-DD date: 30\/12\/2027/);
   });
 
   it("fails on a duplicate id", () => {
-    const r = run(highReport(), [exemption(GHSA_A, "foo"), exemption(GHSA_A, "foo")]);
-    assert.notEqual(r.status, 0);
-    assert.match(r.out, new RegExp(GHSA_A));
-    assert.match(r.out, /duplicate/i);
+    rejected([exemption(GHSA_A, "foo"), exemption(GHSA_A, "foo")], new RegExp(`duplicate id ${GHSA_A}`));
   });
 
   it("fails when the exemptions file is not valid JSON", () => {
-    const r = run(highReport(), undefined, { rawExemptions: "not json {" });
-    assert.notEqual(r.status, 0);
+    rejected(undefined, /is unreadable or not JSON/, { rawExemptions: "not json {" });
   });
 
   it("fails when the exemptions file is not an array", () => {
-    const r = run(highReport(), { id: GHSA_A });
-    assert.notEqual(r.status, 0);
+    rejected({ id: GHSA_A }, /must be a JSON array/);
   });
 });
 

@@ -10,7 +10,7 @@
 // which is how #711's policy file was built and checked in the first
 // place.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -368,5 +368,50 @@ describe("#1472 ruling v2: actions/download-artifact is a reviewed pin", () => {
   it("node tools/supply-chain/pins-policy.mjs exits 0", () => {
     const r = spawnSync(process.execPath, ["tools/supply-chain/pins-policy.mjs"], { cwd: repoRoot, encoding: "utf8" });
     assert.equal(r.status, 0, `pins-policy.mjs failed:\n${r.stdout}${r.stderr}`);
+  });
+});
+
+describe("every pin of an action is compared with the policy", () => {
+  const OLD = "1111111111111111111111111111111111111111";
+  const NEW = "2222222222222222222222222222222222222222";
+  const policyFor = (commit, version) => ({
+    ciActions: [{ name: "docker/login-action", commit, version }],
+    containerImages: [],
+  });
+  const check = (policy, fileTexts) =>
+    diffPolicy(policy, { actionPins: extractActionPins(fileTexts), imagePins: new Map() });
+
+  it("fails and names the file that pins an older commit than the policy records", () => {
+    const problems = check(policyFor(NEW, "v4.8.0"), {
+      "old.yml": `uses: docker/login-action@${OLD} # v4.7.0\n`,
+      "new.yml": `uses: docker/login-action@${NEW} # v4.8.0\n`,
+    });
+    const named = problems.filter((p) => p.includes("old.yml") && p.includes("docker/login-action"));
+    assert.ok(named.length > 0, `no problem names old.yml and docker/login-action: ${JSON.stringify(problems)}`);
+    assert.ok(!problems.some((p) => p.includes("new.yml")), "the file on the recorded commit must not be reported");
+  });
+
+  it("still passes when two files pin the same recorded commit", () => {
+    const problems = check(policyFor(NEW, "v4.8.0"), {
+      "a.yml": `uses: docker/login-action@${NEW} # v4.8.0\n`,
+      "b.yml": `uses: docker/login-action@${NEW} # v4.8.0\n`,
+    });
+    assert.deepEqual(problems, []);
+  });
+
+  it("the real workflows each pin exactly what the real policy records", () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const policy = loadPolicy(join(repoRoot, "supply-chain/pins-policy.json"));
+    const wfDir = join(repoRoot, ".github", "workflows");
+    const drift = [];
+    for (const entry of readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f))) {
+      const file = `.github/workflows/${entry}`;
+      const text = readFileSync(join(wfDir, entry), "utf8");
+      // One file at a time, so a file cannot hide behind another file's pin.
+      for (const problem of check(policy, { [file]: text })) {
+        if (/is pinned to|pin comment says|not recorded/.test(problem)) drift.push(`${file}: ${problem}`);
+      }
+    }
+    assert.deepEqual(drift, []);
   });
 });

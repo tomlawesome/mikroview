@@ -1100,9 +1100,34 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     const card = container.querySelector('.fcard.unreg')
     expect(card).not.toBeNull()
     expect(card?.querySelector('.fhead b')?.textContent).toBe('10.0.50.1')
-    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNREGISTERED')
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNDECLARED')
     expect(card?.textContent).toContain('RouterOS 7.19.4')
-    expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
+    expect(card?.textContent).toContain(
+      'its lines are kept; it has no name until it is enrolled or declared in config.yaml',
+    )
+    expect(card?.textContent).not.toContain('UNREGISTERED')
+    expect(card?.textContent).not.toContain('until it is registered')
+  })
+
+  it('calls a router the wizard enrolled enrolled, not unregistered', async () => {
+    appState.devices = [
+      {
+        ...unregistered[0],
+        id: 'enrolled-1',
+        acceptedIp: '192.0.2.7',
+        enrolledAt: new Date().toISOString(),
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.unreg')
+    expect(card).not.toBeNull()
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · ENROLLED')
+    expect(card?.textContent).toContain('enrolled by the wizard; not declared in config.yaml')
+    expect(card?.textContent).not.toContain('UNREGISTERED')
+    expect(card?.textContent).not.toContain('until it is registered')
   })
 
   // #1241: the setup line Fleet.svelte shows on every card was missing
