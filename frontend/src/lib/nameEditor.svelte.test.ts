@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The three calls the editor makes. Mocked rather than hitting a fake
@@ -336,5 +338,30 @@ describe('the device token (#600)', () => {
 
     expect(deleteEntity).toHaveBeenCalledWith('device', '10.0.0.9')
     expect(appState.devices[0].name).toBe('10.0.0.9')
+  })
+})
+
+// The Go side owns the list of naming sources (naming.Source*); this pins
+// that the editor has a sentence for each member of the NameSource union,
+// so a source added to the type cannot fall through to "no name yet".
+describe('identityLine covers every NameSource', () => {
+  const typesSrc = readFileSync(resolve(process.cwd(), 'src/lib/types.ts'), 'utf8')
+  const block = /(?:export )?type NameSource =([\s\S]*?)\n\nexport /.exec(typesSrc)?.[1] ?? ''
+  const sources = [...block.matchAll(/'([a-z-]+)'/g)].map((m) => m[1])
+
+  it('finds the union members', () => {
+    expect(sources).toContain('config-device')
+    expect(sources).toContain('router')
+  })
+
+  it.each(sources.filter((s) => s !== 'none'))('has a sentence for %s', async (source) => {
+    vi.mocked(fetchNameProvenance).mockResolvedValue(
+      provenance({ name: 'Invented Name', source: source as NameProvenance['source'], editable: false, router: 'core' }),
+    )
+    nameEditorState.open('host', '192.0.2.5', 'core', RECT)
+    await settle()
+    const line = nameEditorState.identityLine
+    expect(line).toContain('Invented Name')
+    expect(line).not.toContain('no name yet')
   })
 })
