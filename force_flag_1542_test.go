@@ -96,3 +96,21 @@ func TestDocsSpellForceWithOneDash1542(t *testing.T) {
 		t.Error("docs/configuration.md never names `-force`")
 	}
 }
+
+func TestForceFlagSpellings1542(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"dest", "-force"}, true},
+		{[]string{"dest", "--force"}, true},
+		{[]string{"dest", "-force=true"}, true},
+		{[]string{"dest", "-force=false"}, false},
+		{[]string{"dest", "-x"}, false},
+		{[]string{"dest"}, false},
+	} {
+		if got := forceFlag(c.args); got != c.want {
+			t.Errorf("forceFlag(%v) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}

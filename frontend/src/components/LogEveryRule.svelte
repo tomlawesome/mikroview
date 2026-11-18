@@ -50,6 +50,7 @@
   import { logEveryRuleWorkState as work } from '../lib/logEveryRuleWork.svelte'
   import { fetchTuneLoggingAnalyse, fetchTuneLoggingRender } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { downloadText } from '../lib/export'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import {
@@ -146,7 +147,7 @@
       work.adoptDevice()
       analyseError = null
       renderError = null
-      copied = ''
+      flash.key = null
       // A request still in flight was asked about the router we have
       // just left. Retiring the tokens discards its answer wherever it
       // lands -- including in an instance of this card that has since
@@ -180,7 +181,7 @@
   let renderingToken = $state(0)
   const rendering = $derived(renderingToken !== 0 && renderingToken === work.renderToken)
   let renderError = $state<string | null>(null)
-  let copied = $state('')
+  const flash = new CopyFlash()
 
   // The one intake. Every door into the drop zone -- a dropped file, a
   // chosen file, a paste -- ends here, so a second export always lands
@@ -318,12 +319,7 @@
   }
 
   async function copy(text: string, label: string) {
-    const ok = await copyToClipboard(text)
-    if (ok) {
-      copied = label
-      setTimeout(() => (copied = ''), 1500)
-      work.resultSaved = true
-    }
+    if (await flash.run(label, () => copyToClipboard(text))) work.resultSaved = true
   }
 
   // The guard (issue's own invariant list, "Warn on leave"): held only
@@ -524,11 +520,11 @@
                   Download {work.device}-logging.rsc
                 </button>
                 <button type="button" onclick={() => copy(rr.annotated, 'annotated')}>
-                  {copied === 'annotated' ? 'Copied' : 'Copy the annotated export'}
+                  {flash.label('annotated', 'Copy the annotated export')}
                 </button>
                 <pre>{rr.commands}</pre>
                 <button type="button" onclick={() => copy(rr.commands, 'commands')}>
-                  {copied === 'commands' ? 'Copied' : 'Copy'}
+                  {flash.label('commands', 'Copy')}
                 </button>
               </div>
             {/if}

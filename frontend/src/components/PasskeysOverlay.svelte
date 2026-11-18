@@ -21,6 +21,7 @@
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
@@ -57,7 +58,7 @@
     modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
   let addBusy = $state(false)
   let recoveryCodes = $state<string[]>([])
-  let codesCopied = $state(false)
+  const flash = new CopyFlash()
   // #1202: a first passkey is held, with its codes, until
   // confirmRecoveryCodes says they were saved -- not listed or counted
   // until then. Null when the registration was not held (the account
@@ -132,7 +133,7 @@
     addError = null
     addBusy = false
     recoveryCodes = []
-    codesCopied = false
+    flash.key = null
     heldPasskey = null
     codesError = null
     renamingId = null
@@ -222,7 +223,7 @@
   }
 
   async function copyCodes() {
-    codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
+    await flash.run('codes', () => copyToClipboard(recoveryCodes.join('\n')))
   }
 
   // #1202: a held passkey that gauntlet no longer holds (the ten minutes
@@ -506,7 +507,7 @@
             {/each}
           </div>
           <div class="copyrow">
-            <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
+            <button type="button" class="copy" onclick={copyCodes}>{flash.label('codes', 'Copy all', { copied: 'Copied', failed: 'Copy failed' })}</button>
           </div>
           <!-- #1202: sessions end when the passkey is confirmed, not before. -->
           {#if heldPasskey}

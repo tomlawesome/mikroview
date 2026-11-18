@@ -20,6 +20,7 @@
 
   import { fetchRouterRules, type RouterFilterRule, type RouterTable } from '../../lib/api'
   import { copyToClipboard } from '../../lib/clipboard'
+  import { CopyFlash } from '../../lib/copyFlash.svelte'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
   import { proposeRules, tagBlock, type TuneRule } from '../../lib/wizardTune'
@@ -72,11 +73,16 @@
   // Copy: what is on the clipboard is decided here, whether or not the
   // browser's own write succeeds -- the block stays selectable either
   // way -- and the count starts from this moment.
+  const flash = new CopyFlash()
+
   async function copy() {
     if (copied || chosenRules.length === 0) return
+    // A failed copy flips the button to "copy failed" for a moment and
+    // leaves the step uncopied, so it can be tried again; a successful one
+    // keeps the step's own persistent "Copied" state.
+    if (!(await flash.run('tune', () => copyToClipboard(block)))) return
     wizardRun.tuneChosen = chosenRules
     wizardRun.markTuneCopied(chosenRules.length)
-    await copyToClipboard(block)
   }
 </script>
 
@@ -107,7 +113,7 @@
   <pre class="script tagblock" aria-label="Tagging block">{#if block}{block}{:else}<span class="sec"># nothing ticked</span>{/if}</pre>
   <div class="copyrow">
     <button type="button" class="primary" disabled={copied || chosenRules.length === 0} onclick={copy}>
-      {copied ? 'Copied' : `Copy — ${chosenRules.length} rule${chosenRules.length === 1 ? '' : 's'}`}
+      {copied ? 'Copied' : flash.label('tune', `Copy — ${chosenRules.length} rule${chosenRules.length === 1 ? '' : 's'}`)}
     </button>
     <span class="note">Safe to paste again; it sets, never adds.</span>
   </div>

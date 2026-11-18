@@ -850,3 +850,37 @@ describe('LogEveryRule survives the deck unmounting and remounting the card (#11
     expect(second.container.querySelector('.render-result pre')?.textContent).toBe(renderResponse().commands)
   })
 })
+
+describe('LogEveryRule copy label flip (#1542 C12)', () => {
+  async function toRender(container: HTMLElement) {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBe(1))
+    await fireEvent.click(screen.getByRole('button', { name: /^Render/ }))
+    await waitFor(() => expect(container.querySelector('.render-result')).toBeTruthy())
+  }
+
+  it('flips to lowercase "copied" and returns to its label', async () => {
+    const { container } = render(LogEveryRule)
+    await toRender(container)
+    const btn = screen.getByRole('button', { name: 'Copy the annotated export' })
+    vi.useFakeTimers()
+    await fireEvent.click(btn)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(btn.textContent?.trim()).toBe('copied')
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(btn.textContent?.trim()).toBe('Copy the annotated export')
+    vi.useRealTimers()
+  })
+
+  it('flips to "copy failed" when the copy fails', async () => {
+    const { container } = render(LogEveryRule)
+    await toRender(container)
+    vi.mocked(copyToClipboard).mockResolvedValue(false)
+    const btn = screen.getByRole('button', { name: 'Copy the annotated export' })
+    await fireEvent.click(btn)
+    await waitFor(() => expect(btn.textContent?.trim()).toBe('copy failed'))
+  })
+})

@@ -29,6 +29,7 @@
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { qrCode } from '../lib/qrcode'
   import Fullfall from './Fullfall.svelte'
 
@@ -54,7 +55,7 @@
   let name = $state('')
   let password = $state('')
   let recoveryCodes = $state<string[]>([])
-  let codesCopied = $state(false)
+  const flash = new CopyFlash()
   let error = $state<string | null>(null)
   let busy = $state(false)
   // #1202 U13: where focus goes after the codes screen's call fails or
@@ -123,7 +124,7 @@
   function startAgain(message: string) {
     recoveryCodes = []
     pendingConfirmation = false
-    codesCopied = false
+    flash.key = null
     codesLost = false
     code = ''
     name = ''
@@ -326,7 +327,7 @@
   }
 
   async function copyCodes() {
-    codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
+    await flash.run('codes', () => copyToClipboard(recoveryCodes.join('\n')))
   }
 
   // "I have saved these". A held first factor (#1202) goes live only once
@@ -627,7 +628,7 @@
               <span class="rc">{rc}</span>
             {/each}
           </div>
-          <button class="copy" type="button" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
+          <button class="copy" type="button" onclick={copyCodes}>{flash.label('codes', 'Copy all', { copied: 'Copied', failed: 'Copy failed' })}</button>
           {#if !passkeyOnly}
             <p class="aside">Your ten recovery codes cover your authenticator app and
               your passkeys alike.</p>
