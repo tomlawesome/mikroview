@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // #1542 (C12): the recovery-codes "Copy all" control flips its own label
-// to "copied" / "copy failed" (lowercase, like every other copy control).
+// to "Copied" / "Copy failed" (sentence case: a modal overlay, C6 #1541).
 // Harness as AuthenticatorOverlay.review1202b.svelte.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -76,13 +76,13 @@ async function copyAll(ok: boolean): Promise<HTMLElement> {
 }
 
 describe('AuthenticatorOverlay copy label flip (#1542 C12)', () => {
-  it('flips to lowercase "copied" after a successful copy', async () => {
+  it('flips to "Copied" after a successful copy', async () => {
     const btn = await copyAll(true)
-    expect(btn.textContent?.trim()).toBe('copied')
+    expect(btn.textContent?.trim()).toBe('Copied')
   })
 
   it('flips to "copy failed" after a failed copy (today it reverts to "Copy all")', async () => {
     const btn = await copyAll(false)
-    expect(btn.textContent?.trim()).toBe('copy failed')
+    expect(btn.textContent?.trim()).toBe('Copy failed')
   })
 })
