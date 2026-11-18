@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // mirrorSelfTriggering lists the only workflows under .github/workflows

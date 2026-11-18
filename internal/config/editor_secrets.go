@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // secretKey is one config.yaml setting that is, or points at, something
@@ -210,7 +210,7 @@ type textSpan struct {
 }
 
 // scalarSpan finds the source text of the scalar v in lines, quotes
-// included. yaml.v3 reports where a node starts but not where it ends,
+// included. The yaml package reports where a node starts but not where it ends,
 // so the end is found by reading the text the way YAML does for each
 // style. ok is false when the text at v's position is not what v says it
 // is, which is the signal to leave it alone rather than cut in the wrong

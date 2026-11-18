@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // TextProblem is one entry in the config editor's Problems rail
@@ -52,11 +52,11 @@ func ValidateText(text string) []TextProblem {
 	dec := yaml.NewDecoder(strings.NewReader(text))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
-		var typeErr *yaml.TypeError
-		if !errors.As(err, &typeErr) {
+		var loadErr *yaml.LoadErrors
+		if !errors.As(err, &loadErr) {
 			return []TextProblem{{Line: yamlErrorLine(err), Severity: SeverityFatal.String(), Message: err.Error()}}
 		}
-		for _, issue := range keyIssues(typeErr) {
+		for _, issue := range keyIssues(loadErr) {
 			problems = append(problems, TextProblem{Line: issue.Line, Key: issue.Key, Severity: SeverityFatal.String(), Message: issue.Msg})
 		}
 	}
@@ -108,7 +108,7 @@ func lineForKey(lines map[string]int, key string) int {
 	return 0
 }
 
-// yamlErrorLine pulls the line number out of a yaml.v3 error, 0 when it
+// yamlErrorLine pulls the line number out of a yaml error, 0 when it
 // names none.
 func yamlErrorLine(err error) int {
 	if m := yamlLinePattern.FindStringSubmatch(err.Error()); m != nil {
