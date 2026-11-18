@@ -35,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -439,18 +440,6 @@ func buildSeen(in Input, absent []string) (Seen, []string) {
 	return s, absent
 }
 
-// sourceNotes puts the naming layer's provenance tokens into words. A
-// token is a fine thing for a UI to switch on and a poor thing to show
-// an operator.
-var sourceNotes = map[string]string{
-	"router-dns-static":     "a static DNS entry pushed by the router, which outranks anything named here",
-	"router-dhcp-lease":     "the hostname on the router's own DHCP lease",
-	"router-wireguard-peer": "the comment on the router's WireGuard peer",
-	"entity":                "a label you saved in MikroView",
-	"config":                "an alias in MikroView's config file",
-	"none":                  "nothing has named this address",
-}
-
 func buildNames(in Input, absent []string) (Names, []string) {
 	n := Names{
 		Name:     in.Name.Name,
@@ -458,10 +447,10 @@ func buildNames(in Input, absent []string) (Names, []string) {
 		OwnLabel: in.Name.Label,
 	}
 	n.Known = n.Name != ""
-	n.SourceNote = sourceNotes[in.Name.Source]
+	n.SourceNote = naming.SourceNote(in.Name.Source)
 	if !n.Known {
 		if n.SourceNote == "" {
-			n.SourceNote = sourceNotes["none"]
+			n.SourceNote = naming.SourceNote(naming.SourceNone)
 		}
 		n.Note = "no DNS entry, lease hostname, saved label or config alias names this address"
 		absent = append(absent, "names: nothing names this address in any layer")
