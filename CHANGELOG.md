@@ -250,6 +250,7 @@ rewritten.
   no longer breaks every later one** (#1489, #1485). The pepper file now only
   appears once it is complete, and two commands started together agree on one
   pepper instead of one failing with "recovery pepper is unreadable".
+  The pepper is also created on filesystems that refuse hard links.
 
 - **A watchlist match with an oversized log line is now recorded** (#1471).
   Its raw line is cut to the stored limit instead of the match being refused.

@@ -216,18 +216,51 @@ func loadOrCreatePepperOnce(path string, retried bool) ([]byte, error) {
 	// next run would refuse as unreadable (#1489). Link, not rename: a rename
 	// would overwrite a pepper another process just created (#1485) and make
 	// every digest written under it unverifiable; link fails with EEXIST
-	// instead, and the loser reads theirs. A filesystem without hard links
-	// fails here, loudly. Stray temps are harmless and are not swept.
+	// instead, and the loser reads theirs. Where the filesystem refuses hard
+	// links, the pepper is created exclusively at path itself, so EEXIST still
+	// means read theirs. The trade, on those filesystems only: a kill
+	// mid-write can again leave a short pepper, which is refused as unreadable
+	// and has to be deleted by hand. Stray temps are harmless and are not
+	// swept.
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
 		return nil, err
 	}
 	tmp := path + ".tmp-" + hex.EncodeToString(suffix)
-	f, err := openPepperFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, err
+	if err := writePepperFile(tmp, p); err != nil {
+		return nil, fmt.Errorf("auth: writing the recovery pepper %s: %w", path, err)
 	}
-	// Durable write (#1484): write, fsync, close, each error checked.
+	err = linkPepperFile(tmp, path)
+	_ = os.Remove(tmp)
+	if err != nil && !os.IsExist(err) {
+		// No hard links here: create the final name exclusively instead.
+		err = writePepperFile(path, p)
+		if err != nil && !os.IsExist(err) {
+			return nil, fmt.Errorf("auth: writing the recovery pepper %s: %w", path, err)
+		}
+	}
+	if err != nil {
+		if retried {
+			return nil, fmt.Errorf("auth: recovery pepper %s exists but cannot be read", path)
+		}
+		return loadOrCreatePepperOnce(path, true) // lost the race; read theirs
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return p, nil
+}
+
+// writePepperFile creates name exclusively and writes p to it durably
+// (#1484): write, fsync, close, each error checked. On a write, sync or
+// close failure the file it created is removed; an error from the create
+// itself (EEXIST included) is returned as is, with nothing removed.
+func writePepperFile(name string, p []byte) error {
+	f, err := openPepperFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
 	_, err = f.WriteString(hex.EncodeToString(p))
 	if err == nil {
 		err = f.Sync()
@@ -236,25 +269,9 @@ func loadOrCreatePepperOnce(path string, retried bool) ([]byte, error) {
 		err = closeErr
 	}
 	if err != nil {
-		_ = os.Remove(tmp)
-		return nil, fmt.Errorf("auth: writing the recovery pepper %s: %w", path, err)
+		_ = os.Remove(name)
 	}
-	err = linkPepperFile(tmp, path)
-	_ = os.Remove(tmp)
-	if err != nil {
-		if os.IsExist(err) {
-			if retried {
-				return nil, fmt.Errorf("auth: recovery pepper %s exists but cannot be read", path)
-			}
-			return loadOrCreatePepperOnce(path, true) // lost the race; read theirs
-		}
-		return nil, fmt.Errorf("auth: publishing the recovery pepper %s: %w", path, err)
-	}
-	if d, err := os.Open(filepath.Dir(path)); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return p, nil
+	return err
 }
 
 // pepperFile is what loadOrCreatePepper writes the pepper through; an
@@ -266,6 +283,8 @@ type pepperFile interface {
 	Close() error
 }
 
+// linkPepperFile publishes the pepper; a test double stands in for a
+// filesystem that refuses hard links.
 var linkPepperFile = os.Link
 
 var openPepperFile = func(name string, flag int, perm os.FileMode) (pepperFile, error) {
