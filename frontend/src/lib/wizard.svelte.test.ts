@@ -551,3 +551,38 @@ describe('the drop box (#1361)', () => {
   })
 })
 
+
+// #1507 review decision: Go judges the certificate for the address being
+// typed, so refresh() must hand the wizard's current typed address to the
+// status fetch, and the CA step must block on the served verdict for it
+// even with nothing stored.
+describe('status is fetched for the typed address (#1507)', () => {
+  it('sends the current typed address when it fetches status', async () => {
+    vi.mocked(fetchSetupStatus).mockReset()
+    vi.mocked(fetchSetupStatus).mockResolvedValue(status())
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    wizardState.address = '2001:db8::10'
+    // Already initialised: refresh() must not overwrite the typed value.
+    await wizardState.refresh()
+    expect(fetchSetupStatus).toHaveBeenCalledWith('2001:db8::10')
+  })
+
+  it('blocks the CA step for an uncovered typed address with nothing stored', async () => {
+    vi.mocked(fetchSetupStatus).mockReset()
+    // The server answers for whatever address it is asked about.
+    vi.mocked(fetchSetupStatus).mockImplementation(async (address?: string) => {
+      const base = status()
+      const uncovered = address === '192.0.2.99:8443'
+      return {
+        ...base,
+        instance: { ...base.instance, hosts: ['router.example.net'], effectiveHosts: ['router.example.net'], certificateCoversAddress: !uncovered, addressHost: uncovered ? '192.0.2.99' : '' },
+      } as SetupStatus
+    })
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    wizardState.address = '192.0.2.99:8443'
+    await wizardState.refresh()
+    expect(wizardState.address).toBe('192.0.2.99:8443')
+    const ca = wizardState.ledger.find((st) => st.key === 'ca')
+    expect(ca?.status.state).toBe('blocked')
+  })
+})

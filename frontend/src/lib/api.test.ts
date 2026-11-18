@@ -10,6 +10,7 @@ import {
   clearUserPasskeys,
   clearUserTOTP,
   confirmTOTP,
+  fetchSetupStatus,
   deleteDevice,
   deleteDroplistEntry,
   disablePasskey,
@@ -1146,3 +1147,31 @@ describe('the country source calls (#1352)', () => {
   })
 })
 
+
+// #1507: the typed address rides the status request as ?address=, so Go
+// judges the certificate for it.
+describe('fetchSetupStatus carries the typed address (#1507)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stub() {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('puts a typed address in the address query parameter', async () => {
+    const fetchMock = stub()
+    await (fetchSetupStatus as (a?: string) => Promise<unknown>)('[2001:db8::10]:8443')
+    const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://x.example')
+    expect(url.pathname).toBe('/api/setup/status')
+    expect(url.searchParams.get('address')).toBe('[2001:db8::10]:8443')
+  })
+
+  it('sends no address parameter when none is typed', async () => {
+    const fetchMock = stub()
+    await (fetchSetupStatus as (a?: string) => Promise<unknown>)('')
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/setup/status')
+  })
+})
