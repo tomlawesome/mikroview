@@ -21,6 +21,7 @@ import { wanDoorsState } from '../lib/wanDoors.svelte'
 import { appState } from '../lib/state.svelte'
 import type { ClientEvent } from '../lib/types'
 import WanDoors from './WanDoors.svelte'
+import { expectTabWraps, focusedTrigger } from './dialogKit'
 
 let nextId = 1
 function event(overrides: Partial<ClientEvent>): ClientEvent {
@@ -245,5 +246,26 @@ describe('WanDoors', () => {
     await fireEvent.keyDown(window, { key: 'Escape' })
     flushSync()
     expect(screen.queryByTestId('wan-doors')).toBeNull()
+  })
+})
+
+// #1539 C3 (decision 19a): an aria-modal dialog owns focus -- Tab cannot
+// leave it. Closing already hands focus back (lib/wanDoors.svelte.ts).
+describe('the doors sheet traps focus (#1539 C3)', () => {
+  it('moves focus inside and wraps Tab and Shift+Tab at its ends', async () => {
+    withDeviceWans([{ id: 'core', iface: 'ether1' }])
+    vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
+      devices: [{ id: device, name: 'rb5009', wan, doors: [{ label: '#12', ordinal: 12, dstPort: '443', proto: 'tcp', to: { ip: '192.0.2.5' } }], services: null }],
+    }))
+    const trigger = focusedTrigger()
+    render(WanDoors)
+    wanDoorsState.open(undefined, trigger)
+    flushSync()
+    await vi.waitFor(() => expect(screen.getByText('Doors from the internet')).toBeTruthy())
+    const sheet = screen.getByTestId('wan-doors')
+    await vi.waitFor(() => expect(sheet.querySelectorAll('button').length).toBeGreaterThan(1))
+
+    expectTabWraps(sheet)
+    trigger.remove()
   })
 })

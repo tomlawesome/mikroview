@@ -171,3 +171,75 @@ describe('forgetting an expectation', () => {
     expect(vi.mocked(fetchExpectations)).toHaveBeenCalledTimes(1)
   })
 })
+
+// #1539 C1 (decision 15a) and C2 (18a): Forget is arm-then-confirm like
+// its siblings (round 28). Today the first click forgets.
+describe('Forget is arm-then-confirm (#1539 C1)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchExpectations).mockResolvedValue([PORT_SCAN, SIZELESS])
+    vi.mocked(forgetExpectation).mockResolvedValue(null)
+  })
+
+  const forgetBtn = () => document.querySelector('.forget') as HTMLButtonElement
+
+  it('the first click arms it with the consequence in the label and forgets nothing', async () => {
+    render(ExpectationsLedger, { canEdit: true })
+    await settle()
+    await fireEvent.click(forgetBtn())
+    await settle()
+
+    expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
+    expect(forgetBtn().textContent?.trim()).toMatch(/^confirm — \S/)
+  })
+
+  it('the second click forgets, exactly once', async () => {
+    render(ExpectationsLedger, { canEdit: true })
+    await settle()
+    const btn = forgetBtn()
+    await fireEvent.click(btn)
+    await settle()
+    await fireEvent.click(btn)
+    await settle()
+
+    expect(vi.mocked(forgetExpectation)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(forgetExpectation)).toHaveBeenCalledWith(PORT_SCAN.id)
+  })
+
+  it('a click elsewhere disarms it', async () => {
+    render(ExpectationsLedger, { canEdit: true })
+    await settle()
+    await fireEvent.click(forgetBtn())
+    await settle()
+    await fireEvent.click(document.body)
+    await settle()
+
+    expect(forgetBtn().textContent?.trim()).toBe('Forget')
+    expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
+  })
+
+  it('Escape disarms it (#1539 C2)', async () => {
+    render(ExpectationsLedger, { canEdit: true })
+    await settle()
+    await fireEvent.click(forgetBtn())
+    await settle()
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    await settle()
+
+    expect(forgetBtn().textContent?.trim()).toBe('Forget')
+    expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
+  })
+
+  it('arming one row and then clicking another row\'s Forget arms the second, not the first', async () => {
+    render(ExpectationsLedger, { canEdit: true })
+    await settle()
+    const [a, b] = [...document.querySelectorAll<HTMLButtonElement>('.forget')]
+    await fireEvent.click(a)
+    await settle()
+    await fireEvent.click(b)
+    await settle()
+
+    expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
+    expect(a.textContent?.trim()).toBe('Forget')
+    expect(b.textContent?.trim()).toMatch(/^confirm — /)
+  })
+})

@@ -416,3 +416,25 @@ describe('closing', () => {
     expect(configEditorState.text).toBe('')
   })
 })
+
+// #1539 C2 (decision 18a): Escape disarms an armed control. Escape here
+// already has layers (bars, then the password step, then close); an
+// armed Delete is the innermost one, so the first Escape only backs out
+// of it -- "back out, nothing lost" -- and the editor stays open.
+describe('Escape disarms an armed snapshot delete (#1539 C2)', () => {
+  it('backs out of the armed Delete on Escape, deletes nothing and leaves the editor open', async () => {
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
+    await openEditor()
+
+    const first = () => document.querySelectorAll('.snap .del')[0] as HTMLButtonElement
+    await fireEvent.click(first())
+    expect(first().textContent?.trim()).toBe('Delete for good?')
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await settle()
+
+    expect(configEditorState.visible).toBe(true)
+    expect(first().textContent?.trim()).toBe('Delete')
+    expect(deleteConfigSnapshot).not.toHaveBeenCalled()
+  })
+})

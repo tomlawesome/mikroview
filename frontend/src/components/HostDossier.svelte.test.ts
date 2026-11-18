@@ -25,6 +25,7 @@ import { dossierState } from '../lib/dossier.svelte'
 import { authState } from '../lib/auth.svelte'
 import type { HostDossier as HostDossierResponse } from '../lib/types'
 import HostDossier from './HostDossier.svelte'
+import { expectTabWraps, focusedTrigger } from './dialogKit'
 
 // A host with something in every block: the card's full-house case.
 let FIXTURE: HostDossierResponse
@@ -277,5 +278,21 @@ describe('HostDossier', () => {
     await vi.waitFor(() => expect(geoLookup).toHaveBeenCalled())
     flushSync()
     expect(screen.queryByTestId('dossier-network-owner')).toBeNull()
+  })
+})
+
+// #1539 C3 (decision 19a): an aria-modal dialog owns focus -- Tab cannot
+// leave it. Closing already hands focus back (lib/dossier.svelte.ts).
+describe('the card traps focus (#1539 C3)', () => {
+  it('moves focus inside and wraps Tab and Shift+Tab at its ends', async () => {
+    const trigger = focusedTrigger()
+    render(HostDossier)
+    dossierState.open(FIXTURE.ip, trigger)
+    flushSync()
+    await vi.waitFor(() => expect(screen.getByText('Reads as')).toBeTruthy())
+    const card = screen.getByTestId('host-dossier')
+
+    expectTabWraps(card)
+    trigger.remove()
   })
 })

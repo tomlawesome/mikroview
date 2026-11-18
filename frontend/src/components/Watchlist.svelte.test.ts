@@ -1410,3 +1410,23 @@ describe('the decommission table (#1069)', () => {
     })
   })
 })
+
+// #1539 C2 (decision 18a): Escape disarms an armed control, same as a
+// click elsewhere. Today the armed start-over button stays red.
+describe('Escape disarms start over (#1539 C2)', () => {
+  it('an armed start-over goes back to its resting label on Escape and wipes nothing', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'device', { status: 'off' })])
+    await renderWatchlist([entry('e1', 'SSH watch')])
+
+    const btn = within(document.body).getByRole('button', { name: /wipe every watch/ })
+    await fireEvent.click(btn)
+    flushSync()
+    expect(btn.textContent).toContain('confirm — every watch goes')
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    flushSync()
+
+    expect(btn.textContent).toContain('start over — wipe every watch')
+    expect(resetSuggestions).not.toHaveBeenCalled()
+  })
+})
