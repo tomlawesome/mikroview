@@ -218,13 +218,6 @@
     wizardState.openReEnrol(deviceId)
   }
 
-  // Finish registering… (#1291) opens the router ledger straight at
-  // Register, for a router whose only gap is that one step -- its
-  // enrolment already stands, so nothing here mints a fresh token.
-  function finishRegistering(deviceId: string) {
-    wizardState.openRegister(deviceId)
-  }
-
   // Remove… (#1369): DELETE /api/devices/{id}. Only ever offered on a
   // card whose device is not configured: true -- a config.yaml-declared
   // device is rebuilt from that file every boot, so the server refuses
@@ -771,23 +764,6 @@
   </button>
 {/snippet}
 
-{#snippet finishRegisteringButton(deviceId: string, label: string)}
-  <!-- Finish registering… (#1291): the ledger at Register, keeping the
-       router's device and history, with no fresh token minted -- for a
-       router whose enrolment already stands and is only short of the
-       ledger's own confirmation. Re-enrol… stays offered beside it for
-       when the enrolment itself is the problem; this is for the one
-       step nearly finished, not the whole walk again. -->
-  <button
-    type="button"
-    class="row-action"
-    onclick={() => finishRegistering(deviceId)}
-    aria-label="Finish registering {label} — resume the Register step for it"
-  >
-    Finish registering…
-  </button>
-{/snippet}
-
 {#snippet removeButton(d: Device)}
   <!-- Remove… (#1369): DELETE /api/devices/{id}, admin-only like every
        other device-identity write, next to Re-enrol… on the same card.
@@ -887,7 +863,8 @@
             {@const detail = routerDetail[d.id]}
             <div class="fcard unreg">
               <div class="fhead">
-                <b>{d.name || d.sourceIp}</b><span class="fstate warn">● PUSHING · UNREGISTERED</span>
+                <b>{d.name || d.sourceIp}</b><!-- The chip follows registeredAt: set means the wizard enrolled it. -->
+                <span class="fstate warn">● PUSHING · {d.registeredAt ? 'ENROLLED' : 'UNDECLARED'}</span>
               </div>
               <!-- #1372: same address line as the registered cards above. -->
               <div class="frow dim mono">{routerAddress(d)}</div>
@@ -895,7 +872,11 @@
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
               </div>
-              <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>
+              <div class="frow dim">
+                {d.registeredAt
+                  ? 'enrolled by the wizard; not declared in config.yaml'
+                  : 'its lines are kept; it has no name until it is enrolled or declared in config.yaml'}
+              </div>
               {#if setupEcho(d)}
                 <!-- #1241's line belongs here too: a router discovered by
                      its own push and never declared is the common case,
@@ -908,32 +889,7 @@
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
-              <!-- #1291: enrolling and the ledger's Register step are
-                   independent, so the pair says how far the operator
-                   actually got. This card is where it has to be said --
-                   every router the wizard adds is drawn here, and the
-                   config.yaml-declared cards above can never carry a
-                   registeredAt at all (the server refuses to register
-                   one, since config.yaml rebuilds it every boot).
-                   Worded as "the Register step" rather than
-                   "registered": on this card that word already means
-                   declared in config.yaml, which is the chip in the
-                   header, and the two senses must not be read as one. -->
-              {#if d.acceptedIp && !d.registeredAt}
-                <div class="frow">its logs are accepted, but the Register step was never finished</div>
-              {:else if d.registeredAt && !d.acceptedIp}
-                <div class="frow dim">
-                  the Register step is done; still waiting for its enrolment token to arrive
-                </div>
-              {/if}
               {#if isAdmin}
-                {#if d.acceptedIp && !d.registeredAt}
-                  <!-- #1291: this router's only gap is the Register
-                       step -- offer to finish that directly rather than
-                       sending it through Re-enrol's full mint-a-fresh-
-                       token walk for one step it nearly completed. -->
-                  {@render finishRegisteringButton(d.id, d.name || d.sourceIp)}
-                {/if}
                 <!-- Re-enrol… belongs on this card most of all: since
                      #1281 a router earns its place by presenting a
                      token, and a router the ledger declared is not in
@@ -1328,9 +1284,9 @@
     border-color: var(--hair-2);
   }
 
-  /* The unregistered router, standing in the berth's slot (rounds
+  /* The router not declared in config.yaml, standing in the berth's slot (rounds
      37-38). Its border is --now -- the time/attention ink, not --alarm:
-     a router that pushes without being registered is something to look
+     a router that pushes without being declared is something to look
      at, not something going wrong, and its lines are being kept either
      way. No new colour is introduced for it. */
   .fcard.unreg {
@@ -1468,7 +1424,7 @@
     color: var(--fg-dim);
   }
 
-  /* PUSHING · UNREGISTERED: the time/attention ink, not the alarm one
+  /* PUSHING · ENROLLED / UNDECLARED: the time/attention ink, not the alarm one
      (see .fcard.unreg). */
   .fstate.warn {
     color: var(--now);

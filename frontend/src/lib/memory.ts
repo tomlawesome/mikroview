@@ -31,7 +31,7 @@ const TRACK_W = TRACK_X1 - TRACK_X0
  * of the range has no room to be dragged in. Round 39 draws it a quarter
  * of the way along instead, which is what a log scale gives.
  */
-export function fractionFor(bytes: number, min: number, max: number): number {
+function fractionFor(bytes: number, min: number, max: number): number {
   if (!(max > min) || !(bytes > 0)) return 0
   const span = Math.log2(max / min)
   if (span <= 0) return 0
@@ -53,7 +53,7 @@ export function trackX(bytes: number, min: number, max: number): number {
  * enough that the number under the handle stops flickering while the
  * mouse moves.
  */
-export function bytesAt(fraction: number, min: number, max: number): number {
+function bytesAt(fraction: number, min: number, max: number): number {
   if (!(max > min)) return min
   const raw = min * Math.pow(2, clamp01(fraction) * Math.log2(max / min))
   return clampBytes(snap(raw), min, max)
@@ -229,7 +229,7 @@ function trimZero(s: string): string {
 }
 
 /** capacityFor is the event count a budget buys, as the server derives it. */
-export function capacityFor(bytes: number, bytesPerEvent: number): number {
+function capacityFor(bytes: number, bytesPerEvent: number): number {
   if (!(bytesPerEvent > 0)) return 0
   return Math.max(1, Math.floor(bytes / bytesPerEvent))
 }
@@ -244,7 +244,7 @@ export function capacityFor(bytes: number, bytesPerEvent: number): number {
  * on. "today's rate" is eventsPerSecond, the server's own rolling
  * average -- the same figure every other reach claim in the app uses.
  */
-export function reachHours(capacity: number, eventsPerSecond: number): number | null {
+function reachHours(capacity: number, eventsPerSecond: number): number | null {
   if (!(eventsPerSecond > 0) || !(capacity > 0)) return null
   return capacity / eventsPerSecond / 3600
 }

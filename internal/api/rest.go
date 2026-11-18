@@ -357,6 +357,16 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleNetworks serves networks.home (#1481). An unset list is [] not
+// null: the frontend iterates it.
+func (s *Server) handleNetworks(w http.ResponseWriter, _ *http.Request) {
+	home := s.HomeNetworks
+	if home == nil {
+		home = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"home": home})
+}
+
 // deviceStatus computes info's fleet-health status as of now -- see
 // deviceView.Status for what each value means. A device with no events
 // yet is "never_seen" regardless of DeviceStaleAfter (there's no elapsed
@@ -653,13 +663,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // body size with no credentials required, a straightforward DoS.
 const maxJSONBodyBytes = 64 * 1024
 
-// decodeJSONBody is json.NewDecoder(r.Body).Decode(v), wrapped with
+// strictDecode decodes one JSON value into v and refuses any field v does
+// not declare (#1500), as gauntlet's routes do: a misspelt field fails with
+// the caller's usual 400 instead of being silently dropped. Fields inside
+// a map or json.RawMessage stay free-form.
+func strictDecode(body io.Reader, v any) error {
+	dec := json.NewDecoder(body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}
+
+// decodeJSONBody is strictDecode (unknown fields refused), wrapped with
 // http.MaxBytesReader -- see maxJSONBodyBytes. Every handler that
 // accepts a JSON body should read it through this, not r.Body
 // directly.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
-	return json.NewDecoder(r.Body).Decode(v)
+	return strictDecode(r.Body, v)
 }
 
 // handleThirdPartyNotices serves THIRD-PARTY-NOTICES.md verbatim, as

@@ -119,3 +119,4 @@ no account exists yet -- create the first admin with setup code xxxx-xxxx-xxxx-x
   and that an unexpectedly empty store (deleted file, wrong path, bad
   restore) prints a new code rather than letting the first visitor in.
 
+Written 2026-10-02.

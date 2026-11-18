@@ -1018,3 +1018,29 @@ func TestRebindEnrolmentRefusesAnExpiredWindow(t *testing.T) {
 		t.Error("the window moved to .5 anyway -- a lapsed token must not reopen the gate")
 	}
 }
+
+// TestAFailedEnrolPersistLeavesTheRouterUnregistered is #1493: the
+// registration stamp that acceptance now sets is rolled back with
+// AcceptedIP and EnrolledAt when the save fails.
+func TestAFailedEnrolPersistLeavesTheRouterUnregistered(t *testing.T) {
+	r, err := OpenRegistryWithBackend(nil, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistryWithBackend: %v", err)
+	}
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.backend = &failingSaveBackend{}
+	if r.TryEnrol("10.10.0.1", []byte(`<30>Jan  1 00:00:00 router mikroview-enrol `+token)) {
+		t.Fatal("TryEnrol() = true against a backend that cannot save, want false")
+	}
+	got := r.List()
+	if len(got) != 1 || !got[0].EnrolledAt.IsZero() || !got[0].RegisteredAt.IsZero() {
+		t.Errorf("state after a failed persist = %+v, want EnrolledAt and RegisteredAt both zero", got)
+	}
+}

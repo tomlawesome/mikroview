@@ -159,13 +159,13 @@ screenshot_sources() {
     docs/screenshots/engine-room-people-door.png)
       echo "frontend/src/components/EngineRoom.svelte frontend/src/components/ResetCodeOverlay.svelte" ;;
     docs/screenshots/setup-wizard-ledger.png)
-      echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
+      echo "frontend/src/components/wizard/Wizard.svelte frontend/src/components/wizard/StepRouter.svelte frontend/src/lib/wizard.svelte.ts" ;;
     docs/screenshots/entities-add-a-router.png)
       echo "frontend/src/components/Entities.svelte" ;;
     docs/screenshots/entities-refused-sender.png)
       echo "frontend/src/components/Entities.svelte" ;;
     docs/screenshots/setup-wizard-send-logs.png)
-      echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
+      echo "frontend/src/components/wizard/StepPaste.svelte frontend/src/lib/wizardRun.svelte.ts frontend/src/lib/wizard.svelte.ts" ;;
     docs/screenshots/authenticator-menu-dark.png)
       echo "frontend/src/components/AccountMenu.svelte" ;;
     docs/screenshots/authenticator-enrol-dark.png)
@@ -179,8 +179,15 @@ screenshot_sources() {
   esac
 }
 
-grep -ohE '(docs/)?screenshots/[A-Za-z0-9_.-]+\.png' README.md docs/*.md .github/workflows/pages.yml 2>/dev/null \
-  | sed -E 's#^screenshots/#docs/screenshots/#' | sort -u >"$tmpd/screens"
+{
+  grep -ohE '(docs/)?screenshots/[A-Za-z0-9_.-]+\.png' README.md docs/*.md .github/workflows/pages.yml 2>/dev/null \
+    | sed -E 's#^screenshots/#docs/screenshots/#'
+  # site/index.html shows img/<name>.png, which the Pages job copies from
+  # docs/screenshots/<name>.png (#1456) -- map it back so those are
+  # checked against the same sources, not only the ones README names.
+  grep -ohE 'src="img/[A-Za-z0-9_.-]+\.png"' site/index.html 2>/dev/null \
+    | sed -E 's#^src="img/#docs/screenshots/#; s#"$##'
+} | sort -u >"$tmpd/screens"
 while IFS= read -r png; do
   [ -n "$png" ] || continue
   last=$(git log -1 --format=%H -- "$png" 2>/dev/null || true)

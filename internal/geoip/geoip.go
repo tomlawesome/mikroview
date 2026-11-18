@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/settings"
 )
@@ -79,6 +80,9 @@ type Options struct {
 	// vault seals with. Nil refuses key entry -- see ErrNoSealKey.
 	Sealer *retention.Key
 	Log    *slog.Logger
+	// Home is the networks.home scope (#1481): a home address is inside,
+	// so it is not geolocated. Nil is the address-only default.
+	Home *ipscope.Scope
 }
 
 // source is one feed's live state. Every field is guarded by
@@ -124,6 +128,7 @@ type Manager struct {
 
 	cacheDir string
 	keys     KeyStore
+	home     *ipscope.Scope // set once by New, read without mu
 	sealer   *retention.Key
 	log      *slog.Logger
 	client   *http.Client
@@ -150,6 +155,7 @@ func New(opts Options) *Manager {
 		cacheDir: opts.CacheDir,
 		keys:     opts.Keys,
 		sealer:   opts.Sealer,
+		home:     opts.Home,
 		log:      log,
 		client:   newFetchClient(),
 		eps:      defaultEndpoints(),
@@ -233,7 +239,7 @@ func (m *Manager) noteSourceChangeLocked() {
 // for: no source loaded, an unparseable IP, a non-public address, or no
 // match.
 func (m *Manager) Country(ipStr string) (code string, ok bool) {
-	ip, ok := lookupAddr(ipStr)
+	ip, ok := lookupAddr(m.homeScope(), ipStr)
 	if !ok || m == nil {
 		return "", false
 	}
@@ -251,7 +257,7 @@ func (m *Manager) Country(ipStr string) (code string, ok bool) {
 // and whether one was found. Only IPinfo carries it, so this answers
 // only while IPinfo is the source in use.
 func (m *Manager) Owner(ipStr string) (asn uint, name string, ok bool) {
-	ip, ok := lookupAddr(ipStr)
+	ip, ok := lookupAddr(m.homeScope(), ipStr)
 	if !ok || m == nil {
 		return 0, "", false
 	}
@@ -265,8 +271,11 @@ func (m *Manager) Owner(ipStr string) (asn uint, name string, ok bool) {
 }
 
 // lookupAddr parses and filters an address for lookup. Unmapped first:
-// ::ffff:192.0.2.8 is the same host as 192.0.2.8 (#1081).
-func lookupAddr(ipStr string) (netip.Addr, bool) {
+// ::ffff:203.0.113.5 is the same host as 203.0.113.5 (#1081). The filter is the
+// shared ipscope classifier -- the looser of this package's two
+// predicates (see IsPublicUnicast, the dial guard, which a home set never
+// touches) -- so a networks.home address is not geolocated.
+func lookupAddr(scope *ipscope.Scope, ipStr string) (netip.Addr, bool) {
 	if ipStr == "" {
 		return netip.Addr{}, false
 	}
@@ -275,19 +284,15 @@ func lookupAddr(ipStr string) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	ip = ip.Unmap()
-	return ip, isPublic(ip)
+	return ip, scope.IsPublic(ip)
 }
 
-// isPublic is the ingest-path filter: an address it is meaningful to
-// geolocate. Deliberately the looser of this package's two predicates
-// (see IsPublicUnicast), unchanged from before #1352.
-func isPublic(ip netip.Addr) bool {
-	return ip.IsValid() &&
-		!ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsUnspecified() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast()
+// homeScope is nil-safe: Country and Owner answer on a nil Manager.
+func (m *Manager) homeScope() *ipscope.Scope {
+	if m == nil {
+		return nil
+	}
+	return m.home
 }
 
 // SourceStatus is one source's fetch state, as GET /api/settings/geo

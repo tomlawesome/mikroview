@@ -39,6 +39,7 @@ import type { Host } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography, { tunnelEventCounts } from './Topography.svelte'
+import { CARD_GRACE_MS } from '../lib/cardAnchor'
 // Vite's own `?raw` import (typed by vite/client, already in this
 // project's tsconfig) -- not a Node fs read -- so the handful of
 // assertions below that care about a raw CSS value or a stylesheet's own
@@ -5150,6 +5151,136 @@ describe('the reach, drawn to round 49 (#1016)', () => {
       // The same invariant the strand pill's door carried: a printed
       // line for the operator to paste, and nothing sent to the router.
       expect(composer!.textContent).toContain('MikroView never touches the router')
+    })
+  })
+
+  // #1496: drafting from a hover card is interacting with it, so the card
+  // is pinned first, as the host and off-baseline cards' form doors do.
+  describe('drafting a rule pins its line card (#1496)', () => {
+    const refusedEvent = () =>
+      event({
+        inInterface: 'bridge1',
+        outInterface: 'bridge2',
+        srcIp: '10.0.10.21',
+        dstIp: '10.0.20.10',
+        dstPort: 22,
+        protocol: 'tcp',
+        action: 'drop',
+        ruleLabel: '#17 default drop',
+      })
+
+    const strands = (c: HTMLElement) => [...c.querySelectorAll('.membrane-layer .strand-g')]
+    const refusedAt = (c: HTMLElement) => strands(c).findIndex((g) => g.querySelector('.strand-x') !== null)
+
+    /** Hover the refused strand and click its draft door. */
+    function draft(container: HTMLElement) {
+      const at = refusedAt(container)
+      expect(at).toBeGreaterThanOrEqual(0)
+      const card = hoverStrand(container, at)!
+      expect(card.classList.contains('pinned'), 'the hover card opens unpinned').toBe(false)
+      card.querySelector<HTMLButtonElement>('[data-draft-rule]')!.click()
+      flushSync()
+      return { at, card }
+    }
+
+    /** The pointer leaves strand and card; the grace timer runs out. */
+    function leave(container: HTMLElement, at: number, card: HTMLElement) {
+      strands(container)[at].dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      card.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      vi.advanceTimersByTime(CARD_GRACE_MS + 100)
+      flushSync()
+    }
+
+    const esc = () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+    }
+
+    /** standOnDesktop seeds two zones; this scene needs a third (and a
+     * second strand to it), so it takes the same steps with its own. */
+    function setup() {
+      zonesState.pushed = [
+        { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+        { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'bridge2', comment: 'Servers' },
+        { address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge3', comment: 'DMZ' },
+      ]
+      appState.events = [
+        event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', srcHostName: 'alex-desktop', dstIp: '10.0.20.10', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'accept' }),
+        refusedEvent(),
+        event({ inInterface: 'bridge1', outInterface: 'bridge3', srcIp: '10.0.10.21', dstIp: '10.0.30.5', dstHostName: 'web', dstPort: 443, protocol: 'tcp', action: 'accept' }),
+      ]
+      const { container } = render(Topography)
+      flushSync()
+      container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+      return container
+    }
+
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('pins the card when the door is clicked, so it outlives the pointer', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+
+      expect(container.querySelector('.composer[role=dialog]')).not.toBeNull()
+      expect(container.querySelector('.line-card')!.classList.contains('pinned')).toBe(true)
+      expect(container.querySelector('.line-card .pin')!.getAttribute('aria-pressed')).toBe('true')
+
+      leave(container, at, card)
+      expect(container.querySelector('.line-card'), 'the card closed under the composer').not.toBeNull()
+    })
+
+    it('walks out one rung per Escape: the card, then the composer, then the reach', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+      leave(container, at, card)
+
+      esc()
+      expect(container.querySelector('.line-card')).toBeNull()
+      expect(container.querySelector('.composer')).not.toBeNull()
+
+      esc()
+      expect(container.querySelector('.composer')).toBeNull()
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+
+      esc()
+      expect(container.querySelector('.membrane-layer')).toBeNull()
+    })
+
+    it('unpinning closes the card and leaves the half-written draft alone', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+      leave(container, at, card)
+
+      const free = container.querySelector<HTMLInputElement>('.composer .pfree')!
+      free.value = '2222'
+      free.dispatchEvent(new Event('input', { bubbles: true }))
+      flushSync()
+
+      container.querySelector<HTMLButtonElement>('.line-card .pin')!.click()
+      flushSync()
+
+      expect(container.querySelector('.line-card'), 'unpin should close a pinned card').toBeNull()
+      expect(container.querySelector('.composer')).not.toBeNull()
+      expect(container.querySelector<HTMLInputElement>('.composer .pfree')!.value).toBe('2222')
+    })
+
+    it('does not swap a drafted card when another strand is hovered', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+      leave(container, at, card)
+      const titleBefore = container.querySelector('.line-card .n')!.textContent
+      expect(titleBefore).toContain('Servers')
+
+      // A strand to a different counterpart: one to the drafted card's own
+      // counterpart returns before the pin guard is reached.
+      const other = strands(container).findIndex((g) => g.getAttribute('aria-label')?.includes('DMZ'))
+      expect(other, 'a strand to the DMZ is drawn').toBeGreaterThanOrEqual(0)
+      strands(container)[other].dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.line-card .n')!.textContent).toBe(titleBefore)
     })
   })
 

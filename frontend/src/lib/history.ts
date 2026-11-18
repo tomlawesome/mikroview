@@ -36,7 +36,7 @@ export function daysAtX(x: number): number {
   return clampDays(Math.round(Math.pow(DAYS_MAX, fraction)))
 }
 
-export function clampDays(days: number): number {
+function clampDays(days: number): number {
   if (!Number.isFinite(days)) return DAYS_MIN
   return Math.min(DAYS_MAX, Math.max(DAYS_MIN, Math.round(days)))
 }
@@ -66,7 +66,7 @@ export function capDays(maxBytes: number, bytesPerDay: number): number | null {
 }
 
 /** bytesForDays is what a number of days needs at today's rate. */
-export function bytesForDays(days: number, bytesPerDay: number): number {
+function bytesForDays(days: number, bytesPerDay: number): number {
   return Math.max(0, days) * Math.max(0, bytesPerDay)
 }
 
@@ -139,7 +139,7 @@ export function heldRow(s: HistorySettings, locale?: string): string | null {
  * history on with the same key to use them". Both ends of the range,
  * because nothing is being added at the newest end any more.
  */
-export function keptRow(held: HistoryHeld, locale?: string): string {
+function keptRow(held: HistoryHeld, locale?: string): string {
   const range =
     held.oldest === held.newest
       ? dayLabel(held.oldest, locale)
@@ -158,7 +158,7 @@ export function deletePasswordLabel(days: number): string {
   return `Your password, to delete ${nDays(days)} of history`
 }
 
-export function heldSuffix(s: HistorySettings): string {
+function heldSuffix(s: HistorySettings): string {
   if (!s.held) return ''
   if (s.capped) return ' — full'
   if (s.held.days < s.days) return ' — filling'
@@ -182,7 +182,7 @@ export function capMark(maxBytes: number, bytesPerDay: number): { days: number; 
 export type DiskPhase = 'rest' | 'dshrink' | 'dgrow' | 'dcap' | 'dcapped' | 'dstopped' | 'dnokey' | 'dfail'
 
 /** Which of those a proposal puts the group in. */
-export type ProposalKind = 'dshrink' | 'dgrow' | 'dcap'
+type ProposalKind = 'dshrink' | 'dgrow' | 'dcap'
 
 export interface DiskProposal {
   kind: ProposalKind
@@ -454,13 +454,13 @@ export const HOW_TO_MOUNT_URL =
  *  the app folder's own keys/ (#1209, #1243). Beside data/, never inside
  *  it -- the rule is that the key must not live in the data store, which
  *  is what a backup of data/ alone carries. */
-export const KEY_DIR = 'mikroview/keys'
-export const KEY_FILE_PATH = `${KEY_DIR}/history.key`
+const KEY_DIR = 'mikroview/keys'
+const KEY_FILE_PATH = `${KEY_DIR}/history.key`
 
 /** The same file seen from inside the container, where the app folder is
  *  mounted read-only. MikroView reads this path with nothing set, so the
  *  wizard only quotes it to say what `history.keyFile` would name. */
-export const KEY_FILE_CONTAINER_PATH = '/etc/mikroview/keys/history.key'
+const KEY_FILE_CONTAINER_PATH = '/etc/mikroview/keys/history.key'
 
 /**
  * newHistoryKey mints a `history.keyFile` value in the browser: 32

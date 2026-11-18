@@ -150,3 +150,4 @@ is stupid, just say finish or something"
 - Round 9: rethink AC's finished state; the strip goes. The closing
   button says "Finish" (or similar), not "Stay on the fall".
 
+Written 2026-09-26.

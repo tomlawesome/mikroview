@@ -40,7 +40,7 @@ import { preferencesState } from './preferences.svelte'
 // card, so the estimate moves with the deck instead of being fixed
 // prose -- #647 grew an admin's deck to seven, and a viewer's is the
 // six the round drew.
-export const TOUR_SECONDS_PER_CARD = 20
+const TOUR_SECONDS_PER_CARD = 20
 
 // How long after the way out has landed the offer rises: the fall, the
 // bar and the groups have struck on by then (WizardJourney.svelte's

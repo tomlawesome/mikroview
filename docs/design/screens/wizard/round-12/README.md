@@ -107,3 +107,4 @@ two tweaks: the slide keeps its motion but the chute — the NOW line,
 the time labels, the rows, the "nothing has arrived" line — is gone;
 the letters flicker a little more often.
 
+Written 2026-09-27.

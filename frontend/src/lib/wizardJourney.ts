@@ -107,7 +107,7 @@ function runLetters(letters: Letter[], t: number) {
 /** The riding box: a copy of the wordmark in a fixed element the caller
  * has already rendered (WizardJourney.svelte), with its letters. `from`
  * is the rect the wordmark starts on. */
-export type Ride = {
+type Ride = {
   el: HTMLElement
   w: number
   h: number
@@ -117,7 +117,7 @@ export type Ride = {
   letters: Letter[]
   put: (cx: number, cy: number, s: number) => { cx: number; cy: number; hw: number; hh: number }
 }
-export function makeRide(el: HTMLElement, from: DOMRect): Ride {
+function makeRide(el: HTMLElement, from: DOMRect): Ride {
   const w = el.offsetWidth
   const h = el.offsetHeight
   const wm = el.querySelector('.wm') as HTMLElement

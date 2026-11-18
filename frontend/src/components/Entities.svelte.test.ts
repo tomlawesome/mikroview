@@ -270,16 +270,11 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  // #1291: registering (the ledger's final Register step) and enrolling
-  // (a router's logs being accepted) are independent, so a card has to
-  // say plainly when only one of the two ever happened.
-  // configured: false throughout -- every router the wizard adds is
-  // drawn on the unregistered cards, and a config.yaml-declared one can
-  // never carry a registeredAt at all (the server refuses to register
-  // one, since config.yaml rebuilds it on every boot). A test written
-  // against the declared cards would be asserting about a state that
-  // cannot happen.
-  it('reads an enrolled-but-never-registered router as an unfinished setup, not the finished state', async () => {
+  // #1493: registration is acceptance of the enrol line, so the card no
+  // longer reports an unfinished Register step nor offers to finish one.
+  // configured: false throughout -- the wizard's routers draw on the
+  // unregistered cards.
+  it('says nothing of a Register step for an accepted router with no registeredAt', async () => {
     appState.devices = [
       {
         id: 'rb5009',
@@ -295,16 +290,11 @@ describe('Entities router cards (#675)', () => {
     const { container } = render(Entities)
     await settle()
 
-    const card = container.querySelector('.fcard.unreg')
-    expect(card?.textContent).toContain(
-      'its logs are accepted, but the Register step was never finished',
-    )
+    expect(container.querySelector('.fcard.unreg')).not.toBeNull()
+    expect(container.textContent).not.toContain('Register step')
   })
 
-  // #1291's other unmet checklist item: this router only needs the
-  // Register step, not a whole re-enrolment, so it gets a direct way to
-  // resume there -- keeping its device and history, minting nothing.
-  it('offers to finish registering an enrolled-but-unregistered router, landing on Register with no token minted', async () => {
+  it('offers no Finish registering control for an accepted router with no registeredAt', async () => {
     appState.devices = [
       {
         id: 'rb5009',
@@ -317,23 +307,14 @@ describe('Entities router cards (#675)', () => {
         acceptedIp: '10.0.0.1',
       },
     ] as unknown as (typeof appState)['devices']
-    const { getByLabelText } = render(Entities)
+    const { container, queryByLabelText } = render(Entities)
     await settle()
 
-    getByLabelText(/Finish registering rb5009/).click()
-    flushSync()
-
-    expect(wizardState.open).toBe(true)
-    expect(wizardState.steps).toEqual(ROUTER_STEPS)
-    expect(wizardState.ledgerDevice).toBe('rb5009')
-    // Register is the last step of the router ledger.
-    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
-    expect(wizardState.enrolment).toBeNull()
+    expect(container.querySelector('.fcard.unreg')).not.toBeNull()
+    expect(queryByLabelText(/Finish registering/)).toBeNull()
+    expect(container.textContent).not.toContain('Finish registering')
   })
 
-  // A registered-but-not-yet-enrolled router has nothing left for
-  // Register to finish -- the gap is the token, which only Re-enrol…
-  // mints -- so the Finish registering… control must not appear there.
   it('does not offer Finish registering… once the router is already registered', async () => {
     appState.devices = [
       {
@@ -354,7 +335,7 @@ describe('Entities router cards (#675)', () => {
     expect(queryByText('Finish registering…')).toBeNull()
   })
 
-  it('reads a registered-but-not-yet-enrolled router as a normal wait, not an error', async () => {
+  it('says nothing of a Register step for a not-yet-enrolled router', async () => {
     appState.devices = [
       {
         id: 'rb5009',
@@ -370,9 +351,7 @@ describe('Entities router cards (#675)', () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.textContent).toContain(
-      'the Register step is done; still waiting for its enrolment token to arrive',
-    )
+    expect(container.textContent).not.toContain('Register step')
   })
 
   it('shows neither unfinished-setup nor waiting-for-token copy once both registered and enrolled', async () => {
@@ -833,11 +812,11 @@ describe('Entities named-things table (#675)', () => {
     await settle()
     const input = container.querySelector('.rename-input') as HTMLInputElement
     expect(input).toBeTruthy()
-    await fireEvent.input(input, { target: { value: 'alexs-desktop' } })
+    await fireEvent.input(input, { target: { value: 'kais-desktop' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
     await settle()
 
-    expect(upsertEntity).toHaveBeenCalledWith({ type: 'host', key: '10.0.10.2', label: 'alexs-desktop', tags: ['trusted'] })
+    expect(upsertEntity).toHaveBeenCalledWith({ type: 'host', key: '10.0.10.2', label: 'kais-desktop', tags: ['trusted'] })
   })
 
   it('Esc cancels a rename without saving', async () => {
@@ -864,7 +843,7 @@ describe('Entities named-things table (#675)', () => {
     await fireEvent.click(getByText('alex-desktop'))
     await settle()
     let input = container.querySelector('.rename-input') as HTMLInputElement
-    await fireEvent.input(input, { target: { value: 'alexs-desktop' } })
+    await fireEvent.input(input, { target: { value: 'kais-desktop' } })
     await fireEvent.blur(input)
     await settle()
     expect(upsertEntity).toHaveBeenCalledTimes(1)
@@ -1121,9 +1100,34 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     const card = container.querySelector('.fcard.unreg')
     expect(card).not.toBeNull()
     expect(card?.querySelector('.fhead b')?.textContent).toBe('10.0.50.1')
-    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNREGISTERED')
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNDECLARED')
     expect(card?.textContent).toContain('RouterOS 7.19.4')
-    expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
+    expect(card?.textContent).toContain(
+      'its lines are kept; it has no name until it is enrolled or declared in config.yaml',
+    )
+    expect(card?.textContent).not.toContain('UNREGISTERED')
+    expect(card?.textContent).not.toContain('until it is registered')
+  })
+
+  it('calls a router the wizard enrolled enrolled, not unregistered', async () => {
+    appState.devices = [
+      {
+        ...unregistered[0],
+        id: 'enrolled-1',
+        acceptedIp: '192.0.2.7',
+        enrolledAt: new Date().toISOString(),
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.unreg')
+    expect(card).not.toBeNull()
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · ENROLLED')
+    expect(card?.textContent).toContain('enrolled by the wizard; not declared in config.yaml')
+    expect(card?.textContent).not.toContain('UNREGISTERED')
+    expect(card?.textContent).not.toContain('until it is registered')
   })
 
   // #1241: the setup line Fleet.svelte shows on every card was missing

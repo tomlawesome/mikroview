@@ -4680,7 +4680,18 @@
           <!-- The composer, on the card that names the refusal (round
                49). Drafted, never run -- the same invariant as the 2D
                composer, and the same printed line. -->
-          <button type="button" class="linkact" data-draft-rule onclick={() => (composerOpen = true)}>draft the rule ▸</button>
+          <button
+            type="button"
+            class="linkact"
+            data-draft-rule
+            onclick={() => {
+              // Pins the card first (#1496), as openExpectedForm does.
+              roadGrace.hold()
+              pinnedRoad = lc.id
+              hoverRoad = lc.id
+              composerOpen = true
+            }}>draft the rule ▸</button
+          >
         </div>
       {/if}
     </div>

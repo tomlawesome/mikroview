@@ -147,3 +147,4 @@ receipts are the boilerplate, not the identity — the identity is how the
 fall, the topography and the stream use colour to bring the picture
 alive.
 
+Written 2026-09-26.

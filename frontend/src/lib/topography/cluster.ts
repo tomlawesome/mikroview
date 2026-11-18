@@ -29,11 +29,11 @@ import { boxHasPoint, boxesOverlap, fitScale, growFrame, type Box } from '../fit
  * why these are two numbers rather than one half-width. */
 export const CARD_W = 188
 export const CARD_H = 56
-export const CARD_LEFT = 84
-export const CARD_RIGHT = 104
-export const CARD_HALF_H = 28
+const CARD_LEFT = 84
+const CARD_RIGHT = 104
+const CARD_HALF_H = 28
 /** How far the aggregate bar hangs below a card that has one. */
-export const CARD_BAR = 20
+const CARD_BAR = 20
 
 /** Round 30's seat for the first tunnel (the-whole.html:986). The
  * busiest tunnel keeps it, so with one tunnel nothing moves. */
@@ -45,8 +45,8 @@ export const WG0_STRAND = 'M1080 186 C 990 215, 880 240, 830 252'
 export const NOMINAL_FRAME: Box = { x: 0, y: 0, w: 1400, h: 720 }
 /** The stage the viewBox is presented on, and what a zoom percentage is
  * measured against -- the city's own (project.ts STAGE_W/STAGE_H). */
-export const STAGE_W = 1400
-export const STAGE_H = 700
+const STAGE_W = 1400
+const STAGE_H = 700
 
 /** The router card's right edge and the shoulder the strands land on. */
 const ROUTER_RIGHT = 828
@@ -194,7 +194,7 @@ function crossesAny(pts: Pt[], boxes: Box[]): boolean {
  * under the Guest card (round 52 README) -- strands are drawn before the
  * cards, so the card covers what passes beneath it.
  */
-export function strandFor(p: Spot, shoulder: Spot, topEdge: boolean, cards: Box[]): { d: string; anchor: Spot; points: Pt[] } {
+function strandFor(p: Spot, shoulder: Spot, topEdge: boolean, cards: Box[]): { d: string; anchor: Spot; points: Pt[] } {
   const direct = directCurve(p, shoulder, topEdge)
   const chosen = crossesAny(samplePath(direct), cards) ? threadedCurve(p, shoulder, topEdge) : direct
   return { d: pathOf(chosen), anchor: { x: chosen[0][0], y: chosen[0][1] }, points: samplePath(chosen) }

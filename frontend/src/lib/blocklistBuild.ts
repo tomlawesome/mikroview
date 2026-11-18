@@ -56,7 +56,7 @@ export function inkFor(key: string): string {
 // Threats compromised" for ET, the card's own title for every other.
 const RAIL_NAMES: Record<string, string> = { et: 'Emerging Threats compromised' }
 
-export function railName(e: BlocklistCatalogueEntry): string {
+function railName(e: BlocklistCatalogueEntry): string {
   return RAIL_NAMES[e.key] ?? e.name
 }
 
@@ -146,7 +146,7 @@ export function refreshLabel(r: BlocklistRefresh): string {
 }
 
 // held reports whether the router holds any of a list.
-export function held(row: BlocklistLedgerEntry | undefined): boolean {
+function held(row: BlocklistLedgerEntry | undefined): boolean {
   return !!row && row.state === 'held'
 }
 
@@ -179,7 +179,7 @@ export function requestLists(b: BlocklistBuilder, c: Choices): BlocklistChoice[]
     })
 }
 
-export function plural(n: number, one: string, many: string): string {
+function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
@@ -251,7 +251,7 @@ export function flagsFact(e: BlocklistCatalogueEntry, row: BlocklistLedgerEntry)
   return `flags from this list: ${row.flags24h} in 24 h (dropped first)`
 }
 
-export type RowState = 'done' | 'chosen' | 'off'
+type RowState = 'done' | 'chosen' | 'off'
 
 export interface RailRow {
   key: string

@@ -166,3 +166,4 @@ Numbered for reply; the counter continues from the session.
 - The `⚑ flags` / `◉ watch` lens pills: no toggle, the marks come and go
   with the data (owner, 2026-09-08, #981).
 
+Written 2026-09-07.

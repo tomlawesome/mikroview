@@ -87,8 +87,8 @@
     // or when the wizard last closed (#1404): read it again, and place
     // the run once more on what it says -- unless the operator has
     // already answered something, which a re-place would throw away.
-    // Only the bare Run setup… door: Add a router, Re-enrol… and Finish
-    // registering… place their walk on the door, not on the evidence.
+    // Only the bare Run setup… door: Add a router and Re-enrol… place
+    // their walk on the door, not on the evidence.
     if (untrack(() => !wizardState.ledgerDevice && !wizardState.addingRouter)) {
       const placed = untrack(() => wizardRun.placement)
       wizardState.refresh().then(() => {

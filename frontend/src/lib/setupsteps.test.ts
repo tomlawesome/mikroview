@@ -41,6 +41,7 @@ function backups(over: Partial<RouterBackupsResponse> = {}): RouterBackupsRespon
   return {
     enabled: true,
     keyUnreadable: false,
+    transport: 'sftp',
     routers: [],
     totalGenerations: 0,
     totalRouters: 0,

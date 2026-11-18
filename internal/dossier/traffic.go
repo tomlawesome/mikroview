@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"sync/atomic"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 	"github.com/tomlawesome/mikroview/internal/oui"
 )
 
@@ -256,10 +258,10 @@ func appendUnique(list []int, v int) []int {
 	return append(list, v)
 }
 
-// scopeOf is this package's own copy of the public/private predicate,
-// following the codebase's precedent that each package keeps its own
-// rather than exporting one across a boundary -- here it decides
-// display scope, nothing security-relevant.
+// scopeOf decides a peer's display scope, nothing security-relevant. It
+// keeps its own base rule (multicast counts as local here) and adds the
+// shared networks.home set (#1481), so a home peer reads as local as it
+// does in the browser.
 func scopeOf(ip string) string {
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
@@ -267,11 +269,21 @@ func scopeOf(ip string) string {
 	}
 	addr = addr.Unmap()
 	if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() ||
-		addr.IsMulticast() || addr.IsUnspecified() {
+		addr.IsMulticast() || addr.IsUnspecified() || homeScope.Load().InHome(addr) {
 		return "local"
 	}
 	return "internet"
 }
+
+// homeScope is networks.home (#1481), set once at start-up by
+// SetHomeScope. Package state, as in internal/engine: Assemble is a pure
+// function of its Input, and the scope is a deployment fact, not a
+// per-request one.
+var homeScope atomic.Pointer[ipscope.Scope]
+
+// SetHomeScope sets the networks.home scope peers are classified by.
+// nil restores the address-only rule.
+func SetHomeScope(sc *ipscope.Scope) { homeScope.Store(sc) }
 
 func isWebPort(port int) bool {
 	switch port {

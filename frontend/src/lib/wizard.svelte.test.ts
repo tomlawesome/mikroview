@@ -12,7 +12,6 @@ vi.mock('./api', () => ({
   saveSetupBackupTransport: vi.fn(),
   rebindEnrolment: vi.fn(),
   fetchRefusedSenders: vi.fn(),
-  registerDevice: vi.fn(),
 }))
 
 import {
@@ -22,7 +21,6 @@ import {
   fetchSetupStatus,
   mintEnrolment,
   rebindEnrolment,
-  registerDevice,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
@@ -129,83 +127,9 @@ describe('openLostRouter (#394)', () => {
   })
 })
 
-// #1291's other unmet checklist item: a router that enrolled but was
-// never registered must be resumable at Register alone, without being
-// sent through Re-enrol's full mint-a-fresh-token walk to close the one
-// step it is actually short of.
-describe('openRegister resumes an enrolled-but-unregistered router (#1291)', () => {
-  it('lands on Register for the named router, minting nothing', () => {
-    wizardState.close()
-    wizardState.openRegister('edge-1')
-
-    expect(wizardState.open).toBe(true)
-    expect(wizardState.steps).toEqual(ROUTER_STEPS)
-    expect(wizardState.ledgerDevice).toBe('edge-1')
-    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
-    // No fresh proof of identity was asked for and no token exists --
-    // this door only opens the ledger, it never mints.
-    expect(wizardState.enrolment).toBeNull()
-    expect(wizardState.enrolmentMintedAt).toBe('')
-    expect(mintEnrolment).not.toHaveBeenCalled()
-  })
-
-  it('carries no enrolment form leftovers from a previous walk', () => {
-    wizardState.openReEnrol('edge-2')
-    wizardState.enrolExpectedAddress = '192.0.2.50'
-    wizardState.enrolPassword = 'the-admin-password'
-
-    wizardState.openRegister('edge-1')
-
-    expect(wizardState.enrolExpectedAddress).toBe('')
-    expect(wizardState.enrolPassword).toBe('')
-  })
-
-  it('is cleared by Run setup…, the same as Re-enrol…', () => {
-    wizardState.status = status()
-    wizardState.openRegister('edge-1')
-
-    wizardState.launch()
-
-    expect(wizardState.ledgerDevice).toBe('')
-    expect(wizardState.steps).toEqual(SETUP_STEPS)
-  })
-
-  // v0.6.0 pre-release audit: registerError and registering were written
-  // only by launch() and registerRouter(), and close() -- Escape or the
-  // X -- never touched them. Entities.svelte's Finish registering… calls
-  // openRegister() directly, with no launch() on that path, so router
-  // A's refusal was still sitting there when the operator closed the
-  // wizard on A and reopened it on a different router B: B's Register
-  // pane rendered A's error before any request for B had been made.
-  it('does not carry another router\'s register refusal into this one', () => {
-    wizardState.openRegister('edge-1')
-    wizardState.registerError = 'a name is already registered for this router'
-    wizardState.registering = true
-
-    wizardState.close()
-    wizardState.openRegister('edge-2')
-
-    expect(wizardState.registerError).toBeNull()
-    expect(wizardState.registering).toBe(false)
-  })
-
-  // Same gap, the sign-out door: reset() (#1083) was audited and fixed
-  // for most of wizardState's fields but missed these two, so a register
-  // refusal from one account's session could still be sitting there for
-  // whoever signs in next on the same tab.
-  it('reset() clears a stale register error and its busy flag too', () => {
-    wizardState.openRegister('edge-1')
-    wizardState.registerError = 'a name is already registered for this router'
-    wizardState.registering = true
-
-    wizardState.reset()
-
-    expect(wizardState.registerError).toBeNull()
-    expect(wizardState.registering).toBe(false)
-  })
-
+describe('reset() clears module-lifetime walk state', () => {
   // syslogCopiedAddress (#1370) is a module-lifetime field the same way
-  // token/address/registerError above are -- what one account's session
+  // token and address are -- what one account's session
   // last copied the Send logs block for is not something the next
   // account signing in on this tab should see a stale warning about.
   it('reset() clears which address the Send logs block was last copied for', () => {
@@ -527,12 +451,12 @@ describe('minting is one at a time whichever way it is asked for (#1291)', () =>
   })
 })
 
-// A slow mint or register response can still be in flight once the
+// A slow mint response can still be in flight once the
 // operator has clicked Back/Next, closed the modal, or opened a
 // different router's walk. Applying it then would flash a token or a
 // refusal onto a pane nobody is looking at any more. v0.6.0 audit Lows,
 // F4.
-describe('a stale enrol or register response is ignored once the operator has left (F4)', () => {
+describe('a stale enrol response is ignored once the operator has left (F4)', () => {
   it('mintEnrolmentToken drops a response that lands after the pane changed', async () => {
     wizardState.status = status()
     wizardState.openReEnrol('edge-1')
@@ -573,24 +497,6 @@ describe('a stale enrol or register response is ignored once the operator has le
     expect(wizardState.enrolment).toBeNull()
     expect(wizardState.ledgerDevice).toBe('edge-2')
   })
-
-  it('registerRouter drops a response that lands after the modal was closed', async () => {
-    wizardState.status = status()
-    wizardState.openRegister('edge-1')
-    let settle: (v: string) => void = () => {}
-    vi.mocked(registerDevice).mockReturnValueOnce(
-      new Promise((resolve) => {
-        settle = resolve
-      }),
-    )
-
-    const register = wizardState.registerRouter('edge-1')
-    wizardState.close()
-    settle('a name is already registered for this router')
-    await register
-
-    expect(wizardState.registerError).toBeNull()
-  })
 })
 
 // #1361: what The router's Back up nightly choice reads and does.
@@ -599,6 +505,7 @@ describe('the drop box (#1361)', () => {
     return {
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp' as const,
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,

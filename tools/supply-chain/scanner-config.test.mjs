@@ -11,13 +11,15 @@
 //     or on the line directly above it. Per entry, not per list: every
 //     element of a multi-line list needs its own. In YAML a nested list item
 //     (e.g. `- errcheck` under a rule) is covered by its parent item's reason.
-//   - JSON (frontend/knip.json ignore* keys, .jscpd.json "ignore"): either a
+//   - frontend/knip.jsonc ignore* keys: a // comment on the line above each
+//     entry (knip rejects unknown keys, so the JSON forms below fail there).
+//   - JSON (.jscpd.json "ignore"): either a
 //     non-empty "//" string key in the same object as the ignore key, or a
 //     non-empty string in a top-level "$reasons" object keyed by the ignored
 //     entry (the glob, package or binary name). Empty lists need neither.
 //   - A workflow checkout needs `persist-credentials: false` in `with:`, or
 //     `# zizmor: ignore[artipacked] <reason>` on its `uses:` line.
-// A config file that does not exist yet (.shellcheckrc, frontend/knip.json,
+// A config file that does not exist yet (.shellcheckrc, frontend/knip.jsonc,
 // .jscpd.json) is a failure, not a skip.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -196,8 +198,31 @@ function golangciErrcheckOutsideTests(text) {
   return bad;
 }
 
-// ---- JSON (knip.json, .jscpd.json) ------------------------------------------
+// ---- JSON (.jscpd.json) and knip.jsonc ------------------------------------------
 // Ignore entries and whether each has a reason, per the convention above.
+// knip rejects unknown keys (a "//" or "$reasons" key fails its schema), so
+// frontend/knip.jsonc gives each ignore* entry its reason as a // comment on
+// the line directly above it (#1463).
+function knipIgnoreProblems(text) {
+  const bad = [];
+  const lines = text.split("\n");
+  const json = JSON.parse(lines.filter((l) => !/^\s*\/\//.test(l)).join("\n"));
+  const reasonAbove = (needle) => {
+    const i = lines.findIndex((l) => l.includes(needle));
+    if (i < 1) return false;
+    const m = lines[i - 1].match(/^\s*\/\/\s*(.*)$/);
+    return Boolean(m && m[1].trim().length >= 3);
+  };
+  for (const [k, v] of Object.entries(json)) {
+    if (!/^ignore/.test(k) || !v || typeof v !== "object") continue;
+    const entries = Array.isArray(v) ? v.filter((x) => typeof x === "string") : Object.keys(v);
+    for (const e of entries) {
+      if (!reasonAbove(JSON.stringify(e))) bad.push(`frontend/knip.jsonc: ${k} entry ${JSON.stringify(e)} has no reason on the line above`);
+    }
+  }
+  return bad;
+}
+
 function jsonIgnoreProblems(file, json, keyTest = /^ignore/) {
   const reasons = json?.$reasons && typeof json.$reasons === "object" ? json.$reasons : {};
   const bad = [];
@@ -329,8 +354,8 @@ describe("#1462 step 3: scanner suppressions carry reasons", () => {
     assert.match(stripAll(t), /^\s*disable\s*=.*\bSC1007\b/m, "SC1007 is not disabled");
     assert.deepEqual(shellcheckrcProblems(t), []);
   });
-  it("frontend/knip.json: every ignore* entry has a reason", () => {
-    assert.deepEqual(jsonIgnoreProblems("frontend/knip.json", JSON.parse(must("frontend/knip.json"))), []);
+  it("frontend/knip.jsonc: every ignore* entry has a reason", () => {
+    assert.deepEqual(knipIgnoreProblems(must("frontend/knip.jsonc")), []);
   });
   it(".jscpd.json: every ignore entry has a reason", () => {
     assert.deepEqual(jsonIgnoreProblems(".jscpd.json", JSON.parse(must(".jscpd.json")), /^ignore$/), []);
@@ -359,7 +384,7 @@ function stripAll(text) { return text.split("\n").map(stripComment).join("\n"); 
 // merge it pulls in carries `allow_failure`. Extend BLOCKING_JOBS as each
 // report-only scanner (lint:ruff, lint:knip, lint:jscpd) is
 // promoted.
-const BLOCKING_JOBS = ["lint:shellcheck", "lint:golangci", "security:zizmor"];
+const BLOCKING_JOBS = ["lint:shellcheck", "lint:golangci", "lint:ruff", "lint:knip", "lint:jscpd", "security:zizmor"];
 
 // Text of a top-level key of .gitlab-ci.yml without comment lines, or null.
 function ciBlock(text, name) {

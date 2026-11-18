@@ -53,6 +53,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/dossier"
 	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -60,6 +61,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
@@ -566,6 +568,20 @@ func passkeyStartupRefusal(status gauntlet.PasskeyStatus, anyPasskeysExist bool)
 		status)
 }
 
+// installHomeScope builds the networks.home scope and hands it to the
+// package-level consumers (engine, hosts, dossier). The instance-held ones
+// (reputation, geoip, store) take the returned scope where they are built.
+func installHomeScope(home []string) (*ipscope.Scope, error) {
+	sc, err := ipscope.New(home)
+	if err != nil {
+		return nil, err
+	}
+	engine.SetHomeScope(sc)
+	hosts.SetHomeScope(sc)
+	dossier.SetHomeScope(sc)
+	return sc, nil
+}
+
 func main() {
 	// -version: prints the build-time-stamped commit SHA (see the
 	// `version` var above) and exits -- no config load, no network,
@@ -778,10 +794,21 @@ func main() {
 	}
 	syslog.SetConfiguredSources(configuredSources)
 	h := hub.New()
+	// networks.home (#1481): one classifier for every inside/outside
+	// decision. Validate has already refused a bad entry, so an error
+	// here is a bug, not an operator mistake -- stop rather than run with
+	// inside hosts reading as outside. Set on the engine before any
+	// definition is built, since each compiles the scope in.
+	homeScope, err := installHomeScope(cfg.Networks.Home)
+	if err != nil {
+		logging.New("config").Error("networks.home: " + err.Error())
+		os.Exit(1)
+	}
 	// rep: always built (AbuseIPDBKey empty just means that one source
 	// inside it stays inert; Shodan InternetDB is free/keyless and
 	// always queried).
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
+	rep.SetHomeScope(homeScope)
 
 	flagsLog := logging.New("flags")
 	// Boot-time context: the signal-aware ctx below is created after
@@ -818,6 +845,7 @@ func main() {
 		Keys:     settingsStore,
 		Sealer:   persistence.key,
 		Log:      geoLog,
+		Home:     homeScope,
 	})
 	defer geo.Close()
 	if src := geo.Source(); src != "" {
@@ -826,6 +854,7 @@ func main() {
 		geoLog.Info("country flags: no data cached yet -- DB-IP Lite is fetched shortly after start")
 	}
 	st := store.New(storeCapacity, cfg.Store.Retention)
+	st.SetHomeScope(homeScope)
 
 	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
 	if err != nil {
@@ -2004,6 +2033,7 @@ func main() {
 	sessionIdle, sessionCeiling := sessionLimits(cfg.Auth)
 
 	srv := &api.Server{
+		HomeNetworks:            cfg.Networks.Home,
 		Store:                   st,
 		History:                 hist,
 		HistoryControl:          hist,

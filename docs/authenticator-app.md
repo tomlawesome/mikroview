@@ -40,7 +40,7 @@ step would be securing a login your identity provider already owns.
 Open the account menu (click your username, bottom of the rail) and
 choose **Authenticator app**.
 
-![The account menu open, with "Authenticator app" showing among the other rows -- no "· on" tag yet, since nothing is set up](screenshots/authenticator-menu-dark.png)
+![The account menu open, with "Authenticator app" showing among the other rows -- no "· on" tag, since the authenticator is not set up](screenshots/authenticator-menu-dark.png)
 
 Press **Set up authenticator app**. MikroView shows a QR code and, next
 to it, the same secret written out as text.

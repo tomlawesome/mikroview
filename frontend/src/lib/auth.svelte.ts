@@ -161,7 +161,7 @@ function clearSessionState() {
 // from the session's mustEnrolPasskey, and AuthEnrolFactor draws it with
 // passkey-only wording. Order of the doors: password change, then this
 // one, then the any-factor door.
-export type AuthViewState =
+type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"

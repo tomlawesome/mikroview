@@ -614,6 +614,11 @@ lint:flake-check:
   <<: *dev_or_mr
   script:
     - sh scripts/ci/flake-check.sh --quarantined scripts/quarantine.txt docs/flakes.md
+    # #1456: no tracked text file may spell the owner's name (sha256 only).
+    # Reads docs too, so it lives in this docs-inclusive job.
+    - apk add --no-cache git nodejs >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - node --test scripts/names-guard.test.mjs
 
 # The shared check for personal details (ai/agent-infra#32, #1460): one set of
 # rules for every project, kept on the agent host and mounted read-only into
@@ -672,6 +677,8 @@ lint:script-tests:
     - bash scripts/coverage-floor.test.sh
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
+    - bash scripts/routeros-chr-open-mr.test.sh
+    - node --test scripts/jscpd-baseline.test.mjs
 
 lint:go:
   stage: lint
@@ -782,8 +789,7 @@ lint:ruff:
   needs: []
   <<: *dev_or_mr_code
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1462)
   script:
     - rc=0
     - ruff check --no-cache --output-format=concise . > ruff-report.txt || rc=$?
@@ -796,7 +802,7 @@ lint:ruff:
     expire_in: 30 days
 
 # knip on frontend/ (unused files, exports and dependencies), configured by
-# frontend/knip.json; an exact-version devDependency, installed with npm ci.
+# frontend/knip.jsonc; an exact-version devDependency, installed with npm ci.
 lint:knip:
   stage: lint
   tags: [light]
@@ -804,8 +810,7 @@ lint:knip:
   needs: []
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure: true
+  # blocking since its findings reached zero (#1463)
   script:
     - cd frontend
     - npm ci
@@ -819,11 +824,13 @@ lint:knip:
       - knip-report.txt
     expire_in: 30 days
 
-# jscpd on frontend/src (.jscpd.json). Two outcomes, on purpose (#1463): a
-# duplication finding is report-only (jscpd exits 3, which allow_failure
-# tolerates), but `npm audit signatures` -- the owner's condition for using
-# jscpd -- checks every installed package's registry signature and provenance
-# attestation and fails the job, with its own exit code, if one is invalid.
+# jscpd on frontend/src (.jscpd.json). Blocking on new findings (#1463):
+# jscpd runs with exit code 0 and scripts/jscpd-baseline.mjs compares its
+# report with frontend/.jscpd-baseline.txt, failing on a clone not listed and
+# on a listed entry that no longer matches, so the baseline only shrinks. Also
+# `npm audit signatures` -- the owner's condition for using jscpd -- checks
+# every installed package's registry signature and provenance attestation and
+# fails the job if one is invalid.
 lint:jscpd:
   stage: lint
   tags: [light]
@@ -831,15 +838,13 @@ lint:jscpd:
   needs: []
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   interruptible: true
-  # report-only until one pipeline's noise is triaged (#1462)
-  allow_failure:
-    exit_codes: [3]
   script:
     - cd frontend
     - npm ci
     - npm audit signatures
     - cd ..
-    - frontend/node_modules/.bin/jscpd
+    - frontend/node_modules/.bin/jscpd --exit-code 0
+    - node scripts/jscpd-baseline.mjs jscpd-report/jscpd-report.json frontend/.jscpd-baseline.txt
   artifacts:
     when: always
     paths:
@@ -2015,7 +2020,7 @@ perf:promotion:
 security:semgrep:
   stage: security
   tags: [light]
-  image: semgrep/semgrep:1.183.0
+  image: semgrep/semgrep:1.184.0
   <<: *dev_or_mr_code
   variables:
     # The whole history, as gitleaks below. On a merge request the scan
@@ -2263,7 +2268,15 @@ security:npm-audit:
     # runs, so the image's own bundled version never gets a say.
     - npm install -g npm@12.0.2
     - npm ci
-    - npm audit --audit-level=high
+    # #1505: `npm audit --audit-level=high` cannot express a time-limited
+    # exemption. Write the JSON report (npm exits non-zero when it finds
+    # anything, which is tolerated here), and let the script decide:
+    # it also refuses a file that is not a report. Exemptions live in
+    # supply-chain/npm-audit-exemptions.json.
+    - npm audit --json > /tmp/npm-audit.json || true
+    - cd ..
+    - node tools/supply-chain/npm-audit.mjs /tmp/npm-audit.json
+    - node --test tools/supply-chain/npm-audit.test.mjs
 
 # Checks the licence of every dependency mikroview actually ships -- Go
 # modules and the frontend's bundled npm packages, the same inventory

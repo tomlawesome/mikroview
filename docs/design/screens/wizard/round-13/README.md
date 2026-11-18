@@ -51,3 +51,4 @@ Read as: the flicker is a failing neon tube — stutter, buzz, drop-outs
 — not a colour swap. Round 14 (`../round-14/`) takes the neon further
 as one direction, AM.
 
+Written 2026-09-27.

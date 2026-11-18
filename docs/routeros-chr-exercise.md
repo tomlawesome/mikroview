@@ -44,7 +44,8 @@ The job then:
 - adds one row to `internal/routeros/dialects.go` recording
   `exercised on CHR <version>, <date>`,
 - saves the full console transcript alongside it, under
-  `docs/routeros-verification-logs/<version>.log`,
+  `docs/routeros-verification-logs/<version>.log`, headed by the version
+  and the run date so each run's file can be told apart,
 - and opens a **merge request** on this project's GitLab instance
   (`ai/mikroview`), from a new branch into `dev`.
 

@@ -192,18 +192,18 @@ export function reachedIdx(s: RunAnswers): number {
 // hms formats an instant as the wall-clock time the receipts and chips
 // show (14:03:04). '' stays ''; an unparseable value is shown as given
 // rather than hidden.
-export function hms(iso: string): string {
+function hms(iso: string): string {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleTimeString(undefined, { hour12: false })
 }
 
-export type RowClass = '' | 'done' | 'chosen' | 'offer'
+type RowClass = '' | 'done' | 'chosen' | 'offer'
 
 // The ink a row's receipt wears: the ink of what it records (DESIGN.md,
 // "One ink per thing"). '' is the rail's own muted colour.
-export type Ink = '' | 'cert' | 'logs' | 'push' | 'backup' | 'token' | 'rules' | 'off'
+type Ink = '' | 'cert' | 'logs' | 'push' | 'backup' | 'token' | 'rules' | 'off'
 
 export interface RowState {
   cls: RowClass
@@ -340,7 +340,7 @@ export type FootAction =
   | 'finish'
   | 'none'
 
-export interface FootButton {
+interface FootButton {
   label: string
   action: FootAction
   primary: boolean
@@ -493,7 +493,7 @@ export function announce(rows: RailRow[]): string {
 // yes to and the run has reached the rules step or beyond -- never
 // while stage is still 'watch', so the paste step's own track
 // (StepPaste.svelte) is unaffected by its addition below.
-export type TrackState = 'wait' | 'done' | 'skip' | 'alarm' | 'later'
+type TrackState = 'wait' | 'done' | 'skip' | 'alarm' | 'later'
 
 export interface TrackStation {
   id: 'copy' | 'cert' | 'enrol' | 'push' | 'backup' | 'rules' | 'lists'

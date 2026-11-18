@@ -117,3 +117,4 @@ Round 11 draws three ways in: the slide down the fall, the rain that
 swells to fill the screen, and one unconstrained. The door's rain must
 be the real `Fullfall`'s, not a static field of marks.
 
+Written 2026-09-27.

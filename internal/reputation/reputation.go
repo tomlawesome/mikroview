@@ -13,12 +13,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 )
 
 // maxResponseBytes bounds what an upstream reputation API may return.
@@ -126,9 +129,16 @@ type Client struct {
 	abuseIPDBKey string
 	httpClient   *http.Client
 
+	// home is the networks.home scope (#1481): a home address is inside,
+	// so it is never sent to a reputation service. nil is the default.
+	home atomic.Pointer[ipscope.Scope]
+
 	mu    sync.Mutex
 	cache map[string]cacheEntry
 }
+
+// SetHomeScope sets the networks.home scope Lookup refuses addresses by.
+func (c *Client) SetHomeScope(sc *ipscope.Scope) { c.home.Store(sc) }
 
 // New creates a Client. abuseIPDBKey may be empty, in which case only
 // the free, keyless Shodan InternetDB source is queried.
@@ -142,8 +152,10 @@ func New(abuseIPDBKey string) *Client {
 
 // Lookup returns combined reputation info for ipStr.
 func (c *Client) Lookup(ctx context.Context, ipStr string) (Result, error) {
-	ip := net.ParseIP(ipStr)
-	if ip == nil || !isPublic(ip) {
+	// A zoned address is refused as net.ParseIP refused it before:
+	// ipStr goes into the request URL verbatim.
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil || ip.Zone() != "" || !c.home.Load().IsPublic(ip) {
 		return Result{}, ErrNotPublic
 	}
 
@@ -291,12 +303,4 @@ func fetchAbuseIPDB(ctx context.Context, client *http.Client, key, ip string) Re
 		UsageType:    body.Data.UsageType,
 		IsTor:        body.Data.IsTor,
 	}
-}
-
-func isPublic(ip net.IP) bool {
-	return !ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsUnspecified() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast()
 }

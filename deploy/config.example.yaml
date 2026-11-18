@@ -175,6 +175,17 @@ devices:
 #     # - aws             # opt-in: official AWS ranges, with region detail
 #     # - gcp             # opt-in: official Google Cloud ranges
 
+# Optional: inside networks the address alone does not reveal -- a routed
+# public block on your LAN, an IPv6 global prefix. Private, loopback and
+# link-local addresses are always inside; list only what is inside on top
+# of that. Each entry is a CIDR prefix; a /0 is refused. Addresses here
+# are never geolocated or sent to reputation lookups. See
+# docs/configuration.md.
+# networks:
+#   home:
+#     - 198.51.100.0/24
+#     - 2001:db8:1::/48
+
 # Optional (on by default): MAC vendor lookups, from IEEE's own MA-L
 # registry. It turns the first three octets of a hardware address into
 # the organisation that registered them, for the device dossier

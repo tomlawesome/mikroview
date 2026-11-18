@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 // routerBackupGeneration is one kept generation -- the shape round 44's
@@ -84,6 +85,10 @@ type routerBackupsResponse struct {
 	// the same SetupInstance.BackupPortNow() the wizard's step 6 already
 	// reads, not a second copy of anything.
 	Port string `json:"port,omitempty"`
+	// Transport is the "deliver by" row (#1494): a live read of the same
+	// store handleSetupCommands renders from, so the group needs no second
+	// fetch.
+	Transport string `json:"transport"`
 }
 
 func toRouterBackupGeneration(g backupvault.Generation) routerBackupGeneration {
@@ -148,7 +153,11 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 		KeyUnreadable: s.SetupInstance.BackupKeyUnreadable,
 		Routers:       []routerBackupRouter{},
 		Port:          s.SetupInstance.BackupPortNow(),
+		Transport:     setup.BackupTransportSFTP,
 		LowSpace:      s.Vault.LowSpace(),
+	}
+	if s.Setup != nil {
+		resp.Transport = s.Setup.BackupTransport()
 	}
 	resp.Lock = s.vaultLockStatus(r, time.Now())
 	if !s.Vault.Enabled() {

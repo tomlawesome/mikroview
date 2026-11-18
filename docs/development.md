@@ -44,7 +44,7 @@ cannot. The harness already has a sender that does:
 ```sh
 eval "$(scripts/live-env.sh up)"     # exports MV_URL, MV_USER, MV_PASS
 scripts/live-env.sh syslog 200       # 200 synthetic firewall events
-scripts/live-env.sh raw '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->192.0.2.4:443, len 60'
+scripts/live-env.sh raw '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->203.0.113.4:443, len 60'
 scripts/live-env.sh down
 ```
 
@@ -82,6 +82,8 @@ requires and why.
   review and gate process is
 - [docs/flakes.md](flakes.md) — the flake record: checks that
   failed and passed again on unchanged code
+- [docs/ci-scanners.md](ci-scanners.md) — which scanners the CI
+  pipeline runs and what each one checks
 - [docs/routeros-chr-exercise.md](routeros-chr-exercise.md) — the
   RouterOS CHR exercise the pipeline runs
 - [docs/release-signing.md](release-signing.md) — how a release's two

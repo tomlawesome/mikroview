@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -141,7 +144,7 @@ type Condition struct {
 // (definition.go, params.go) for a future API boundary that wants to
 // validate a condition before it is ever attached to a definition.
 func ValidateCondition(c Condition) error {
-	_, err := compileCondition(c)
+	_, err := compileCondition(c, nil)
 	return err
 }
 
@@ -172,7 +175,11 @@ func (cs compiledConditionSet) match(e store.Event, members AddressListMembershi
 // meaningfully, and is almost certainly a mistake, not a valid "match
 // everything" definition) and a duplicate field (see Condition's doc
 // comment on why that isn't the AND/OR model this package implements).
-func compileConditions(conds []Condition) (compiledConditionSet, error) {
+//
+// scope is the networks.home classifier matchesClassification uses
+// (#1481); nil is the address-only default. It changes what a condition
+// matches, never whether it is valid, so validation-only callers pass nil.
+func compileConditions(conds []Condition, scope *ipscope.Scope) (compiledConditionSet, error) {
 	if len(conds) == 0 {
 		return nil, fmt.Errorf("engine: a declarative definition requires at least one condition")
 	}
@@ -183,7 +190,7 @@ func compileConditions(conds []Condition) (compiledConditionSet, error) {
 			return nil, fmt.Errorf("engine: duplicate condition on field %q -- one condition per field, use inSet/inCIDR for multiple values", c.Field)
 		}
 		seen[c.Field] = struct{}{}
-		fn, err := compileCondition(c)
+		fn, err := compileCondition(c, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +241,7 @@ var (
 	}
 )
 
-func compileCondition(c Condition) (conditionMatcher, error) {
+func compileCondition(c Condition, scope *ipscope.Scope) (conditionMatcher, error) {
 	allowed, ok := fieldOperators[c.Field]
 	if !ok {
 		return nil, fmt.Errorf("engine: unknown condition field %q", c.Field)
@@ -245,7 +252,7 @@ func compileCondition(c Condition) (conditionMatcher, error) {
 
 	switch c.Field {
 	case FieldSourceAddress, FieldDestinationAddress:
-		return compileAddressCondition(c)
+		return compileAddressCondition(c, scope)
 	case FieldSourcePort, FieldDestinationPort:
 		return compilePortCondition(c)
 	case FieldAddressListMembership:
@@ -404,36 +411,41 @@ func addressFieldValue(f Field, e store.Event) string {
 	return e.DstIP
 }
 
-// isPublicIP mirrors internal/store's own scopeMatches helper (unexported
-// there) -- this package keeps its own small copy rather than exporting
-// one across a package boundary solely for this, the same "each package
-// keeps its own small private copy" precedent internal/detect and
-// internal/watchlist already set (see internal/store/query.go's own
-// comment on isPublicIP).
+// homeScope is the networks.home classifier (#1481), set once at
+// start-up by SetHomeScope before any definition is built. Package state
+// rather than a parameter on every constructor because the dispatch
+// index (classKeyFor), scope matching and the reputation sink must
+// classify exactly as the compiled conditions do: if they disagreed, the
+// index could skip a definition its own conditions would match.
+var homeScope atomic.Pointer[ipscope.Scope]
+
+// SetHomeScope sets the networks.home scope every definition built after
+// it classifies internal/external by. nil restores the default.
+func SetHomeScope(sc *ipscope.Scope) { homeScope.Store(sc) }
+
+// isPublicIP is the shared ipscope classifier under the configured home
+// scope, for the callers that hold a net.IP.
 func isPublicIP(ip net.IP) bool {
-	return !ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsUnspecified() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast()
+	addr, ok := netip.AddrFromSlice(ip)
+	return ok && homeScope.Load().IsPublic(addr)
 }
 
-func classificationMatches(class, addr string) bool {
+func classificationMatches(scope *ipscope.Scope, class, addr string) bool {
 	if class == "any" {
 		return true
 	}
-	ip := net.ParseIP(addr)
-	if ip == nil {
+	ip, err := netip.ParseAddr(addr)
+	if err != nil {
 		return false
 	}
-	public := isPublicIP(ip)
+	public := scope.IsPublic(ip)
 	if class == "internal" {
 		return !public
 	}
 	return public // "external"
 }
 
-func compileAddressCondition(c Condition) (conditionMatcher, error) {
+func compileAddressCondition(c Condition, scope *ipscope.Scope) (conditionMatcher, error) {
 	field := c.Field
 	switch c.Operator {
 	case OpEquals, OpNotEquals:
@@ -520,7 +532,7 @@ func compileAddressCondition(c Condition) (conditionMatcher, error) {
 			return nil, fmt.Errorf("engine: %q is not a valid classification (want internal, external or any)", class)
 		}
 		return func(e store.Event, _ AddressListMembership) bool {
-			return classificationMatches(class, addressFieldValue(field, e))
+			return classificationMatches(scope, class, addressFieldValue(field, e))
 		}, nil
 	default:
 		return nil, fmt.Errorf("engine: field %q does not accept operator %q", field, c.Operator)

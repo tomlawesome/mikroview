@@ -34,6 +34,10 @@ Five steps:
 | 4 | Tag firewall rules | a rule list proposed from the push; tick, Copy, paste — the only second paste; Skip leaves them dark |
 | ✓ | Where setup stands | the ledger: what stands on evidence, what was set aside, Undo per row, undo everything; Add another router; Finish |
 
+Registration is not a step: minting with the password already records
+the operator's intent, so acceptance of the enrol line is registration
+(#1493).
+
 **Gated** (owner, round 9): a step ahead of the furthest reached is
 locked — dashed number, dim, not clickable, titled "After the step
 before it". An earlier completed step is clickable while the run is
@@ -372,4 +376,5 @@ was the screen, with a body⟷ledger flip.
 - The old wizard page's ephemeral, restart-from-scratch behaviour and
   its absence of close/skip affordances: replaced by the ledger model.
 
+Written 2026-09-27 (the modal design:
 2026-08-23; the router ledger: 2026-09-19).

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-export type ConfigProblem = {
+type ConfigProblem = {
   code: string
   key: string
   message: string

@@ -43,7 +43,7 @@ export interface OffBaselineLine {
 }
 
 /** The threshold the server applied: seen on `days` of the last `of`. */
-export interface BaselineConfig {
+interface BaselineConfig {
   days: number
   of: number
 }

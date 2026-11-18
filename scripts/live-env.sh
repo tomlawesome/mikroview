@@ -105,7 +105,8 @@ else
 fi
 
 # MV_DEMO_DEVICES=1 declares the estate scripts/seed-demo.py feeds, which
-# is the only way its pushed tables can ever be read back (#709).
+# is the only way its pushed tables can ever be read back (#709). It also
+# sets networks.home to the estate's inside blocks (#1481), below.
 #
 # A pushed rule/NAT/address table is keyed by *device id*. seed-demo.py
 # mints its ingest tokens against the router names below and then streams
@@ -134,6 +135,16 @@ fi
 # router's, so the two are unrelated and 127.0.0.6 is not a typo.
 if [ "${MV_DEMO_DEVICES:-}" = "1" ]; then
   DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}, {id: rb5009, name: rb5009, sourceIp: 127.0.0.5}, {id: hap-ax3, name: hap-ax3, sourceIp: 127.0.0.6}]'
+  # networks.home (#1481): the seeded estate's inside lives on
+  # documentation blocks (docs/design/sample-names.md), which read as
+  # outside by address alone. The first /27 of 192.0.2.0/24 (router WANs,
+  # design host) stays out: it is the outside part of the mixed block.
+  # Demo only, like the devices: the gate's scenarios use 198.51.100.0/24
+  # as outside sources (scanners, investigate targets), which this set
+  # would turn inside.
+  NETWORKS_BLOCK='networks:
+  home: [198.51.100.0/24, 192.0.2.32/27, 192.0.2.64/27, 192.0.2.96/27, 192.0.2.128/27,
+    192.0.2.160/27, 192.0.2.192/27, 192.0.2.224/28, 192.0.2.240/29, 192.0.2.248/29]'
 fi
 
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
@@ -395,6 +406,7 @@ $TLS_BLOCK
 $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 publicUrl: "$MV_SCHEME://localhost:$HTTP_PORT"
+${NETWORKS_BLOCK:-}
 $DEVICES_BLOCK
 EOF
   # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset

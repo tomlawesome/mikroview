@@ -655,6 +655,9 @@ addresses, the registry invents a discovered device per source IP and the
 pushed tables sit under ids no device has. Both halves report success and
 never meet (#709).
 
+It also sets `networks.home` to the estate's inside address blocks (#1481), so
+the demo's inside hosts read as inside; unset, the instance has no home networks.
+
 `MV_DEMO_BUILD=1` matters here too: it ships the self-destroying service
 worker (#713) that stops a browser serving back a stale precached build
 across the many rebuilds a demo goes through. `live-env.sh up` no longer
