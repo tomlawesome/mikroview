@@ -261,33 +261,23 @@ describe("invalid audit input", () => {
 });
 
 describe("real exemptions file", () => {
-  const realReport = report({
-    picomatch: vuln("picomatch", "high", [advisory(REAL, "picomatch", "high", 1116000)]),
-    vite: vuln("vite", "high", ["picomatch"]),
-    vitest: vuln("vitest", "high", ["vite"]),
-    "workbox-build": vuln("workbox-build", "moderate", [advisory(GHSA_B, "glob", "moderate")]),
-  });
-
-  function runReal(today) {
+  // Emptied 2026-11-18 (#1537): GHSA-fc5q-39xc-vjpf (picomatch) left npm's
+  // audit report, so its exemption went stale and the check asked for it to go.
+  function runReal(vulnerabilities) {
     const dir = scratchDir();
     const auditPath = join(dir, "audit.json");
-    writeFileSync(auditPath, JSON.stringify(realReport));
-    const r = spawnSync(process.execPath, [script, auditPath, realExemptions], {
-      encoding: "utf8",
-      env: { ...process.env, NPM_AUDIT_TODAY: today },
-    });
+    writeFileSync(auditPath, JSON.stringify(report(vulnerabilities)));
+    const r = spawnSync(process.execPath, [script, auditPath, realExemptions], { encoding: "utf8" });
     return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   }
 
-  it("is valid and covers the picomatch advisory before 2026-12-17", () => {
-    const r = runReal("2026-11-17");
+  it("is valid and passes a clean report", () => {
+    const r = runReal({});
     assert.equal(r.status, 0, r.out);
-    assert.match(r.out, new RegExp(REAL));
-    assert.match(r.out, /2026-12-17/);
   });
 
-  it("expires after 2026-12-17", () => {
-    const r = runReal("2026-12-18");
+  it("no longer excuses the picomatch advisory", () => {
+    const r = runReal({ picomatch: vuln("picomatch", "high", [advisory(REAL, "picomatch", "high", 1116000)]) });
     assert.notEqual(r.status, 0);
     assert.match(r.out, new RegExp(REAL));
   });

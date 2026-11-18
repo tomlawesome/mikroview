@@ -256,3 +256,11 @@ own rather than swelling that entry's count.
 ## live-blocklist-tail: page.reload throws a WebKit internal error
 
 - 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 1/4 · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-blocklist-tail.mjs:50`), before any check ran, so no verdict was printed. A rerun of shard 1/4 alone under WebKit passed 28/28. Same signature as the `live-decommission`, `live-city-reach` and `live-settings-doors` entries. First sighting.
+
+## test:go: internal/authe2e fails after passing, because go test cannot write its test log ("file too large")
+
+- 2026-11-18 · 8035964c (batch-a, audited tip, !1231) · CI `test:go`, pipeline 4637, job 55882 · every test passed (`PASS`), then `testing: can't write /tmp/go-build…/testlog.txt: … file too large` and `FAIL github.com/tomlawesome/mikroview/internal/authe2e 541.709s`. The retry on the same commit (job 55925) passed `go test` with no such line. First sighting.
+
+## live-group-compression: the Stream filter line never appears (`.filterline .fbox`) under WebKit
+
+- 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, from a scratch clone with temporary logging in the Topography tunnel code (#1536 diagnosis, nothing here touched) · `unfoldStreamFilter` timed out waiting for `.filterline .fbox` (`live-browser.mjs:565`). The earlier full WebKit runs at 9545c47a passed it. First sighting.
