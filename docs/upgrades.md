@@ -123,8 +123,9 @@ Enrol it by hand:
    everything after that is accepted normally.
 
 If you gave the wrong address, the router is turned away and its real
-address is listed under the step's refused senders. Press it to point
-the enrolment window at it — the token you already pasted stays as it
+address is listed on the Paste once step, in the refused-sender box.
+Press **enrol at <address> instead** there to point the enrolment
+window at it — the token you already pasted stays as it
 is, so there is nothing to paste into the router again.
 
 Until you do this, that router's traffic is refused, not silently

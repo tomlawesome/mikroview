@@ -239,7 +239,7 @@ own rather than swelling that entry's count.
 
 ## live-history-control: goTo("Stream") times out with the card off-screen
 
-- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `goTo("Stream") timed out waiting for card "live"` from `remount()` at `live-history-control.mjs:133`: the card existed but sat at `offsetFromDeckTop: -2880`, so the deck never rolled it into place. Every check before it passed. A rerun of shard 2/4 alone under WebKit passed 26/26. First sighting with this symptom (the 2026-09-08 sighting under "two gate stages overlap" printed no detail).
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `goTo("Stream") timed out waiting for card "live"` from `remount()` at `live-history-control.mjs:133`: the card existed but sat at `offsetFromDeckTop: -2880`, so the deck never rolled it into place. Every check before it passed. A rerun of shard 2/4 alone under WebKit passed 26/26. First sighting with this symptom (an earlier sighting, 2026-09-08, pipeline 770, exited 1 without printing a result or any detail).
 
 ## live-topography-card-placement: the Topography rail button is not clickable within 30 s
 
