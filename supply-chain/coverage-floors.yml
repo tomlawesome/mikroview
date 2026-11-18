@@ -147,15 +147,15 @@ floors:
                              # Raising this is out of scope for #1333.
 
   # --- below the 70% band: known debt ---
-  cmd/demo-history: 0       # No test files. Dev-data seeding tool for
+  cmd/demo-history: 82      # 82.1% measured 2026-11-18 (#1537). Dev-data seeding tool for
                              # demos (docs/demos.md) -- not shipped in the release
                              # binary.
   internal/evict: 100       # #1328 added the first direct test of its
                              # contract; 100% measured 2026-09-27.
-  scripts/routerosappendrow: 29  # 29.2% measured 2026-09-27. A CLI dev-tool
+  scripts/routerosappendrow: 38  # 38.1% measured 2026-11-18 (#1537). A CLI dev-tool
                              # under scripts/, not shipped in the release
                              # binary.
-  scripts/routeroscommands: 36   # No test files of its own; 36.3% from
+  scripts/routeroscommands: 63   # No test files of its own; 63.6% (#1537) from
                              # internal/api's test running it on go1.27.2
                              # (45.3% on go1.27.1; #1451, #1440,
                              # 2026-10-11). CLI dev-tool under scripts/,
@@ -168,11 +168,11 @@ floors:
   # --- inside the 70-85% band ---
   internal/api: 84
   internal/backupvault: 82
-  internal/decommission: 82
+  internal/decommission: 87
   internal/ingest: 77
-  internal/notify: 78
+  internal/notify: 84
   internal/oidc: 85
-  internal/retention: 76
+  internal/retention: 84
   internal/servertls: 81
   internal/snapshot: 79
   internal/tlssniff: 77
@@ -188,7 +188,7 @@ floors:
   internal/blcatalogue: 100  # new with #1360; 100.0% measured 2026-10-01
   internal/blocklist: 92
   internal/config: 86
-  internal/configsnap: 80    # new with #1347; 81.2% measured 2026-09-27
+  internal/configsnap: 88    # new with #1347; 88.9% measured 2026-11-18 (#1537)
   internal/coverage: 95
   internal/device: 89
   internal/dossier: 90
@@ -200,9 +200,10 @@ floors:
                              # sources (100% on the earlier, smaller package)
   internal/hosts: 94
   internal/hub: 100
-  internal/logging: 84
+  internal/ipscope: 100     # new with #1481; 100.0% measured 2026-11-18 (#1537)
+  internal/logging: 92
   internal/naming: 89
-  internal/netclass: 84
+  internal/netclass: 90
   internal/oui: 84
   internal/prefs: 87
   internal/recoverykeys: 89  # new with #1202 (moved out of internal/auth); 89.5%
@@ -212,7 +213,7 @@ floors:
   internal/reputation: 90
   internal/routeros: 91
   internal/routeros/export: 96
-  internal/routerstate: 87
+  internal/routerstate: 93
   internal/rules: 96
   internal/seen: 85         # 85.8% on the host run of 2026-09-27
   internal/settings: 96

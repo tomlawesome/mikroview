@@ -18,14 +18,14 @@ func TestFlushWritesThePendingDocument(t *testing.T) {
 	if err := s.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if err := s.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	// Read back before Close: Close writes whatever is still dirty, so a
+	// reopen after it would pass even if Flush did nothing.
 	again, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer again.Close(context.Background())
+	defer s.Close(context.Background())
 	var found bool
 	for _, got := range again.List() {
 		found = found || got.ID == w.ID

@@ -22,10 +22,17 @@ testing-and-ci skill (owner, 2026-09-08).
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 3/4 · `locator('.popover .chip').waitFor` timed out in `openPopover` (`live-nat-popup.mjs:155`). The first WebKit run of the same commit passed it.
 - 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 3/4 · a different symptom: `FAIL no console errors (WebSocket connection to 'ws://127.0.0.1:18483/api/ws' failed: WebSocket is closed before the connection is established.)`, every other check passed. A rerun of shard 3/4 alone under WebKit passed it. Second sighting.
 
-## live-topography-tunnel: the Topography rail entry is never found (30 s) under WebKit
+## live-filter-parity: a WebSocket closed before it connected reaches the console under WebKit
+
+- 2026-11-18 · b5ce741c (batch-b audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `FAIL no console errors (WebSocket connection to 'ws://127.0.0.1:18482/api/ws' failed: WebSocket is closed before the connection is established.)`; every other check passed. The two full WebKit runs at 9545c47a the same day passed it. First sighting in this scenario; the same console line is logged above for another scenario.
+
+## live-topography-tunnel: the Topography rail entry is never found (30 s) under WebKit (#1536)
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 4/4 · `page.click` timed out waiting for `.rail-name` `text=Topography` (`live-topography-tunnel.mjs:231`), after the tunnel checks had passed, so the scenario exited without a verdict. The second WebKit run passed shard 4/4 27/27.
 - 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4 --shard 4/4`, first rerun · a different symptom: the tunnel node was never drawn (`the tunnel is drawn as its own node beside Internet`, `the node names its interface and subnet (got null)`, `wg0 appears exactly once on the map, as the node (found 0)`, `the tunnel is joined to the router by its own line`). The full WebKit run before it and the second rerun passed the scenario. Second sighting.
+- 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 4/4 · the tunnel node was never drawn, the same four checks as the second sighting; the later DOWN check passed. Third sighting.
+- 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 4/4 · the tunnel node was never drawn, the same four checks as the second sighting; the later DOWN check passed. Fourth sighting, two runs in a row: now #1536.
+- 2026-11-18 · b5ce741c (batch-b audit head, before batch-a) · local `scripts/gate-local.sh --browser webkit --shards 4`, full run, shard 4/4 · the tunnel node was never drawn, the same four checks as the second sighting; the later DOWN check passed. Fifth sighting, so the fault is older than batch-a (#1536).
 
 ## live-preferences-roam: a 401 reaches the console under WebKit
 
@@ -239,7 +246,8 @@ own rather than swelling that entry's count.
 
 ## live-history-control: goTo("Stream") times out with the card off-screen
 
-- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `goTo("Stream") timed out waiting for card "live"` from `remount()` at `live-history-control.mjs:133`: the card existed but sat at `offsetFromDeckTop: -2880`, so the deck never rolled it into place. Every check before it passed. A rerun of shard 2/4 alone under WebKit passed 26/26. First sighting with this symptom (the 2026-09-08 sighting under "two gate stages overlap" printed no detail).
+- 2026-10-03 · b6427ac1 (dev) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `goTo("Stream") timed out waiting for card "live"` from `remount()` at `live-history-control.mjs:133`: the card existed but sat at `offsetFromDeckTop: -2880`, so the deck never rolled it into place. Every check before it passed. A rerun of shard 2/4 alone under WebKit passed 26/26. First sighting with this symptom (an earlier sighting, 2026-09-08, pipeline 770, exited 1 without printing a result or any detail).
+- 2026-11-18 · b5ce741c (batch-b audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `goTo("Stream") timed out waiting for card "live"`, `offsetFromDeckTop: -2160`; exited 1 without a result. The two full WebKit runs at 9545c47a the same day passed it. Second sighting with this symptom.
 
 ## live-topography-card-placement: the Topography rail button is not clickable within 30 s
 
@@ -248,3 +256,11 @@ own rather than swelling that entry's count.
 ## live-blocklist-tail: page.reload throws a WebKit internal error
 
 - 2026-10-03 · 2b2089de (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 1/4 · `page.reload: WebKit encountered an internal error` waiting for networkidle, at `live-browser.mjs:1065` from the scenario's own `session()` call (`live-blocklist-tail.mjs:50`), before any check ran, so no verdict was printed. A rerun of shard 1/4 alone under WebKit passed 28/28. Same signature as the `live-decommission`, `live-city-reach` and `live-settings-doors` entries. First sighting.
+
+## test:go: internal/authe2e fails after passing, because go test cannot write its test log ("file too large")
+
+- 2026-11-18 · 8035964c (batch-a, audited tip, !1231) · CI `test:go`, pipeline 4637, job 55882 · every test passed (`PASS`), then `testing: can't write /tmp/go-build…/testlog.txt: … file too large` and `FAIL github.com/tomlawesome/mikroview/internal/authe2e 541.709s`. The retry on the same commit (job 55925) passed `go test` with no such line. First sighting.
+
+## live-group-compression: the Stream filter line never appears (`.filterline .fbox`) under WebKit
+
+- 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, from a scratch clone with temporary logging in the Topography tunnel code (#1536 diagnosis, nothing here touched) · `unfoldStreamFilter` timed out waiting for `.filterline .fbox` (`live-browser.mjs:565`). The earlier full WebKit runs at 9545c47a passed it. First sighting.

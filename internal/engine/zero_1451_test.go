@@ -58,8 +58,13 @@ func TestDefinitionsStoreResetEmptiesAndCountsAndNotifies(t *testing.T) {
 	if want == 0 {
 		t.Fatal("seeded store is empty")
 	}
+	notified := 0
+	s.SetOnChange(func() { notified++ })
 	if got := s.Reset(); got != want {
 		t.Errorf("Reset() = %d, want %d", got, want)
+	}
+	if notified != 1 {
+		t.Errorf("change hook ran %d times after Reset, want 1", notified)
 	}
 	if n := len(s.List()); n != 0 {
 		t.Errorf("%d definitions left after Reset", n)

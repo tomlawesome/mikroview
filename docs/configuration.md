@@ -451,8 +451,8 @@ rather than a lesser one.
 
 ### Router backups over SFTP (issue #394)
 
-Issue #394: a router's own scheduled script (the setup wizard's step 6
-prints it) pushes two files a night -- the binary `.backup` that
+Issue #394: a router's own scheduled script (the setup wizard's Paste once
+step prints it) pushes two files a night -- the binary `.backup` that
 restores the router whole, and the plain-text `.rsc` export kept for
 reading -- into a small SFTP server MikroView runs for exactly this.
 **MikroView is the place you turn to when the router is gone**, so the
@@ -463,8 +463,8 @@ control is Settings → router backups' own "drop box: closed / open on
 port N" row, admin-only: opening it re-checks the admin's password and
 shows the trust caveat below, closing needs an admin but no password,
 since closing is the safe direction. A fresh install starts closed. The
-setup wizard's backup step offers the same control directly, in place of
-a per-router script it cannot yet print. Right under it, the **deliver by**
+setup wizard's first step, The router, offers the same control (**Open it
+now**) when you answer Yes to a nightly backup while the box is closed. Right under it, the **deliver by**
 row (#1494) chooses how the wizard's script delivers: SFTP to the drop box or
 the HTTPS slice push.
 
@@ -2732,8 +2732,9 @@ those are re-made from arriving traffic every time MikroView starts.
 What *is* stored is the other half: decisions rather than observations
 -- the steps someone **skipped** or **forced past**, each with who
 decided it and when, as older versions of the wizard recorded them (the
-current wizard does not write new ones; its Skip this step is not
-stored). What is stored is what lets the rest of the interface explain
+current wizard writes only one: the **not now** on its optional
+blocklist offer. Its other skips, such as Skip this step on Tag
+firewall rules, are not stored). What is stored is what lets the rest of the interface explain
 itself -- an empty live view can say which setup step accounts
 for the silence instead of just being empty. That explanation is most
 wanted right after a restart, which is when an upgrade happens, so it
@@ -5555,7 +5556,7 @@ route keeps as-is, such as the preferences document, accept any keys.
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `POST /api/devices` | admin-only (#1281): declare a syslog-only router by name, with no address yet -- the same thing the Entities screen's "+ add router" does. It exists so a router with no ingest token and no `devices[].sourceIp` can still be enrolled |
-| `DELETE /api/devices/{id}` | admin-only: remove a device that was declared through `POST /api/devices`, along with its enrolled address and any pending token. A device declared in `config.yaml` refuses with 400 -- it would only come back at the next restart |
+| `DELETE /api/devices/{id}` | admin-only: remove a device that was declared through `POST /api/devices`, along with its enrolled address and any pending token, and revoke the router's ingest token(s); if a revoke cannot be saved, the response says so. A device declared in `config.yaml` refuses with 400 -- it would only come back at the next restart |
 | `POST /api/devices/{id}/enrolment` | admin-only, and re-checks your password (#1291): mint (or reroll) the device's one-time enrolment token, 15-minute life, bound to the address you name. The response is the token and its expiry; `POST /api/setup/commands` renders it into the `/log info "mikroview-enrol …"` line the wizard shows |
 | `DELETE /api/devices/{id}/enrolment` | admin-only: revoke a pending enrolment token before it is redeemed |
 | `POST /api/devices/{id}/enrolment/address` | admin-only (#1291): point a pending token at a different address without rerolling it -- the way back when the address you named was wrong and the router was turned away. Only an address already in the refused-senders list is accepted |
@@ -5653,7 +5654,7 @@ route keeps as-is, such as the preferences document, accept any keys.
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
 | `POST /api/setup/address` | admin-only (#1213): the address your routers reach this instance on, as typed into the setup ledger's header field; persisted beside the ledger's own marks and rendered into every router command the ledger shows |
-| `PUT /api/setup/backup-transport` | admin-only (#955): how step 6's router script delivers its backup, set from Settings → router backups' deliver by row (#1494) -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
+| `PUT /api/setup/backup-transport` | admin-only (#955): how the backup part of the wizard's Paste once script delivers its backup, set from Settings → router backups' deliver by row (#1494) -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
 | `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- a state MikroView no longer starts in, since v0.7.0 needs a key) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |

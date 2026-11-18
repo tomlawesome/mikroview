@@ -123,11 +123,10 @@ rewritten.
   push now sends both raw tables with their counters, and how many
   entries each blocklist holds rather than the entries; the
   address-list page leaves the blocklists out. The wizard's script
-  version is now **6**: a router on 5 keeps pushing correctly until it
-  loads a blocklist, after which its address-list page would outgrow
-  what `/tool fetch` can post -- which is why the blocklist block re-sets
-  the push as its first part, and why the setup page nudges every router
-  to re-paste.
+  version is now **6**. A router on version 5 keeps working until it
+  loads a blocklist. The blocklist makes its pushed address list too big
+  to send. So the blocklist block replaces the push script, and the
+  setup page asks every router to paste again.
 
 - **An open tab notices a server upgrade by itself** (#1363, owner
   decision 2026-09-30). Before this, an already-open page kept running
@@ -250,6 +249,7 @@ rewritten.
   no longer breaks every later one** (#1489, #1485). The pepper file now only
   appears once it is complete, and two commands started together agree on one
   pepper instead of one failing with "recovery pepper is unreadable".
+  The pepper is also created on filesystems that refuse hard links.
 
 - **A watchlist match with an oversized log line is now recorded** (#1471).
   Its raw line is cut to the stored limit instead of the match being refused.
@@ -381,7 +381,8 @@ rewritten.
   password already confirmed it. Entities no longer reports an
   unfinished Register step or offers **Finish registering…**, and
   `POST /api/devices/{id}/registration` is removed. `registeredAt` is
-  still reported in `/api/devices` and now always equals `enrolledAt`.
+  still reported in `/api/devices`. Every new enrolment sets it to the
+  same moment as `enrolledAt`; older records keep their own date.
 
 ### Changed
 
@@ -685,19 +686,20 @@ rewritten.
 ### Added
 
 - **The setup wizard warns about RouterOS upgrades that break pasted
-  commands** (#1344, owner ruling on #1343). Setup screen shows, per
-  connected router, every "from version X onward, this affects Y"
-  warning that applies to its reported version; first entry is 7.24.3's
-  removal of the GoDaddy Class 2 root from the router's trust store.
+  commands** (#1344, owner ruling on #1343). The drop-list setup card
+  shows, per connected router, every "from version X onward, this
+  affects Y" warning that applies to its reported version; first entry
+  is 7.24.3's removal of the GoDaddy Class 2 root from the router's
+  trust store. (The full-screen wizard that replaced the old setup
+  screen, #1381-#1386, does not show it.)
 
 ### Added
 
-- **The RouterOS upgrade warning also shows on the drop-list setup card
-  and the account-creation journey** (#1378, follow-up to #1344). Both
-  now fetch the setup commands the warning is drawn from -- the
-  drop-list card once its own setup section is opened, the journey
-  screen that already fetched them for its two-line command block --
-  and show it in the same place relative to the commands, above them.
+- **The RouterOS upgrade warning also shows on the drop-list setup card**
+  (#1378, follow-up to #1344). The card fetches the setup commands the
+  warning is drawn from, once its own setup section is opened, and
+  shows the warning above them. (It also showed on the
+  account-creation journey; the wizard rewrite removed that.)
   Still not shown on the Engine Room's clipboard-only "copy for
   RouterOS" (#1344's own ruling).
 

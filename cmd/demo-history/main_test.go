@@ -162,7 +162,7 @@ func TestSortRecordsAndMarshalRecords(t *testing.T) {
 	}
 }
 
-func TestBuildRetainedEventsIsChronologicalAndEndsYesterday(t *testing.T) {
+func TestBuildRetainedEventsIsChronologicalAndNeverLaterThanNow(t *testing.T) {
 	const days = 3
 	b, n, err := buildRetainedEvents(fixedNow, days)
 	if err != nil {
@@ -182,6 +182,27 @@ func TestBuildRetainedEventsIsChronologicalAndEndsYesterday(t *testing.T) {
 		if r.ReceivedAt.After(fixedNow) {
 			t.Fatalf("record at %v is in the future", r.ReceivedAt)
 		}
+	}
+
+	// Background traffic (the only kind with a source MAC) ends before
+	// today; matching traffic may fall in this morning's closed window.
+	today := fixedNow.Truncate(24 * time.Hour)
+	demoIPs := map[string]bool{}
+	for _, d := range demoWatchlist {
+		demoIPs[d.ip] = true
+	}
+	last := nightlyWindow.ClosedSince(time.Time{}, fixedNow, 1)[0]
+	matches := 0
+	for _, r := range recs {
+		if r.Event.SrcMAC != "" && !r.ReceivedAt.Before(today) {
+			t.Fatalf("background record at %v runs into today (%v)", r.ReceivedAt, today)
+		}
+		if demoIPs[r.Event.DstIP] && !r.ReceivedAt.Before(last.Open) && !r.ReceivedAt.After(last.Close) {
+			matches++
+		}
+	}
+	if matches < 1 {
+		t.Errorf("no matching event in the last closed window %v-%v", last.Open, last.Close)
 	}
 }
 
