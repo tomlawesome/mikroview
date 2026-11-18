@@ -4220,9 +4220,9 @@ describe('living hosts on the 2D map (#1016)', () => {
       flushSync()
 
       act(openCard(container)!, 'dismiss ▸')!.click()
-      await vi.waitFor(() => expect(container.querySelector('.card .d-error')).not.toBeNull())
+      await vi.waitFor(() => expect(container.querySelector('.card [role="alert"]')).not.toBeNull())
 
-      expect(container.querySelector('.card .d-error')?.textContent).toContain('403')
+      expect(container.querySelector('.card [role="alert"]')?.textContent).toContain('403')
       // Still on the map: nothing was written, so nothing is taken away.
       expect(dots(container).length).toBe(1)
     })

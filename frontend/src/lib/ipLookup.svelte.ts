@@ -60,9 +60,9 @@ class IpLookupState {
         this.result = r
         this.loading = false
       },
-      () => {
+      (err) => {
         if (id !== this.requestId) return
-        this.error = 'Lookup failed'
+        this.error = err instanceof Error ? err.message : String(err)
         this.loading = false
       },
     )

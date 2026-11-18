@@ -16,6 +16,7 @@
   // count is how many firings it has suppressed, so an expectation
   // that has absorbed nothing in months is visibly not earning its
   // place and can be forgotten from here.
+  import FailureLine from './FailureLine.svelte'
   import { fetchExpectations, forgetExpectation } from '../lib/api'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { formatDayMonth } from '../lib/format'
@@ -114,7 +115,7 @@
   <h3>What it has been told to expect</h3>
 
   {#if loadError}
-    <p class="error">{loadError}</p>
+    <FailureLine verb="load" thing="the expectations" said={loadError} />
   {:else if rows.length === 0}
     <p class="empty">Nothing yet — every Expected verdict on the docket's flags tab records one here.</p>
   {:else}
@@ -147,7 +148,7 @@
             {/if}
           </span>
           {#if rowError[e.id]}
-            <p class="error">{rowError[e.id]}</p>
+            <FailureLine verb="forget" thing="this expectation" said={rowError[e.id]} />
           {/if}
         </li>
       {/each}
@@ -237,9 +238,4 @@
     cursor: default;
   }
 
-  .error {
-    margin: 4px 0 0;
-    color: var(--reject);
-    font-size: 11.5px;
-  }
 </style>

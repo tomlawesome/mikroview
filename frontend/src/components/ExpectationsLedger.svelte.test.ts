@@ -79,7 +79,7 @@ describe('an empty ledger', () => {
     render(ExpectationsLedger, { canEdit: true })
     await settle()
 
-    expect(screen.getByText('fetchExpectations: 503')).toBeTruthy()
+    expect(screen.getByText('Could not load the expectations: fetchExpectations: 503')).toBeTruthy()
     expect(screen.queryByText(/Nothing yet/)).toBeNull()
   })
 })
@@ -166,7 +166,7 @@ describe('forgetting an expectation', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.0.2.50' }))
     await settle()
 
-    expect(screen.getByText('user role required')).toBeTruthy()
+    expect(screen.getByText('Could not forget this expectation: user role required')).toBeTruthy()
     expect(screen.getByText('192.0.2.50')).toBeTruthy()
     // A refused forget must not have re-read the list: the ledger would
     // then look refreshed when nothing changed.

@@ -20,6 +20,7 @@
   // same way #1018's port doors keep policy and traffic apart. This
   // panel evaluates no precedence and claims no port is safe or unsafe.
   import { trapFocus } from '../lib/focusTrap'
+  import FailureLine from './FailureLine.svelte'
   import { wanDoorsState, portUnion } from '../lib/wanDoors.svelte'
   import { formatRelative } from '../lib/format'
   import CopyButton from './CopyButton.svelte'
@@ -116,7 +117,7 @@
       {#if wanDoorsState.loading && wanDoorsState.devices.length === 0}
         <GhostRows label="Reading the pushed tables…" rows={5} />
       {:else if wanDoorsState.error}
-        <p class="failed" role="alert">{wanDoorsState.error}</p>
+        <FailureLine verb="read" thing="the pushed tables" said={wanDoorsState.error} />
       {:else if wanDoorsState.devices.length === 0}
         <p class="from">No device has shown a WAN interface yet.</p>
       {:else}
@@ -322,10 +323,5 @@
     padding-top: 10px;
     border-top: 1px solid var(--border);
     color: var(--fg-dim);
-  }
-
-  .failed {
-    padding: 16px 0;
-    color: var(--fg-muted);
   }
 </style>

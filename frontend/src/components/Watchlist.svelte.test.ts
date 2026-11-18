@@ -1253,7 +1253,7 @@ describe('a watcher offered by a resolved flag (#641)', () => {
     await settle()
 
     expect(appState.view).toBe('watchlist')
-    expect(draftRow().querySelector('.error')?.textContent).toContain('at least one port')
+    expect(draftRow().querySelector('[role="alert"]')?.textContent).toContain('at least one port')
   })
 
   // A draft the operator opened here has no provenance and nowhere to be

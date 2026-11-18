@@ -30,6 +30,7 @@
   // found in the popover's header, in the body both surfaces share. The
   // id is what every fetch here is keyed by and stays in st.device; it
   // is not what the operator is shown.
+  import FailureLine from './FailureLine.svelte'
   import { routerLookupState as st } from '../lib/routerLookup.svelte'
 
   const partition = $derived(st.natPartition)
@@ -38,7 +39,7 @@
 {#if st.loading}
   <div class="status">Loading…</div>
 {:else if st.error}
-  <div class="status error">{st.error}</div>
+  <FailureLine verb="look up" thing="this router's NAT rules" said={st.error} />
 {:else if !st.available}
   <div class="status">
     No NAT table pushed by “{st.deviceName}” yet — this data arrives via the RouterOS push
@@ -194,10 +195,6 @@
   .status {
     color: var(--fg-dim);
     padding: 4px 0;
-  }
-
-  .status.error {
-    color: var(--reject);
   }
 
   /* The first thing in the body of the mode that needs it: what this

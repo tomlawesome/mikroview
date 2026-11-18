@@ -10,6 +10,7 @@
   import { ipLookupState } from '../lib/ipLookup.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
+  import FailureLine from './FailureLine.svelte'
 
   const POPOVER_WIDTH = 260
 
@@ -83,7 +84,7 @@
     {#if ipLookupState.loading}
       <div class="status">Looking up…</div>
     {:else if ipLookupState.error}
-      <div class="status error">{ipLookupState.error}</div>
+      <FailureLine verb="look up" thing="this address" said={ipLookupState.error} />
     {:else if ipLookupState.result}
       <ReputationDetails result={ipLookupState.result} owner={ipLookupState.owner} />
     {/if}
@@ -155,9 +156,5 @@
   .status {
     color: var(--fg-dim);
     padding: 4px 0;
-  }
-
-  .status.error {
-    color: var(--reject);
   }
 </style>

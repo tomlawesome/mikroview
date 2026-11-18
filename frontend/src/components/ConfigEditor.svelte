@@ -12,6 +12,7 @@
   //
   // No editor library, deliberately: a textarea with wrapping off keeps
   // one text line to one screen line, which is all the gutter needs.
+  import FailureLine from './FailureLine.svelte'
   import { configEditorState } from '../lib/configEditor.svelte'
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
@@ -400,7 +401,7 @@
             </span>
           </h3>
           {#if ed.checkError}
-            <p class="quiet error">Could not check the text: {ed.checkError}</p>
+            <FailureLine verb="check" thing="the text" said={ed.checkError} />
           {:else if ed.problems.length === 0 && !ed.checking}
             <p class="quiet">No problems found. MikroView would start with this file.</p>
           {/if}
@@ -420,7 +421,7 @@
         <section class="snaps">
           <h3>Snapshots</h3>
           {#if ed.snapshotsError}
-            <p class="quiet error">Could not list the snapshots: {ed.snapshotsError}</p>
+            <FailureLine verb="list" thing="the snapshots" said={ed.snapshotsError} />
           {:else if ed.snapshotsLoaded && ed.snapshots.length === 0}
             <p class="quiet">None yet. Snapshot keeps a copy of the text; Carry forward keeps one of the file before it changes anything.</p>
           {/if}
@@ -601,8 +602,7 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .msg.error,
-  .quiet.error {
+  .msg.error {
     color: var(--reject);
   }
 

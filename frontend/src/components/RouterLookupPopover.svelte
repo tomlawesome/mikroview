@@ -23,6 +23,7 @@
   // is accent-coloured in logged mode, but the distinction it carries is
   // the word, never the colour.
   import { restoreFocus } from '../lib/focusTrap'
+  import FailureLine from './FailureLine.svelte'
   import { routerLookupState as st, natChip, natTitle } from '../lib/routerLookup.svelte'
   import { appState } from '../lib/state.svelte'
   import RouterNatLookup from './RouterNatLookup.svelte'
@@ -99,7 +100,7 @@
     {:else if st.loading}
       <div class="status">Loading…</div>
     {:else if st.error}
-      <div class="status error">{st.error}</div>
+      <FailureLine verb="look up" thing="this router" said={st.error} />
     {:else if !st.available}
       <div class="status">
         No rule table pushed by “{st.deviceName}” yet — this data arrives via the RouterOS push

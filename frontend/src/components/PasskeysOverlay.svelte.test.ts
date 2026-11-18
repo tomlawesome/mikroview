@@ -466,6 +466,6 @@ describe('Q5-F2: loading the list reports errors like the other list calls', () 
     vi.mocked(fetchPasskeys).mockRejectedValue(new ApiError('the server could not do that (500)', 500))
     render(PasskeysOverlay, { open: true })
 
-    expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
+    expect(await screen.findByText('Could not load the passkeys: the server could not do that (500)')).toBeTruthy()
   })
 })

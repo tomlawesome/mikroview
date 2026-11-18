@@ -11,9 +11,16 @@ import type { Entity } from './types'
 // always exactly what the server has.
 class EntitiesState {
   list = $state<Entity[]>([])
+  // False until the first fetch lands, so the page can show ghost rows
+  // rather than an empty table that reads as "no names yet" (#1540).
+  loaded = $state(false)
 
   async refresh() {
-    this.list = await fetchEntities()
+    try {
+      this.list = await fetchEntities()
+    } finally {
+      this.loaded = true
+    }
   }
 
   async upsert(entity: Entity): Promise<string | null> {

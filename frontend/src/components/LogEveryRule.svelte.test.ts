@@ -578,13 +578,13 @@ describe('LogEveryRule device pick', () => {
     await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
     await typeExport(container)
     await clickAnalyse()
-    await waitFor(() => expect(container.querySelector('.load-error')).toBeTruthy())
+    await waitFor(() => expect(container.querySelector('[role="alert"]')).toBeTruthy())
 
     const select = container.querySelector('#ler-device') as HTMLSelectElement
     await fireEvent.change(select, { target: { value: 'edge-2' } })
 
     await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
-    expect(container.querySelector('.load-error')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
   // Clearing on the switch is not enough on its own. A request already
@@ -637,7 +637,7 @@ describe('LogEveryRule device pick', () => {
 
     settle('edge-1 has not been observed for long enough yet')
     await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
-    expect(container.querySelector('.load-error')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
   // The highlight the topography hands over, guarded because clearing
@@ -792,7 +792,7 @@ describe('LogEveryRule device pick', () => {
     await typeExport(container)
     await clickAnalyse()
 
-    await waitFor(() => expect(container.querySelector('.load-error')?.textContent).toContain('Failed to fetch'))
+    await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('Failed to fetch'))
     expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
   })
 

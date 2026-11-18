@@ -28,6 +28,7 @@
   // the city building card and the topography host card -- each need one
   // call and no state of their own.
   import { trapFocus } from '../lib/focusTrap'
+  import FailureLine from './FailureLine.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import { nameEditorState } from '../lib/nameEditor.svelte'
   import { countryFlag, formatRelative, isPublicIp } from '../lib/format'
@@ -169,8 +170,8 @@
     {#if dossierState.loading}
       <GhostRows label="Assembling the dossier…" rows={7} />
     {:else if dossierState.error}
-      <div class="failed" role="alert">
-        <p>{dossierState.error}</p>
+      <div class="failed">
+        <FailureLine verb="assemble" thing="the dossier" said={dossierState.error} />
         <button type="button" class="retry" onclick={() => dossierState.retry()}>Try again</button>
       </div>
     {:else if d}

@@ -50,6 +50,8 @@
   // paraphrasing the ghost's card in new words. See decommission.ts's
   // own file comment for why the sentences all live there.
   import { decommissionsState } from '../lib/decommission.svelte'
+  import GhostRows from './GhostRows.svelte'
+  import FailureLine from './FailureLine.svelte'
   import { forgetContract, ghostNote, ghostStateOf, retiredNote, watchlistRowText } from '../lib/decommission'
   import type {
     DecommissionWatch,
@@ -1350,7 +1352,7 @@
     {#if WATCH_HEADING_ENABLED}
       <h3 id="watch-heading" class="section-title">Watches</h3>
     {/if}
-    {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
+    {#if wtError}<FailureLine verb="change" thing="this watch" said={wtError} />{/if}
     <!-- The table always renders, even with no watches at all: round 33
          hangs the suggestions body off the same table, so a page that
          dropped the table when the watchlist was empty would take the
@@ -1476,7 +1478,7 @@
                            up. -->
                       <p class="wf-prov">{draftProvenance}</p>
                     {/if}
-                    {#if draftError}<p class="error" role="alert">{draftError}</p>{/if}
+                    {#if draftError}<FailureLine verb="create" thing="this watch" said={draftError} />{/if}
                   </div>
                   <div class="side wf-mode">
                     <span class="lab">and it means</span>
@@ -1519,6 +1521,10 @@
                 Every watch is gone as of {formatHM(startedOverAt)}; the suggestions below are being rebuilt from the
                 next push. The audit log has who did it.
               </td>
+            </tr>
+          {:else if !watchlistState.loaded}
+            <tr>
+              <td class="empty-row" colspan="6"><GhostRows label="Reading the watches…" rows={4} /></td>
             </tr>
           {:else if sortedWatchRows.length === 0}
             <tr>
@@ -1605,7 +1611,7 @@
                               {/each}
                             </select></label
                           >
-                          {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
+                          {#if wtError}<FailureLine verb="change" thing="this watch" said={wtError} />{/if}
                         </div>
                         <div class="side wf-mode">
                           <span class="lab">and it means</span>
@@ -1655,7 +1661,7 @@
                               {/each}
                             </ul>
                             {#if olderError[row.entry.id]}
-                              <p class="error" role="alert">{olderError[row.entry.id]}</p>
+                              <FailureLine verb="load" thing="older matches" said={olderError[row.entry.id]} />
                             {/if}
                             {#if canLoadOlder(row.entry)}
                               <button
@@ -1805,7 +1811,7 @@
           </tr>
 
           {#if suggestError}
-            <tr><td colspan="6"><p class="error" role="alert">{suggestError}</p></td></tr>
+            <tr><td colspan="6"><FailureLine verb="update" thing="the suggestions" said={suggestError} /></td></tr>
           {/if}
 
           {#if openSuggestions.length === 0}
@@ -1926,7 +1932,7 @@
   {#if decommissionRows.length > 0}
     <section class="section decomm-section" aria-label="Decommission watches">
       <h3 class="section-title">Decommission watches</h3>
-      {#if decommError}<p class="error" role="alert">{decommError}</p>{/if}
+      {#if decommError}<FailureLine verb="forget" thing="this watch" said={decommError} />{/if}
       <table class="watch-table">
         <thead>
           <tr>
@@ -2029,11 +2035,6 @@
     gap: 14px;
   }
 
-  .error {
-    margin: 0;
-    color: var(--reject);
-    font-size: 12px;
-  }
 
   .section {
     display: flex;
