@@ -94,7 +94,7 @@ func (s *Server) handlePreferencesPatch(w http.ResponseWriter, r *http.Request) 
 
 	var req preferencesDocument
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if req.Version != preferencesSchemaVersion {

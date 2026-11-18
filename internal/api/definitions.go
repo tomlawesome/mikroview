@@ -1081,7 +1081,7 @@ func (s *Server) handleDefinitionsDelete(w http.ResponseWriter, r *http.Request)
 		apiLog.Error("hiding the suggestion candidate for a deleted definition failed: " + err.Error())
 	}
 	s.Audit.Record(auditActor(r), "definition.delete", id, sd.Definition.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // cloneRequest is the wire shape for POST /api/definitions/{id}/clone.

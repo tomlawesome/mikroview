@@ -80,7 +80,7 @@ func (s *Server) handleGeoIPinfoSet(w http.ResponseWriter, r *http.Request) {
 	}
 	var req geoIPinfoRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	s.geoKeyChange(w, r, geoip.IPinfo, "key set", func(actor string) error {
@@ -96,7 +96,7 @@ func (s *Server) handleGeoMaxMindSet(w http.ResponseWriter, r *http.Request) {
 	}
 	var req geoMaxMindRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	s.geoKeyChange(w, r, geoip.MaxMind, "key set", func(actor string) error {

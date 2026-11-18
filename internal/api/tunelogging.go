@@ -214,7 +214,7 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 
 	after, err := export.Parse(annotated)
 	if err != nil || !export.LoggingOnlyDiff(before, after) {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "logging-only check failed"})
+		http.Error(w, "logging-only check failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -227,7 +227,8 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 }
 
 // writeTuneLoggingRejection answers a *export.SecretFieldError with the
-// contract's 400 {"rejected":{"reason":...}} shape; any other error --
+// contract's 400 {"rejected":{"reason":...}} shape (application/json, the
+// one documented JSON refusal on this route; the frontend reads it as text); any other error --
 // including a *export.ControlCharError -- falls back to a plain 400.
 func writeTuneLoggingRejection(w http.ResponseWriter, err error) {
 	var secretErr *export.SecretFieldError

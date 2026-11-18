@@ -146,7 +146,7 @@ func (s *Store) persistLocked() {
 	}
 	data, err := json.Marshal(document{Watches: s.watches})
 	if err != nil {
-		storeLog.Error("decommission: encoding the watch document failed", "error", err)
+		storeLog.Error("decommission: encoding the watch document failed", "err", err)
 		return
 	}
 	s.wb.MarkDirty(data)

@@ -71,7 +71,7 @@ func (s *Server) handleConfigProblems(w http.ResponseWriter, r *http.Request) {
 		// started leaking, since both look like "allowed through". An
 		// unambiguous refusal keeps that guard meaningful, and leaks
 		// nothing a non-admin doesn't already know about their own role.
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	problems := append([]ConfigProblem{}, s.ConfigProblems...)

@@ -47,7 +47,7 @@ type PersistenceInfo struct {
 // distinction handleConfigProblems' own doc comment explains.
 func (s *Server) handlePersistence(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Persistence)
