@@ -27,9 +27,23 @@ the same block, so rounds agree:
 | Workshop | 198.51.100.160/27 |
 | Cams | 198.51.100.192/27 |
 | Garage | 198.51.100.224/27 |
-| Site tunnels, router WAN, the design host | 192.0.2.0/24 (a /28 per tunnel) |
+| Router WANs (a /29 each), the design host (.30) | 192.0.2.0/27 |
+| Staff | 192.0.2.32/27 |
+| Office | 192.0.2.64/27 |
+| VoIP | 192.0.2.96/27 |
+| WiFi | 192.0.2.128/27 |
+| Mgmt | 192.0.2.160/27 |
+| Core | 192.0.2.192/27 |
+| L2TP tunnel (a /28 per tunnel) | 192.0.2.224/28 |
+| DMZ | 192.0.2.240/29 |
+| Old DMZ | 192.0.2.248/29 |
 | Outside peers (scanners, internet hosts) | 203.0.113.0/24 |
 | IPv6 | 2001:db8::/32 |
+
+192.0.2.0/24 is the mixed block: the router WANs and the design host are
+outside, every other row in it is inside. Inside networks outside RFC 1918
+read as outside unless the config lists them under `networks.home`
+(#1481); the demo's `cfg.yaml` lists every inside row above.
 
 Write a network as its network address (`198.51.100.32/27`), never as a host
 with a prefix. One device keeps one address across a page, its README and its

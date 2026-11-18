@@ -94,6 +94,18 @@ rewritten.
 
 ### Added
 
+- **Settings → router backups gains "deliver by"** (#1494). It chooses
+  between the SFTP drop box and the HTTPS slice push, and the wizard
+  prints whichever is chosen. Before, only the API could set it.
+
+- **`networks.home`: inside networks the address alone does not reveal**
+  (#1481). List a routed public block or an IPv6 global prefix and its
+  addresses classify as internal everywhere -- event filters, detections,
+  each router's WAN, geolocation and reputation lookups (home addresses
+  are no longer sent). Empty by default, which changes nothing; a `/0` or
+  an unparsable entry stops start-up (CFG-0105). The demo's config now
+  lists its documentation-range inside blocks.
+
 - **Block known-bad addresses on the router** (#1360, round 2 ratified
   2026-10-01). Settings ▸ drop list ▸ "Block known-bad addresses…" opens
   a page that builds one RouterOS block making the router fetch
@@ -234,6 +246,11 @@ rewritten.
 
 ### Fixed
 
+- **A recovery-key command killed while first creating the recovery pepper
+  no longer breaks every later one** (#1489, #1485). The pepper file now only
+  appears once it is complete, and two commands started together agree on one
+  pepper instead of one failing with "recovery pepper is unreadable".
+
 - **A watchlist match with an oversized log line is now recorded** (#1471).
   Its raw line is cut to the stored limit instead of the match being refused.
 
@@ -359,7 +376,18 @@ rewritten.
   mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
   refuses to start and names the card. Remove the key.
 
+- **The Register step is gone for good** (#1493). A router is registered
+  the moment its enrol line is accepted: minting its token with your
+  password already confirmed it. Entities no longer reports an
+  unfinished Register step or offers **Finish registering…**, and
+  `POST /api/devices/{id}/registration` is removed. `registeredAt` is
+  still reported in `/api/devices` and now always equals `enrolledAt`.
+
 ### Changed
+
+- **Drafting a rule keeps its line card open** (#1496). On the map and in
+  the city, `draft the rule ▸` pins the card it was clicked on, so the
+  ports and counts stay beside the draft; unpin or Escape closes it.
 
 - **Authentication runs on gauntlet** (#1202), the sign-in library shared
   with the author's other projects. What you will notice, beyond the

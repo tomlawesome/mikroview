@@ -285,6 +285,10 @@ var authzMatrix = []routeExpectation{
 			"The gate the issue asks for is the same gate the existing query carries. The mode learns nothing new in kind: a token that already reaches GET /api/events reads the live feed for every device, and a bounded page of matches is a strictly smaller view of the same traffic. And it is bounded by construction, not by the caller -- matchlog.RecentQuery clamps the limit to 5000 (100 by default) before either backend runs, which is the property that stops an all-entries read on an unrate-limited route being an arbitrarily large response. " +
 			"What did NOT change: the per-identity path still refuses an empty identity (matchlog.ErrEmptyIdentity), and entries=all refuses to be combined with mac/ip, so 'no identity' can never silently mean 'every device'"},
 	{http.MethodGet, "/api/rules", accessViewer, "core read"},
+	{http.MethodGet, "/api/networks", accessViewer,
+		"the configured home networks (networks.home, #1481), so the browser classifies inside/outside the " +
+			"way the server does -- any signed-in caller, like /api/devices: it is a deployment fact the events " +
+			"already imply, and carries no credential"},
 	{http.MethodGet, "/api/me/preferences", accessViewer,
 		"reads the caller's own preferences record (#1283) -- same reasoning as gauntlet's /api/auth/password: it acts " +
 			"only on the session's own account, there is no id in the request that could point it at someone else's, " +
@@ -466,11 +470,6 @@ var authzMatrix = []routeExpectation{
 		"removes a device this registry itself created, clearing its enrolled address and any pending token with " +
 			"it -- same tier as creating one. A config.yaml declaration refuses with 400 rather than reaching this " +
 			"tier check meaningfully, since it would simply reappear on the next restart"},
-	{http.MethodPost, "/api/devices/{id}/registration", accessAdmin,
-		"records the operator's confirmation of a router on the device itself -- the ledger's final Register step " +
-			"(#1291). Admin tier like its neighbours, but deliberately no password re-proof on top: registering " +
-			"grants nothing (it never sets AcceptedIP), so spoofing it renames a device and stamps a date. The " +
-			"re-proof belongs on the endpoint that opens the door, which is minting"},
 	{http.MethodPost, "/api/devices/{id}/enrolment", accessAdmin,
 		"mints (or rerolls) a device's enrolment token (#1281) -- a bearer credential that attributes syslog traffic " +
 			"to a device, the same tier every other token-issuing endpoint in this API holds to (POST /api/tokens, " +
@@ -556,6 +555,46 @@ func TestEveryRouteIsInTheAuthorizationMatrix(t *testing.T) {
 			t.Errorf("authzMatrix has a row for %s %s, but no such route is registered -- remove the stale row",
 				r.method, r.path)
 		}
+	}
+}
+
+// retiredRoutes are routes this API used to serve and must not serve
+// again. A retired route has no row in authzMatrix -- there is no tier
+// to state -- so without this list nothing would notice one coming
+// back. TestRetiredRoutesAreAbsent proves each is gone, not merely
+// admin-only.
+var retiredRoutes = []routeExpectation{
+	{http.MethodPost, "/api/devices/{id}/registration", accessAdmin,
+		"the ledger's old Register step (#1291), retired by #1493: a router is registered the moment its enrol " +
+			"line is accepted, so no web request records a registration any more"},
+}
+
+// TestRetiredRoutesAreAbsent checks each retired route twice: it is not
+// in the route table, and an admin -- who passes every tier check --
+// gets 404 from the running server.
+func TestRetiredRoutesAreAbsent(t *testing.T) {
+	registered := make(map[string]bool)
+	for _, p := range registeredRoutePatterns(t) {
+		registered[p] = true
+	}
+
+	s := newAuthTestServer(t)
+	s.TestHooks = true
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	admin := registerAdmin(t, s, ts)
+
+	for _, r := range retiredRoutes {
+		t.Run(r.method+" "+r.path, func(t *testing.T) {
+			if registered[r.method+" "+r.path] {
+				t.Errorf("%s %s is registered again, but it was retired: %s", r.method, r.path, r.why)
+			}
+			resp := doRouteRequest(t, admin, ts.URL, r)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("admin %s %s: status %d, want 404 for a retired route", r.method, r.path, resp.StatusCode)
+			}
+		})
 	}
 }
 

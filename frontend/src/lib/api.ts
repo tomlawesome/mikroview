@@ -501,6 +501,15 @@ export async function fetchDevices(): Promise<Device[]> {
   return body.devices ?? []
 }
 
+// fetchNetworks reads networks.home (#1481), the configured inside
+// ranges isPublicIp honours alongside the private ones.
+export async function fetchNetworks(): Promise<string[]> {
+  const res = await fetch('/api/networks')
+  if (!res.ok) throw new ApiError(`fetchNetworks: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.home ?? []
+}
+
 // createDevice is the router ledger's first step (#1284): naming a
 // router is what creates it, so the name field and the create are one
 // act. Admin-only server-side, same gate as every other write here.
@@ -525,17 +534,6 @@ export async function mintEnrolment(
   })
   if (res.ok) return res.json()
   return (await errorText(res)) || `mintEnrolment: ${res.status}`
-}
-
-// registerDevice records the operator's confirmation of a router --
-// the ledger's final Register step (#1291). It grants the router
-// nothing: the server never sets acceptedIp from this call, so an
-// address is still only accepted when a valid token arrives over
-// syslog from it. Answers the updated device.
-export async function registerDevice(device: string, name: string): Promise<Device | string> {
-  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/registration`, { name })
-  if (res.ok) return res.json()
-  return (await errorText(res)) || `registerDevice: ${res.status}`
 }
 
 // rebindEnrolment points a pending enrolment window at a different

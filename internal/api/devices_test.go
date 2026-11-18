@@ -598,54 +598,17 @@ func TestDeviceEnrolmentMintRequiresAnExpectedAddress(t *testing.T) {
 	}
 }
 
-// TestDeviceRegisterRecordsIntentAndGrantsNoAddress is the ledger's
-// final step end to end: it stamps the device and confers nothing.
-func TestDeviceRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
-	s, ts, admin := deviceTestServer(t)
+// TestDeviceRegistrationEndpointIsGone is #1493: registration is
+// acceptance of the enrol line, so no request registers a router.
+func TestDeviceRegistrationEndpointIsGone(t *testing.T) {
+	_, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
 
 	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/registration",
-		deviceRegisterRequest{Name: "hap-ax3"})
+		map[string]string{"name": "hap-ax3"})
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200, body = %s", resp.StatusCode, body)
-	}
-	var info device.Info
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		t.Fatal(err)
-	}
-	if info.RegisteredAt.IsZero() {
-		t.Error("registeredAt is zero after registering, want it stamped")
-	}
-	if info.AcceptedIP != "" {
-		t.Fatalf("acceptedIp = %q after registering, want registering to grant no address", info.AcceptedIP)
-	}
-	// And it opened no enrolment window either -- registering is not a
-	// back door to the thing minting is now guarded for.
-	if s.Devices.AcceptsConnectionFrom("10.10.0.1") {
-		t.Error("registering opened the connection gate, want it to grant nothing at all")
-	}
-}
-
-// TestDeviceRegisterRequiresAdmin: same tier as every other
-// device-identity write in this file.
-func TestDeviceRegisterRequiresAdmin(t *testing.T) {
-	s, ts, admin := deviceTestServer(t)
-	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
-	postJSON(t, admin, ts.URL+"/api/auth/users",
-		createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
-
-	viewer := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewer, ts.URL+"/api/auth/login",
-		credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
-	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/devices/.../registration below
-
-	resp := postJSON(t, viewer, ts.URL+"/api/devices/hap-ax3/registration",
-		deviceRegisterRequest{Name: "hap-ax3"})
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status = %d, want 403 for a non-admin", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for the retired registration route", resp.StatusCode)
 	}
 }
 

@@ -1,5 +1,4 @@
-Recaptured at d5fdc4eb (2026-09-21) and the output was byte-for-byte
-identical to the committed image: that commit changed EngineRoom.svelte's
-key-copy error handling in the Settings panel, which this crop of the
-#people door does not show. Recorded here because an identical recapture
-leaves git nothing to commit, so the image's own commit cannot move.
+Recaptured at 761f0325 (2026-11-16) from a seeded demo and the output matched the committed image in
+what it shows (only clock times, ports and event rates differ): #1494's EngineRoom.svelte change (router-backups deliver-by row) is outside this crop of the #people door.
+Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
+cannot move.

@@ -276,6 +276,8 @@ in the feed it comes back by itself. Neither state claims more than
 
 Cards are the one interaction, the same on both surfaces: hover to
 open, and every card has a **pin** so it stays when the pointer leaves.
+An action on a card that opens a form -- declare, mark quiet on
+purpose, expected, draft the rule -- pins the card first (#1496).
 Boundary card (dark): the gate's own `rule N · name` (owner,
 2026-09-08 on #1016 — numbered as RouterOS numbers it, and on the card
 only, never on the drawing; a rule with no comment is shown by its

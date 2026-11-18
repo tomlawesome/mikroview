@@ -171,7 +171,7 @@ export function diamond(c: Cam, u: number, v: number, R: number, z = 0): string 
 }
 
 /** One of the two faces of a diamond prism the camera can see. */
-export function wallFace(c: Cam, u: number, v: number, R: number, h: number, side: 'l' | 'r', z0 = 0): string {
+function wallFace(c: Cam, u: number, v: number, R: number, h: number, side: 'l' | 'r', z0 = 0): string {
   const a: Pt = side === 'l' ? [u - R, v] : [u, v + R]
   const b: Pt = side === 'l' ? [u, v + R] : [u + R, v]
   const ax = R2(X(c, a[0]))

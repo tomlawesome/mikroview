@@ -48,7 +48,7 @@ import { fetchDevices, fetchRouterNat, fetchRouterRules, fetchWatchlistEntries, 
 import { appState } from './state.svelte'
 import type { WatchlistBoundary, WatchlistEntry } from './types'
 
-export type BoundaryCoverage = 'unknown' | 'dark' | 'observed'
+type BoundaryCoverage = 'unknown' | 'dark' | 'observed'
 
 export interface FallBoundary {
   key: string
@@ -111,7 +111,7 @@ export function logPrefixSlug(prefix: string | undefined): string {
 }
 
 /** The part of a live FirewallEvent the fall matches a boundary on. */
-export interface MatchableEvent {
+interface MatchableEvent {
   chain: string
   inInterface?: string
   outInterface?: string
@@ -317,8 +317,8 @@ export function boundariesFromRules(rules: BoundaryRule[], anyRulesPushed: boole
 // the round's colour for it; other observed boundaries take lanes in
 // adjacency order. Shared by the fall's band headers and the atlas
 // overlay's zones so one boundary wears one colour everywhere.
-export const FALL_LANES = ['#3987e5', '#199e70', '#d76a9e', '#c98500']
-export const FALL_LANE_BY_NAME: Record<string, string> = {
+const FALL_LANES = ['#3987e5', '#199e70', '#d76a9e', '#c98500']
+const FALL_LANE_BY_NAME: Record<string, string> = {
   lan: '#3987e5',
   srv: '#199e70',
   guest: '#d76a9e',

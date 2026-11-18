@@ -55,14 +55,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -180,11 +183,10 @@ var ipv4Dotted = regexp.MustCompile(`^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})
 //   - the octets are not range-checked, so "999.1.2.3" reads as public
 //     and is skipped.
 //
-// Each package in this codebase keeps its own small private copy of a
-// public/private predicate rather than exporting one across a package
-// boundary (see internal/engine/conditions.go's isPublicIP for the
-// precedent). This copy exists to match the *frontend's* rule, which is
-// not the same rule internal/engine's copy implements.
+// The base rule stays a port of the browser's rather than the shared
+// ipscope one, because the two differ at the edges (above); what both
+// share is networks.home (#1481), applied through homeScope so the
+// register and the map agree on any install that sets it.
 func isPublicIP(ip string) bool {
 	m := ipv4Dotted.FindStringSubmatch(ip)
 	if m == nil {
@@ -206,8 +208,23 @@ func isPublicIP(ip string) bool {
 	case a == 0:
 		return false
 	}
+	// The browser applies the home set to IPv4 only, as here. An address
+	// the dotted pattern admits but netip refuses (999.1.2.3) stays
+	// public, as it does there.
+	if addr, err := netip.ParseAddr(ip); err == nil && homeScope.Load().InHome(addr) {
+		return false
+	}
 	return true
 }
+
+// homeScope is networks.home (#1481), set once at start-up by
+// SetHomeScope. Package state, as in internal/engine, because Registers
+// is a free function that internal/baseline also calls.
+var homeScope atomic.Pointer[ipscope.Scope]
+
+// SetHomeScope sets the networks.home scope Registers counts as inside.
+// nil restores the browser's address-only rule.
+func SetHomeScope(sc *ipscope.Scope) { homeScope.Store(sc) }
 
 // Registers reports whether an event with this inbound interface and
 // source address puts a host in the register.

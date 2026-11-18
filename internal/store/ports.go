@@ -3,7 +3,7 @@
 package store
 
 import (
-	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -708,6 +708,7 @@ func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]
 		return out
 	}
 
+	home := s.home.Load()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -728,8 +729,8 @@ func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]
 		if e.DeviceID != device || e.InInterface != wan || e.DstPort <= 0 {
 			continue
 		}
-		ip := net.ParseIP(e.SrcIP)
-		if ip == nil || !isPublicIP(ip) {
+		ip, err := netip.ParseAddr(e.SrcIP)
+		if err != nil || ip.Zone() != "" || !home.IsPublic(ip) {
 			continue
 		}
 		proto := strings.ToLower(e.Protocol)

@@ -172,6 +172,7 @@ describe('StepRouter: the drop box, when closed (#1361)', () => {
     return {
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,

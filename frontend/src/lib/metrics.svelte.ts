@@ -53,7 +53,7 @@ function isView(v: unknown): v is MetricsView {
   return v === 'seismograph' || v === 'register' || v === 'table'
 }
 
-export function viewLabel(v: MetricsView): string {
+function viewLabel(v: MetricsView): string {
   return METRICS_VIEWS.find((o) => o.value === v)?.label ?? v
 }
 

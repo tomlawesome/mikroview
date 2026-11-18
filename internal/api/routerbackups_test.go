@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 func vaultWithOnePush(t *testing.T) *backupvault.Vault {
@@ -393,5 +394,41 @@ func TestRouterBackupsListUnaffectedByAFailedSpaceProbe(t *testing.T) {
 	push(12)
 	if !lowSpace() {
 		t.Fatal("lowSpace flipped to false on a failed probe reporting plenty of free space -- a reading that could not be taken must never clear a mode a real one set")
+	}
+}
+
+// TestRouterBackupsListReportsTheBackupTransport covers #1494: the
+// "deliver by" row reads the transport from this same response, a live
+// read of the store the wizard's commands render from.
+func TestRouterBackupsListReportsTheBackupTransport(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := setUpAdmin(t, s, ts)
+
+	get := func() string {
+		t.Helper()
+		resp, err := client.Get(ts.URL + "/api/router-backups")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var raw map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := raw["transport"].(string)
+		return got
+	}
+
+	if got := get(); got != "sftp" {
+		t.Errorf(`transport = %q on a fresh store, want "sftp"`, got)
+	}
+	if ok, err := s.Setup.SetBackupTransport("https"); err != nil || !ok {
+		t.Fatalf("SetBackupTransport(https): ok=%v err=%v", ok, err)
+	}
+	if got := get(); got != "https" {
+		t.Errorf(`transport = %q after SetBackupTransport("https"), want "https"`, got)
 	}
 }

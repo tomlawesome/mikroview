@@ -97,7 +97,7 @@ def changed_from_git():
               "runs every job and there is nothing to guard. PASS.")
         return None
     probe = subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
-                           capture_output=True)
+                           capture_output=True, check=False)
     if probe.returncode != 0:
         print(f"guard: {what}={base} is not in this clone -- GitLab's changes: "
               "runs every job when it cannot diff either. PASS.")

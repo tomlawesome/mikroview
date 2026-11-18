@@ -133,7 +133,7 @@ type RecoveryStore struct {
 //
 // The pepper lives in its own file, outside the backup set (issue #97),
 // so someone holding a stolen backup has the digests but nothing to
-// verify them against. It is written with O_EXCL and never rewritten.
+// verify them against. It is created once, atomically, and never rewritten.
 func OpenRecovery(path, pepperPath string) (*RecoveryStore, error) {
 	if path == "" {
 		return &RecoveryStore{pepperPath: pepperPath}, nil
@@ -181,6 +181,13 @@ func OpenRecoveryWithBackend(b persist.Backend, pepperPath string) (*RecoverySto
 }
 
 func loadOrCreatePepper(path string) ([]byte, error) {
+	return loadOrCreatePepperOnce(path, false)
+}
+
+// loadOrCreatePepperOnce re-reads at most once after losing the create
+// race: a second EEXIST means the name exists but cannot be read, such as a
+// dangling symlink, and retrying would loop forever.
+func loadOrCreatePepperOnce(path string, retried bool) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("auth: recovery pepper path is not configured")
 	}
@@ -203,19 +210,24 @@ func loadOrCreatePepper(path string) ([]byte, error) {
 	if _, err := rand.Read(p); err != nil {
 		return nil, err
 	}
-	// O_EXCL: never overwrite an existing pepper, even on a race. Losing
-	// it makes every stored digest unverifiable.
-	f, err := openPepperFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return loadOrCreatePepper(path) // lost the race; read theirs
-		}
+	// Written beside path and hard-linked into place once fsynced, so path
+	// either does not exist or holds a complete pepper: a kill or power loss
+	// mid-write leaves at most a stray .tmp- file, never a short pepper the
+	// next run would refuse as unreadable (#1489). Link, not rename: a rename
+	// would overwrite a pepper another process just created (#1485) and make
+	// every digest written under it unverifiable; link fails with EEXIST
+	// instead, and the loser reads theirs. A filesystem without hard links
+	// fails here, loudly. Stray temps are harmless and are not swept.
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
 		return nil, err
 	}
-	// Durable write (#1484): write, fsync, close, each error checked. The
-	// pepper is only returned once it is known to be on disk; on any
-	// failure the file this call created is removed, so the next start
-	// generates a fresh one rather than refusing on a short file.
+	tmp := path + ".tmp-" + hex.EncodeToString(suffix)
+	f, err := openPepperFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	// Durable write (#1484): write, fsync, close, each error checked.
 	_, err = f.WriteString(hex.EncodeToString(p))
 	if err == nil {
 		err = f.Sync()
@@ -224,8 +236,23 @@ func loadOrCreatePepper(path string) ([]byte, error) {
 		err = closeErr
 	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("auth: writing the recovery pepper %s: %w", path, err)
+	}
+	err = os.Link(tmp, path)
+	_ = os.Remove(tmp)
+	if err != nil {
+		if os.IsExist(err) {
+			if retried {
+				return nil, fmt.Errorf("auth: recovery pepper %s exists but cannot be read", path)
+			}
+			return loadOrCreatePepperOnce(path, true) // lost the race; read theirs
+		}
+		return nil, fmt.Errorf("auth: publishing the recovery pepper %s: %w", path, err)
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return p, nil
 }

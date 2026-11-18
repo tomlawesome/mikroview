@@ -25,7 +25,7 @@ import type { DefinitionCondition } from './types'
 // A verb as the bar shows it. Round 8: the verbs drop their `is` where
 // the word stands alone -- `within`, `between`, `one of`, `classed as` --
 // while `is` and `is not` keep it, because those two words are the verb.
-export interface Verb {
+interface Verb {
   operator: string
   label: string
   // What this verb takes, in the dim words the list shows after it.
@@ -85,7 +85,7 @@ export interface FieldSpec {
 // The fifteen fields, one per engine.Field, named as the columns name
 // them (round 8's build list). The order is the order the list offers
 // them: what an operator reaches for first, not alphabetical.
-export const FIELDS: FieldSpec[] = [
+const FIELDS: FieldSpec[] = [
   {
     field: 'sourceAddress',
     label: 'source',

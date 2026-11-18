@@ -32,7 +32,7 @@ import type { Suggestion, SuggestionStatus, WatchlistEntry } from './types'
 // component resolves a zone name for the boundary, which this module
 // cannot see. `stale` is part of it because a stale candidate says so on
 // its chip -- two rows that read differently are not duplicates.
-export function suggestionIdentity(c: Suggestion): string {
+function suggestionIdentity(c: Suggestion): string {
   return JSON.stringify([
     c.kind,
     c.name,

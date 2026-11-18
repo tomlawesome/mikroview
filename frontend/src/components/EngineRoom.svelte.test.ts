@@ -21,6 +21,7 @@ import { cleanup, render, screen, fireEvent, within } from '@testing-library/sve
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
+  saveSetupBackupTransport: vi.fn(async () => null),
   fetchSetupStatus: vi.fn(async () => ({
     instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true },
     sources: [],
@@ -181,6 +182,7 @@ function backupsWith(device: string): RouterBackupsResponse {
   return {
     enabled: true,
     keyUnreadable: false,
+    transport: 'sftp',
     routers: [
       { device, generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 },
     ],
@@ -1136,6 +1138,7 @@ describe('The settings shelf (#633)', () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       port: ':2222',
       routers: [
         {
@@ -1570,6 +1573,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       port: ':2222',
       routers: [{ device: 'rb5009', generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 }],
       totalGenerations: 1,
@@ -1632,6 +1636,44 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     }
   })
 
+  // #1494: the same stale-poll rule for the "deliver by" save. A poll
+  // issued before the save and answered after it carries the old
+  // transport; it must not flip the row back.
+  it('a router-backups poll issued before a deliver-by save does not undo it (#1494)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: RouterBackupsResponse) => void)[] = []
+      const held = () => new Promise<RouterBackupsResponse>((resolve) => answer.push(resolve))
+      fetchRouterBackups.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The first poll lands, the operator switches, then the second
+      // (issued before the save) answers with the old transport.
+      answer[0](backupsWith('rb1'))
+      await settle()
+      const backups = document.getElementById('bakg') as HTMLElement
+      vi.advanceTimersByTime(5)
+      await fireEvent.click(within(backups).getByRole('button', { name: 'switch to HTTPS…' }))
+      await settle()
+      expect(within(backups).getByText(/HTTPS through the ingest channel/)).toBeTruthy()
+
+      answer[1](backupsWith('rb1'))
+      await settle()
+      await settle()
+      expect(within(backups).getByText(/HTTPS through the ingest channel/)).toBeTruthy()
+      expect(within(backups).queryByText(/SFTP to the drop box/)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('"router backups" answers unknown, with a working ask again, when the server does not', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -1647,6 +1689,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: false,
       keyUnreadable: false,
+      transport: 'sftp',
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,

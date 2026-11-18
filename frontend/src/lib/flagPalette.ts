@@ -122,7 +122,7 @@ export function worstFamilyOf(types: readonly string[]): FlagFamily {
 // surge's own hex, the family that already owns the ▲ mark most often.
 export const ADVISORY_INK = surge.ink
 
-export const FLAG_FAMILIES: Record<FlagType, FlagFamily> = {
+const FLAG_FAMILIES: Record<FlagType, FlagFamily> = {
   critical_port: hostile,
   known_bad_ip: hostile,
   distributed_brute_force: hostile,

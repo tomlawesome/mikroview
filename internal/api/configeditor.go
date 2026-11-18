@@ -14,7 +14,6 @@ package api
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -193,7 +192,7 @@ func (s *Server) editorGate(w http.ResponseWriter, r *http.Request) bool {
 // editorMaxBodyBytes rather than the general JSON cap.
 func decodeEditorBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, editorMaxBodyBytes)
-	return json.NewDecoder(r.Body).Decode(v)
+	return strictDecode(r.Body, v)
 }
 
 // scrubSecrets replaces any secret value that found its way into a

@@ -82,6 +82,7 @@
     HistorySettings,
     RouterBackupsResponse,
     RouterBackupSwitchState,
+    BackupTransport,
     DroplistResponse,
     PasswordResetCode,
     GeoSettings,
@@ -373,6 +374,15 @@
     routerBackups = { ...routerBackups, port: next.open ? next.port : undefined }
     routerBackupsFetchedAt = Date.now()
     configProblemsState.refresh()
+  }
+
+  // routerBackupTransportChanged folds the "deliver by" save (#1494) in
+  // and stamps it like routerBackupSwitchChanged, so a poll issued before
+  // the save and answered after it is overtaken, not re-applied.
+  function routerBackupTransportChanged(transport: BackupTransport) {
+    if (!routerBackups) return
+    routerBackups = { ...routerBackups, transport }
+    routerBackupsFetchedAt = Date.now()
   }
 
   // The `state` row (round 43): the state store, beside the key.
@@ -1718,6 +1728,7 @@
               fetchedAt={routerBackupsFetchedAt}
               onopenlost={openLostRouter}
               onswitchchanged={routerBackupSwitchChanged}
+              ontransportchanged={routerBackupTransportChanged}
             />
           </div>
         {:else if routerBackupsUnanswered}

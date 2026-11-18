@@ -10,32 +10,33 @@
 //
 // Produces four images docs/routeros-setup.md needs:
 //
-//  - docs/screenshots/setup-wizard-ledger.png: the wizard's seven-step
-//    ledger with step 1 open, which is the path that enrols the FIRST
-//    router (account menu ▸ Run setup…). #1284's "docs show both paths
-//    with screenshots".
+//  - docs/screenshots/setup-wizard-ledger.png: the wizard's step rail
+//    (five steps down the left) beside the form on "The router", which
+//    is the path that enrols the FIRST router (account menu ▸ Run
+//    setup…, or Add a router on Entities). The file keeps its old name
+//    so the guide's links hold. #1284's "docs show both paths with
+//    screenshots".
 //  - docs/screenshots/entities-add-a-router.png: the Entities routers
 //    row with its "+ add a router" berth, which is the path that adds
 //    every LATER one. Also #1284.
-//  - docs/screenshots/setup-wizard-send-logs.png: the Send logs step
-//    once a token is minted, carrying the "Token good until ..." line
-//    and its Reroll control. #1305.
+//  - docs/screenshots/setup-wizard-send-logs.png: the "Paste once"
+//    step once a token is minted: the end of the command block (the
+//    syslog part and the enrol line) with the "Token good until ..."
+//    line and its Reroll control under it. #1305. Also keeps its old
+//    name.
 //  - docs/screenshots/entities-refused-sender.png: a refused-sender
 //    card next to the router cards on Entities. Also #1305.
 //
-// Both wizard shots are clipped to the modal from the step list down
-// rather than taken whole. The block above that line is the address
-// field, and its "This machine also answers on ..." line prints the
-// capture host's own LAN and docker-bridge addresses -- real addresses
-// of whoever ran this, published into a public repo, and nothing the
-// documentation needs. The clip starts below it; everything each
-// marker asked for is inside.
+// The wizard shots are cropped, not whole screens: the rail and form
+// for the first, the command block and its token line for the second.
+// The wizard opens through Entities' "Add a router" berth, not Run
+// setup…: on a seeded instance Run setup… reopens on the router's turn
+// (the ledger as it stands), where the berth always starts on the form.
 //
-// The Send logs shot has a second host-specific thing on screen: a
-// live enrolment token, minted for real so the "Token good until ..."
-// line is real too. That line can't just be framed out the way the
-// address field is -- it sits directly under the one <pre> that also
-// carries the token itself, and the marker wants both on screen. So the
+// The Paste once shot has a host-specific thing on screen: a live
+// enrolment token, minted for real so the "Token good until ..." line
+// is real too. That line sits directly under the one <pre> that also
+// carries the token itself, and the shot wants both on screen. So the
 // token is blanked in the DOM immediately before the shot, in place
 // rather than by cropping around it (see that block below for the
 // check that fails the run rather than silently screenshotting a live
@@ -49,9 +50,7 @@
 // Usage:
 //   export MV_DEMO_DEVICES=1
 //   eval "$(scripts/live-env.sh up)"       # routers row has routers in it
-//   scripts/live-env.sh syslog 200   # rule-tagged events, for the
-//                                     # ledger's "N of N carry an
-//                                     # action" rules-step receipt
+//   scripts/live-env.sh syslog 200   # rule-tagged events
 //   scripts/seed-demo.py entities    # named routers/hosts/ports
 //   scripts/seed-demo.py feed --once # one tick per declared router, so
 //                                     # each router card's "events/s
@@ -108,41 +107,62 @@ async function signedInPage() {
   return { context, page }
 }
 
-// --- The ledger: the path that enrols the first router ------------------
-{
-  const { context, page } = await signedInPage()
-  await page.locator('.deck .card .account button').first().click()
-  await page.waitForSelector('.account .menu')
-  await page.click('.account .menu button.row:text-is("Run setup…")')
-  await page.waitForSelector('.setup-wizard', { state: 'visible', timeout: 10000 })
-  // The step list's receipts ("466 of 466 events carry an action") come
-  // from /api/setup/status, which resolves after the modal paints.
-  // Wait for the "rules" step's own receipt to actually say so, rather
-  // than a fixed sleep and hoping the API won by then -- capturing too
-  // early leaves the ledger reading "nothing has arrived yet" against an
-  // instance that has heard plenty.
+// Opens the full-screen wizard through Entities' "Add a router" berth and
+// fills The router's form: the four answers it needs before Next. 203.0.113.0/24
+// is RFC 5737's documentation range, already this suite's convention for an
+// address that means nothing beyond the shot (live-token-copy.mjs). The name
+// is a real-fleet-sounding one, not capture scaffolding, in the voice of
+// seed-demo.py's own devices. Push Yes and backup No: backup Yes can raise
+// the "drop box is closed" notice, which is not what these shots are about.
+async function openWizardOnTheRouter(page) {
+  await page.click('.roll-rail button.rail-name:text-is("Entities")')
   await page.waitForFunction(
     () => {
-      const receipt = document.querySelector('.setup-wizard .steps li:nth-child(4) .step-receipt')
-      return !!receipt && /events carry an action/.test(receipt.textContent ?? '')
+      const deck = document.querySelector('.deck')
+      const el = deck?.querySelector('.card[data-card="entities"]')
+      if (!el) return false
+      return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
     },
     null,
     { timeout: 15000 },
   )
-  const title = (await page.locator('#setup-wizard-title').textContent())?.trim()
-  if (title !== 'Trust the certificate') {
-    throw new Error(`wizard opened at ${JSON.stringify(title)}, not step 1 -- the shot is meant to show the ledger at its first step`)
+  await page.click('button.berth-trigger[aria-label="Add a router"]')
+  await page.locator('.page.wiz').waitFor({ state: 'visible', timeout: 10000 })
+  const lead = (await page.locator('.wiz .body h3').textContent())?.trim()
+  if (lead !== 'Your first router.') {
+    throw new Error(`wizard opened at ${JSON.stringify(lead)}, not The router's form`)
   }
-  const modal = await page.locator('.setup-wizard').boundingBox()
-  const middle = await page.locator('.setup-wizard .middle').boundingBox()
+  await page.fill('#f-name', 'branch-hex')
+  await page.fill('#f-addr', '203.0.113.50')
+  const groups = page.locator('.wiz .form .seg[role="radiogroup"]')
+  await groups.nth(0).locator('button:text-is("Yes")').click()
+  await groups.nth(1).locator('button:text-is("No")').click()
+  await page.waitForFunction(() => !document.querySelector('.wiz .foot button.primary')?.disabled)
+  // The rail's first row carries the four answers once they are given;
+  // wait for that rather than a fixed sleep. The slide-in transitions
+  // have to have finished too, or the crop catches the rail mid-move.
+  await page.waitForFunction(
+    () => /branch-hex · 203\.0\.113\.50/.test(document.querySelector('.wiz .rail li:nth-child(1) .step-receipt')?.textContent ?? ''),
+    null,
+    { timeout: 10000 },
+  )
+  await page.waitForTimeout(1500)
+}
+
+// --- The rail: the path that enrols the first router -------------------
+{
+  const { context, page } = await signedInPage()
+  await openWizardOnTheRouter(page)
+  const rail = await page.locator('.wiz .rail').boundingBox()
+  const body = await page.locator('.wiz .main .body').boundingBox()
+  const pad = 12
+  const x = rail.x - pad
+  const y = Math.min(rail.y, body.y) - pad
+  const right = Math.max(rail.x + rail.width, body.x + body.width) + pad
+  const bottom = Math.max(rail.y + rail.height, body.y + body.height) + pad
   await page.screenshot({
     path: path.join(SHOTS, 'setup-wizard-ledger.png'),
-    clip: {
-      x: modal.x,
-      y: middle.y,
-      width: modal.width,
-      height: modal.y + modal.height - middle.y,
-    },
+    clip: { x, y, width: right - x, height: bottom - y },
   })
   console.log('captured setup-wizard-ledger.png')
   await context.close()
@@ -192,96 +212,70 @@ async function signedInPage() {
   await context.close()
 }
 
-// --- The mint: Send logs once a token is on the page --------------------
+// --- The mint: Paste once with a token on the page ----------------------
 {
   const { context, page } = await signedInPage()
-  await page.click('.roll-rail button.rail-name:text-is("Entities")')
-  await page.waitForFunction(
-    () => {
-      const deck = document.querySelector('.deck')
-      const el = deck?.querySelector('.card[data-card="entities"]')
-      if (!el) return false
-      return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
-    },
-    null,
-    { timeout: 15000 },
-  )
-  await page.click('button.berth-trigger[aria-label="Add a router"]')
-  const wizard = page.locator('.setup-wizard')
-  await wizard.waitFor({ timeout: 10000 })
-  // Named like a real fleet member, not like capture scaffolding: this
-  // name is in frame at step 1 ("named branch-hex"), and seed-demo.py's
-  // own devices (border-rb5009, office-hex, ...) and the refused-sender
-  // shot's rb5009 set the voice a shipped doc image should match.
-  await page.fill('#router-name', 'branch-hex')
-  // Next is what creates the router on the Name step, and it advances
-  // the ledger to Send logs itself (SetupWizard.svelte's onNext) -- there
-  // is no second Next to click for that move.
-  await page.click('.setup-wizard footer button.primary:text-is("Next")')
-  await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
-  const title = (await page.locator('#setup-wizard-title').textContent())?.trim()
-  if (title !== 'Send logs') {
-    throw new Error(`wizard opened at ${JSON.stringify(title)}, not Send logs -- the shot is meant to show that step`)
-  }
+  await openWizardOnTheRouter(page)
+  await page.click('.wiz .foot button.primary:text-is("Next")')
+  await page.locator('.wiz .rail li:nth-child(2) .step-row[aria-current="step"]').waitFor({ timeout: 10000 })
+  // Minting is what opens the port, so the admin's password is re-typed
+  // here -- the same field live-setup-wizard-router-mint.mjs drives.
+  await page.fill('.wiz .body input[type="password"]', PASS)
+  await page.click('.wiz .foot button.primary:text-is("Mint the token")')
 
-  // The mint form asks for the router's own address (whatever the
-  // enrolment window binds to) and the admin's password (minting is
-  // what opens the port, so re-typing it is the point) -- same two
-  // fields live-enrolment.mjs's mintFor drives. 203.0.113.0/24 is
-  // RFC 5737's documentation range, already this suite's convention for
-  // an address that means nothing beyond the shot (live-token-copy.mjs).
-  await page.fill('#setup-wizard-enrol-address', '203.0.113.50')
-  await page.fill('#setup-wizard-enrol-password', PASS)
-  await page.click('.setup-wizard .mint-ask button:text-is("Mint the token")')
-
-  // Minting closes the mint-ask form and prints the enrol block with a
+  // Minting moves the run to Paste once, which prints the block with a
   // real token as its last line, plus the "Token good until ..." line
   // this shot exists to show. Wait for that exact countdown text rather
-  // than a fixed sleep or the form closing -- either can be true a beat
-  // before the token is actually the thing on screen.
+  // than a fixed sleep -- either can be true a beat before the token is
+  // actually the thing on screen.
   await page.waitForFunction(
     () => {
-      const el = document.querySelector('.setup-wizard .token-life')
-      return !!el && /^Token good until \d\d:\d\d \(\d{1,2} minutes?\) · Reroll$/.test((el.textContent ?? '').trim())
+      const el = document.querySelector('.wiz .token-life')
+      return !!el && /^Token good until \d\d:\d\d \(15 minutes\) · Reroll$/.test((el.textContent ?? '').trim())
     },
     null,
     { timeout: 15000 },
   )
+  const title = (await page.locator('.wiz .body h3').textContent())?.trim()
+  if (title !== 'One paste.') {
+    throw new Error(`wizard is at ${JSON.stringify(title)}, not Paste once -- the shot is meant to show that step`)
+  }
 
   // The live token itself, not just the countdown line, is what #1305
-  // exists to keep off this page. The block that carries it is one
-  // <pre> with no per-line markup, so there is nothing to clip around --
-  // the token is blanked in the DOM instead, in place, right before the
-  // shot. Matched by the same 20-char [a-z0-9] shape
-  // internal/device/enrolment.go's enrolLineRE accepts, so this can't
-  // match a different line by accident. If the line isn't there, this
-  // throws rather than screenshotting whatever the block actually says
-  // -- a silent miss here is exactly how a real token would reach git.
-  const pre = wizard.locator('.body pre').first()
+  // exists to keep off this page. The block is one <pre> with no
+  // per-line markup, so there is nothing to clip around -- the token is
+  // blanked in the DOM instead, in place, right before the shot. Matched
+  // by the same 20-char [a-z0-9] shape internal/device/enrolment.go's
+  // enrolLineRE accepts, so this can't match a different line by
+  // accident. If the line isn't there, this throws rather than
+  // screenshotting whatever the block actually says -- a silent miss
+  // here is exactly how a real token would reach git. The block is
+  // scrolled to its end first: the syslog part and the enrol line are
+  // what the guide's caption describes.
+  const pre = page.locator('.wiz .body pre.script').first()
   const redacted = await pre.evaluate((el) => {
     const text = el.textContent ?? ''
     const m = text.match(/mikroview-enrol [a-z0-9]{20}/)
     if (!m) return false
     el.textContent = text.replace(m[0], `mikroview-enrol ${'\u2588'.repeat(20)}`)
+    el.scrollTop = el.scrollHeight
     return true
   })
   if (!redacted) {
-    throw new Error('the Send logs block has no "mikroview-enrol <token>" line to redact -- refusing to screenshot it')
+    throw new Error('the Paste once block has no "mikroview-enrol <token>" line to redact -- refusing to screenshot it')
   }
+  await page.waitForTimeout(500)
 
-  // Same clip shape as the ledger shot above: from the step list down,
-  // which is what keeps the address field's host-specific LAN/bridge
-  // addresses out of frame here too.
-  const modal = await page.locator('.setup-wizard').boundingBox()
-  const middle = await page.locator('.setup-wizard .middle').boundingBox()
+  const preBox = await pre.boundingBox()
+  const life = await page.locator('.wiz .body .copyrow').boundingBox()
+  const pad = 12
+  const x = Math.min(preBox.x, life.x) - pad
+  const y = preBox.y - pad
+  const right = Math.max(preBox.x + preBox.width, life.x + life.width) + pad
+  const bottom = life.y + life.height + pad
   await page.screenshot({
     path: path.join(SHOTS, 'setup-wizard-send-logs.png'),
-    clip: {
-      x: modal.x,
-      y: middle.y,
-      width: modal.width,
-      height: modal.y + modal.height - middle.y,
-    },
+    clip: { x, y, width: right - x, height: bottom - y },
   })
   console.log('captured setup-wizard-send-logs.png')
 

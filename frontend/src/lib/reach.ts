@@ -89,8 +89,8 @@ export interface ReachSummary {
 
 // What counts as a connection actually landing, rather than being
 // refused.
-export const ACCEPTED_ACTIONS = new Set(['accept', 'nat', 'log'])
-export const isAccepted = (action: string): boolean => ACCEPTED_ACTIONS.has(action)
+const ACCEPTED_ACTIONS = new Set(['accept', 'nat', 'log'])
+const isAccepted = (action: string): boolean => ACCEPTED_ACTIONS.has(action)
 
 /**
  * What a reach is centred on (#1016). A reach answers "where does this
@@ -286,7 +286,7 @@ export function reachFor(
 /** One destination port on a hovered line: what was tried there, and
  * whether it landed. `proto` is '' where the events named no protocol --
  * unknown, not assumed TCP. */
-export interface ReachLinePort {
+interface ReachLinePort {
   port: number
   proto: 'tcp' | 'udp' | string
   accepted: number

@@ -27,6 +27,7 @@ vi.mock('../lib/api', () => ({
   releaseRouterBackup: vi.fn(),
   setRouterBackupComment: vi.fn(),
   setRouterBackupSwitch: vi.fn(),
+  saveSetupBackupTransport: vi.fn(),
 }))
 
 // Blob/URL.createObjectURL are unreliable in jsdom -- faked at the
@@ -47,6 +48,7 @@ import {
   lockRouterBackupVault,
   releaseRouterBackup,
   removeRouterBackupPassphrase,
+  saveSetupBackupTransport,
   setRouterBackupComment,
   setRouterBackupPassphrase,
   setRouterBackupSwitch,
@@ -77,6 +79,7 @@ function resp(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse 
     totalRouters: 0,
     totalBytes: 0,
     port: ':47022',
+    transport: 'sftp',
     lock: lock(),
     ...over,
   }
@@ -838,5 +841,71 @@ describe('reading one export, and comparing two', () => {
     })
     expect(screen.queryByRole('button', { name: 'read' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'compare with previous' })).toBeNull()
+  })
+})
+
+// #1494: the backup transport is chosen in this group's "deliver by" row,
+// right under the drop box row -- an instance-wide fact, one click, no
+// password, calling PUT /api/setup/backup-transport.
+describe('the deliver-by row (#1494)', () => {
+  beforeEach(() => {
+    vi.mocked(saveSetupBackupTransport).mockReset()
+  })
+
+  it('shows SFTP with a switch to HTTPS, also when no key is mounted', () => {
+    const { unmount } = render(RouterBackups, {
+      props: { resp: resp({ transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+    expect(screen.getByText('deliver by')).toBeTruthy()
+    expect(screen.getByText(/SFTP to the drop box/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'switch to HTTPS…' })).toBeTruthy()
+    unmount()
+
+    render(RouterBackups, {
+      props: { resp: resp({ enabled: false, transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+    expect(screen.getByText('deliver by')).toBeTruthy()
+    expect(screen.getByText(/SFTP to the drop box/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'switch to HTTPS…' })).toBeTruthy()
+  })
+
+  it('switching saves https and the row then reads HTTPS through the ingest channel', async () => {
+    vi.mocked(saveSetupBackupTransport).mockResolvedValue(null)
+    const view = render(RouterBackups, {
+      props: {
+        resp: resp({ transport: 'sftp' }),
+        fetchedAt: 0,
+        onopenlost: vi.fn(),
+        // A host that folds the new value into its copy of resp, as
+        // EngineRoom does; a component holding the value itself passes too.
+        ontransportchanged: (t: 'sftp' | 'https') => view.rerender({ resp: resp({ transport: t }) }),
+      },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'switch to HTTPS…' }))
+    expect(vi.mocked(saveSetupBackupTransport)).toHaveBeenCalledWith('https')
+    await waitFor(() => expect(screen.getByText(/HTTPS through the ingest channel/)).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'switch to SFTP…' })).toBeTruthy()
+  })
+
+  it('a refusal leaves the row on SFTP and shows the error text', async () => {
+    vi.mocked(saveSetupBackupTransport).mockResolvedValue('could not save the setting')
+    render(RouterBackups, { props: { resp: resp({ transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'switch to HTTPS…' }))
+    await waitFor(() => expect(screen.getByText(/could not save the setting/)).toBeTruthy())
+    expect(screen.getByText(/SFTP to the drop box/)).toBeTruthy()
+    expect(screen.queryByText(/HTTPS through the ingest channel/)).toBeNull()
+  })
+
+  it('arrive by reads the HTTPS line when the transport is https and the port is set', () => {
+    const restingRouter = { device: 'rb5009', generations: [], intervalKnown: false, missed: 0 }
+    render(RouterBackups, {
+      props: {
+        resp: resp({ routers: [restingRouter], transport: 'https', port: ':47022' }),
+        fetchedAt: 0,
+        onopenlost: vi.fn(),
+      },
+    })
+    expect(screen.getByText(/HTTPS to the ingest channel — the drop box's port is not used/)).toBeTruthy()
+    expect(screen.queryByText(/SFTP on port 47022/)).toBeNull()
   })
 })

@@ -14,7 +14,7 @@ import type { ClientEvent, Device, LoggingLeftover, UnattributedSource } from '.
 
 export const RECENT_WINDOW_MS = 5 * 60 * 1000
 
-export const STATUS_LABEL: Record<Device['status'], string> = {
+const STATUS_LABEL: Record<Device['status'], string> = {
   live: 'Live',
   stale: 'Stale',
   never_seen: 'Never seen',

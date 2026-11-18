@@ -13,6 +13,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/decommission"
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 )
 
 // Validate checks a loaded configuration and reports everything wrong
@@ -43,6 +44,7 @@ func (c *Config) Validate() Result {
 
 	c.validateListen(fatal)
 	c.validateUI(fatal)
+	c.validateNetworks(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
 	c.validateBaseline(warn)
@@ -219,6 +221,7 @@ auth:
 	"CFG-0102": `publicUrl: "https://mikroview.example.com:8443"  # https, not http`,
 	"CFG-0103": `publicUrl: "https://mikroview.example.com:8443"  # scheme, host and port only -- no path, query or fragment`,
 	"CFG-0104": `publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ`,
+	"CFG-0105": "networks:\n  home:\n    - 198.51.100.0/24  # each inside network as a CIDR prefix, never /0",
 }
 
 // validateUI checks ui.allow (issue #1287).
@@ -233,6 +236,19 @@ func (c *Config) validateUI(fatal problemFunc) {
 	if _, err := ParseUIAllow(c.UI.Allow); err != nil {
 		fatal("CFG-0004", "ui.allow", err.Error(),
 			"list each address as an IP or CIDR, or leave the list empty to let every address reach the web UI")
+	}
+}
+
+// validateNetworks checks networks.home (#1481). Fatal, as for ui.allow:
+// a skipped entry would leave inside hosts reading as outside (and sent
+// to reputation lookups), and a /0 would silently switch off every
+// outside-facing detection.
+func (c *Config) validateNetworks(fatal problemFunc) {
+	for i, s := range c.Networks.Home {
+		if _, err := ipscope.Parse(s); err != nil {
+			fatal("CFG-0105", fmt.Sprintf("networks.home[%d]", i), err.Error(),
+				"list each inside network as a CIDR prefix such as 198.51.100.0/24; a /0 is refused")
+		}
 	}
 }
 

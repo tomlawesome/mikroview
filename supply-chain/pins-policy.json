@@ -164,8 +164,8 @@
     },
     {
       "name": "docker/login-action",
-      "commit": "81c6f93d4bc991e510b342a00b419b3bb4efc5c6",
-      "version": "v4.7.0",
+      "commit": "8aa5831fb8d48d8f76594c7ddde61ae58019f550",
+      "version": "v4.8.0",
       "license": "Apache-2.0",
       "source": "https://github.com/docker/login-action",
       "locations": [
@@ -208,8 +208,8 @@
     },
     {
       "name": "github/codeql-action/analyze",
-      "commit": "9b3254085494b55a0f7c4c2b3d2d52cc712ce370",
-      "version": "v4.39.1",
+      "commit": "33d7b85da1a04171e211befe2c739303b9a4c066",
+      "version": "v4.39.3",
       "license": "MIT",
       "source": "https://github.com/github/codeql-action",
       "locations": [
@@ -220,8 +220,8 @@
     },
     {
       "name": "github/codeql-action/init",
-      "commit": "9b3254085494b55a0f7c4c2b3d2d52cc712ce370",
-      "version": "v4.39.1",
+      "commit": "33d7b85da1a04171e211befe2c739303b9a4c066",
+      "version": "v4.39.3",
       "license": "MIT",
       "source": "https://github.com/github/codeql-action",
       "locations": [
@@ -232,8 +232,8 @@
     },
     {
       "name": "sigstore/cosign-installer",
-      "commit": "6f9f17788090df1f26f669e9d70d6ae9567deba6",
-      "version": "v4.1.2",
+      "commit": "756fe2d284c7292c4e9b62c8a28f1e5629c59532",
+      "version": "v4.1.3",
       "license": "Apache-2.0",
       "source": "https://github.com/sigstore/cosign-installer",
       "locations": [
@@ -336,7 +336,7 @@
     },
     {
       "name": "Semgrep static analysis scanner",
-      "reference": "semgrep/semgrep:1.183.0",
+      "reference": "semgrep/semgrep:1.184.0",
       "shipped": false,
       "license": "LGPL-2.1-only",
       "source": "https://github.com/semgrep/semgrep",

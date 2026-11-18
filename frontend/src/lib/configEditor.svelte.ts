@@ -34,10 +34,10 @@ export const VALIDATE_PAUSE_MS = 600
 const PLACEHOLDER = /<<secret:([^>\s]+)>>/g
 
 /** What the inline password field is asking for. */
-export type PasswordReason = 'open' | 'download' | 'reveal'
+type PasswordReason = 'open' | 'download' | 'reveal'
 
 /** What the card shows about the running file, kept after the editor closes. */
-export interface ConfigFileSummary {
+interface ConfigFileSummary {
   path: string
   header: ConfigEditorOpen['header']
   schemaGuess: number

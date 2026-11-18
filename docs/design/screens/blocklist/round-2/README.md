@@ -169,3 +169,4 @@ bar; a looser one admits more.
 - **B3** Heavier: on first run the tail is the primary action and
   Finish is secondary until it is taken or set aside.
 
+Written 2026-09-30.
