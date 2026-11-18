@@ -5,14 +5,20 @@ package main
 import (
 	"testing"
 
+	"github.com/tomlawesome/mikroview/internal/dossier"
 	"github.com/tomlawesome/mikroview/internal/engine"
+	"github.com/tomlawesome/mikroview/internal/hosts"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-// installHomeScope is what main calls at boot: a definition built after it
-// must classify a networks.home address as internal.
+// installHomeScope is what main calls at boot: engine, hosts and dossier
+// must each see a networks.home address as home.
 func TestInstallHomeScopeReachesNewDefinitions(t *testing.T) {
-	t.Cleanup(func() { engine.SetHomeScope(nil) })
+	t.Cleanup(func() {
+		engine.SetHomeScope(nil)
+		hosts.SetHomeScope(nil)
+		dossier.SetHomeScope(nil)
+	})
 	if _, err := installHomeScope([]string{"not-a-cidr"}); err == nil {
 		t.Fatal("a bad networks.home entry must be refused")
 	}
@@ -37,5 +43,27 @@ func TestInstallHomeScopeReachesNewDefinitions(t *testing.T) {
 	}
 	if got := idx.Candidates(store.Event{SrcIP: "203.0.113.44"}); len(got) != 0 {
 		t.Errorf("outside address: %d candidates, want 0", len(got))
+	}
+	if !hosts.Registers("vlan10", "198.51.100.66") {
+		t.Error("hosts: a networks.home address must register as a host")
+	}
+	if hosts.Registers("ether1", "203.0.113.44") {
+		t.Error("hosts: an outside address must stay public")
+	}
+	peerScope := func(ip string) string {
+		d := dossier.Assemble(dossier.Input{
+			IP:     "192.0.2.5",
+			Events: []store.Event{{SrcIP: "192.0.2.5", DstIP: ip}},
+		})
+		if len(d.Traffic.Destinations) != 1 {
+			t.Fatalf("dossier: %d destinations for %s, want 1", len(d.Traffic.Destinations), ip)
+		}
+		return d.Traffic.Destinations[0].Scope
+	}
+	if got := peerScope("198.51.100.66"); got != "local" {
+		t.Errorf("dossier: home peer scope = %q, want local", got)
+	}
+	if got := peerScope("203.0.113.44"); got != "internet" {
+		t.Errorf("dossier: outside peer scope = %q, want internet", got)
 	}
 }
