@@ -238,7 +238,7 @@ function scenarioDef(name) {
 //
 // Realistic shapes, copied from internal/routeros/commands_test.go's own
 // expectations (TestCaTrustCommands, TestSyslogCommands*, TestScheduleCommands,
-// TestBackupScriptMatchesRound45) rather than invented -- see AGENTS.md's
+// TestBackupScriptMatchesRound45) rather than invented -- see docs/design/screens/README.md,
 // "Building a ratified design": drawn, not impressioned.
 
 function caTrustCommands(address) {

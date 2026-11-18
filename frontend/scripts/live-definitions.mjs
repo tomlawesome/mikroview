@@ -17,7 +17,7 @@
 // It also covers the thing the removal itself risks: /api/detectors and
 // /api/watchlist/entries are gone with no alias and no friendlier-error
 // stub, so a stale caller must get a plain 404. A shim quietly surviving
-// the removal is exactly what AGENTS.md's "removals are wholesale" rule
+// the removal is exactly what the "removals are wholesale" rule (docs/development.md)
 // exists to prevent, and it would not be visible in any Go test that
 // only asks the routes that do exist.
 //

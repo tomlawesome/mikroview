@@ -1589,7 +1589,7 @@ export type Scope = '' | 'internal' | 'external'
 // for how the two sides (plus their scope and country) swap together.
 // srcCountry/dstCountry are the owner-ratified country section of that
 // issue -- see lib/countryMatch.ts. Per the project's dev-stage norm
-// (AGENTS.md "Removals are wholesale"), the retired `ip` field is not
+// (docs/development.md, "Removals are wholesale"), the retired `ip` field is not
 // migrated: a saved preset or bookmarked URL that still carries it simply
 // stops applying that half of its filter.
 export interface Filters {

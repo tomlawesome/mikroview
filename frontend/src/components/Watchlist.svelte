@@ -28,7 +28,7 @@
   // separate "Manage entries" card list and its own add/edit form
   // (#243, #649) pre-dated that table and were retired wholesale once
   // every capability they carried was reachable from the drawer instead
-  // (AGENTS.md's "removals are wholesale" -- no flag, no dead code kept
+  // (the "removals are wholesale" rule, docs/development.md -- no flag, no dead code kept
   // reachable behind one, since nothing here still needs it).
   import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
@@ -950,7 +950,7 @@
   // are no sub-tabs: the Watchlist/Matches/Suggestions strip and the two
   // components behind it are gone outright rather than left unmounted
   // behind a flag, because #771 gives both the capabilities they carried
-  // a drawn home here. AGENTS.md's "removals are wholesale" applies once
+  // a drawn home here. The "removals are wholesale" rule (docs/development.md) applies once
   // nothing still needs the old surface to reach them.
   //
   // The cross-watch matches view the retired Matches tab also offered

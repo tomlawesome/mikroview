@@ -9,7 +9,7 @@
 // the run's own memory on top of it, and is reset every time the
 // wizard opens.
 //
-// Nothing here connects to a router (the AGENTS.md invariant): every
+// Nothing here connects to a router (the invariant in docs/decisions/observe-never-probe.md): every
 // field of `evidence` is a reading of what has arrived.
 
 import { createToken, deleteDevice, markSetupStep } from './api'
@@ -331,7 +331,7 @@ class WizardRun {
   // undoTextFor is one row's Undo (DESIGN.md: "the lines to paste on the
   // router"), sourced from POST /api/setup/commands' own Undo builders
   // (internal/routeros/commands.go's Undo* functions) -- never
-  // hand-written here (AGENTS.md). 'tune' is not answered from here: its
+  // hand-written here (docs/decisions/observe-never-probe.md). 'tune' is not answered from here: its
   // lines depend on which rules this walk actually tagged, which needs
   // the pushed rule table StepStand reads for itself the same way
   // StepTune does (wizardTune.undoBlock), so that one row's text is

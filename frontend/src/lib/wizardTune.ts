@@ -6,11 +6,11 @@
 // commands stay testable without a browser.
 //
 // The proposal is read from MikroView's own copy of the router's rule
-// table (the push; never the router itself -- the AGENTS.md invariant).
+// table (the push; never the router itself -- the invariant in docs/decisions/observe-never-probe.md).
 // A rule is proposed when it logs nothing and sits on a boundary no
 // rule logs on -- "a rule, but no line" -- with the boundary named in
 // the fall's own words as why it matters. Coverage is about boundaries,
-// not accepts versus denies (AGENTS.md, "Why MikroView suggests"), so
+// not accepts versus denies (docs/decisions/scope-and-companion-projects.md, "Why MikroView suggests"), so
 // an accept on a dark boundary is proposed exactly as a drop is.
 //
 // The commands mirror the server's own per-rule tagging render

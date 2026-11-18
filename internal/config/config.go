@@ -1173,7 +1173,7 @@ type History struct {
 	// decoration: whoever copies the directory copies both.
 	//
 	// Not a key value, and not an environment variable -- a path to a
-	// file the operator mounts, per AGENTS.md's secret rule.
+	// file the operator mounts, per the house secret rule.
 	KeyFile string `yaml:"keyFile"`
 	// Enabled is the operator's switch, beside the memory slider. Off
 	// at startup stops retaining; it never deletes what an earlier run
@@ -2142,7 +2142,7 @@ func applyEnv(cfg *Config) {
 	}
 	// MIKROVIEW_HISTORY_KEY_FILE is a path, never the key itself.
 	// There is deliberately no environment variable carrying key
-	// material: AGENTS.md's secret rule keeps secrets out of the
+	// material: the house secret rule keeps secrets out of the
 	// environment, where a process listing, a crash dump or a container
 	// inspect would expose them.
 	if v := os.Getenv("MIKROVIEW_HISTORY_KEY_FILE"); v != "" {

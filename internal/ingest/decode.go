@@ -185,7 +185,7 @@ func (p Payload) RecordCount() int {
 }
 
 // DecodePayload strictly decodes and validates a RouterOS ingest payload
-// from r. Strict in the sense AGENTS.md asks of anything parsing
+// from r. Strict in the sense the project's security standards ask of anything parsing
 // attacker-shaped input: unknown fields are refused rather than silently
 // ignored, every bound in this file is enforced before a Payload is ever
 // returned, and a payload that fails any check is refused whole rather

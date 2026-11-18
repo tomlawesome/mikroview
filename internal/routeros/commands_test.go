@@ -947,7 +947,7 @@ func TestBackupScriptIsIdempotent(t *testing.T) {
 // TestBackupScriptMatchesRound45 pins the wizard's step 6 script
 // (docs/design/concepts/round-45/build.py's SCRIPT constant) byte for
 // byte -- the copy is drawn, not invented, and a builder must match it
-// word for word (AGENTS.md, "Building a ratified design").
+// word for word (docs/design/screens/README.md, "Building a ratified design").
 //
 // One line differs from the round deliberately, on #895's ruling: the
 // export is `hide-sensitive` into `mv-export.rsc`, so the readable half
@@ -1135,7 +1135,7 @@ func TestBackupPushScriptEscapesQuotedHost(t *testing.T) {
 // TestBackupPushScriptEscapesQuotedToken is TestBackupPushScriptEscapesQuotedHost's
 // twin for the token: unlike PushBlock's bare Bearer header (which
 // relies on the handler's own Token validation), this function quotes
-// token itself -- AGENTS.md's "validated and quoted, never interpolated
+// token itself -- the "validated and quoted, never interpolated
 // raw" rule -- so a hostile token cannot break out of the
 // http-header-field string either.
 func TestBackupPushScriptEscapesQuotedToken(t *testing.T) {

@@ -5,7 +5,7 @@ counts below are from those samples) and each source's own terms
 page. The catalogue is MikroView's: names, URLs, the parse recipe and
 the guidance. The lists are never MikroView's: the router fetches
 each one from its source, and MikroView never serves or copies list
-data (AGENTS.md, "List and lookup data"; the dependencies-and-data
+data (docs/decisions/scope-and-companion-projects.md, "Why list and lookup data..."; the dependencies-and-data
 skill). Attribution terms still bind data the router fetches, so each
 entry records them.
 

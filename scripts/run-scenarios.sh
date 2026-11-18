@@ -208,7 +208,7 @@ for scenario in $(plan); do
   # but from the file rather than through node's own stdout, so this
   # script blocks on `wait`, not on the pipeline itself. `--pid` is a
   # GNU coreutils extension; live-check only ever runs on the Linux
-  # hosts this project targets (AGENTS.md's "second host"), so that is
+  # hosts this project targets (docs/runner-host.md), so that is
   # not a portability cost paid here. It stops following (after a final
   # read) once node exits, so it never outlives the scenario the way an
   # unmanaged `tail -f` would.

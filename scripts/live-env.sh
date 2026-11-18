@@ -264,8 +264,8 @@ build() {
   #
   # Not set here: the live-check gate needs a real worker so
   # live-sw-navigation.mjs can prove a typed /api/* navigation reaches the
-  # server (#753); a demo sets MV_DEMO_BUILD=1 itself (AGENTS.md, "Demos
-  # the owner reviews").
+  # server (#753); a demo sets MV_DEMO_BUILD=1 itself (docs/demos.md,
+  # "Seed it").
   if ! ( cd frontend && npm run build ) 1>&2; then
     echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
     if [ ! -d frontend/node_modules ]; then
@@ -314,7 +314,7 @@ build() {
   # fallback), so an instance built before a fix was indistinguishable in
   # the browser from one built after it -- which is how round 30 lost a
   # day to the owner reviewing a stale build and finding faults that were
-  # already fixed in the tree. AGENTS.md carries the rule; this is what
+  # already fixed in the tree. docs/demos.md carries the rule; this is what
   # makes it true. Same $mv_stamp the frontend build above was given, not
   # recomputed -- see this function's own top.
   go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "${1:-$MV_DIR/mikroview}" .

@@ -13,7 +13,7 @@
   // wired here for every step, as the prototype's renderFoot has them.
   //
   // The model is still a claim ledger: every check is an observation --
-  // MikroView never connects to a router (the AGENTS.md invariant) --
+  // MikroView never connects to a router (the invariant in docs/decisions/observe-never-probe.md) --
   // and the wizard is stateless beyond the evidence, so reopening shows
   // the ledger as it stands (wizardRun.begin()).
   //

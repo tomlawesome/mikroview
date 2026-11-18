@@ -207,7 +207,7 @@ export function scopeSummary(sc: DetectorScope): string {
 // apart. Each axis is now a set of removable chips (lib/definitionEditor
 // .ts's ScopeDraft), so nothing joins or splits those strings any more
 // and the four are gone rather than left as an unused second way to
-// represent the same thing -- AGENTS.md's "removals are wholesale".
+// represent the same thing -- the "removals are wholesale" rule (docs/development.md).
 
 const SECONDS_PER_DAY = 86400
 

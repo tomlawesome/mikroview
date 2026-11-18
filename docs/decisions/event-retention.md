@@ -43,7 +43,7 @@ compress 5–10×. So:
    table is no more protected at rest than a file.
 2. **Encrypted at rest, key held outside the data directory.** The key comes
    from a secret file the operator mounts (never in the data directory, never
-   in config, never in an environment variable — AGENTS.md's secret rule).
+   in config, never in an environment variable — the house secret rule).
    Copying the data directory or a backup yields nothing readable. Root on
    the running host can still read what the process can; only not retaining
    at all avoids that.

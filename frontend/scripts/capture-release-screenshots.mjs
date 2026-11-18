@@ -16,7 +16,7 @@
 // where sign-in happens to land.
 //
 // Produces three shots for the README and the GitHub Pages site, against
-// a seeded demo (AGENTS.md's "Seed it: a demo on bare syslog is not a
+// a seeded demo (docs/demos.md, "Seed it: a demo on bare syslog is not a
 // demo" -- run scripts/seed-demo.py push/entities/accounts and capture
 // while `feed` is still running, or the header rate reads 0.0/s and the
 // stream rows all carry one stale timestamp instead of a live spread):

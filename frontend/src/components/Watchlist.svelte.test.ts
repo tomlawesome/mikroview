@@ -75,7 +75,7 @@ function fallBoundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
 // #547/#584 gave Suggestions and Matches tabs of their own on the house
 // tablist. Round 33 (#771) goes further than round 30's "no sub-tab row"
 // fidelity check ever did: Suggestions.svelte and MatchesTab.svelte are
-// deleted outright (AGENTS.md's "removals are wholesale"), and what they
+// deleted outright (docs/development.md's "removals are wholesale"), and what they
 // carried is redrawn as two things directly inside this table -- a match
 // list in each watch's own drawer, and a suggestion body underneath the
 // watches. #712 records the tab-era coverage (empty states, load-older

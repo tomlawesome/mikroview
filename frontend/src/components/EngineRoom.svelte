@@ -20,7 +20,7 @@
   // own row grammar -- the two doors EngineRoomDoors.svelte used to draw
   // below the shelf behind USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED
   // (round 30/#700/#691 had unmounted both). That component and its
-  // flags are retired outright (no shim -- see AGENTS.md's "removals
+  // flags are retired outright (no shim -- see docs/development.md's "removals
   // are wholesale"); usersState/tokensState and their create/remove/
   // revoke calls are the same ones it used.
   //

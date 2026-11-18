@@ -10,7 +10,7 @@
 // Round 32 (#767): keys (under ingest) and people (under account) are
 // mounted directly in the card, in its own row grammar, replacing the
 // retired EngineRoomDoors.svelte and its USERS_DOOR_ENABLED/
-// TOKENS_DOOR_ENABLED flags outright -- no shim, per AGENTS.md's
+// TOKENS_DOOR_ENABLED flags outright -- no shim, per docs/development.md's
 // "removals are wholesale". Both groups are gated on isAdmin: GET
 // /api/tokens and GET /api/auth/users are both admin-only server-side
 // (#657), so a `user` or `viewer` session gets neither group at all, not
