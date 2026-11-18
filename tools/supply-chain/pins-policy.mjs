@@ -72,8 +72,20 @@ export function extractActionPins(fileTexts) {
       const match = ACTION_PIN.exec(line);
       if (!match) continue;
       const [, name, commit, version] = match;
-      if (!pins.has(name)) pins.set(name, { commit, version, locations: new Set() });
+      if (!pins.has(name)) {
+        const entry = { commit, version, locations: new Set() };
+        // Every file's own pin, not just the first one seen: two files can pin
+        // the same action to different commits, and keeping only the first
+        // let a stale pin in a later file pass unchecked. Non-enumerable so
+        // the entry's public shape ({commit, version, locations}) is unchanged.
+        Object.defineProperty(entry, "pinsByFile", { value: [] });
+        pins.set(name, entry);
+      }
       pins.get(name).locations.add(file);
+      const byFile = pins.get(name).pinsByFile;
+      if (!byFile.some((p) => p.file === file && p.commit === commit && p.version === version)) {
+        byFile.push({ file, commit, version });
+      }
     }
   }
   return pins;
@@ -277,15 +289,21 @@ export function diffPolicy(policy, { actionPins, imagePins }) {
       problems.push(`ci action pinned but not recorded in the policy: ${name}@${found.commit}`);
       continue;
     }
-    if (recorded.commit !== found.commit) {
-      problems.push(
-        `ci action ${name} is pinned to ${found.commit} but the policy records ${recorded.commit}`,
-      );
-    }
-    if (found.version !== undefined && recorded.version !== found.version) {
-      problems.push(
-        `ci action ${name} pin comment says ${found.version} but the policy records ${recorded.version}`,
-      );
+    // Compare each file's pin, so a mismatch names the file it is in; an
+    // entry built by hand without pinsByFile is checked as a single pin.
+    const perFile = found.pinsByFile ?? [{ commit: found.commit, version: found.version }];
+    for (const pin of perFile) {
+      const where = pin.file === undefined ? "" : ` in ${pin.file}`;
+      if (recorded.commit !== pin.commit) {
+        problems.push(
+          `ci action ${name}${where} is pinned to ${pin.commit} but the policy records ${recorded.commit}`,
+        );
+      }
+      if (pin.version !== undefined && recorded.version !== pin.version) {
+        problems.push(
+          `ci action ${name}${where} pin comment says ${pin.version} but the policy records ${recorded.version}`,
+        );
+      }
     }
   }
   for (const name of policyActions.keys()) {
