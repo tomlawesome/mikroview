@@ -1971,8 +1971,12 @@ export async function startSSOLink(password: string): Promise<{ url: string } | 
 
 // The guided setup wizard's view of what has landed (#320). Admin-only
 // server-side; the menu entry is gated the same way.
-export async function fetchSetupStatus(): Promise<SetupStatus> {
-  const res = await fetch('/api/setup/status')
+//
+// address is the wizard's typed setup address (#1507): the server judges
+// certificate coverage for it. Empty or omitted sends no parameter, and
+// the server uses the stored address.
+export async function fetchSetupStatus(address?: string): Promise<SetupStatus> {
+  const res = await fetch(address ? `/api/setup/status?address=${encodeURIComponent(address)}` : '/api/setup/status')
   if (!res.ok) throw new ApiError(`fetchSetupStatus: ${res.status}`, res.status)
   return res.json()
 }

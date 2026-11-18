@@ -231,9 +231,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		address = s.Setup.Address()
 		backupTransport = s.Setup.BackupTransport()
 	}
+	// The coverage fields judge the address being typed when the wizard
+	// sends one (?address=), else the stored one. An address
+	// validSetupAddress refuses is treated like none (#1507).
+	judged := address
+	if typed := r.URL.Query().Get("address"); typed != "" && validSetupAddress(typed) {
+		judged = typed
+	}
 	addressHost := ""
-	if address != "" {
-		addressHost = routeros.Hostname(address)
+	if judged != "" {
+		addressHost = routeros.Hostname(judged)
 	}
 	effectiveHosts := servertls.EffectiveHosts(s.SetupInstance.Hosts)
 	writeJSON(w, http.StatusOK, setupStatus{
@@ -242,7 +249,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			Hosts:                    nonNilStrings(s.SetupInstance.Hosts),
 			EffectiveHosts:           effectiveHosts,
 			AddressHost:              addressHost,
-			CertificateCoversAddress: certificateCovers(s.SetupInstance, effectiveHosts, address),
+			CertificateCoversAddress: certificateCovers(s.SetupInstance, effectiveHosts, judged),
 			SyslogPort:               s.SetupInstance.SyslogPort,
 			SyslogEnabled:            s.SetupInstance.SyslogPort != "",
 			Address:                  address,
