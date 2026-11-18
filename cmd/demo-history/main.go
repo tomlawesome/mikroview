@@ -288,10 +288,12 @@ func buildRetainedEvents(now time.Time, days int) ([]byte, int, error) {
 	rng := mathrand.New(mathrand.NewSource(cryptoSeed()))
 	var records []retainedRecord
 
-	// Ends yesterday, never today: today belongs to the live feeder that
-	// starts right after -restore (AGENTS.md's demo recipe), and a
-	// retained event timestamped later than "now" would be a corpus
-	// claiming to have seen the future.
+	// Background traffic ends yesterday, never today: today belongs to the
+	// live feeder that starts right after -restore (AGENTS.md's demo
+	// recipe). Matching traffic below may fall in the last closed window,
+	// which can end this morning, but never later than now: a retained
+	// event timestamped after "now" would be a corpus claiming to have
+	// seen the future.
 	dayStart := now.Truncate(24*time.Hour).AddDate(0, 0, -days)
 	for day := 0; day < days; day++ {
 		base := dayStart.AddDate(0, 0, day)
