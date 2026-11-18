@@ -14,6 +14,7 @@
 // the modal fetches while open belongs to the component and stops with
 // it.
 
+import { untrack } from 'svelte'
 import {
   createDevice,
   fetchDevices,
@@ -395,7 +396,12 @@ class WizardState {
   // explain their own silence have something to explain it with.
   async refresh(): Promise<void> {
     try {
-      const [s, d] = await Promise.all([fetchSetupStatus(), fetchDevices()])
+      // The typed address rides the status fetch so Go judges the
+      // certificate for it (#1507). Read untracked: Wizard.svelte calls
+      // refresh() from an effect, and a tracked read would re-run it on
+      // every keystroke; the poll picks the new address up.
+      const typed = untrack(() => this.address)
+      const [s, d] = await Promise.all([fetchSetupStatus(typed), fetchDevices()])
       this.status = s
       this.devices = d
       this.error = null

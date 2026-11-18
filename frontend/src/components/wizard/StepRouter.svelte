@@ -17,7 +17,7 @@
   // aria-labelledby instead.
 
   import { configProblemsState } from '../../lib/configProblems.svelte'
-  import { portOf } from '../../lib/setupsteps'
+  import { listenPort } from '../../lib/format'
   import type { RouterBackupSwitchState } from '../../lib/types'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
@@ -125,7 +125,7 @@
       {/if}
     {:else if openedPort}
       <p class="opened" aria-live="polite">
-        The drop box is open on port {portOf(openedPort)} — the router must be able to reach this host there.
+        The drop box is open on port {listenPort(openedPort)} — the router must be able to reach this host there.
       </p>
     {/if}
   </div>
