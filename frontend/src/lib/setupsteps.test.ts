@@ -158,6 +158,40 @@ describe('step status', () => {
   })
 })
 
+// #1507 (decision #1437): Go owns the certificate-coverage answer. The
+// step reads instance.certificateCoversAddress and instance.effectiveHosts
+// as served; it never splits the address or compares names itself. The
+// fixtures below make the served verdict disagree with what a local
+// comparison of hosts would say, so only reading the verdict passes.
+describe('CA step reads the served certificate verdict', () => {
+  function served(over: Record<string, unknown>): SetupStatus {
+    const base = status()
+    return { ...base, instance: { ...base.instance, ...over } } as SetupStatus
+  }
+
+  it('blocks when the server says the certificate does not cover the address', () => {
+    const s = caStep(served({ hosts: ['192.0.2.10'], effectiveHosts: ['192.0.2.10'], certificateCoversAddress: false }), '192.0.2.10:8080')
+    expect(s.state).toBe('blocked')
+  })
+
+  it('does not block when the server says it covers, whatever the local list holds', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['ROUTER.example.net'], certificateCoversAddress: true }), 'router.example.net:8080')
+    expect(s.state).not.toBe('blocked')
+  })
+
+  it('names the whole address, not a port-cut fragment, for a bare IPv6 literal', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: false }), '2001:db8::10')
+    expect(s.state).toBe('blocked')
+    expect(s.detail).toContain('2001:db8::10')
+    expect(s.detail).not.toContain('2001:db8: ')
+  })
+
+  it('builds the paste block from the served effective hosts', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: false }), '2001:db8::10')
+    expect(s.pasteBlock).toBe('hosts: ["localhost", "127.0.0.1", "2001:db8::10"]')
+  })
+})
+
 describe('tlsHostsBlock', () => {
   it('keeps hosts already configured, adding the missing one', () => {
     expect(tlsHostsBlock(['192.0.2.10', 'localhost'], '192.0.2.99')).toBe(

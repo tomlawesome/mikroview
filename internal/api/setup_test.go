@@ -634,3 +634,98 @@ func getSetupStatus(t *testing.T, client *http.Client, baseURL string) setupStat
 	}
 	return got
 }
+
+// getSetupStatusInstance reads GET /api/setup/status as a generic map so
+// the #1507 tests below fail on the missing wire fields themselves
+// rather than on a compile error.
+func getSetupStatusInstance(t *testing.T, client *http.Client, baseURL string) map[string]any {
+	t.Helper()
+	resp, err := client.Get(baseURL + "/api/setup/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/setup/status = %d, want 200", resp.StatusCode)
+	}
+	var raw struct {
+		Instance map[string]any `json:"instance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw.Instance
+}
+
+// TestSetupStatusServesTheCertificateCoverageVerdict is #1507 (decision
+// #1437): Go owns the answer to "does the certificate cover the wizard's
+// address", served as instance.certificateCoversAddress beside
+// instance.effectiveHosts. Names compare case-insensitively, and a bare
+// IPv6 literal is not cut at its last colon.
+func TestSetupStatusServesTheCertificateCoverageVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hosts     []string
+		address   string
+		want      bool
+		wantHosts []string
+	}{
+		{"uncovered name", []string{"router.example.net"}, "other.example.net:8443", false, []string{"router.example.net"}},
+		{"covered name in a different case", []string{"router.example.net"}, "ROUTER.Example.NET:8443", true, []string{"router.example.net"}},
+		{"covered name, configured in upper case", []string{"Router.EXAMPLE.net"}, "router.example.net", true, []string{"Router.EXAMPLE.net"}},
+		{"covered bare IPv6 literal", []string{"2001:db8::10"}, "2001:db8::10", true, []string{"2001:db8::10"}},
+		{"covered bracketed IPv6 with port", []string{"2001:db8::10"}, "[2001:db8::10]:8443", true, []string{"2001:db8::10"}},
+		{"uncovered bare IPv6 literal", []string{"192.0.2.10"}, "2001:db8::10", false, []string{"192.0.2.10"}},
+		{"unset hosts fall back to the generated defaults", nil, "127.0.0.1:8443", true, []string{"localhost", "127.0.0.1"}},
+		{"unset hosts do not cover another address", nil, "192.0.2.99:8443", false, []string{"localhost", "127.0.0.1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			s.Setup = setup.New()
+			s.SetupInstance = SetupInstance{TLSEnabled: true, Hosts: tc.hosts, SyslogPort: "6514"}
+			if _, err := s.Setup.SetAddress(tc.address); err != nil {
+				t.Fatalf("SetAddress: %v", err)
+			}
+			ts := httptest.NewServer(s.Routes())
+			defer ts.Close()
+			adminClient := setUpAdmin(t, s, ts)
+
+			inst := getSetupStatusInstance(t, adminClient, ts.URL)
+			got, ok := inst["certificateCoversAddress"].(bool)
+			if !ok {
+				t.Fatalf("instance.certificateCoversAddress missing or not a bool: %v", inst["certificateCoversAddress"])
+			}
+			if got != tc.want {
+				t.Errorf("certificateCoversAddress = %v, want %v", got, tc.want)
+			}
+			eff, _ := inst["effectiveHosts"].([]any)
+			var gotHosts []string
+			for _, h := range eff {
+				gotHosts = append(gotHosts, fmt.Sprint(h))
+			}
+			if strings.Join(gotHosts, ",") != strings.Join(tc.wantHosts, ",") {
+				t.Errorf("effectiveHosts = %v, want %v", gotHosts, tc.wantHosts)
+			}
+		})
+	}
+}
+
+// TestSetupStatusCoverageVerdictIsTrueWhenNoCertificateIsInPlay keeps
+// the front end's old short-circuit (#374): with neither HTTP TLS nor
+// syslog TLS on there is nothing to cover.
+func TestSetupStatusCoverageVerdictIsTrueWhenNoCertificateIsInPlay(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	s.SetupInstance = SetupInstance{TLSEnabled: false, Hosts: []string{"192.0.2.10"}, SyslogPort: ""}
+	if _, err := s.Setup.SetAddress("192.0.2.99:8443"); err != nil {
+		t.Fatalf("SetAddress: %v", err)
+	}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	adminClient := setUpAdmin(t, s, ts)
+
+	inst := getSetupStatusInstance(t, adminClient, ts.URL)
+	if got, ok := inst["certificateCoversAddress"].(bool); !ok || !got {
+		t.Errorf("certificateCoversAddress = %v, want true when no certificate is in play", inst["certificateCoversAddress"])
+	}
+}

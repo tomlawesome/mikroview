@@ -30,6 +30,28 @@ func TestHostname(t *testing.T) {
 	}
 }
 
+// TestHostnameSplitsEveryFormValidSetupAddressAccepts is #1507: the four
+// address forms internal/api's validSetupAddress comment lists (bare host,
+// host:port, [ipv6]:port, bare IPv6 literal with no port) must each split
+// to the host alone. A bare IPv6 literal used to be cut at its last colon.
+func TestHostnameSplitsEveryFormValidSetupAddressAccepts(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"bare hostname", "router.example.net", "router.example.net"},
+		{"hostname with port", "router.example.net:6514", "router.example.net"},
+		{"bare IPv4", "192.0.2.10", "192.0.2.10"},
+		{"IPv4 with port", "192.0.2.10:6514", "192.0.2.10"},
+		{"bracketed IPv6 with port", "[2001:db8::10]:6514", "2001:db8::10"},
+		{"bare IPv6 literal", "2001:db8::10", "2001:db8::10"},
+		{"bare IPv6 literal, full form", "2001:db8:0:0:0:0:0:10", "2001:db8:0:0:0:0:0:10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Hostname(tc.in); got != tc.want {
+				t.Errorf("Hostname(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPortOf(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{":6514", "6514"},
