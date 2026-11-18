@@ -239,7 +239,7 @@ func loadOrCreatePepperOnce(path string, retried bool) ([]byte, error) {
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("auth: writing the recovery pepper %s: %w", path, err)
 	}
-	err = os.Link(tmp, path)
+	err = linkPepperFile(tmp, path)
 	_ = os.Remove(tmp)
 	if err != nil {
 		if os.IsExist(err) {
@@ -265,6 +265,8 @@ type pepperFile interface {
 	Sync() error
 	Close() error
 }
+
+var linkPepperFile = os.Link
 
 var openPepperFile = func(name string, flag int, perm os.FileMode) (pepperFile, error) {
 	return os.OpenFile(name, flag, perm)
