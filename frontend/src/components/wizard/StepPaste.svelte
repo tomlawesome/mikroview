@@ -18,6 +18,7 @@
 
   import { fetchEvents } from '../../lib/api'
   import { copyToClipboard } from '../../lib/clipboard'
+  import { CopyFlash } from '../../lib/copyFlash.svelte'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
   import Track from './Track.svelte'
@@ -77,9 +78,12 @@
     }
   })
 
+  const flash = new CopyFlash()
+
   async function copy() {
-    await copyToClipboard(blockText)
-    wizardRun.markCopied()
+    const ok = await flash.run('paste', () => copyToClipboard(blockText))
+    // The ledger line is kept (#1542); it records a copy that happened.
+    if (ok) wizardRun.markCopied()
   }
 
   let showReroll = $state(false)
@@ -125,7 +129,7 @@
   </p>
   <pre class="script" aria-label="The block to paste">{blockText}</pre>
   <div class="copyrow">
-    <button type="button" class="primary" onclick={copy}>Copy</button>
+    <button type="button" class="primary" onclick={copy}>{flash.label('paste', 'Copy')}</button>
     <span class="token-life">
       Token good until {ev.tokenUntil} (15 minutes) ·
       <button type="button" class="linkish" onclick={toggleReroll}>Reroll</button>

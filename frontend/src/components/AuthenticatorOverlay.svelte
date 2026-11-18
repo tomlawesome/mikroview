@@ -23,6 +23,7 @@
   import { authState } from '../lib/auth.svelte'
   import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { qrCode } from '../lib/qrcode'
@@ -59,7 +60,7 @@
   }
   const firstControl = () =>
     modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
-  let codesCopied = $state(false)
+  const flash = new CopyFlash()
   // #1202: gauntlet holds a first factor, with its codes, until
   // confirmRecoveryCodes says they were saved. False when the app went live at once,
   // where "I have saved these" only closes.
@@ -93,7 +94,7 @@
     password = ''
     error = null
     busy = false
-    codesCopied = false
+    flash.key = null
     pendingConfirmation = false
   }
 
@@ -217,7 +218,7 @@
   }
 
   async function copyCodes() {
-    codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
+    await flash.run('codes', () => copyToClipboard(recoveryCodes.join('\n')))
   }
 
   async function finish() {
@@ -411,7 +412,7 @@
             {/each}
           </div>
           <div class="copyrow">
-            <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
+            <button type="button" class="copy" onclick={copyCodes}>{flash.label('codes', 'Copy all', { copied: 'Copied', failed: 'Copy failed' })}</button>
           </div>
           <!-- #1202: sessions end when the factor is confirmed, not before. -->
           {#if pendingConfirmation}
