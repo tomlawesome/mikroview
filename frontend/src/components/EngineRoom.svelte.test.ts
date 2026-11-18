@@ -398,7 +398,7 @@ describe('The settings shelf (#633)', () => {
     expect(screen.queryByText('rb5009-ingest')).toBeNull()
     expect(screen.queryByText(/ingest · speaks for rb5009/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'revoke' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '+ mint a new key' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ mint a key' })).toBeNull()
     expect(screen.queryByRole('button', { name: '+ let someone in' })).toBeNull()
   })
 
@@ -417,7 +417,7 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByText('rb5009-ingest')).toBeTruthy()
     expect(screen.getByText('ingest · speaks for rb5009')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'revoke' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ mint a new key' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '+ mint a key' })).toBeTruthy()
 
     // The seeded accounts: alex is the caller ("this is you"), and the
     // admin row ends console-only rather than a remove verb.
@@ -469,7 +469,7 @@ describe('The settings shelf (#633)', () => {
       value: 'mv1_4c21secret9b0d',
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: '+ mint a new key' }))
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
     await settle()
     await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
     await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
@@ -486,7 +486,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.queryByText('mv1_4c21secret9b0d')).toBeNull()
-    expect(screen.getByRole('button', { name: '+ mint a new key' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '+ mint a key' })).toBeTruthy()
   })
 
   it('an ingest key reveal offers copy for RouterOS', async () => {
@@ -519,7 +519,7 @@ describe('The settings shelf (#633)', () => {
       value: 'mv1_ingestsecret',
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: '+ mint a new key' }))
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
@@ -566,7 +566,7 @@ describe('The settings shelf (#633)', () => {
       value: 'mv1_ingestsecret',
     })
 
-    await fireEvent.click(screen.getByRole('button', { name: '+ mint a new key' }))
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()

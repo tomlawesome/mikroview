@@ -11,7 +11,7 @@
 > state and for a nightly backup. It asks for your password on the next
 > step, because minting the token is what opens the port.
 >
-> Its five steps, in order: **The router**, **Mint the token**, **Paste
+> Its five steps, in order: **The router**, **Mint the ingest token**, **Paste
 > once**, **Tag firewall rules**, **Where setup stands**. They do not
 > line up with this page's numbered sections. **Paste once** gives you
 > one block with the parts you chose (the certificate, then the push,
@@ -194,7 +194,7 @@ block, with a live token already filled in:
 ![The end of the wizard's Paste once block just after minting a token: the logging part, then the enrol line with its token blanked out, and the token's expiry beside Copy and Reroll beneath it](screenshots/setup-wizard-send-logs.png)
 
 Before it mints that token the wizard asks for the router's own address
-(on **The router**) and for your password (on **Mint the token**). The address is the only one MikroView opens the
+(on **The router**) and for your password (on **Mint the ingest token**). The address is the only one MikroView opens the
 syslog port to while the token is pending — a pending token does not
 leave the port reachable by everything else on your network — and the
 password is asked for because minting is what opens it, so being signed
@@ -1333,7 +1333,7 @@ actions.
 ![The Entities routers row: a card per router already enrolled, and "+ add a router" as the last berth](screenshots/entities-add-a-router.png)
 
 Each router's card also carries **Re-enrol…**, which opens the wizard at
-**Mint the token** for that router — for a router you have
+**Mint the ingest token** for that router — for a router you have
 replaced or given a new address, where the old token's address no longer
 applies. Beside the routers, a card per refused sender appears whenever
 there is something to show — an address that has sent lines without a

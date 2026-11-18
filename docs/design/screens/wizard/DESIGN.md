@@ -29,7 +29,7 @@ Five steps:
 | # | Step | Character |
 |---|---|---|
 | 1 | The router | one form — name, address, push Yes / No, backup Yes / No; Next when all four are answered |
-| 2 | Mint the token | asks for the password at the moment of minting; the token's life is 15 minutes; Reroll asks again |
+| 2 | Mint the ingest token | asks for the password at the moment of minting; the token's life is 15 minutes; Reroll asks again |
 | 3 | Paste once | one block built from the answers, the enrol line last; Copy; then the router's turn — the track — until everything chosen has arrived |
 | 4 | Tag firewall rules | a rule list proposed from the push; tick, Copy, paste — the only second paste; Skip leaves them dark |
 | ✓ | Where setup stands | the ledger: what stands on evidence, what was set aside, Undo per row, undo everything; Add another router; Finish |
@@ -165,10 +165,10 @@ once: the choice is made here, and the block is built from it after the
 mint; opening from here after Back re-renders the block so its backup
 part appears. Nothing is said before the read has landed.
 
-**2 · Mint the token.** Lead: "Your password, to mint <name>'s token.
+**2 · Mint the ingest token.** Lead: "Your password, to mint <name>'s token.
 Minting opens the log port for <address>, for 15 minutes, so it asks for
 your password at that moment. The token goes at the end of the block."
-One password field; Back; **Mint the token** primary. (#1291's model:
+One password field; Back; **Mint the ingest token** primary. (#1291's model:
 minting is what opens the port, so it asks every time.)
 
 **3 · Paste once.** Lead: "One paste. N parts, in order — <titles> — and
@@ -262,7 +262,7 @@ wear these same tokens.
 
 "Add another router" from the ledger, and the Entities routers row's
 "+ add a router" berth (#1284), open this same wizard at **The router**;
-**Re-enrol…** on a router card opens it at **Mint the token** for that
+**Re-enrol…** on a router card opens it at **Mint the ingest token** for that
 router with a fresh token. There is no separate router ledger: the
 five steps are the router ledger, with the certificate as one of the
 paste's parts rather than a step of its own. Refused senders are

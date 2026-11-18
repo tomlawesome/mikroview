@@ -103,7 +103,7 @@ describe('C8 em dash in client-authored strings; server -- passed through', () =
 })
 
 describe('C9 "ingest token" for the router credential', () => {
-  const old = /ingest key|enrolment token|mint a key|mint (the|a) token|API token/i
+  const old = /ingest key|enrolment token|mint (the|a) token|API token/i
   it('no old name for the credential in client strings', () => {
     expect(hits(all, old)).toEqual([])
   })

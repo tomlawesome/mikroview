@@ -751,7 +751,7 @@
       return
     }
     if (!newKeyPassword) {
-      keyError = 'Enter your password to mint an ingest token.'
+      keyError = 'Enter your password to mint a key.'
       return
     }
     minting = true
@@ -1448,7 +1448,7 @@
               </span>
             </div>
           {:else}
-            <div class="ogfoot"><button type="button" class="olink" onclick={openMintKey}>+ mint a new key</button></div>
+            <div class="ogfoot"><button type="button" class="olink" onclick={openMintKey}>+ mint a key</button></div>
           {/if}
         </div>
       {/if}
