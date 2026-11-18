@@ -279,7 +279,7 @@ describe('the tuning fields', () => {
     await fireEvent.input(screen.getByRole('spinbutton', { name: /Window/ }), {
       target: { value: '90' },
     })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
     await settle()
     expect(api.updateDefinition).toHaveBeenCalledTimes(1)
     const [id, body] = vi.mocked(api.updateDefinition).mock.calls[0]
@@ -300,7 +300,7 @@ describe('scope chips', () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
     await fireEvent.click(screen.getByRole('button', { name: 'remove host 192.168.1.20' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
     await settle()
     const [, body] = vi.mocked(api.updateDefinition).mock.calls[0]
     expect(body.scope?.hosts).toEqual([])
@@ -325,7 +325,7 @@ describe('scope chips', () => {
     await fireEvent.keyDown(box, { key: 'Enter' })
     expect(screen.getByRole('button', { name: 'remove port 8000' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'remove port 8002' })).toBeTruthy()
-    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
     await settle()
     const [, body] = vi.mocked(api.updateDefinition).mock.calls[0]
     expect(body.scope?.ports).toEqual([22, 8000, 8001, 8002])
@@ -528,7 +528,7 @@ describe('clone', () => {
 //     bounded sample makes only the *list* partial.
 //   - Try never blocks Save, before or after either answer.
 describe('try', () => {
-  async function press(name = 'Try') {
+  async function press(name = 'try') {
     await fireEvent.click(screen.getByRole('button', { name }))
     await settle()
   }
@@ -733,7 +733,7 @@ describe('try', () => {
   it('never blocks Save -- before, during or after either answer', async () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
-    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement
+    const save = screen.getByRole('button', { name: 'save' }) as HTMLButtonElement
     expect(save.disabled).toBe(false)
     await press()
     expect(save.disabled).toBe(false)

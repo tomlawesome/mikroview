@@ -81,7 +81,7 @@ describe('the rail', () => {
     const rows = railRows(freshAnswers(), ev())
     expect(rows.map((r) => r.title)).toEqual([
       'The router',
-      'Mint the token',
+      'Mint the ingest token',
       'Paste once',
       'Tag firewall rules',
       'Where setup stands',
@@ -177,10 +177,10 @@ describe('the footer', () => {
     expect(footSpec(answered(), ev()).hint).toBe('')
   })
 
-  it('offers Back and Mint the token on the password step', () => {
+  it('offers Back and Mint the ingest token on the password step', () => {
     const f = footSpec(answered({ q: 4 }), ev())
     expect(f.left?.label).toBe('Back')
-    expect(f.right[0]).toMatchObject({ label: 'Mint the token', disabled: true })
+    expect(f.right[0]).toMatchObject({ label: 'Mint the ingest token', disabled: true })
     expect(footSpec(answered({ q: 4, pass: 'x' }), ev()).right[0].disabled).toBe(false)
   })
 

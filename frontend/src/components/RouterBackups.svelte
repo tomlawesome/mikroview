@@ -337,11 +337,11 @@
   async function submitSet() {
     formError = null
     if (runeCount(newPassphrase) < lock.minPassphraseLength) {
-      formError = `the vault passphrase must be at least ${lock.minPassphraseLength} characters`
+      formError = `The vault passphrase must be at least ${lock.minPassphraseLength} characters.`
       return
     }
     if (newPassphrase !== confirmPassphrase) {
-      formError = "the two don't match"
+      formError = "The two do not match."
       return
     }
     submitting = true
@@ -358,15 +358,15 @@
   async function submitChange() {
     formError = null
     if (!currentPassphrase) {
-      formError = 'enter the current vault passphrase'
+      formError = "Enter the current vault passphrase."
       return
     }
     if (runeCount(newPassphrase) < lock.minPassphraseLength) {
-      formError = `the vault passphrase must be at least ${lock.minPassphraseLength} characters`
+      formError = `The vault passphrase must be at least ${lock.minPassphraseLength} characters.`
       return
     }
     if (newPassphrase !== confirmPassphrase) {
-      formError = "the two don't match"
+      formError = "The two do not match."
       return
     }
     submitting = true
@@ -428,11 +428,11 @@
     if (!keepTarget) return
     const comment = keepComment.trim()
     if (comment.length === 0) {
-      formError = 'say why you are keeping it'
+      formError = "Say why you are keeping it."
       return
     }
     if (runeCount(comment) > MAX_KEEP_COMMENT) {
-      formError = `at most ${MAX_KEEP_COMMENT} characters`
+      formError = `At most ${MAX_KEEP_COMMENT} characters.`
       return
     }
     submitting = true

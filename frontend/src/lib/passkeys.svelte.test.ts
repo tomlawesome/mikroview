@@ -153,7 +153,7 @@ describe('registerPasskey', () => {
 
     const result = await registerPasskey('my key', 'hunter2')
 
-    expect(result).toBe("That didn't complete -- try again, or use another way in.")
+    expect(result).toBe("That didn't complete — try again, or use another way in.")
     expect(finishPasskeyRegistration).not.toHaveBeenCalled()
   })
 

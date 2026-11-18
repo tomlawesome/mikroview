@@ -344,9 +344,9 @@
           </th>
         </tr>
         <tr class="filters">
-          <td><input bind:value={filters.time} placeholder="filter…" aria-label="Filter by time" /></td>
-          <td><input bind:value={filters.actor} placeholder="filter…" aria-label="Filter by actor" /></td>
-          <td><input bind:value={filters.what} placeholder="filter…" aria-label="Filter by what" /></td>
+          <td><input bind:value={filters.time} placeholder="filter" aria-label="Filter by time" /></td>
+          <td><input bind:value={filters.actor} placeholder="filter" aria-label="Filter by actor" /></td>
+          <td><input bind:value={filters.what} placeholder="filter" aria-label="Filter by what" /></td>
         </tr>
       </thead>
       <tbody>

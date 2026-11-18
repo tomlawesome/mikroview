@@ -192,7 +192,7 @@ async function openMintForm() {
   authState.role = 'admin'
   render(EngineRoom)
   await settle()
-  await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+  await fireEvent.click(screen.getByRole('button', { name: '+ mint a new key' }))
   await settle()
 }
 

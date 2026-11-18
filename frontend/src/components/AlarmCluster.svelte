@@ -39,7 +39,7 @@
     type="button"
     class="wmk"
     onclick={() => (appState.view = 'watchlist')}
-    title="{watchlistState.heldCount} watcher{watchlistState.heldCount === 1 ? '' : 's'} held{watchlistState.brokenCount > 0 ? `, ${watchlistState.brokenCount} broken` : ''}"
+    title="{watchlistState.heldCount} watch{watchlistState.heldCount === 1 ? '' : 'es'} held{watchlistState.brokenCount > 0 ? `, ${watchlistState.brokenCount} broken` : ''}"
   >
     <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
       <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />

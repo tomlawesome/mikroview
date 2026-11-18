@@ -302,7 +302,7 @@ class AuthState {
     } else if (code === "link_failed") {
       this.ssoError = "Connecting SSO to your account failed. Nothing was changed.";
     } else {
-      this.ssoError = "SSO sign-in failed -- try again, or sign in with your password below.";
+      this.ssoError = "SSO sign-in failed — try again, or sign in with your password below.";
     }
     params.delete("ssoError");
     const qs = params.toString();

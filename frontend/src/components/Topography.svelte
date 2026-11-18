@@ -3539,7 +3539,7 @@
   const watchesZeroLine = 'no watches yet'
 
   const watchPanelGroupLabel = $derived(
-    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watcher${watcherTotal === 1 ? '' : 's'}, broken first`,
+    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watch${watcherTotal === 1 ? '' : 'es'}, broken first`,
   )
 
   // Same handoff as activateFlagRow above, for the watchlist tab.
@@ -4709,7 +4709,7 @@
         class="hbar-g"
         role="button"
         tabindex="0"
-        aria-label="{agg.watchCount} watcher{agg.watchCount === 1 ? '' : 's'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
+        aria-label="{agg.watchCount} watch{agg.watchCount === 1 ? '' : 'es'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
         onclick={openWatchlist}
         onkeydown={(e) => {
           if (e.key === 'Enter') openWatchlist(e)
@@ -4960,7 +4960,7 @@
           aria-expanded={expandedDial === 'watchlist'}
           aria-controls="{uid}-watch-panel"
           onclick={() => toggleDialPanel('watchlist')}
-          aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
+          aria-label="{watcherTotal} watch{watcherTotal === 1 ? '' : 'es'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
         >
           <svg viewBox="0 0 56 56" aria-hidden="true">
             {#if watcherTotal === 0}
@@ -6981,7 +6981,7 @@
         {:else}
           <p class="cmdnote">pick a port — the command drafts itself from what was observed</p>
         {/if}
-        <button class="composer-close" onclick={() => (compose = null)}>Close</button>
+        <button class="composer-close" onclick={() => (compose = null)}>close</button>
       </div>
     </div>
   {/if}

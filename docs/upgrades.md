@@ -97,7 +97,7 @@ docs/configuration.md — nothing here changes for you.
 address its syslog comes from (#1281). From this version on, a syslog
 source is accepted only once it is the address you declared under
 `devices:` in config.yaml (`sourceIp`), or once it has redeemed a
-one-time enrolment token you mint for it from the Entities screen. Until
+one-time ingest token you mint for it from the Entities screen. Until
 then, its lines are refused and shown under "Refused senders" rather
 than counted at all.
 
