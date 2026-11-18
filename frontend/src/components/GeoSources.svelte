@@ -159,7 +159,7 @@
   }
 </script>
 
-<svelte:window onclick={disarmAll} />
+<svelte:window onclick={disarmAll} onkeydown={(e) => e.key === 'Escape' && disarmAll()} />
 
 {#snippet inUse(live: boolean)}
   {#if live}{' '}<span class="ginuse">in use</span>{/if}

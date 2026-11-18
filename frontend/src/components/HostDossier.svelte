@@ -27,6 +27,7 @@
   // dossier -- the per-IP investigate popover, the Entities host row,
   // the city building card and the topography host card -- each need one
   // call and no state of their own.
+  import { trapFocus } from '../lib/focusTrap'
   import { dossierState } from '../lib/dossier.svelte'
   import { nameEditorState } from '../lib/nameEditor.svelte'
   import { countryFlag, formatRelative, isPublicIp } from '../lib/format'
@@ -139,6 +140,7 @@
     aria-labelledby={titleId}
     tabindex="-1"
     data-testid="host-dossier"
+    use:trapFocus
   >
     <!-- 1. Head. Present in every state, so a card that is still
          loading or that failed still says which address it is about. -->

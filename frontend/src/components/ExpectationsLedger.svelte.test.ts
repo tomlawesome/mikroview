@@ -34,9 +34,9 @@ import type { Exclusion } from '../lib/types'
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
 const PORT_SCAN: Exclusion = {
-  id: 'port_scan|192.168.1.50',
+  id: 'port_scan|192.0.2.50',
   type: 'port_scan',
-  target: '192.168.1.50',
+  target: '192.0.2.50',
   size: 30,
   absorbed: 7,
   since: '2026-09-02T08:15:00Z',
@@ -94,7 +94,7 @@ describe('a populated ledger', () => {
     await settle()
 
     expect(screen.getByText('Port scan')).toBeTruthy()
-    expect(screen.getByText('192.168.1.50')).toBeTruthy()
+    expect(screen.getByText('192.0.2.50')).toBeTruthy()
     expect(screen.getByText('up to 30')).toBeTruthy()
     expect(screen.getByText('absorbed 7')).toBeTruthy()
     // Against formatDayMonth rather than a hardcoded "2 Sep": the
@@ -147,12 +147,13 @@ describe('forgetting an expectation', () => {
     // an optimistic splice would pass a "row is gone" assertion without
     // the server ever having been asked.
     vi.mocked(fetchExpectations).mockResolvedValue([SIZELESS])
-    await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.168.1.50' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.0.2.50' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.0.2.50' }))
     await settle()
 
-    expect(vi.mocked(forgetExpectation)).toHaveBeenCalledWith('port_scan|192.168.1.50')
+    expect(vi.mocked(forgetExpectation)).toHaveBeenCalledWith('port_scan|192.0.2.50')
     expect(vi.mocked(fetchExpectations)).toHaveBeenCalledTimes(2)
-    expect(screen.queryByText('192.168.1.50')).toBeNull()
+    expect(screen.queryByText('192.0.2.50')).toBeNull()
     expect(screen.getByText('any size')).toBeTruthy()
   })
 
@@ -161,11 +162,12 @@ describe('forgetting an expectation', () => {
     render(ExpectationsLedger, { canEdit: true })
     await settle()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.168.1.50' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.0.2.50' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Forget the expectation for 192.0.2.50' }))
     await settle()
 
     expect(screen.getByText('user role required')).toBeTruthy()
-    expect(screen.getByText('192.168.1.50')).toBeTruthy()
+    expect(screen.getByText('192.0.2.50')).toBeTruthy()
     // A refused forget must not have re-read the list: the ledger would
     // then look refreshed when nothing changed.
     expect(vi.mocked(fetchExpectations)).toHaveBeenCalledTimes(1)
@@ -213,7 +215,7 @@ describe('Forget is arm-then-confirm (#1539 C1)', () => {
     await fireEvent.click(document.body)
     await settle()
 
-    expect(forgetBtn().textContent?.trim()).toBe('Forget')
+    expect(forgetBtn().textContent?.trim()).toBe('forget')
     expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
   })
 
@@ -225,7 +227,7 @@ describe('Forget is arm-then-confirm (#1539 C1)', () => {
     await fireEvent.keyDown(document.body, { key: 'Escape' })
     await settle()
 
-    expect(forgetBtn().textContent?.trim()).toBe('Forget')
+    expect(forgetBtn().textContent?.trim()).toBe('forget')
     expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
   })
 
@@ -239,7 +241,7 @@ describe('Forget is arm-then-confirm (#1539 C1)', () => {
     await settle()
 
     expect(vi.mocked(forgetExpectation)).not.toHaveBeenCalled()
-    expect(a.textContent?.trim()).toBe('Forget')
+    expect(a.textContent?.trim()).toBe('forget')
     expect(b.textContent?.trim()).toMatch(/^confirm — /)
   })
 })

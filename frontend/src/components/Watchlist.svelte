@@ -1324,6 +1324,11 @@
     armedRemoveId = null
     armedReset = false
   }}
+  onkeydown={(e) => {
+    if (e.key !== 'Escape') return
+    armedRemoveId = null
+    armedReset = false
+  }}
 />
 
 <div class="watchlist-page">

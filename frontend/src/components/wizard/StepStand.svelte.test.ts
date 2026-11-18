@@ -300,6 +300,7 @@ describe('StepStand: the ledger (#1385)', () => {
     await tick()
 
     await fireEvent.click(screen.getByRole('button', { name: /forget rb5009 on MikroView/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — the router must enrol again/ }))
     await waitFor(() => expect(wizardRun.answers.stage).toBe('ask'))
 
     expect(deleteDevice).toHaveBeenCalledTimes(1)
@@ -317,6 +318,7 @@ describe('StepStand: the ledger (#1385)', () => {
     await tick()
 
     await fireEvent.click(screen.getByRole('button', { name: /forget rb5009 on MikroView/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — the router must enrol again/ }))
     await waitFor(() => expect(screen.getByText('device is declared in config.yaml')).toBeTruthy())
 
     expect(wizardState.ledgerDevice).toBe('rb5009')

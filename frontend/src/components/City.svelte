@@ -14,6 +14,7 @@
   // this file's own "the reach" section below. #986 dropped height and
   // the plinth (#867): devices sit flat on their district plate.
   import { tick, untrack } from 'svelte'
+  import { restoreFocus } from '../lib/focusTrap'
   import { appState } from '../lib/state.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -4249,6 +4250,7 @@
       style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
       bind:this={bcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{c.d.name} to {c.gate.toward}: this boundary, {COVERAGE_WORD[c.gate.coverage]}"
       onpointerenter={cardGrace.hold}
@@ -4351,6 +4353,7 @@
       style={hostPlace ? `left:${R2(hostPlace.left)}px;top:${R2(hostPlace.top)}px` : undefined}
       bind:this={hcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{c.b.name}: {hostWord(c.h)}"
       onpointerenter={hostGrace.hold}
@@ -4512,6 +4515,7 @@
       style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
       bind:this={rcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={roadAria(rc.road.id)}
       onpointerenter={roadGrace.hold}
@@ -4617,6 +4621,7 @@
       style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
       bind:this={rcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={roadAria(lc.id)}
       onpointerenter={roadGrace.hold}
@@ -4717,6 +4722,7 @@
       style={dropPlace ? `left:${R2(dropPlace.left)}px;top:${R2(dropPlace.top)}px` : undefined}
       bind:this={dcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={dropTitle}
       onpointerenter={dropGrace.hold}

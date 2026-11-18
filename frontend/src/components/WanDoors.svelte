@@ -19,6 +19,7 @@
   // "seen arriving ●" is the event buffer's own answer, kept apart the
   // same way #1018's port doors keep policy and traffic apart. This
   // panel evaluates no precedence and claims no port is safe or unsafe.
+  import { trapFocus } from '../lib/focusTrap'
   import { wanDoorsState, portUnion } from '../lib/wanDoors.svelte'
   import { formatRelative } from '../lib/format'
   import CopyButton from './CopyButton.svelte'
@@ -104,6 +105,7 @@
     aria-labelledby={titleId}
     tabindex="-1"
     data-testid="wan-doors"
+    use:trapFocus
   >
     <div class="head">
       <h2 id={titleId}>Doors from the internet</h2>

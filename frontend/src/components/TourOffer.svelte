@@ -15,14 +15,24 @@
   // It rises a beat after the way out has landed (lib/tour.svelte.ts's
   // OFFER_DELAY_MS), so it never fights the fall, the bar and the groups
   // striking on. Escape is "not now", so a keyboard user is not held.
+  import { restoreFocus } from '../lib/focusTrap'
   import { tourState, tourLengthSentence } from '../lib/tour.svelte'
 
   const cardCount = $derived(tourState.cards.length)
 
+  // Where focus was when the offer rose (#1539 C3). "Not now" hands it
+  // back there, whether or not the host unmounts the offer on declining.
+  const before = typeof document === 'undefined' ? null : (document.activeElement as HTMLElement | null)
+
+  function notNow() {
+    tourState.declineOffer()
+    before?.focus()
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault()
-      tourState.declineOffer()
+      notNow()
     }
   }
 </script>
@@ -30,11 +40,11 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="offerwrap">
-  <div class="offer" role="dialog" aria-label="Take the tour?">
+  <div class="offer" role="dialog" aria-label="Take the tour?" use:restoreFocus>
     <p class="big">Take the tour?</p>
     <p class="story">{tourLengthSentence(cardCount)}</p>
     <button type="button" class="begin" onclick={() => tourState.acceptOffer()}>begin the tour</button>
-    <button type="button" class="later" onclick={() => tourState.declineOffer()}>
+    <button type="button" class="later" onclick={notNow}>
       not now — it stays in the account menu
     </button>
   </div>

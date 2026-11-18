@@ -61,6 +61,20 @@
   let forgetting = $state(false)
   let forgetError = $state<string | null>(null)
 
+  // Round 28's arm-then-confirm gesture (#1539 C1): the first click arms
+  // it, the second forgets; a click elsewhere or Escape disarms.
+  let armed = $state(false)
+
+  function onForgetClick(e: MouseEvent) {
+    e.stopPropagation()
+    if (!armed) {
+      armed = true
+      return
+    }
+    armed = false
+    void forget()
+  }
+
   async function forget() {
     if (forgetting) return
     forgetting = true
@@ -68,6 +82,13 @@
     forgetting = false
   }
 </script>
+
+<svelte:window
+  onclick={() => (armed = false)}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') armed = false
+  }}
+/>
 
 <h3>{wizardRun.name} is sending.</h3>
 <p class="hint">
@@ -112,8 +133,8 @@
   <pre>{undoAllText}</pre>
   <p class="note">
     Then
-    <button type="button" class="linkish" disabled={forgetting} onclick={forget}>
-      forget {wizardRun.name} on MikroView — its token, its enrolment and its record
+    <button type="button" class="linkish" class:armed disabled={forgetting} onclick={onForgetClick}>
+      {#if armed}confirm — the router must enrol again{:else}forget {wizardRun.name} on MikroView — its token, its enrolment and its record{/if}
     </button>
   </p>
   {#if forgetError}

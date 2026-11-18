@@ -10,6 +10,7 @@
   // the old `e.inInterface === iface || e.outInterface === iface` OR
   // check: if in and out are the same interface, that is one count.
   import type { ClientEvent } from '../lib/types'
+  import { restoreFocus } from '../lib/focusTrap'
 
   export function tunnelEventCounts(events: readonly ClientEvent[]): Map<string, number> {
     const counts = new Map<string, number>()
@@ -6830,6 +6831,7 @@
       style={lineCardPlace ? `left:${R2(lineCardPlace.left)}px;top:${R2(lineCardPlace.top)}px` : undefined}
       bind:this={lineCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{reachSideName} → {counterpartName(lineCard.counterpart)}: the ports on this line"
       onpointerenter={lineGrace.hold}
@@ -6925,7 +6927,7 @@
   {/if}
 
   {#if reach && compose}
-    <div class="composer" role="dialog" aria-label="Draft a rule for this strand">
+    <div class="composer" role="dialog" use:restoreFocus aria-label="Draft a rule for this strand">
       <div class="portpanel">
         <h4>
           {compose.direction === 'out'
@@ -7011,6 +7013,7 @@
       style={hostCardPlace ? `left:${R2(hostCardPlace.left)}px;top:${R2(hostCardPlace.top)}px` : undefined}
       bind:this={hostCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="The host {d.label}"
       onpointerenter={hostGrace.hold}
@@ -7198,6 +7201,7 @@
       style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
       bind:this={cardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="The {pairName(boundaryCard.from, boundaryCard.to)} boundary"
       onpointerenter={cardGrace.hold}
@@ -7354,6 +7358,7 @@
       style={offCardPlace ? `left:${R2(offCardPlace.left)}px;top:${R2(offCardPlace.top)}px` : undefined}
       bind:this={offCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="Off the baseline on the {pairName(openOffDrawn.r.from, openOffDrawn.r.to)} rib"
       onpointerenter={offGrace.hold}
@@ -7490,7 +7495,7 @@
     <!-- The node info card (#648, rounds 22-23): a small glass card --
          name, address, lane, open warnings, actions -- anchored to the
          click, clamped inside the viewport. -->
-    <div class="node-card" role="dialog" aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
+    <div class="node-card" role="dialog" use:restoreFocus aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
       <button class="nc-close" onclick={closeNodeCard} aria-label="Close">✕</button>
       <b class="nc-name">{nodeCard.name}</b>
       {#if nodeCard.address}<span class="nc-addr">{nodeCard.address}</span>{/if}

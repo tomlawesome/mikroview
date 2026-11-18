@@ -65,3 +65,22 @@ export function trapFocus(node: HTMLElement) {
     },
   }
 }
+
+/**
+ * restoreFocus(node) is trapFocus's other half, for the non-modal
+ * dialogs and pop-ups that must not hold Tab (#1539 C3): it leaves focus
+ * where it is on open and hands it back to whatever had it before the
+ * node mounted -- the trigger, or the nearest thing to one -- once the
+ * node unmounts, rather than dropping it to the document body.
+ */
+export function restoreFocus(node: HTMLElement) {
+  const previouslyFocused = document.activeElement as HTMLElement | null
+  return {
+    destroy() {
+      // Only reclaim focus that was inside the node, or already lost to
+      // the body; never pull it from a control the user moved on to.
+      const active = document.activeElement
+      if (!active || active === document.body || node.contains(active)) previouslyFocused?.focus()
+    },
+  }
+}

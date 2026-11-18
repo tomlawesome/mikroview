@@ -273,7 +273,7 @@
   }
 </script>
 
-<svelte:window onclick={disarmAll} />
+<svelte:window onclick={disarmAll} onkeydown={(e) => e.key === 'Escape' && disarmAll()} />
 
 <div class="wleft">
   {#if resp.routers && resp.routers.length > 0}

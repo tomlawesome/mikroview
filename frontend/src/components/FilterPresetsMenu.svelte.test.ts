@@ -120,6 +120,8 @@ describe('the saved list', () => {
 
     await fireEvent.click(forgets()[0])
     flushSync()
+    await fireEvent.click(forgets()[0])
+    flushSync()
 
     expect(presetState.presets.map((p) => p.name)).toEqual(['the guest vlan'])
     // Forgetting is housekeeping, often more than one at a time, so the
