@@ -10,7 +10,7 @@ require (
 	github.com/maxmind/mmdbwriter v1.2.0
 	github.com/oschwald/maxminddb-golang/v2 v2.9.0
 	github.com/pkg/sftp v1.13.12
-	github.com/tomlawesome/gauntlet v0.4.2
+	github.com/tomlawesome/gauntlet v0.4.3
 	go.yaml.in/yaml/v3 v3.0.6
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
 	golang.org/x/crypto v0.58.0
