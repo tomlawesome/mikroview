@@ -863,7 +863,8 @@
             {@const detail = routerDetail[d.id]}
             <div class="fcard unreg">
               <div class="fhead">
-                <b>{d.name || d.sourceIp}</b><span class="fstate warn">● PUSHING · UNREGISTERED</span>
+                <b>{d.name || d.sourceIp}</b><!-- The chip follows registeredAt: set means the wizard enrolled it. -->
+                <span class="fstate warn">● PUSHING · {d.registeredAt ? 'ENROLLED' : 'UNDECLARED'}</span>
               </div>
               <!-- #1372: same address line as the registered cards above. -->
               <div class="frow dim mono">{routerAddress(d)}</div>
@@ -871,7 +872,11 @@
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
               </div>
-              <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>
+              <div class="frow dim">
+                {d.registeredAt
+                  ? 'enrolled by the wizard; not declared in config.yaml'
+                  : 'its lines are kept; it has no name until it is enrolled or declared in config.yaml'}
+              </div>
               {#if setupEcho(d)}
                 <!-- #1241's line belongs here too: a router discovered by
                      its own push and never declared is the common case,
@@ -1279,9 +1284,9 @@
     border-color: var(--hair-2);
   }
 
-  /* The unregistered router, standing in the berth's slot (rounds
+  /* The router not declared in config.yaml, standing in the berth's slot (rounds
      37-38). Its border is --now -- the time/attention ink, not --alarm:
-     a router that pushes without being registered is something to look
+     a router that pushes without being declared is something to look
      at, not something going wrong, and its lines are being kept either
      way. No new colour is introduced for it. */
   .fcard.unreg {
@@ -1419,7 +1424,7 @@
     color: var(--fg-dim);
   }
 
-  /* PUSHING · UNREGISTERED: the time/attention ink, not the alarm one
+  /* PUSHING · ENROLLED / UNDECLARED: the time/attention ink, not the alarm one
      (see .fcard.unreg). */
   .fstate.warn {
     color: var(--now);
