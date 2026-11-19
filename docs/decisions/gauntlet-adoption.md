@@ -192,7 +192,8 @@ still set `droplist.storePath` to `""`.
   store (`-recover-admin-account`, `-transfer-admin`,
   `-clear-second-factor`, `-generate-recovery-keys`) give the same
   refusal.
-- **Existing plaintext data is sealed in place on first open**
+- **[Superseded by ruling 19: no sealing in place; plaintext is refused.]**
+  **Existing plaintext data is sealed in place on first open**
   (`MigratePlaintext`), so an install that has run keyless upgrades
   without a manual step once a key is mounted. Postgres: each auth
   store's row is wrapped in `persist.Encrypt(..., MigratePlaintext:
@@ -212,7 +213,8 @@ still set `droplist.storePath` to `""`.
   already sealed open unchanged, byte for byte. Sealing in place, on
   files and on Postgres, applies only while the stored schema is below
   4 -- the first start of v0.7.0 -- and the schema moves to 4 only once
-  every auth store and the drop list have opened sealed (ruling 14).
+  every auth store and the drop list have opened sealed (ruling 14). [Superseded by ruling 19: no sealing in
+  place, at any schema.]
   From then on a plaintext document is refused, as an install with a
   key always refused one before. Gauntlet's
   `persist.Encrypt` is not used for files: it binds its label rather
@@ -491,7 +493,7 @@ build tooling; only the common-password list enters the binary. Go
   24 hours. Gauntlet's answer is the unlock code in the server log, and
   mikroview's `-recover-admin-account` remains. Documented under
   "Recovering the admin account".
-- **Sealing in place** is one-way for every auth store, file and
+- **[Superseded by ruling 19: there is no sealing in place.]** **Sealing in place** is one-way for every auth store, file and
   Postgres alike: `MigratePlaintext` seals on first open; rollback needs
   the copy or `pg_dump` taken before. The schema stamp stops an older
   build from reading a sealed row as "no accounts".
@@ -586,7 +588,8 @@ decision the design above states.
   mikroview will not set `AllowPlaintextAtRest`. Every auth store
   (accounts, tokens, recovery-key digests, sign-in history) is sealed
   under the key, on the file and Postgres backends; existing plaintext
-  data is sealed in place on first open (`MigratePlaintext`). Ends the
+  data is sealed in place on first open (`MigratePlaintext`) [superseded by
+  ruling 19: plaintext is refused, never sealed]. Ends the
   #853 rule 6 exception for these stores. Needs a start-up refusal
   with a clear error code and message on mounting a key; a key mounted
   in `deploy/docker-compose.yml` and the install docs; a CHANGELOG entry
@@ -606,7 +609,7 @@ decision the design above states.
 - **Ruling 8, sign-in history:** recorded from v0.7.0; the page is #1442.
 - **Ruling 9, passkey-alone sign-in:** off; tracked in #1443.
 - **Ruling 10, SSO group roles:** off; tracked in #1444.
-- **Ruling 11, sealing plaintext auth files (2026-10-10):** mikroview's
+- **Ruling 11, sealing plaintext auth files (2026-10-10; superseded by ruling 19):** mikroview's
   own `EncryptedFileBackend` gains the seal-in-place option rather than
   gauntlet gaining one; files already sealed open unchanged. On
   Postgres each auth store's row has its own label.
@@ -617,7 +620,7 @@ decision the design above states.
   gains an addendum ending #853 rule 6 and the 2026-09-18 drop-list
   addendum, and noting the auth stores as the exception to "Postgres
   is unaffected".
-- **Ruling 14, when sealing in place ends (2026-10-10):** only on the
+- **Ruling 14, when sealing in place ends (2026-10-10; superseded by ruling 19):** only on the
   first start of v0.7.0, while the stored schema is below 4; the stamp
   moves to 4 only after every auth store and the drop list are sealed.
   Afterwards a plaintext document is refused. Gauntlet's own

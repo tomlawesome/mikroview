@@ -293,7 +293,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   IP address -- so passkeys stay unavailable until an admin sets the
   top-level `publicUrl` config key (env `MIKROVIEW_PUBLIC_URL`) to the
   https address the deployment is actually reached on. Getting this
-  wrong is warn-and-degrade, never a startup failure: an absolute URL is
+  wrong is warn-and-degrade, not a startup failure, unless an account
+  already holds a passkey (then start-up stops, #1334): an absolute URL is
   required or the setting is ignored (`CFG-0100`), an IP-literal host or
   a non-`localhost` `http` scheme both leave passkeys unavailable
   (`CFG-0101`, `CFG-0102`) rather than refusing to boot, and a path,
@@ -307,8 +308,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   the password still never creates a session on its own, and the sign-in
   screen falls back to a recovery code with an explanation. See
   [docs/configuration.md](docs/configuration.md#public-url-publicurl-optional-for-passkeys)
-  for the config reference. (The one thing that is a startup failure is
-  asking for the admin passkey rule below where no passkey can be made.)
+  for the config reference. (The other startup failure is asking for
+  the admin passkey rule below where no passkey can be made.)
 - **Every admin must hold a passkey when MikroView is served over https
   on a domain name** (v0.7.0, owner ruling 2026-10-10, #1202; gauntlet
   ADR-0015). `auth.adminPasskey` is `required` or `optional`; left unset,
@@ -867,7 +868,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   carries the lines as plain JSON, like every other store, and `-restore`
   seals them again under the restoring deployment's key.
 
-  **A plaintext file is never sealed in place** (#1202, ruling 19). An
+  **A plaintext file is never sealed in place** (#1202, [ruling 19](docs/decisions/gauntlet-adoption.md#owner-rulings-2026-10-10)). An
   earlier keyless release's plaintext accounts, tokens or recovery-key
   digests -- on files or in Postgres rows -- a plaintext drop-list
   file, including one being moved onto Postgres, and a plaintext match
@@ -877,7 +878,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   with an admin they chose. The key has to be in place before upgrading.
   Drop-list rows already in Postgres are left as the database holds them:
   unsealed, like every store other than the four account stores, and
-  protected by the database's own access control (ruling 21).
+  protected by the database's own access control ([ruling 21](docs/decisions/gauntlet-adoption.md#owner-rulings-2026-10-10)).
 
   With a key, the flags file contains the IP addresses that triggered a
   flag and a short human-readable description (encrypted); the accounts
@@ -942,9 +943,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above; or an ingest bearer token, scoped to one device, for `POST /api/ingest/routeros` and `POST /api/ingest/router-backup` only — the latter is the sliced HTTPS router-backup push, up to 16MiB reassembled from `<=32KiB` pieces, one transfer per device at a time and 64MiB across every device's transfer combined, spending one ingest-rate-limit reservation per whole transfer rather than per piece); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. `ui.allow` in `config.yaml` (file only, never settable from the UI) can additionally limit which addresses reach this listener at all — a refusal is a plain 403, and the router-facing paths are exempt; see "Recommended deployment hardening" below. |
+| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for five `GET` routes only — see "API tokens" above; or an ingest bearer token, scoped to one device, for `POST /api/ingest/routeros` and `POST /api/ingest/router-backup` only — the latter is the sliced HTTPS router-backup push, up to 16MiB reassembled from `<=32KiB` pieces, one transfer per device at a time and 64MiB across every device's transfer combined, spending one ingest-rate-limit reservation per whole transfer rather than per piece); until the first admin exists, only first-run registration (needs the setup code) is reachable | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. `ui.allow` in `config.yaml` (file only, never settable from the UI) can additionally limit which addresses reach this listener at all — a refusal is a plain 403, and the router-facing paths are exempt; see "Recommended deployment hardening" below. |
 | Syslog TLS | None | Always (MikroView's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and MikroView authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
-| WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
+| WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; refused until the first admin exists | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` — moot, since `requireAuth` never lets the request reach this handler before the first admin exists. See `internal/api/ws.go`. |
 | Router-backup SFTP drop box (`internal/backupsftp`, issue #394) | Username = device name, password = that device's ingest token, checked against the same token store the syslog push uses; write-only, per-device, no listing/reading/deleting/renaming | SSH transport (host key generated on first start), but see the caveat below — **the router never verifies it** | Off by default; a fresh install starts closed. Opened and closed from Settings → router backups (#1361), password-gated on the way open — closing needs an admin but no password, since closing is the safe direction. The port is always published by `install.sh`/`deploy/docker-compose.yml`; nothing answers on it while the switch is closed. Login isolation, write-only scope and header/quota checks are enforced in `internal/backupvault`/`internal/backupsftp`, not by the transport. |
 
 **RouterOS never verifies this server's host key.** Measured on RouterOS

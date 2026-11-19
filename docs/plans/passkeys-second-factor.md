@@ -1,5 +1,7 @@
 # #1250 delivery design: passkeys (WebAuthn) as a second factor
 
+**Status:** delivered in v0.6.1. Its routes and handlers (`server.go`'s table, `passkey.go` and the rest) were superseded in v0.7.0, when authentication moved onto gauntlet (`docs/decisions/gauntlet-adoption.md`, decision 1).
+
 Issue #1250 (passkeys), milestone M19, shipping in v0.6.1. #1249 is merged on
 this branch; this design is written against the code it actually left behind,
 not the issue text. Build agents implement what is written here; anything this
