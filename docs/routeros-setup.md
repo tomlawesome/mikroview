@@ -530,11 +530,10 @@ it matches, and without this field MikroView had to guess from whether a
 `log-prefix` happened to be set, which is wrong in both directions.
 
 `connectionState`, `inInterface` and `outInterface` were added for issue
-#408. Nothing in MikroView reads them yet, deliberately: they are the
-input a later "which rules can actually feed this view" answer is built
-from, and that answer is only worth designing against rule data that has
-genuinely been pushed for a while. Sending them now costs one line and
-means the history exists when it's wanted. `connection-state` is a *set*
+#408. The Doors from the internet panel uses the first two to decide which
+rules face the internet, and the ports and logging-tune views use the two
+interface fields to say who a rule lets in and whether it crosses a
+boundary that logs nothing. `connection-state` is a *set*
 — `established,related` is two values — and MikroView takes it either as
 the array RouterOS sends or as a comma-joined string, so
 `($v->"connection-state")` can go straight in with no conversion.
