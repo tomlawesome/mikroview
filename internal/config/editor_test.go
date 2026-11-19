@@ -529,3 +529,87 @@ store:
 		t.Error("SSO turned off although the oidc block is fine")
 	}
 }
+
+// Five key changes since v0.6.1 (schema 7): auth.adminPasskey,
+// auth.signInsStorePath, geoip.cachePath and networks.home were added and
+// geoip.dbPath was removed. The schema goes up by one in any release whose
+// key set changed, so v0.7.0 reads schema 8.
+func TestCurrentSchemaCoversEveryKeyChangeSinceV061(t *testing.T) {
+	if CurrentSchema != 8 {
+		t.Errorf("CurrentSchema = %d, want 8: v0.7.0 added auth.adminPasskey, auth.signInsStorePath, geoip.cachePath and networks.home and removed geoip.dbPath since v0.6.1 (schema 7)", CurrentSchema)
+	}
+	if got, ok := SchemaForVersion("v0.7.0"); !ok || got != 8 {
+		t.Errorf("SchemaForVersion(v0.7.0) = %d, %v, want 8, true", got, ok)
+	}
+}
+
+func TestGuessSchemaDatesV070KeysToEight(t *testing.T) {
+	cases := []struct {
+		name, text string
+		want       int
+	}{
+		{"auth.adminPasskey", "auth:\n  adminPasskey: x\n", 8},
+		{"auth.signInsStorePath", "auth:\n  signInsStorePath: /x\n", 8},
+		{"geoip.cachePath", "geoip:\n  cachePath: /x\n", 8},
+		{"networks.home", "networks:\n  home:\n    - 192.0.2.0/24\n", 8},
+		{"prefs.storePath stays 7", "prefs:\n  storePath: /x\n", 7},
+		{"oui.cachePath is 5, not geoip's", "oui:\n  cachePath: /x\n", 5},
+	}
+	for _, c := range cases {
+		if got := GuessSchema(c.text); got != c.want {
+			t.Errorf("%s: GuessSchema = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestStampHeaderWritesSchemaEight(t *testing.T) {
+	text := "auth:\n  adminPasskey: not-a-real-passkey\nlisten:\n  http: \":8080\"\n"
+	if h, _ := ParseHeader(StampHeader(text, "0.7.0")); h != (Header{Schema: 8, WrittenBy: "v0.7.0", Layout: 0}) {
+		t.Errorf("stamped %+v, want schema 8 written by v0.7.0", h)
+	}
+	old := WriteHeader("listen:\n  http: \":8080\"\n", Header{Schema: 7, WrittenBy: "v0.6.1", Layout: 1})
+	_, changes, _ := CarryForward(old, "v0.7.0")
+	found := false
+	for _, c := range changes {
+		if c.Kind == "header" && strings.Contains(c.Note, "schema 7 -> 8") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("carry forward from a v0.6.1 header did not note schema 7 -> 8: %+v", changes)
+	}
+}
+
+// Placeholders go back only at the secret settings they name; a
+// placeholder anywhere else (a comment, another key, text that does not
+// parse) stays literal, so unmasking can never write a secret to a place
+// the admin did not put one.
+func TestUnmaskPutsBackOnlyAtSecretSettings(t *testing.T) {
+	masked, values := MaskSecrets(secretsConfig)
+	smtp := SecretPlaceholder("notify.smtp.password")
+
+	withComment := masked + "# was " + smtp + "\n"
+	if got, want := UnmaskSecrets(withComment, values), secretsConfig+"# was "+smtp+"\n"; got != want {
+		t.Errorf("comment placeholder: got\n%s\nwant\n%s", got, want)
+	}
+
+	moved := strings.Replace(masked, "host: mail.example.com", "host: "+SecretPlaceholder("oidc.clientSecret"), 1)
+	got := UnmaskSecrets(moved, values)
+	if n := strings.Count(got, "line-one-secret"); n != 1 {
+		t.Errorf("a placeholder moved to notify.smtp.host was filled in: line-one-secret appears %d times, want 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "host: "+SecretPlaceholder("oidc.clientSecret")) {
+		t.Errorf("the moved placeholder did not stay literal:\n%s", got)
+	}
+
+	other := strings.Replace(masked, SecretPlaceholder("notify.pushover.user"), SecretPlaceholder("notify.pushover.token"), 1)
+	got = UnmaskSecrets(other, values)
+	if !strings.Contains(got, "user: "+SecretPlaceholder("notify.pushover.token")) || strings.Contains(got, "user: 'single''quoted'") {
+		t.Errorf("a placeholder naming another secret was filled in:\n%s", got)
+	}
+
+	broken := "listen: [\n" + SecretPlaceholder("reputation.abuseIPDBKey") + "\n"
+	if got := UnmaskSecrets(broken, values); got != broken {
+		t.Errorf("text that does not parse was changed: %q", got)
+	}
+}

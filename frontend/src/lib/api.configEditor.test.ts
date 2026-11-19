@@ -10,6 +10,7 @@ import {
   createConfigSnapshot,
   deleteConfigSnapshot,
   downloadConfig,
+  fetchConfigSnapshot,
   fetchConfigSnapshots,
   filenameFromDisposition,
   openConfigEditor,
@@ -64,6 +65,16 @@ describe('config editor API (#1347)', () => {
     expect(await revealConfigSecrets()).toEqual({ reauth: true })
     stub(new Response('', { status: 401 }))
     expect(await downloadConfig('x')).toBe('your session has expired — sign in again')
+  })
+
+  it('fetchConfigSnapshot tells a lapsed unlock (401 + X-Config-Reauth) apart from any other refusal', async () => {
+    let fetchMock = stub(new Response('unlock lapsed', { status: 401, headers: { 'X-Config-Reauth': 'required' } }))
+    expect(await fetchConfigSnapshot('s1')).toEqual({ reauth: true })
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/api/config/snapshots/s1')
+    stub(new Response('no such snapshot', { status: 404 }))
+    expect(await fetchConfigSnapshot('s1')).toBe('no such snapshot')
+    fetchMock = stub(new Response('', { status: 401 }))
+    expect(await fetchConfigSnapshot('s1')).toBe('your session has expired — sign in again')
   })
 
   it('reveals the secrets map', async () => {
