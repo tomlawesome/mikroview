@@ -145,22 +145,6 @@ describe('AuthSetup', () => {
     expect(startSSOLink).not.toHaveBeenCalled()
   })
 
-  // Route one out of creation: OIDC is configured, so the browser that
-  // made the account carries straight on to the provider, and the
-  // identity that comes back is linked to it. Session continuity is the
-  // proof it is the same person -- nothing compares an email.
-  it('hands over to the identity provider when OIDC is configured', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
-    authState.ssoAvailable = true
-
-    render(AuthSetup)
-    await createTheAdmin()
-
-    await waitFor(() => expect(startSSOLink).toHaveBeenCalledOnce())
-    await waitFor(() => expect(location.href).toBe('https://idp.example/authorize'))
-  })
-
   // Route two: no OIDC details, so there is nowhere to forward to. The
   // flow ends on the confirmation rather than a redirect, and says
   // where the provider's details go.
@@ -178,46 +162,6 @@ describe('AuthSetup', () => {
     // Still the setup view until the person says they are ready: the
     // session is only re-read when they continue.
     expect(fetchAuthSession).not.toHaveBeenCalled()
-
-    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
-  })
-
-  // The account exists by the time the hand-off can fail, so the
-  // failure belongs on the confirmation -- not on a creation form that
-  // would invite creating it again.
-  it('still confirms the account when the hand-off to SSO fails', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockResolvedValue('this account already signs in through your identity provider')
-    authState.ssoAvailable = true
-
-    render(AuthSetup)
-    await createTheAdmin()
-
-    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
-    expect(screen.getByText(/already signs in through your identity provider/i)).toBeTruthy()
-    expect(location.href).toBe('')
-  })
-
-  // #1218 audit finding 7: startSSOLink() can throw outright (a dropped
-  // connection, same as any other fetch), not just answer with an error
-  // string -- and unlike that answered-string case above, an uncaught
-  // throw here used to skip both the redirect and `created = true`,
-  // leaving AuthScreen's handleSubmit stuck mid-await and its submit
-  // button on "Please wait…" forever. The account already exists by
-  // then (register() above succeeded), so there is no form to retry
-  // against -- the operator needs the confirmation screen's working
-  // Continue button, the same as any other hand-off failure.
-  it('still confirms the account, with a working way in, when the hand-off to SSO throws outright', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockRejectedValue(new Error('network unreachable'))
-    authState.ssoAvailable = true
-
-    render(AuthSetup)
-    await createTheAdmin()
-
-    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
-    expect(location.href).toBe('')
 
     await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
@@ -266,8 +210,8 @@ describe('AuthSetup', () => {
     expect(
       screen.getByText(
         "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes the " +
-          'admin — then you sign in with SSO to connect it, and this password stays as your way in if your ' +
-          'provider is ever unreachable.',
+          'admin — then you add a second step and connect SSO from the account menu. This password stays as ' +
+          'your way in if your provider is ever unreachable.',
       ),
     ).toBeTruthy()
   })

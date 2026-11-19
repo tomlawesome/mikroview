@@ -1959,9 +1959,11 @@ export async function fetchAuditLog(): Promise<AuditResult> {
 //
 // The account is the session's, never the body's; the body carries only
 // the caller's own password (#1202 U10, a rate-limited re-check), in the
-// body and nowhere else. Both callers are here -- SSOLinkOverlay.svelte
-// for an account already in the app, and AuthSetup.svelte immediately
-// after first-run creates the admin. A 401 #invalid-credentials is
+// body and nowhere else. The one caller is SSOLinkOverlay.svelte, for an
+// account already in the app: a first-run admin cannot call this
+// (gauntlet holds a new local account at the must-enrol-factor door,
+// which does not admit this path), so AuthSetup.svelte sends it here via
+// the account menu instead. A 401 #invalid-credentials is
 // INCORRECT_PASSWORD, a 429 and the two 409s their detail.
 export async function startSSOLink(password: string): Promise<{ url: string } | string> {
   const res = await postJSON('/api/auth/oidc/link', { password })
