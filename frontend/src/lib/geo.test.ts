@@ -20,7 +20,12 @@ describe('geo wording (#1352)', () => {
   })
 
   it('names a country from its code, falling back to the code', () => {
-    expect(countryName('GB')).not.toBe('')
+    const expected = new Intl.DisplayNames(undefined, { type: 'region' }).of('GB')
+    expect(expected).toBeTruthy()
+    expect(countryName('GB')).toBe(expected)
+    expect(countryName('gb')).toBe(expected)
+    // A code the display-name lookup cannot resolve falls back to the code itself.
+    expect(countryName('not-a-region')).toBe('not-a-region')
     expect(countryName(undefined)).toBe('')
   })
 

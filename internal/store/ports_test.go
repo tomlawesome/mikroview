@@ -510,3 +510,57 @@ func TestDoorLastSeenKeepsTheNewestArrivalOnRepeat(t *testing.T) {
 		t.Fatalf("want the newest arrival kept despite the older one met later in the scan, got %v want %v", seen, newer)
 	}
 }
+
+func TestDoorLastSeenMatchesTheRuleSpecNotOnlySinglePorts(t *testing.T) {
+	s := New(1000, time.Hour)
+	base := Event{DeviceID: "core", InInterface: "ether1", DstIP: "203.0.113.9", Action: ActionAccept}
+	ins := func(proto, src string, port int) Event {
+		e := base
+		e.Protocol, e.SrcIP, e.DstPort, e.Time = proto, src, port, time.Now()
+		return s.Insert(e)
+	}
+	ins("tcp", "203.0.113.50", 5050)
+	ins("icmp", "203.0.113.51", 0)
+	last := ins("udp", "203.0.113.52", 53)
+
+	got := s.DoorLastSeen("core", "ether1", []DoorPort{
+		{Spec: "5000-5100", Proto: "tcp"},
+		{Spec: "5000-5100", Proto: "udp"},
+		{Spec: "", Proto: ""},
+		{Spec: "", Proto: "udp"},
+		{Spec: "22,5050", Proto: "tcp"},
+		{Spec: "22", Proto: ""},
+	})
+	if _, ok := got[DoorPort{Spec: "5000-5100", Proto: "tcp"}]; !ok {
+		t.Error("tcp range door hit by 5050 is missing")
+	}
+	if _, ok := got[DoorPort{Spec: "5000-5100", Proto: "udp"}]; ok {
+		t.Error("udp range door answered from a tcp arrival")
+	}
+	for _, k := range []DoorPort{{Spec: "", Proto: ""}, {Spec: "", Proto: "udp"}} {
+		v, ok := got[k]
+		if !ok || !v.Equal(last.ReceivedAt) {
+			t.Errorf("unscoped door %+v = %v (present %v), want the newest arrival %v", k, v, ok, last.ReceivedAt)
+		}
+	}
+	if _, ok := got[DoorPort{Spec: "22,5050", Proto: "tcp"}]; !ok {
+		t.Error("list door hit on its second port is missing")
+	}
+	if _, ok := got[DoorPort{Spec: "22", Proto: ""}]; ok {
+		t.Error("a scoped door counted a port-less event or an arrival on another port")
+	}
+	if len(got) != 4 {
+		t.Errorf("len(got) = %d, want 4: %v", len(got), got)
+	}
+
+	s2 := New(1000, time.Hour)
+	e := base
+	e.Protocol, e.SrcIP, e.DstPort, e.Time = "icmp", "203.0.113.51", 0, time.Now()
+	s2.Insert(e)
+	if got := s2.DoorLastSeen("core", "ether1", []DoorPort{{Spec: "", Proto: ""}}); len(got) != 1 {
+		t.Errorf("a fully unscoped door must count a port-less arrival, got %v", got)
+	}
+	if got := s2.DoorLastSeen("core", "ether1", []DoorPort{{Spec: "22", Proto: ""}}); len(got) != 0 {
+		t.Errorf("a scoped door must ignore a port-less arrival, got %v", got)
+	}
+}

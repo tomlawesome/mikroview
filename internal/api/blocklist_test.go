@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 )
@@ -133,6 +134,12 @@ func TestBlocklistBuilderReadsTheRoutersOwnVersionAndHold(t *testing.T) {
 	}
 	if got.UndoAll != routeros.BlocklistUndoAll() {
 		t.Error("undoAll is not the generator's")
+	}
+	if got.DisableAll != routeros.BlocklistDisableAll() {
+		t.Error("disableAll is not the generator's")
+	}
+	if !strings.Contains(got.DisableAll, "/ipv6 firewall raw disable") {
+		t.Errorf("disableAll must reach the IPv6 rules too, got %q", got.DisableAll)
 	}
 }
 
@@ -292,5 +299,37 @@ func TestBlocklistCommandsConvergeOnWhatTheRouterHolds(t *testing.T) {
 	_, cmd, _ := postBlocklistCommands(t, admin, ts.URL, blocklistCommandsRequest{Device: "rb5009", Token: "tok", Lists: []routeros.BlocklistChoice{from}})
 	if !strings.Contains(cmd.CopyText, `/ip firewall raw remove [find comment="mikroview blocklist: et (to)"]`) {
 		t.Errorf("the (to) rule the router holds is not removed:\n%s", cmd.CopyText)
+	}
+}
+
+// A4-T2: the "more lists than there are" case alone would also be refused
+// as a list twice, so the cap is pinned by the refusal it gives: the
+// over-long request is refused for its length, and a two-entry duplicate
+// (well under the cap) is refused for the duplicate, not the length.
+func TestBlocklistCommandsRefuseMoreListsThanTheCatalogue(t *testing.T) {
+	_, ts, admin := blocklistTestServer(t, "7.24.4")
+	ok := blocklistCommandsRequest{Device: "rb5009", Address: "mikroview.lan:8443", Token: "tok"}
+
+	long := ok
+	long.Lists = make([]routeros.BlocklistChoice, len(blcatalogue.Lists())+1)
+	for i := range long.Lists {
+		long.Lists[i] = etDefaults
+	}
+	code, _, rawLong := postBlocklistCommands(t, admin, ts.URL, long)
+	if code != http.StatusBadRequest {
+		t.Fatalf("over-long list: %d, want 400", code)
+	}
+	if !strings.Contains(strings.ToLower(rawLong), "more lists") {
+		t.Errorf("an over-long list must be refused for its length, got %q", rawLong)
+	}
+
+	twice := ok
+	twice.Lists = []routeros.BlocklistChoice{etDefaults, etDefaults}
+	code, _, rawTwice := postBlocklistCommands(t, admin, ts.URL, twice)
+	if code != http.StatusBadRequest {
+		t.Fatalf("a list twice: %d, want 400", code)
+	}
+	if strings.Contains(strings.ToLower(rawTwice), "more lists") {
+		t.Errorf("a two-entry duplicate was refused for length: %q", rawTwice)
 	}
 }

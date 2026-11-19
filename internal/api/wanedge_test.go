@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,5 +294,102 @@ func TestWANDoorsNoDstPortIsStillADoor(t *testing.T) {
 	got := getWANDoors(t, ts, "?device=core&wan=ether1")
 	if len(got.Devices[0].Doors) != 1 || got.Devices[0].Doors[0].DstPort != "" {
 		t.Fatalf("a rule with no dst-port is still a door, with an empty DstPort for the frontend to say 'any port', got %+v", got.Devices[0].Doors)
+	}
+}
+
+func TestWANDoorsInterfaceListScopedRuleIsNotADoor(t *testing.T) {
+	s, _ := newTestServer(t)
+	decode := func(body string) ingest.Payload {
+		t.Helper()
+		p, err := ingest.DecodePayload(strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	filter := decode(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":1,"chain":"input","action":"accept","inInterfaceList":"LAN"},{"ordinal":2,"chain":"input","action":"accept","protocol":"tcp","dstPort":8291,"inInterfaceList":"LAN"},{"ordinal":3,"chain":"input","action":"accept","protocol":"tcp","dstPort":22,"inInterface":"ether1"}]}`)
+	nat := decode(`{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":4,"chain":"dstnat","action":"dst-nat","protocol":"udp","dstPort":53,"inInterfaceList":"LAN","toAddresses":"192.0.2.2"}]}`)
+	if err := s.RouterState.Apply("core", filter, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", nat, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+
+	got := getWANDoors(t, ts, "?device=core&wan=ether1")
+	d := got.Devices[0].Doors
+	if len(d) != 1 || d[0].Ordinal != 3 || d[0].DstPort != "22" || d[0].To != nil {
+		t.Fatalf("a rule scoped by an interface list is not knowably from the internet; only the plain WAN accept (#3) is a door, got %+v", d)
+	}
+}
+
+func wanSeenServer(t *testing.T, filters []ingest.FilterRule, nats []ingest.NATRule) (*Server, *httptest.Server) {
+	t.Helper()
+	s, _ := newTestServer(t)
+	if err := s.RouterState.Apply("core", ingest.Payload{Kind: ingest.KindFilterRule, Page: 1, Pages: 1, FilterRules: filters}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(nats) > 0 {
+		if err := s.RouterState.Apply("core", ingest.Payload{Kind: ingest.KindNATRule, Page: 1, Pages: 1, NATRules: nats}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+	return s, ts
+}
+
+func TestWANDoorsAnyPortAndRangeDoorsCarryTheSeenArrivingMark(t *testing.T) {
+	s, ts := wanSeenServer(t, []ingest.FilterRule{
+		{Ordinal: 1, Chain: "input", Action: "accept", Protocol: "tcp", InInterface: "ether1"},
+		{Ordinal: 2, Chain: "input", Action: "accept", Protocol: "udp", DstPort: "5000-5100", InInterface: "ether1"},
+		{Ordinal: 3, Chain: "input", Action: "accept", Protocol: "tcp", DstPort: "6000-6100", InInterface: "ether1"},
+	}, []ingest.NATRule{
+		{Ordinal: 10, Chain: "dstnat", Action: "dst-nat", Protocol: "tcp", DstPort: "5000-5100", InInterface: "ether1", ToAddresses: "192.0.2.5"},
+	})
+	for _, e := range []store.Event{
+		{Protocol: "tcp", SrcIP: "203.0.113.50", DstPort: 443},
+		{Protocol: "udp", SrcIP: "203.0.113.51", DstPort: 5050},
+		{Protocol: "tcp", SrcIP: "203.0.113.52", DstPort: 5100},
+	} {
+		e.DeviceID, e.Action, e.Time, e.InInterface, e.DstIP = "core", store.ActionAccept, time.Now(), "ether1", "203.0.113.9"
+		s.Store.Insert(e)
+	}
+	got := getWANDoors(t, ts, "?device=core&wan=ether1")
+	doors := got.Devices[0].Doors
+	if len(doors) != 4 {
+		t.Fatalf("want 4 doors, got %+v", doors)
+	}
+	by := map[int]wanDoor{}
+	for _, d := range doors {
+		by[d.Ordinal] = d
+	}
+	for _, o := range []int{1, 2, 10} {
+		if by[o].LastSeen == nil {
+			t.Errorf("door #%d: traffic arrived in the window but LastSeen is nil", o)
+		}
+	}
+	if by[3].LastSeen != nil {
+		t.Errorf("door #3 (tcp 6000-6100): nothing arrived, LastSeen = %v", by[3].LastSeen)
+	}
+}
+
+func TestWANDoorsMultiPortDoorCarriesTheNewestArrival(t *testing.T) {
+	s, ts := wanSeenServer(t, []ingest.FilterRule{
+		{Ordinal: 1, Chain: "input", Action: "accept", Protocol: "tcp", DstPort: "22,8443", InInterface: "ether1"},
+	}, nil)
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+	s.Store.Insert(store.Event{DeviceID: "core", Action: store.ActionAccept, Protocol: "tcp", ReceivedAt: older, InInterface: "ether1", SrcIP: "203.0.113.50", DstIP: "203.0.113.9", DstPort: 22})
+	s.Store.Insert(store.Event{DeviceID: "core", Action: store.ActionAccept, Protocol: "tcp", ReceivedAt: newer, InInterface: "ether1", SrcIP: "203.0.113.60", DstIP: "203.0.113.9", DstPort: 8443})
+	got := getWANDoors(t, ts, "?device=core&wan=ether1")
+	doors := got.Devices[0].Doors
+	if len(doors) != 1 || doors[0].LastSeen == nil {
+		t.Fatalf("want one door with a LastSeen, got %+v", doors)
+	}
+	if !doors[0].LastSeen.Equal(newer) {
+		t.Fatalf("LastSeen = %v, want the newest arrival %v (older was %v)", doors[0].LastSeen, newer, older)
 	}
 }
