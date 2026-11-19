@@ -151,10 +151,16 @@ type AddressListEntry struct {
 //     the second is true of a rule that carries no connection-state.
 //
 //   - InInterface/OutInterface are single interface names, so they are
-//     plain strings: a rule matches at most one of each (an interface
-//     *list* match is a separate RouterOS property, not in this schema),
-//     and a name cannot serialise as a number the way a single port
-//     does. Negation ("!ether1") is part of the string.
+//     plain strings: a rule matches at most one of each, and a name
+//     cannot serialise as a number the way a single port does. Negation
+//     ("!ether1") is part of the string. InInterfaceList is the separate
+//     RouterOS in-interface-list property, added for the doors panel
+//     (v0.7.0 pre-release audit, A4-F1): `accept in-interface-list=LAN`
+//     used to arrive with InInterface "" and read as "any interface,
+//     the WAN included". Absent means not yet reported, the same
+//     reading Disabled documents below -- a push from a script that
+//     predates the field leaves it "", and the doors panel then lists
+//     the rule as it did before; re-pasting the script corrects it.
 type FilterRule struct {
 	Ordinal         RouterOSInt      `json:"ordinal"`
 	Comment         string           `json:"comment"`
@@ -169,6 +175,7 @@ type FilterRule struct {
 	SrcAddress      string           `json:"srcAddress"`
 	ConnectionState RouterOSList     `json:"connectionState"`
 	InInterface     string           `json:"inInterface"`
+	InInterfaceList string           `json:"inInterfaceList"`
 	OutInterface    string           `json:"outInterface"`
 	// Disabled is what lets a count of this table mean "rules doing
 	// something" rather than "rules present" (#701 fact 2). NATRule has
@@ -228,21 +235,22 @@ type FilterRule struct {
 // Disabled/Dynamic as plain bools where an absent key means false the
 // way FilterRule.Log already documents.
 type NATRule struct {
-	Ordinal      RouterOSInt      `json:"ordinal"`
-	Comment      string           `json:"comment"`
-	Chain        string           `json:"chain"`
-	Action       string           `json:"action"`
-	LogPrefix    string           `json:"logPrefix"`
-	ToAddresses  string           `json:"toAddresses"`
-	ToPorts      RouterOSPortSpec `json:"toPorts"`
-	DstPort      RouterOSPortSpec `json:"dstPort"`
-	Protocol     string           `json:"protocol"`
-	InInterface  string           `json:"inInterface"`
-	OutInterface string           `json:"outInterface"`
-	SrcAddress   string           `json:"srcAddress"`
-	DstAddress   string           `json:"dstAddress"`
-	Disabled     bool             `json:"disabled"`
-	Dynamic      bool             `json:"dynamic"`
+	Ordinal         RouterOSInt      `json:"ordinal"`
+	Comment         string           `json:"comment"`
+	Chain           string           `json:"chain"`
+	Action          string           `json:"action"`
+	LogPrefix       string           `json:"logPrefix"`
+	ToAddresses     string           `json:"toAddresses"`
+	ToPorts         RouterOSPortSpec `json:"toPorts"`
+	DstPort         RouterOSPortSpec `json:"dstPort"`
+	Protocol        string           `json:"protocol"`
+	InInterface     string           `json:"inInterface"`
+	InInterfaceList string           `json:"inInterfaceList"`
+	OutInterface    string           `json:"outInterface"`
+	SrcAddress      string           `json:"srcAddress"`
+	DstAddress      string           `json:"dstAddress"`
+	Disabled        bool             `json:"disabled"`
+	Dynamic         bool             `json:"dynamic"`
 }
 
 // DNSStaticEntry mirrors one /ip/dns/static entry.

@@ -220,7 +220,9 @@ func UndoCaTrustCommands(dialect string) string {
 // Still 6 after #1409, which changed the filter-rule and address-list
 // blocks on the same unreleased branch: one bump per released change to
 // the script is what tells a router it is behind, and no router has run
-// a 6 that lacks #1409's reads.
+// a 6 that lacks #1409's reads. Still 6, for the same reason, after
+// the filter-rule block gained inInterfaceList for the doors panel
+// (v0.7.0 pre-release audit, A4-F1).
 const WizardVersion = 6
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
@@ -457,7 +459,7 @@ var blockSpecs = map[string]blockSpec{
 		record: `{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ` +
 			`"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ` +
 			`"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ` +
-			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ` +
+			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "inInterfaceList"=($v->"in-interface-list"); "outInterface"=($v->"out-interface"); ` +
 			`"disabled"=[/ip/firewall/filter get ($v->".id") disabled]; ` +
 			`"packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}`,
 	},

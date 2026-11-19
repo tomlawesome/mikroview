@@ -137,6 +137,13 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 	//     (`src-address-list=LAN` is the worked example) -- and the
 	//     panel's own fixed caveat already says the list here may be
 	//     incomplete, never that it may be wrong.
+	//   - a non-empty InInterfaceList: the rule is scoped to an interface
+	//     list, and the push carries the list's name but never its members,
+	//     so this endpoint cannot tell `in-interface-list=LAN` from
+	//     `in-interface-list=WAN`. Both are left out -- the panel's caveat
+	//     covers a door it does not list, not one it lists wrongly. A push
+	//     from a script that predates the field leaves it "", and the rule
+	//     is listed as before until the script is re-pasted.
 	//
 	// A rule with no dst-port at all is still a door -- DstPort stays ""
 	// and the frontend renders "any port" rather than a blank.
@@ -154,6 +161,9 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 			if rule.SrcAddress != "" || rule.SrcAddressList != "" {
 				continue
 			}
+			if rule.InInterfaceList != "" {
+				continue
+			}
 			if rule.InInterface != "" && rule.InInterface != wan {
 				continue
 			}
@@ -168,7 +178,8 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 	}
 
 	// Group 2: enabled dst-nat rules forwarding through to a host. The
-	// same sender-restriction exclusion as group 1a above; NATRule
+	// same sender-restriction and interface-list exclusions as group 1a
+	// above; NATRule
 	// carries no ConnectionState (dst-nat's own chain, prerouting, never
 	// answers established/related the way an input accept can).
 	if nat, _, ok := s.RouterState.NATRules(device); ok {
@@ -180,6 +191,9 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 				continue
 			}
 			if rule.SrcAddress != "" {
+				continue
+			}
+			if rule.InInterfaceList != "" {
 				continue
 			}
 			if rule.InInterface != "" && rule.InInterface != wan {
