@@ -85,23 +85,31 @@ fi
 # there, so an upgrade (this is also the upgrade line, above) leaves
 # whatever key it is already encrypted under alone.
 #
-# Two docker runs rather than one -- check, then create -- because the
-# check's own exit code is the "does it already exist" answer: nothing
-# printed by either has to be parsed to find out.
-if docker run --rm -v "${etc_vol}:/etc/mikroview:ro" alpine:3.24 \
-  test -e /etc/mikroview/keys/history.key >/dev/null 2>&1; then
-  : # already there -- told about it on an earlier run
-elif docker run --rm -v "${etc_vol}:/etc/mikroview" alpine:3.24 sh -c '
+# One docker run, not two. An earlier version checked in one container
+# and created in a second, reading the check's exit code as "does it
+# exist" -- but docker run also exits non-zero for its own failures
+# (daemon error, failed pull, mount error), and that read as "no key"
+# and sent the create run over an existing one. The helper now decides
+# inside the one container that holds the volume: a key already there
+# ends it with exit 3 before anything is written, and the write itself
+# runs under noclobber (set -C), so it cannot replace a file even if it
+# were reached. Nothing printed has to be parsed: 0 made a key, 3 found
+# one, anything else (docker's own 125-127 included) changed nothing.
+key_rc=0
+key_err="$(docker run --rm -v "${etc_vol}:/etc/mikroview" alpine:3.24 sh -c '
     set -e
+    [ ! -e /etc/mikroview/keys/history.key ] || exit 3
     mkdir -p /etc/mikroview/keys
+    set -C
     head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key
     chown 1000:1000 /etc/mikroview/keys/history.key
     chmod 600 /etc/mikroview/keys/history.key
-  '; then
-  echo "install.sh: on-disk event history is on by default -- a key for it now lives in the ${etc_vol} volume at keys/history.key. Back it up: losing it makes the retained history unreadable."
-else
-  echo "install.sh: could not create a history encryption key in ${etc_vol} -- mikroview will refuse to start until one is mounted, since it keeps accounts and tokens sealed under it (see docs/install.md)" >&2
-fi
+  ' 2>&1 >/dev/null)" || key_rc=$?
+case "$key_rc" in
+  0) echo "install.sh: on-disk event history is on by default -- a key for it now lives in the ${etc_vol} volume at keys/history.key. Back it up: losing it makes the retained history unreadable." ;;
+  3) : ;; # already there -- told about it on an earlier run, and left alone
+  *) echo "install.sh: could not check for or create a history encryption key in ${etc_vol} (docker run exited ${key_rc}${key_err:+: $key_err}) -- nothing in the volume was changed, so a key already there is untouched; mikroview will refuse to start until one is mounted, since it keeps accounts and tokens sealed under it (see docs/install.md)" >&2 ;;
+esac
 
 # Two named volumes: the data store, and the app folder #1243 taught the
 # binary to read config, GeoIP and a certificate pair from -- see
