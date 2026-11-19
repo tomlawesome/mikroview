@@ -110,7 +110,7 @@ func (s *Server) handleEntitiesDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Audit.Record(auditActor(r), "entity.delete", req.Type+":"+req.Key, "")
 	s.restampBufferedNames(req.Type, req.Key)
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // restampBufferedNames re-resolves the friendly-name fields derived from

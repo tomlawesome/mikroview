@@ -79,10 +79,8 @@ func decodeInto(t *testing.T, resp *http.Response, v any) {
 func wantReauth(t *testing.T, resp *http.Response, what string) {
 	t.Helper()
 	defer resp.Body.Close()
-	var body map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if resp.StatusCode != http.StatusUnauthorized || body["reauth"] != true {
-		t.Errorf("%s after the unlock lapsed: %d %v, want 401 {\"reauth\":true}", what, resp.StatusCode, body)
+	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(reauthHeader) == "" {
+		t.Errorf("%s after the unlock lapsed: %d, header %q, want 401 with the %s header", what, resp.StatusCode, resp.Header.Get(reauthHeader), reauthHeader)
 	}
 }
 

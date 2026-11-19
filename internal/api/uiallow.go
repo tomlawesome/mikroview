@@ -135,7 +135,7 @@ func (s *Server) RestrictToAllowList(next http.Handler) http.Handler {
 				"ui.allow does not list this address")
 		}
 		// Plain text, and nothing about what is behind the wall.
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "access not allowed", http.StatusForbidden)
 	})
 }
 

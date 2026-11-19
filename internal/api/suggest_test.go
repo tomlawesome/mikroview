@@ -293,8 +293,8 @@ func TestHandleDefinitionsDeleteHidesOriginatingSuggestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer delResp.Body.Close()
-	if delResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", delResp.StatusCode)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", delResp.StatusCode)
 	}
 
 	got, ok := s.Suggest.Get(id)

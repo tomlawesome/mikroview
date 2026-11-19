@@ -3053,7 +3053,7 @@ export async function deleteDecommissionWatch(id: string, reason?: string): Prom
 //
 // All admin-only. Opening asks for the password again and unlocks
 // Show secrets and Download for 15 minutes; once that lapses the two
-// answer 401 with {reauth:true}, which is told apart here from a
+// answer 401 with an X-Config-Reauth header, which is told apart here from a
 // session that has actually ended (a plain 401) so the editor can ask
 // for the password inline rather than bouncing to the sign-in page.
 
@@ -3062,14 +3062,12 @@ export interface ConfigReauth {
   reauth: true
 }
 
+// The header writeReauth (internal/api/configeditor.go) sets on a lapsed unlock.
+const CONFIG_REAUTH_HEADER = 'X-Config-Reauth'
+
 async function isReauth(res: Response): Promise<boolean> {
   if (res.status !== 401) return false
-  try {
-    const body = await res.clone().json()
-    return body?.reauth === true
-  } catch {
-    return false
-  }
+  return res.headers.get(CONFIG_REAUTH_HEADER) !== null
 }
 
 export async function openConfigEditor(password: string): Promise<ConfigEditorOpen | string> {

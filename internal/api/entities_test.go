@@ -120,8 +120,8 @@ func TestAdminCanListCreateAndDeleteEntities(t *testing.T) {
 	// Delete.
 	delResp := deleteJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "192.168.1.50"})
 	delResp.Body.Close()
-	if delResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 deleting an entity, got %d", delResp.StatusCode)
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 deleting an entity, got %d", delResp.StatusCode)
 	}
 
 	listResp3, err := client.Get(ts.URL + "/api/entities")
@@ -261,7 +261,7 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 
 	userDelResp := deleteJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "192.0.2.4"})
 	defer userDelResp.Body.Close()
-	if userDelResp.StatusCode != http.StatusOK {
+	if userDelResp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected a user DELETE /api/entities to succeed (#653), got %d", userDelResp.StatusCode)
 	}
 }
@@ -331,8 +331,8 @@ func TestEntityUpsertAndDeleteRestampBufferedEventNames(t *testing.T) {
 	// what ingest would stamp on the next event.
 	resp := deleteJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "10.0.0.9"})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete status = %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
 	}
 	if e := buffered(); e.SrcHostName != "" {
 		t.Fatalf("after host delete, SrcHostName = %q, want empty", e.SrcHostName)

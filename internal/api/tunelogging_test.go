@@ -478,16 +478,10 @@ func TestTuneLoggingRenderLoggingOnlyEnforcementBites(t *testing.T) {
 		t.Fatalf("status = %d, want 500 when the render step is tampered with", resp.StatusCode)
 	}
 
-	var out map[string]json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 1 {
-		t.Fatalf("body has %d top-level keys, want exactly 1 (\"error\") -- no annotated/commands output on a failed check: %v", len(out), out)
-	}
-	var errMsg string
-	if err := json.Unmarshal(out["error"], &errMsg); err != nil || errMsg != "logging-only check failed" {
-		t.Errorf(`body["error"] = %q (err %v), want "logging-only check failed"`, errMsg, err)
+	// Plain text (#1538 C14), and no annotated/commands output on a failed check.
+	got, _ := io.ReadAll(resp.Body)
+	if strings.TrimSpace(string(got)) != "logging-only check failed" {
+		t.Errorf("body = %q, want the plain-text \"logging-only check failed\"", got)
 	}
 }
 
