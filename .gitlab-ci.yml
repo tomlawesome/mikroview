@@ -1787,6 +1787,13 @@ gate:scenarios:quarantined:
   variables:
     MV_QUARANTINE: only
     MV_SHARD: "1/1"
+    # #1426 (D-F3): every scenario in scripts/quarantine.txt is a
+    # Firefox-only flake (docs/flakes.md: live-sw-navigation's worker
+    # fetch error only Firefox surfaces, live-viewer-surfaces' sightings
+    # all under Firefox), so under the default Chromium this job could
+    # never see them fail or grow a sighting. Quarantining a flake seen
+    # under another engine means revisiting this line.
+    MV_BROWSER: firefox
   cache:
     - *live_check_npm_cache_entry
   script:
