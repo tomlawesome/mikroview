@@ -285,6 +285,27 @@ describe('WanDoors unjudged rules (A4-C1)', () => {
     expect(screen.queryByText('not judged')).toBeNull()
   })
 
+  it('renders both rows when a filter rule and a dst-nat rule share a number', async () => {
+    withDeviceWans([{ id: 'core', iface: 'ether1' }])
+    vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
+      devices: [
+        {
+          id: device, name: 'rb5009', wan, doors: [], services: null,
+          unjudged: [
+            { label: '#3', ordinal: 3, dstPort: '8291', proto: 'tcp', scope: 'in-interface-list=LAN' },
+            { label: '#3', ordinal: 3, dstPort: '443', proto: 'tcp', scope: 'in-interface-list=WAN', to: { ip: '192.0.2.10' } },
+          ],
+        },
+      ],
+    }))
+    await open()
+
+    expect(screen.getByText('#3 8291/tcp → this router')).toBeTruthy()
+    expect(screen.getByText('#3 443/tcp → 192.0.2.10')).toBeTruthy()
+    const rows = [...document.querySelectorAll('[data-testid="wd-unjudged-core"] ~ ul.doors li')]
+    expect(rows).toHaveLength(2)
+  })
+
   it('shows a host rule with its destination, comment and scope, and claims nothing about it', async () => {
     withDeviceWans([{ id: 'core', iface: 'ether1' }])
     vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
