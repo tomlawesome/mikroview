@@ -332,6 +332,31 @@ check "$(case "$out" in *"Back it up"*) echo false;; *) echo true;; esac)" \
   "and no fresh-key announcement is printed"
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "and the install goes on to the run line (rc=$rc)"
 
+# --- #1426 O1-R4 break attempt: odd-but-present keys are never replaced ----
+# A key that is a dangling symlink (test -e is false for it), a zero-byte
+# file, a file nobody can read, or a key inside a directory nobody can
+# search must each come through an upgrade run with its bytes (or link)
+# exactly as they were -- "present" is not the same as "test -e passes".
+mkdir -p "$TMP/odd-dangling/etc/keys" "$TMP/odd-empty/etc/keys" "$TMP/odd-locked/etc/keys" "$TMP/odd-lockeddir/etc/keys"
+ln -s /nonexistent/elsewhere.key "$TMP/odd-dangling/etc/keys/history.key"
+: >"$TMP/odd-empty/etc/keys/history.key"
+printf OLDKEY >"$TMP/odd-locked/etc/keys/history.key"; chmod 000 "$TMP/odd-locked/etc/keys/history.key"
+printf OLDKEY >"$TMP/odd-lockeddir/etc/keys/history.key"; chmod 000 "$TMP/odd-lockeddir/etc/keys"
+for odd in odd-dangling odd-empty odd-locked odd-lockeddir; do
+  ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+  run "$odd"
+  chmod 700 "$TMP/$odd/etc/keys"; chmod 600 "$TMP/$odd/etc/keys/history.key" 2>/dev/null || true
+  K="$TMP/$odd/etc/keys/history.key"
+  case "$odd" in
+    odd-dangling) same="$([ -L "$K" ] && [ "$(readlink "$K")" = "/nonexistent/elsewhere.key" ] && echo true || echo false)" ;;
+    odd-empty) same="$([ -f "$K" ] && [ ! -s "$K" ] && echo true || echo false)" ;;
+    *) same="$([ "$(cat "$K")" = "OLDKEY" ] && echo true || echo false)" ;;
+  esac
+  check "$same" "$odd: the existing key is left exactly as it was by an upgrade run"
+  check "$(case "$out" in *"a key now lives"*) echo false;; *) echo true;; esac)" \
+    "$odd: and no fresh-key announcement is printed"
+done
+
 # --- missing docker refuses plainly with a non-zero exit -------------------
 ARGS=(); ENV_VARS=(); WITH_DOCKER=false
 run missing-docker

@@ -175,3 +175,38 @@ describe('the block', () => {
     expect(undoBlock(TABLE, [p.rules[1]])).toBe('/ip firewall filter set [find comment="drop from WAN"] log=no log-prefix=""')
   })
 })
+
+// #1426 (A2-F12) break attempt: the action arrives from the router's own
+// text, so it can be anything. Every action must either get a code that
+// logPrefixSlug reads back to the slug, or be left out -- never a prefix
+// built from an object property name ('constructor', 'toString',
+// '__proto__' all resolve on a plain object lookup), an upper-case
+// spelling, or a stray action nobody mapped; and a rule that already logs
+// under its own prefix is never re-tagged.
+describe('the proposal never writes a prefix it cannot read back (#1426 A2-F12)', () => {
+  it('reads every proposed prefix back, whatever spelling the action has', () => {
+    const odd = [
+      'constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf',
+      'DROP', 'Accept', 'RETURN', 'fasttrack', 'tarpit', 'unknown-action', '', ' drop',
+      'drop ', 'accept\n',
+    ]
+    const table = odd.map((action, i) =>
+      rule({ ordinal: i, chain: 'forward', action, comment: `r${i}`, inInterface: `if${i}`, outInterface: 'bridge' }),
+    )
+    // a rule that already logs under its own convention prefix on a
+    // boundary of its own, and one logging under a foreign prefix
+    table.push(rule({ ordinal: odd.length, chain: 'input', action: 'return', comment: 'mine', inInterface: 'ether9', log: true, logPrefix: 'D|mine|' }))
+    table.push(rule({ ordinal: odd.length + 1, chain: 'input', action: 'passthrough', comment: 'theirs', inInterface: 'ether8', log: true, logPrefix: 'vendor-x' }))
+    const p = proposeRules(table)
+    for (const r of p.rules) {
+      expect(r.prefix, `action ${JSON.stringify(r.action)}`).toMatch(/^[ADRL]\|[a-z0-9-]+\|$/)
+      expect(logPrefixSlug(r.prefix), `action ${JSON.stringify(r.action)}`).toBe(r.prefix.slice(2, -1))
+      expect(r.prefix.length).toBeLessThanOrEqual(15)
+    }
+    // none of the logging rules is proposed again, and no odd action
+    // other than the three verdicts is proposed at all
+    expect(p.rules.map((r) => r.ordinal).filter((o) => o >= odd.length)).toEqual([])
+    for (const r of p.rules) expect(['accept', 'drop', 'reject']).toContain(r.action)
+    expect(tagBlock(table, p.rules)).not.toMatch(/function|native code|Object/)
+  })
+})
