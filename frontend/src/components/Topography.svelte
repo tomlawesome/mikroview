@@ -201,6 +201,17 @@
   })
 
   const isAdmin = $derived(authState.role === 'admin')
+  /** The tail of both "Doors from the internet" labels (the internet
+   * anchor's row and the boundary card's row). The sheet's own states in
+   * the sheet's own order (WanDoors.svelte), so the map never reads
+   * "none" for an answer it does not yet have, or failed to get: "none"
+   * is a security-posture statement and is only printed once a read has
+   * landed and counted nothing. */
+  const doorsTail = $derived.by((): string => {
+    if (wanDoorsState.loading && wanDoorsState.devices.length === 0) return ' · reading…'
+    if (wanDoorsState.error) return ' · could not read'
+    return wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'
+  })
 
   /** Component-unique prefix for this instance's SVG ids. */
   const uid = $props.id()
@@ -5775,7 +5786,7 @@
                    the row would sit across the bar's lower half and its
                    flag count (#1430), so it drops beneath the bar instead. -->
               <text x="-82" y={internetAggregate && !filterOn ? 64 : 52} class="n-sub doors-anchor-t"
-                >Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}</text
+                >Doors from the internet{doorsTail}</text
               >
             </g>
           {/if}
@@ -7252,7 +7263,7 @@
              what the pushed tables let it reach. The internet anchor
              above opens the same panel. -->
         <button type="button" class="s doors-row" onclick={() => wanDoorsState.open()}>
-          Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}
+          Doors from the internet{doorsTail}
         </button>
       {/if}
 

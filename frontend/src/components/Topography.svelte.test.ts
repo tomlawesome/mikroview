@@ -16,7 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => ({
   fetchTrace: vi.fn(),
   fetchWanDoors: vi.fn(async () => ({ devices: [] })),
 }))
-import { fetchTrace, type TraceResponse } from '../lib/api'
+import { fetchTrace, fetchWanDoors, type TraceResponse } from '../lib/api'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { zonesState } from '../lib/zones.svelte'
@@ -3348,6 +3348,8 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     vi.restoreAllMocks()
     wanDoorsState.close()
     wanDoorsState.devices = []
+    wanDoorsState.loading = false
+    wanDoorsState.error = null
   })
 
   // #1319: the boundary card gains one last row exactly when its own
@@ -3395,6 +3397,69 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     const card = openInternetCard(container)
     const row = [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
     expect(row!.textContent?.trim()).toBe('Doors from the internet · none')
+  })
+
+  // A5-F1: the map must not say "none" about a security posture it has
+  // not read yet, or could not read.
+  const doorsRow = (card: HTMLElement) =>
+    [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+  const anchorText = (container: HTMLElement) => container.querySelector('.isl-card .doors-anchor-t')!.textContent
+  const restoreWanDoors = () => vi.mocked(fetchWanDoors).mockImplementation(async () => ({ devices: [] }))
+
+  it('says the doors are still being read, not "none", while the first read is in flight (A5-F1)', async () => {
+    let land!: (r: { devices: import('../lib/api').WanDeviceDoors[] }) => void
+    vi.mocked(fetchWanDoors).mockReturnValue(new Promise((res) => { land = res }))
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    void wanDoorsState.refresh()
+    flushSync()
+
+    expect(anchorText(container)).toBe('Doors from the internet · reading…')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · reading…')
+
+    land({ devices: [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [{ label: '#5', ordinal: 5, dstPort: '22' }], services: null }] })
+    await vi.waitFor(() => expect(wanDoorsState.loading).toBe(false))
+    flushSync()
+    expect(anchorText(container)).toBe('Doors from the internet · 1')
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · 1')
+    restoreWanDoors()
+  })
+
+  it('says the doors could not be read, not "none", after the read fails (A5-F1)', async () => {
+    vi.mocked(fetchWanDoors).mockRejectedValue(new Error('fetchWanDoors: 500'))
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    await wanDoorsState.refresh()
+    flushSync()
+
+    expect(wanDoorsState.error).toBe('Could not read the pushed tables')
+    expect(wanDoorsState.loading).toBe(false)
+    expect(anchorText(container)).toBe('Doors from the internet · could not read')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · could not read')
+    restoreWanDoors()
+  })
+
+  it('still says "· none" once a read has landed and counted nothing (A5-F1 guard)', async () => {
+    vi.mocked(fetchWanDoors).mockResolvedValue({ devices: [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [], services: null }] })
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    await wanDoorsState.refresh()
+    flushSync()
+
+    expect(wanDoorsState.error).toBeNull()
+    expect(wanDoorsState.loading).toBe(false)
+    expect(anchorText(container)).toBe('Doors from the internet · none')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · none')
+    restoreWanDoors()
   })
 
   it('opens the doors panel from the internet anchor itself', () => {

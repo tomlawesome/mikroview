@@ -221,12 +221,13 @@ func (r *backupRuntime) Start() error {
 	return nil
 }
 
-// Stop closes the drop box. Closing only stops new connections -- an
-// upload already under way keeps writing on its own already-accepted
-// connection until it finishes or drops (internal/backupsftp's
-// pendingWrite: an interrupted transfer commits nothing, exactly as if
-// the router's own end had dropped it); nothing here waits for that or
-// cuts it short. Idempotent: calling it while already closed is a no-op.
+// Stop closes the drop box: the listener stops accepting, and every
+// connection already open is closed too (the Serve context is cancelled,
+// and internal/backupsftp closes each accepted connection when it ends),
+// so an upload under way is cut short and commits nothing --
+// internal/backupsftp's pendingWrite treats it exactly as if the router's
+// own end had dropped it. Nothing here waits for those connections to
+// finish. Idempotent: calling it while already closed is a no-op.
 func (r *backupRuntime) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
