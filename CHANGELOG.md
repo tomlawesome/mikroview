@@ -488,6 +488,11 @@ rewritten.
 
 ### Fixed
 
+- **The setup wizard again warns when MikroView's certificate does not
+  cover the address the router is told to use** (#1426, #1365), and shows
+  the tls.hosts line to paste. The full-screen wizard had dropped the
+  certificate step's blocked reading.
+
 - **A recovery-key command killed while first creating the recovery pepper
   no longer breaks every later one** (#1489, #1485). The pepper file now only
   appears once it is complete, and two commands started together agree on one

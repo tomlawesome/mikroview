@@ -19,6 +19,7 @@
   import { fetchEvents } from '../../lib/api'
   import { copyToClipboard } from '../../lib/clipboard'
   import { CopyFlash } from '../../lib/copyFlash.svelte'
+  import type { StepStatus } from '../../lib/setupsteps'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
   import Track from './Track.svelte'
@@ -29,6 +30,7 @@
   const blockText = $derived(wizardRun.blockText)
   const stations = $derived(wizardRun.trackStations)
   const latest = $derived(wizardRun.latestArrival)
+  const certProblem = $derived(wizardRun.certificateProblem)
 
   // The push and backup sections need a persistent ingest token
   // (internal/api/ingest.go's bearer, distinct from the one-shot
@@ -121,12 +123,23 @@
   }
 </script>
 
+{#snippet certWarning(p: StepStatus)}
+  <!-- #1365: the certificate does not cover the address the block
+       fetches from. The whole resulting tls.hosts list, not just
+       the missing address, so pasting it only adds coverage. -->
+  <div class="warnbox" aria-live="polite">
+    <span>{p.detail}</span>
+    <pre>{p.pasteBlock}</pre>
+  </div>
+{/snippet}
+
 {#if wizardRun.stage === 'paste'}
   <h3>One paste.</h3>
   <p class="hint">
     {sections.length} parts, in order — {sections.map((s) => s.title.toLowerCase()).join(', ')} — and the enrol line
     last. Into the router’s <b>terminal</b> (WinBox ▸ New Terminal, or ssh), not a script.
   </p>
+  {#if certProblem}{@render certWarning(certProblem)}{/if}
   <pre class="script" aria-label="The block to paste">{blockText}</pre>
   <div class="copyrow">
     <button type="button" class="primary" onclick={copy}>{flash.label('paste', 'Copy')}</button>
@@ -181,6 +194,7 @@
   {:else}
     <div class="obs waiting">Copied. Waiting for the router — the certificate fetch comes first.</div>
   {/if}
+  {#if certProblem}{@render certWarning(certProblem)}{/if}
   {#if ev.refused}
     <div class="warnbox">
       <span>

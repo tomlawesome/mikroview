@@ -17,7 +17,7 @@ import { blocklistState } from './blocklist.svelte'
 import { hm as routerHm, hmLocal, num } from './blocklistBuild'
 import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
-import { RECORD_NUMBERS, SETUP_STEPS, TITLES } from './setupsteps'
+import { RECORD_NUMBERS, SETUP_STEPS, TITLES, caStep, type StepStatus } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import { wizardJourney } from './wizardJourney.svelte'
 import { tourState } from './tour.svelte'
@@ -224,6 +224,20 @@ class WizardRun {
         dark: b.coverage === 'dark',
       })),
     }
+  }
+
+  // certificateProblem is caStep's 'blocked' reading (#1365) for the
+  // address the block tells the router to fetch /ca.crt from --
+  // wizardState.address, the same value refreshCommands renders into
+  // CaTrustCommands and refresh() asks the server to judge (#1507).
+  // Null when the certificate covers it, or no status has arrived.
+  // StepPaste renders it: the modal's ledger did, and the full-screen
+  // wizard (#1381) had no reader for it until now.
+  get certificateProblem(): StepStatus | null {
+    const st = wizardState.status
+    if (!st) return null
+    const s = caStep(st, wizardState.address)
+    return s.state === 'blocked' ? s : null
   }
 
   // tailDevice is the router the tail builds for: the walk's own, or on
