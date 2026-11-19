@@ -208,7 +208,9 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 	if row, ok := routeros.RowFor(before.Version); ok {
 		dialect = row.Dialect
 	}
-	prefixFor := func(action string) string { return routeros.LogPrefixForAction(action, dialect) }
+	prefixFor := func(action string) string {
+		return routeros.LogPrefixForAction(effectiveFilterAction(action), dialect)
+	}
 
 	if reason := noPrefixCodeReason(before, req.Selected, prefixFor); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]tuneLoggingRejectReason{
@@ -233,6 +235,16 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// effectiveFilterAction (#1546): RouterOS's filter action defaults to
+// accept and /export omits default values, so a rule with no action= is an
+// accept rule.
+func effectiveFilterAction(action string) string {
+	if action == "" {
+		return "accept"
+	}
+	return action
+}
+
 // noPrefixCodeReason (#1546) names the first selected rule that has no
 // log-prefix of its own and whose action has no code MikroView can read
 // back (prefixFor gives ""), or "" when every selected rule can be tagged.
@@ -243,7 +255,7 @@ func noPrefixCodeReason(ex *export.Export, selected []int, prefixFor export.LogP
 	}
 	for _, r := range ex.FilterRules {
 		if want[r.Index] && r.LogPrefix == "" && prefixFor(r.Action) == "" {
-			return fmt.Sprintf("rule %d (action=%s, comment %q) has no log-prefix code MikroView can read back; untick it or give it a log-prefix yourself", r.Index, r.Action, r.Comment)
+			return fmt.Sprintf("rule %d (action=%s, comment %q) has no log-prefix code MikroView can read back; untick it or give it a log-prefix yourself", r.Index, effectiveFilterAction(r.Action), r.Comment)
 		}
 	}
 	return ""

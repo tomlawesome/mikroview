@@ -1092,7 +1092,7 @@ var logPrefixSlug = map[string]string{
 }
 
 // logPrefixCode is the first character of a log-prefix: the class the
-// decoder (internal/ingest prefix.go actionFromCode) reads back for each
+// decoder (internal/routeros/prefix.go actionFromCode) reads back for each
 // RouterOS action. A accept, D drop and R reject are the three filter
 // verdicts; L is a rule that logs without deciding the packet's fate; M a
 // mangle mark; N a NAT rewrite. An action not listed (tarpit, anything
