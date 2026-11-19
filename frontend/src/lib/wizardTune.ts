@@ -119,7 +119,7 @@ const PREFIX_CODE: Readonly<Record<string, string>> = {
   'fasttrack-connection': 'L',
 }
 export function prefixCodeFor(action: string): string {
-  return PREFIX_CODE[action] ?? ''
+  return Object.hasOwn(PREFIX_CODE, action) ? PREFIX_CODE[action] : ''
 }
 
 // prefixFor is the convention's <ACTION>|<slug>|; '' for an action with
