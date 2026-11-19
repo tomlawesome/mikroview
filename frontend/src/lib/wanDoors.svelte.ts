@@ -51,6 +51,10 @@ class WanDoorsState {
     this.devices.reduce((n, d) => n + d.doors.length + (d.services?.length ?? 0), 0),
   )
 
+  /** Rules the endpoint could not judge, across every device: counted
+   * apart from doors, never claimed as one (A4-C1). */
+  totalUnjudged = $derived.by(() => this.devices.reduce((n, d) => n + (d.unjudged?.length ?? 0), 0))
+
   /** Opens the panel. device names nothing currently open here for one
    * device in particular -- both entry points (the boundary card, the
    * internet anchor) are about the internet edge as a whole -- but the

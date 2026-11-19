@@ -546,10 +546,11 @@ the array RouterOS sends or as a comma-joined string, so
 `inInterfaceList` was added for the Doors from the internet panel.
 A rule written `in-interface-list=LAN` with no `in-interface` used to
 look like a door open to the internet, because the push carried only
-`in-interface`. The panel now leaves out any rule that names an
-interface list: MikroView is never sent the list's members, so it
-cannot tell `LAN` from `WAN`, and it would rather miss a door than
-invent one. A router still running the older script sends nothing
+`in-interface`. The panel now shows any rule that names an
+interface list under "not judged" with its list name, counted apart on
+the map and never claimed as a door: MikroView is never sent the list's
+members, so it cannot tell `LAN` from `WAN`, and it would rather say it
+could not judge than invent a door. A router still running the older script sends nothing
 for this field, and its list-scoped rules stay listed until the
 script is re-pasted.
 

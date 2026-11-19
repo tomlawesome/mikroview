@@ -48,6 +48,36 @@ type wanDoor struct {
 	LastSeen *time.Time `json:"lastSeen,omitempty"`
 }
 
+// wanUnjudged is one rule that passes every "known not a door" test but is
+// scoped on something this endpoint cannot judge (an interface list's
+// members, who an address is), so it may or may not be a door. Reported,
+// never claimed: the panel must not print an all-clear past it.
+type wanUnjudged struct {
+	Label   string       `json:"label"`
+	Ordinal int          `json:"ordinal"`
+	DstPort string       `json:"dstPort"`
+	Proto   string       `json:"proto,omitempty"`
+	To      *wanDoorHost `json:"to,omitempty"` // set for dst-nat
+	Comment string       `json:"comment,omitempty"`
+	// Scope is the condition that stopped judgement, verbatim:
+	// in-interface-list=X, src-address-list=X or src-address=X.
+	Scope string `json:"scope"`
+}
+
+// wanUnjudgedScope names the first condition set, in the design's order,
+// or "" when none is.
+func wanUnjudgedScope(inList, srcList, src string) string {
+	switch {
+	case inList != "":
+		return "in-interface-list=" + inList
+	case srcList != "":
+		return "src-address-list=" + srcList
+	case src != "":
+		return "src-address=" + src
+	}
+	return ""
+}
+
 // wanService is one enabled /ip/service row (issue #1329), shown beside
 // the input-chain doors under "to the router itself". Disabled services
 // are never rows -- the same reading doorsFor gives a disabled filter
@@ -70,6 +100,9 @@ type wanDeviceDoors struct {
 	// each source table's own rule order -- the frontend splits them
 	// into the two groups the note draws by whether To is set.
 	Doors []wanDoor `json:"doors"`
+	// Unjudged is every candidate rule skipped on a ground this endpoint
+	// cannot judge. Always an array, never null.
+	Unjudged []wanUnjudged `json:"unjudged"`
 	// Services is null when the router has never pushed /ip/service
 	// (issue #1329) -- distinct from an empty, pushed table, which is a
 	// real answer that the router runs none. Never invented from a
@@ -115,7 +148,7 @@ func (s *Server) handleWANDoors(w http.ResponseWriter, r *http.Request) {
 // its pushed /ip/service table (or its absence), and the WAN
 // interface's own pushed address for the printed nmap line.
 func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
-	out := wanDeviceDoors{ID: device, Name: s.Naming.Device(device), WAN: wan, Doors: []wanDoor{}}
+	out := wanDeviceDoors{ID: device, Name: s.Naming.Device(device), WAN: wan, Doors: []wanDoor{}, Unjudged: []wanUnjudged{}}
 	if s.RouterState == nil {
 		return out
 	}
@@ -145,6 +178,11 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 	//     from a script that predates the field leaves it "", and the rule
 	//     is listed as before until the script is re-pasted.
 	//
+	// The last two are not silently dropped: a rule that passes every
+	// known-not-a-door test but is skipped on a ground this endpoint
+	// cannot judge goes to Unjudged, so the panel never prints an
+	// all-clear past it. A rule failing a known test is still dropped.
+	//
 	// A rule with no dst-port at all is still a door -- DstPort stays ""
 	// and the frontend renders "any port" rather than a blank.
 	if rules, _, ok := s.RouterState.FilterRules(device); ok {
@@ -158,13 +196,18 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 			if len(rule.ConnectionState) > 0 {
 				continue
 			}
-			if rule.SrcAddress != "" || rule.SrcAddressList != "" {
-				continue
-			}
-			if rule.InInterfaceList != "" {
-				continue
-			}
 			if rule.InInterface != "" && rule.InInterface != wan {
+				continue
+			}
+			if scope := wanUnjudgedScope(rule.InInterfaceList, rule.SrcAddressList, rule.SrcAddress); scope != "" {
+				out.Unjudged = append(out.Unjudged, wanUnjudged{
+					Label:   "#" + strconv.Itoa(int(rule.Ordinal)),
+					Ordinal: int(rule.Ordinal),
+					DstPort: string(rule.DstPort),
+					Proto:   strings.ToLower(strings.TrimSpace(rule.Protocol)),
+					Comment: rule.Comment,
+					Scope:   scope,
+				})
 				continue
 			}
 			out.Doors = append(out.Doors, wanDoor{
@@ -178,8 +221,8 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 	}
 
 	// Group 2: enabled dst-nat rules forwarding through to a host. The
-	// same sender-restriction and interface-list exclusions as group 1a
-	// above; NATRule
+	// same sender-restriction and interface-list exclusions (reported as
+	// Unjudged) as group 1a above; NATRule
 	// carries no ConnectionState (dst-nat's own chain, prerouting, never
 	// answers established/related the way an input accept can).
 	if nat, _, ok := s.RouterState.NATRules(device); ok {
@@ -190,13 +233,19 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 			if !strings.EqualFold(rule.Chain, "dstnat") || !strings.EqualFold(rule.Action, "dst-nat") {
 				continue
 			}
-			if rule.SrcAddress != "" {
-				continue
-			}
-			if rule.InInterfaceList != "" {
-				continue
-			}
 			if rule.InInterface != "" && rule.InInterface != wan {
+				continue
+			}
+			if scope := wanUnjudgedScope(rule.InInterfaceList, "", rule.SrcAddress); scope != "" {
+				out.Unjudged = append(out.Unjudged, wanUnjudged{
+					Label:   "#" + strconv.Itoa(int(rule.Ordinal)),
+					Ordinal: int(rule.Ordinal),
+					DstPort: string(rule.DstPort),
+					Proto:   strings.ToLower(strings.TrimSpace(rule.Protocol)),
+					Comment: rule.Comment,
+					To:      &wanDoorHost{IP: rule.ToAddresses, Name: s.Naming.Host(device, rule.ToAddresses)},
+					Scope:   scope,
+				})
 				continue
 			}
 			out.Doors = append(out.Doors, wanDoor{

@@ -210,7 +210,10 @@
   const doorsTail = $derived.by((): string => {
     if (wanDoorsState.loading && wanDoorsState.devices.length === 0) return ' · reading…'
     if (wanDoorsState.error) return ' · could not read'
-    return wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'
+    const doors = wanDoorsState.totalDoors
+    const unjudged = wanDoorsState.totalUnjudged
+    if (unjudged === 0) return doors > 0 ? ` · ${doors}` : ' · none'
+    return doors > 0 ? ` · ${doors} · ${unjudged} not judged` : ` · none known · ${unjudged} not judged`
   })
 
   /** Component-unique prefix for this instance's SVG ids. */

@@ -491,6 +491,13 @@ rewritten.
 
 ### Fixed
 
+- **The "Doors from the internet" panel now lists rules it could not
+  judge instead of dropping them** (#1426). A rule scoped to an interface
+  list or a source address may or may not be a door, since MikroView is
+  never sent a list's members; it shows under "not judged" with its
+  condition, is counted apart on the map (` · 3 · 2 not judged`), and the
+  all-clear line no longer prints past it.
+
 - **The setup wizard again warns when MikroView's certificate does not
   cover the address the router is told to use** (#1426, #1365), and shows
   the tls.hosts line to paste. The full-screen wizard had dropped the

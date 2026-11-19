@@ -2902,6 +2902,19 @@ export interface WanDoor {
   lastSeen?: string
 }
 
+// One rule the endpoint could not place (A4-C1): it may be a door, but
+// the push never carries a list's members or who an address is.
+export interface WanUnjudged {
+  label: string
+  ordinal: number
+  dstPort: string
+  proto?: string
+  to?: WanDoorHost
+  comment?: string
+  // The condition, verbatim: "in-interface-list=WAN".
+  scope: string
+}
+
 export interface WanService {
   name: string
   port: number
@@ -2915,6 +2928,7 @@ export interface WanDeviceDoors {
   name?: string
   wan: string
   doors: WanDoor[]
+  unjudged: WanUnjudged[]
   // null means the router has never pushed /ip/service (#1329) --
   // distinct from an empty, pushed table.
   services: WanService[] | null
