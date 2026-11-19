@@ -46,6 +46,7 @@ import {
   fetchDevices,
   fetchRefusedSenders,
   fetchRouterBackups,
+  fetchRouterRules,
   fetchSetupStatus,
   markSetupStep,
   type BlocklistBuilder,
@@ -122,6 +123,8 @@ describe('Wizard: the full-screen shell', () => {
     vi.mocked(fetchSetupStatus).mockResolvedValue(status())
     vi.mocked(fetchDevices).mockResolvedValue([])
     vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    // begin() reads the walk's pushed rule table (A2-F7).
+    vi.mocked(fetchRouterRules).mockResolvedValue({ available: false, rules: [] })
     vi.mocked(fetchRouterBackups).mockResolvedValue({
       enabled: true,
       keyUnreadable: false,
@@ -448,6 +451,7 @@ describe('Wizard: the first-run tail', () => {
     vi.mocked(fetchSetupStatus).mockResolvedValue(sending())
     vi.mocked(fetchDevices).mockResolvedValue([device({ acceptedIp: '192.0.2.1', enrolledAt: '2026-09-27T14:03:04Z' })])
     vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    vi.mocked(fetchRouterRules).mockResolvedValue({ available: false, rules: [] })
     vi.mocked(fetchRouterBackups).mockResolvedValue({ enabled: true, keyUnreadable: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, lock: 'open' } as never)
     vi.mocked(fetchBlocklistBuilder).mockResolvedValue(builder(false))
     vi.mocked(fetchBlocklistCommands).mockResolvedValue({ parts: [{ ordinal: 1, ink: 'push', title: 'The push', note: [], shown: [], commands: 'x' }], copyText: 'x' })
