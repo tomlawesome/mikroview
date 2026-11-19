@@ -16,6 +16,7 @@ import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
 import { watchlistState } from "./watchlist.svelte";
 import { wizardState } from "./wizard.svelte";
+import { wizardRun } from "./wizardRun.svelte";
 import { logEveryRuleWorkState } from "./logEveryRuleWork.svelte";
 import { forgetHistoryKeyForSession } from "./history";
 import { tokensState } from "./tokens.svelte";
@@ -92,6 +93,12 @@ function clearSessionState() {
   // previous operator's pasted firewall export, and the key that
   // decrypts this instance's stored history.
   wizardState.reset();
+  // The wizard's run (v0.7.0 pre-release audit): wizardRun.pass is the
+  // admin password typed into Mint and not yet spent, a module-level
+  // field like the rest, that only begin() cleared on the next open --
+  // so a failed logout, which deliberately keeps the page up, left it
+  // in memory.
+  wizardRun.reset();
   logEveryRuleWorkState.reset();
   forgetHistoryKeyForSession();
   // Same audit, same batch, still missed: tokensState, usersState,

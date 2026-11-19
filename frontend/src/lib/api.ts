@@ -2660,7 +2660,15 @@ export async function fetchTuneLoggingRender(
 ): Promise<TuneLoggingRenderResponse | string> {
   const res = await postJSON('/api/tune-logging/render', req)
   if (res.ok) return res.json()
-  return (await errorText(res)) || `fetchTuneLoggingRender: ${res.status}`
+  const text = await errorText(res)
+  // The server's 400 refusals answer {"rejected":{"reason":"..."}}: show the reason.
+  try {
+    const reason = (JSON.parse(text) as { rejected?: { reason?: unknown } }).rejected?.reason
+    if (typeof reason === 'string' && reason) return reason
+  } catch {
+    // plain text: shown as it is
+  }
+  return text || `fetchTuneLoggingRender: ${res.status}`
 }
 
 // ─────────────────────────────────────────────────────────────────────

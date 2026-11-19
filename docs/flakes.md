@@ -251,3 +251,6 @@ own rather than swelling that entry's count.
 ## live-group-compression: the Stream filter line never appears (`.filterline .fbox`) under WebKit
 
 - 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, from a scratch clone with temporary logging in the Topography tunnel code (#1536 diagnosis, nothing here touched) · `unfoldStreamFilter` timed out waiting for `.filterline .fbox` (`live-browser.mjs:565`). The earlier full WebKit runs at 9545c47a passed it. First sighting.
+
+## Wizard: 'opens the builder in the wizard's frame' times out (frontend/src/components/wizard/Wizard.svelte.test.ts)
+- 2026-11-19 · dad2c583 (fix/1426-g3-wizard) · local full `npx vitest run` · the test hit vitest's 5 s timeout once, then passed on rerun and in three runs of the file alone on the same commit. Host busy with parallel builders.

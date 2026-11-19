@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/blcatalogue"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 func TestHostname(t *testing.T) {
@@ -312,8 +313,15 @@ func TestLogPrefixForAction(t *testing.T) {
 		{"drop", "D|drop|"},
 		{"reject", "R|reject|"},
 		{"accept", "A|accept|"},
-		{"tarpit", "T|tarpit|"},
-		{"jump", "J|jump|"},
+		{"tarpit", ""},
+		{"jump", "L|jump|"},
+		{"return", "L|return|"},
+		{"passthrough", "L|passthrough|"},
+		{"add-src-to-address-list", "L|add-src-list|"},
+		{"fasttrack-connection", "L|fasttrack|"},
+		{"mark-connection", "M|mark-conn|"},
+		{"masquerade", "N|masquerade|"},
+		{"dst-nat", "N|dst-nat|"},
 		{"", ""},
 	} {
 		if got := LogPrefixForAction(tc.action, "a"); got != tc.want {
@@ -352,9 +360,23 @@ func TestLogPrefixForActionFitsAndDoesNotCollide(t *testing.T) {
 		"dst-nat", "masquerade", "netmap", "redirect", "same", "src-nat",
 	}
 
+	// Every key of logPrefixCode too, so a new over-long entry fails here.
+	listed := make(map[string]bool, len(actions))
+	for _, a := range actions {
+		listed[a] = true
+	}
+	for a := range logPrefixCode {
+		if !listed[a] {
+			actions = append(actions, a)
+		}
+	}
+
 	seen := make(map[string]string, len(actions))
 	for _, action := range actions {
 		got := LogPrefixForAction(action, "a")
+		if got == "" {
+			continue // tarpit has no prefix code; nothing to collide
+		}
 		if len(got) > maxLogPrefixLen {
 			t.Errorf("LogPrefixForAction(%q) = %q (%d bytes), want at most %d", action, got, len(got), maxLogPrefixLen)
 		}
@@ -363,6 +385,55 @@ func TestLogPrefixForActionFitsAndDoesNotCollide(t *testing.T) {
 			continue
 		}
 		seen[got] = action
+	}
+}
+
+// TestLogPrefixForActionDecodesToWhatTheRuleDoes (#1546): the prefix's
+// first byte is the verdict code the decoder reads back, so every
+// action's prefix must decode to the verdict the rule really has --
+// not the action's initial letter, which collides with the codes.
+func TestLogPrefixForActionDecodesToWhatTheRuleDoes(t *testing.T) {
+	actions := []string{
+		"accept", "add-dst-to-address-list", "add-src-to-address-list",
+		"drop", "fasttrack-connection", "jump", "log", "passthrough",
+		"reject", "return",
+		"mark-connection", "mark-packet", "mark-routing",
+		"change-mss", "change-ttl", "change-dscp", "clear-df",
+		"route", "sniff-pc", "sniff-tzsp", "strip-ipv4-options",
+		"dst-nat", "masquerade", "netmap", "redirect", "same", "src-nat",
+	}
+	want := func(a string) store.Action {
+		switch a {
+		case "accept":
+			return store.ActionAccept
+		case "drop":
+			return store.ActionDrop
+		case "reject":
+			return store.ActionReject
+		case "mark-connection", "mark-packet", "mark-routing":
+			return store.ActionMarked
+		case "masquerade", "src-nat", "dst-nat", "redirect", "netmap", "same":
+			return store.ActionNatted
+		}
+		return store.ActionLog
+	}
+	for _, a := range actions {
+		p := LogPrefixForAction(a, "a")
+		if p == "" {
+			t.Errorf("LogPrefixForAction(%q) = \"\", want a prefix", a)
+			continue
+		}
+		act, ok := actionFromCode(p[0])
+		if !ok {
+			t.Errorf("LogPrefixForAction(%q) = %q: code %q is not one the decoder reads", a, p, p[0])
+			continue
+		}
+		if act != want(a) {
+			t.Errorf("LogPrefixForAction(%q) = %q decodes to %v, want %v", a, p, act, want(a))
+		}
+	}
+	if got := LogPrefixForAction("tarpit", "a"); got != "" {
+		t.Errorf("LogPrefixForAction(\"tarpit\") = %q, want \"\" (no prefix code reads back as tarpit)", got)
 	}
 }
 
