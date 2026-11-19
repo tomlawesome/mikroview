@@ -107,7 +107,7 @@ describe('authState.signOutEverywhere passes the password on (#1202 review U9)',
     vi.mocked(signOutEverywhere).mockResolvedValue(null)
     await authState.signOutEverywhere('sw0rdfish-secret')
     expect(visibleState(authState)).not.toContain('sw0rdfish-secret')
-    // The check must be able to see a field: the username is on the store.
+    // The check must be able to see a field: the store has a 'state' field.
     expect(visibleState(authState)).toContain('state')
 
     vi.mocked(signOutEverywhere).mockResolvedValue('incorrect password')

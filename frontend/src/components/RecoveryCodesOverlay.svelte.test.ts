@@ -72,7 +72,7 @@ describe('a right password shows all ten fresh codes once', () => {
   it('shows the ten codes and clears the password field', async () => {
     const codes = Array.from({ length: 10 }, (_, i) => `code-${i}`)
     vi.mocked(regenerateRecoveryCodes).mockResolvedValue(codes)
-    render(RecoveryCodesOverlay, { open: true })
+    const { rerender } = render(RecoveryCodesOverlay, { open: true })
 
     await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /regenerate codes/i }))
@@ -81,11 +81,11 @@ describe('a right password shows all ten fresh codes once', () => {
     expect(codes.every((c) => block.textContent?.includes(c))).toBe(true)
 
     // The typed password is not left behind: after acknowledging, a reopened
-    // overlay starts on an empty field.
-    expect(document.body.textContent).not.toContain('hunter2')
+    // overlay starts on an empty field. Reopen the SAME mounted component:
+    // a fresh render() would always start empty and prove nothing.
     await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
-    cleanup()
-    render(RecoveryCodesOverlay, { open: true })
+    await rerender({ open: false })
+    await rerender({ open: true })
     expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
   })
 
@@ -119,9 +119,24 @@ describe('a right password shows all ten fresh codes once', () => {
     expect(screen.getByRole('dialog', { name: /new recovery codes/i })).toBeTruthy()
   })
 
+  // Only resetFields() clears a password typed and then abandoned at the
+  // gate (a successful regenerate clears it on its own), so this is the
+  // case that fails if the reset stops clearing it.
+  it('a password typed then abandoned at the gate is gone when the same overlay reopens', async () => {
+    const { rerender } = render(RecoveryCodesOverlay, { open: true })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('hunter2')
+
+    await fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await rerender({ open: false })
+    await rerender({ open: true })
+
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+  })
+
   it('closes and clears state once "I have saved these" is clicked', async () => {
     vi.mocked(regenerateRecoveryCodes).mockResolvedValue(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'])
-    render(RecoveryCodesOverlay, { open: true })
+    const { rerender } = render(RecoveryCodesOverlay, { open: true })
     await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: /regenerate codes/i }))
     await screen.findByTestId('recovery-codes')
@@ -131,9 +146,9 @@ describe('a right password shows all ten fresh codes once', () => {
     expect(screen.queryByRole('dialog', { name: /new recovery codes/i })).toBeNull()
 
     // Cleared: a reopened overlay shows the gate with an empty password and
-    // none of the old codes.
-    cleanup()
-    render(RecoveryCodesOverlay, { open: true })
+    // none of the old codes. Same mounted component, not a fresh render.
+    await rerender({ open: false })
+    await rerender({ open: true })
     expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
     expect(screen.queryByTestId('recovery-codes')).toBeNull()
   })
