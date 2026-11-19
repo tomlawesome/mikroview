@@ -325,6 +325,160 @@ func TestWANDoorsInterfaceListScopedRuleIsNotADoor(t *testing.T) {
 	}
 }
 
+// wanJSONServer applies filter and NAT tables written as the push's own
+// JSON records (A4-C1), so a rule can carry any condition the script sends.
+func wanJSONServer(t *testing.T, filterRecords, natRecords string) *httptest.Server {
+	t.Helper()
+	s, _ := newTestServer(t)
+	apply := func(kind, records string) {
+		if records == "" {
+			return
+		}
+		p, err := ingest.DecodePayload(strings.NewReader(`{"kind":"` + kind + `","page":1,"pages":1,"records":[` + records + `]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply("filter-rule", filterRecords)
+	apply("nat-rule", natRecords)
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// A4-C1 case 1: a rule the endpoint cannot judge is reported, not dropped;
+// the plain WAN accept stays the only door.
+func TestWANDoorsInterfaceListRuleIsReportedUnjudged(t *testing.T) {
+	ts := wanJSONServer(t,
+		`{"ordinal":1,"chain":"input","action":"accept","protocol":"tcp","dstPort":8291,"inInterfaceList":"WAN","comment":"winbox"},`+
+			`{"ordinal":3,"chain":"input","action":"accept","protocol":"tcp","dstPort":22,"inInterface":"ether1"}`, "")
+	dev := getWANDoors(t, ts, "?device=core&wan=ether1").Devices[0]
+	if len(dev.Doors) != 1 || dev.Doors[0].Ordinal != 3 {
+		t.Fatalf("only the plain WAN accept (#3) is a door, got %+v", dev.Doors)
+	}
+	if len(dev.Unjudged) != 1 {
+		t.Fatalf("the interface-list rule must be reported as unjudged, got %+v", dev.Unjudged)
+	}
+	u := dev.Unjudged[0]
+	if u.Ordinal != 1 || u.Label != "#1" || u.DstPort != "8291" || u.Proto != "tcp" || u.Comment != "winbox" ||
+		u.Scope != "in-interface-list=WAN" || u.To != nil {
+		t.Fatalf("unjudged entry carries the rule's label/port/proto/comment and verbatim scope, To nil, got %+v", u)
+	}
+
+	// Not a door, so no lastSeen is asked for it: the key is absent.
+	res, err := http.Get(ts.URL + "/api/doors/internet?device=core&wan=ether1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var raw struct {
+		Devices []struct {
+			Unjudged []map[string]json.RawMessage `json:"unjudged"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Devices[0].Unjudged) != 1 {
+		t.Fatalf("want one raw unjudged entry, got %+v", raw.Devices[0].Unjudged)
+	}
+	if _, has := raw.Devices[0].Unjudged[0]["lastSeen"]; has {
+		t.Fatalf("an unjudged rule is not a door and carries no lastSeen, got %v", raw.Devices[0].Unjudged[0])
+	}
+}
+
+// A4-C1 case 2.
+func TestWANDoorsUnjudgedDstNATCarriesItsHost(t *testing.T) {
+	ts := wanJSONServer(t, "",
+		`{"ordinal":4,"chain":"dstnat","action":"dst-nat","protocol":"udp","dstPort":53,"inInterfaceList":"WAN","toAddresses":"192.0.2.2"}`)
+	dev := getWANDoors(t, ts, "?device=core&wan=ether1").Devices[0]
+	if len(dev.Doors) != 0 {
+		t.Fatalf("no door expected, got %+v", dev.Doors)
+	}
+	if len(dev.Unjudged) != 1 || dev.Unjudged[0].To == nil || dev.Unjudged[0].To.IP != "192.0.2.2" ||
+		dev.Unjudged[0].Scope != "in-interface-list=WAN" || dev.Unjudged[0].Ordinal != 4 {
+		t.Fatalf("a dst-nat rule scoped by a list is unjudged with To set, got %+v", dev.Unjudged)
+	}
+}
+
+// A4-C1 case 3: scope names the condition verbatim; the list wins.
+func TestWANDoorsUnjudgedScopeNamesTheCondition(t *testing.T) {
+	ts := wanJSONServer(t,
+		`{"ordinal":1,"chain":"input","action":"accept","protocol":"tcp","dstPort":80,"srcAddressList":"LAN"},`+
+			`{"ordinal":2,"chain":"input","action":"accept","protocol":"tcp","dstPort":81,"srcAddress":"203.0.113.0/24"},`+
+			`{"ordinal":3,"chain":"input","action":"accept","protocol":"tcp","dstPort":82,"srcAddress":"203.0.113.0/24","srcAddressList":"LAN"},`+
+			`{"ordinal":4,"chain":"input","action":"accept","protocol":"tcp","dstPort":83,"srcAddress":"203.0.113.0/24","inInterfaceList":"WAN"}`, "")
+	dev := getWANDoors(t, ts, "?device=core&wan=ether1").Devices[0]
+	want := []string{"src-address-list=LAN", "src-address=203.0.113.0/24", "src-address-list=LAN", "in-interface-list=WAN"}
+	if len(dev.Unjudged) != len(want) {
+		t.Fatalf("want %d unjudged rules, got %+v", len(want), dev.Unjudged)
+	}
+	for i, w := range want {
+		if dev.Unjudged[i].Ordinal != i+1 || dev.Unjudged[i].Scope != w {
+			t.Errorf("unjudged[%d] = %+v, want ordinal %d scope %q", i, dev.Unjudged[i], i+1, w)
+		}
+	}
+}
+
+// A4-C1 case 3, order: filter rules first, then NAT, as Doors.
+func TestWANDoorsUnjudgedKeepsFilterThenNATOrder(t *testing.T) {
+	ts := wanJSONServer(t,
+		`{"ordinal":9,"chain":"input","action":"accept","protocol":"tcp","dstPort":80,"inInterfaceList":"WAN"}`,
+		`{"ordinal":2,"chain":"dstnat","action":"dst-nat","protocol":"tcp","dstPort":81,"inInterfaceList":"WAN","toAddresses":"192.0.2.2"}`)
+	dev := getWANDoors(t, ts, "?device=core&wan=ether1").Devices[0]
+	if len(dev.Unjudged) != 2 || dev.Unjudged[0].Ordinal != 9 || dev.Unjudged[1].Ordinal != 2 {
+		t.Fatalf("filter rules come before NAT rules in source order, got %+v", dev.Unjudged)
+	}
+}
+
+// A4-C1 case 4: a rule failing a known "not a door" test is in neither list.
+func TestWANDoorsKnownNotDoorRulesAreNotUnjudged(t *testing.T) {
+	ts := wanJSONServer(t,
+		`{"ordinal":1,"chain":"input","action":"accept","protocol":"tcp","dstPort":80,"inInterfaceList":"WAN","connectionState":"established,related"},`+
+			`{"ordinal":2,"chain":"input","action":"accept","protocol":"tcp","dstPort":81,"inInterfaceList":"WAN","disabled":true},`+
+			`{"ordinal":3,"chain":"forward","action":"accept","protocol":"tcp","dstPort":82,"inInterfaceList":"WAN"},`+
+			`{"ordinal":4,"chain":"input","action":"accept","protocol":"tcp","dstPort":83,"inInterfaceList":"WAN","inInterface":"ether2"},`+
+			`{"ordinal":5,"chain":"input","action":"accept","protocol":"tcp","dstPort":84,"srcAddressList":"LAN","inInterface":"ether2"}`, "")
+	dev := getWANDoors(t, ts, "?device=core&wan=ether1").Devices[0]
+	if len(dev.Doors) != 0 || len(dev.Unjudged) != 0 {
+		t.Fatalf("rules failing a known test belong in neither list, got doors %+v unjudged %+v", dev.Doors, dev.Unjudged)
+	}
+}
+
+// A4-C1 case 5: unjudged is always an array, never null.
+func TestWANDoorsUnjudgedIsAnEmptyArrayNotNull(t *testing.T) {
+	cases := map[string]*httptest.Server{
+		"no rules": wanJSONServer(t, `{"ordinal":1,"chain":"input","action":"accept","protocol":"tcp","dstPort":22,"inInterface":"ether1"}`, ""),
+	}
+	s, _ := newTestServer(t)
+	s.RouterState = nil
+	nilState := httptest.NewServer(s.mux())
+	t.Cleanup(nilState.Close)
+	cases["no RouterState"] = nilState
+	for name, ts := range cases {
+		res, err := http.Get(ts.URL + "/api/doors/internet?device=core&wan=ether1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw struct {
+			Devices []struct {
+				Unjudged json.RawMessage `json:"unjudged"`
+			} `json:"devices"`
+		}
+		err = json.NewDecoder(res.Body).Decode(&raw)
+		res.Body.Close()
+		if err != nil || len(raw.Devices) == 0 {
+			t.Fatalf("%s: decode %v, devices %d", name, err, len(raw.Devices))
+		}
+		if got := string(raw.Devices[0].Unjudged); got != "[]" {
+			t.Fatalf("%s: want unjudged to be a literal [], got %s", name, got)
+		}
+	}
+}
+
 func wanSeenServer(t *testing.T, filters []ingest.FilterRule, nats []ingest.NATRule) (*Server, *httptest.Server) {
 	t.Helper()
 	s, _ := newTestServer(t)

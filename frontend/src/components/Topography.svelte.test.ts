@@ -3462,6 +3462,41 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     restoreWanDoors()
   })
 
+  // A4-C1: rules the endpoint could not judge are counted apart, so "none"
+  // is only ever a true all-clear.
+  it.each([
+    [3, 0, 'Doors from the internet · 3'],
+    [3, 2, 'Doors from the internet · 3 · 2 not judged'],
+    [0, 2, 'Doors from the internet · none known · 2 not judged'],
+    [0, 0, 'Doors from the internet · none'],
+  ])('doorsTail with %i doors and %i unjudged reads "%s" (A4-C1)', (doors, unjudged, text) => {
+    guestDark()
+    const door = (n: number) => ({ label: `#${n}`, ordinal: n, dstPort: '22' })
+    const rule = (n: number) => ({ label: `#${n + 50}`, ordinal: n + 50, dstPort: '8291', scope: 'in-interface-list=WAN' })
+    wanDoorsState.devices = [
+      {
+        id: 'router1', name: 'router1', wan: 'ether1',
+        doors: Array.from({ length: doors }, (_, i) => door(i + 1)),
+        services: null,
+        unjudged: Array.from({ length: unjudged }, (_, i) => rule(i + 1)),
+      },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(anchorText(container)).toBe(text)
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe(text)
+  })
+
+  it('sums unjudged across devices for the map (A4-C1)', () => {
+    wanDoorsState.devices = [
+      { id: 'a', name: 'a', wan: 'ether1', doors: [], services: null, unjudged: [{ label: '#1', ordinal: 1, dstPort: '', scope: 'src-address=203.0.113.0/24' }] },
+      { id: 'b', name: 'b', wan: 'ether1', doors: [], services: null, unjudged: [{ label: '#2', ordinal: 2, dstPort: '', scope: 'src-address-list=LAN' }, { label: '#3', ordinal: 3, dstPort: '', scope: 'src-address-list=LAN' }] },
+    ]
+    expect((wanDoorsState as unknown as { totalUnjudged: number }).totalUnjudged).toBe(3)
+  })
+
   it('opens the doors panel from the internet anchor itself', () => {
     guestDark()
     wanDoorsState.devices = []

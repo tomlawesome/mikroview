@@ -249,6 +249,75 @@ describe('WanDoors', () => {
   })
 })
 
+// A4-C1: rules the endpoint cannot judge are shown, never silently dropped,
+// and never claimed as doors.
+describe('WanDoors unjudged rules (A4-C1)', () => {
+  const unjudgedRule = { label: '#7', ordinal: 7, dstPort: '8291', proto: 'tcp', scope: 'in-interface-list=WAN' }
+
+  it('lists an unjudged rule under "not judged" instead of the all-clear', async () => {
+    withDeviceWans([{ id: 'core', iface: 'ether1' }])
+    vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
+      devices: [{ id: device, name: 'rb5009', wan, doors: [], services: null, unjudged: [unjudgedRule] }],
+    }))
+    await open()
+
+    expect(screen.queryByTestId('wd-empty-core')).toBeNull()
+    expect(screen.getByText('not judged')).toBeTruthy()
+    const lead = screen.getByTestId('wd-unjudged-core')
+    expect(lead.textContent).toContain(
+      'These rules may be doors; MikroView cannot tell, because it is never sent a list\u2019s members or asked who an address is.'.replace('\u2019', "'"),
+    )
+    expect(screen.getByText('#7 8291/tcp → this router')).toBeTruthy()
+    expect(screen.getByText('in-interface-list=WAN')).toBeTruthy()
+  })
+
+  it('keeps the all-clear when nothing was unjudged', async () => {
+    withDeviceWans([{ id: 'core', iface: 'ether1' }])
+    vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
+      devices: [{ id: device, name: 'rb5009', wan, doors: [], services: null, unjudged: [] }],
+    }))
+    await open()
+
+    expect(screen.getByTestId('wd-empty-core').textContent).toContain(
+      'Nothing in the pushed tables lets the internet in, and nothing arrived in the window.',
+    )
+    expect(screen.queryByTestId('wd-unjudged-core')).toBeNull()
+    expect(screen.queryByText('not judged')).toBeNull()
+  })
+
+  it('shows a host rule with its destination, comment and scope, and claims nothing about it', async () => {
+    withDeviceWans([{ id: 'core', iface: 'ether1' }])
+    vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
+      devices: [
+        {
+          id: device, name: 'rb5009', wan, publicAddress: '203.0.113.9',
+          doors: [{ label: '#5', ordinal: 5, dstPort: '22', proto: 'tcp' }],
+          services: null,
+          unjudged: [
+            unjudgedRule,
+            { label: '#9', ordinal: 9, dstPort: '443', proto: 'tcp', comment: 'web', scope: 'src-address-list=LAN', to: { ip: '192.0.2.10', name: 'web' } },
+          ],
+        },
+      ],
+    }))
+    await open()
+
+    expect(screen.getByText('#9 443/tcp → 192.0.2.10 · web')).toBeTruthy()
+    expect(screen.getByText('web · src-address-list=LAN')).toBeTruthy()
+
+    const rows = [...document.querySelectorAll('[data-testid="wd-unjudged-core"] ~ ul.doors li')]
+    expect(rows).toHaveLength(2)
+    for (const r of rows) {
+      expect(r.textContent).not.toContain('allowed through')
+      expect(r.textContent).not.toContain('seen arriving')
+    }
+    // The probe lists only claimed doors.
+    expect(screen.getByText('nmap -Pn -p 22 203.0.113.9')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('8291,')
+    expect(document.body.textContent).not.toMatch(/nmap[^\n]*\b(443|8291)\b/)
+  })
+})
+
 // #1539 C3 (decision 19a): an aria-modal dialog owns focus -- Tab cannot
 // leave it. Closing already hands focus back (lib/wanDoors.svelte.ts).
 describe('the doors sheet traps focus (#1539 C3)', () => {
