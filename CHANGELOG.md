@@ -262,8 +262,11 @@ rewritten.
   `ui.allow` cannot be honoured, or when the accounts live in Postgres.
   Every config MikroView writes, and `deploy/config.example.yaml`, now
   opens with four header lines naming the schema (the settings it should
-  have: v0.6.1 is 7), the release that wrote it and its layout. See
-  docs/configuration.md's "The config editor" and "Setup-only mode".
+  have: v0.6.1 reads 7, this release reads 8 -- `geoip.dbPath` went, and
+  `geoip.cachePath`, `networks.home`, `auth.adminPasskey` and
+  `auth.signInsStorePath` arrived), the release that wrote it and its
+  layout. See docs/configuration.md's "The config editor" and "Setup-only
+  mode".
 
 - **A router's card names what an earlier setup left behind, with the exact
   fix** (#1373). The push script now reports every logging action still

@@ -902,7 +902,7 @@ does `deploy/config.example.yaml`:
 
 ```
 # MikroView configuration -- keep these four lines; MikroView reads them.
-# schema: 7            (which settings this file should have; goes up when keys change)
+# schema: 8            (which settings this file should have; goes up when keys change)
 # written-by: mikroview v0.6.1
 # layout: 1            (the order and banners below)
 ```
@@ -910,7 +910,7 @@ does `deploy/config.example.yaml`:
 - **schema** is the set of settings the file was written for. It goes up
   by one in any release that adds, removes or renames a setting:
   v0.1.0 is 1, v0.2.0 is 2, v0.3.x is 3, v0.4.0 is 4, v0.5.x is 5, v0.6.0
-  is 6 and v0.6.1 is 7.
+  is 6, v0.6.1 is 7 and v0.7.0 is 8.
 - **written-by** is the MikroView release that wrote the file.
 - **layout** is the order the file is in: the header, the settings you
   must set, the optional features, then -- under a large banner --

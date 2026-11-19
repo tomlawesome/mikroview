@@ -115,7 +115,7 @@ func TestGuessSchema(t *testing.T) {
 }
 
 func TestSchemaForVersion(t *testing.T) {
-	for v, want := range map[string]int{"v0.1.0": 1, "0.3.1": 3, "v0.5.1": 5, "v0.6.1": 7} {
+	for v, want := range map[string]int{"v0.1.0": 1, "0.3.1": 3, "v0.5.1": 5, "v0.6.1": 7, "v0.7.0": 8} {
 		if got, ok := SchemaForVersion(v); !ok || got != want {
 			t.Errorf("SchemaForVersion(%q) = %d, %v, want %d", v, got, ok, want)
 		}
