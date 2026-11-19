@@ -106,8 +106,6 @@ export function slugFor(rule: Pick<RouterFilterRule, 'comment' | 'chain' | 'inIn
 // to nothing -- or, worse, to a verdict the rule never reached: the
 // action's own initial gave return R (read as reject) and
 // add-*-to-address-list A (read as accept). '' means no code.
-// internal/routeros.LogPrefixForAction (the server's per-rule render
-// behind Log every rule) still uses the initial; that is its own finding.
 const PREFIX_CODE: Readonly<Record<string, string>> = {
   accept: 'A',
   drop: 'D',

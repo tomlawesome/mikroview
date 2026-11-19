@@ -210,6 +210,13 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 	}
 	prefixFor := func(action string) string { return routeros.LogPrefixForAction(action, dialect) }
 
+	if reason := noPrefixCodeReason(before, req.Selected, prefixFor); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]tuneLoggingRejectReason{
+			"rejected": {Reason: reason},
+		})
+		return
+	}
+
 	annotated, changed := renderExport(before, req.Selected, prefixFor)
 
 	after, err := export.Parse(annotated)
@@ -224,6 +231,22 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 		Changed:   changed,
 		RouterOS:  tuneLoggingRouterOS{Version: before.Version, Standing: standing, Dialect: dialect},
 	})
+}
+
+// noPrefixCodeReason (#1546) names the first selected rule that has no
+// log-prefix of its own and whose action has no code MikroView can read
+// back (prefixFor gives ""), or "" when every selected rule can be tagged.
+func noPrefixCodeReason(ex *export.Export, selected []int, prefixFor export.LogPrefixFunc) string {
+	want := make(map[int]bool, len(selected))
+	for _, id := range selected {
+		want[id] = true
+	}
+	for _, r := range ex.FilterRules {
+		if want[r.Index] && r.LogPrefix == "" && prefixFor(r.Action) == "" {
+			return fmt.Sprintf("rule %d (action=%s, comment %q) has no log-prefix code MikroView can read back; untick it or give it a log-prefix yourself", r.Index, r.Action, r.Comment)
+		}
+	}
+	return ""
 }
 
 // writeTuneLoggingRejection answers a *export.SecretFieldError with the

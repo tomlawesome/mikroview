@@ -227,8 +227,11 @@ from the rule's `log-prefix`, using a compact convention:
 
 - `A` = accept, `D` = drop, `R` = reject, `L` = log-only/passthrough,
   and any other rule that hands the packet on without deciding its fate
-  (jump, return, add-*-to-address-list, fasttrack-connection),
-  `M` = mangle mark rule, `N` = NAT
+  (jump, return, add-*-to-address-list, fasttrack-connection, notrack,
+  the change-* actions, set-priority, route, sniff-*),
+  `M` = mangle mark rule (mark-connection, mark-packet, mark-routing),
+  `N` = NAT (masquerade, src-nat, dst-nat, redirect, netmap, same).
+  `tarpit` has no code: MikroView never tags it.
 - `rule-slug` is a short, human-meaningful label (lowercase, hyphens)
 - **the trailing `|` is required** — RouterOS concatenates the log-prefix
   directly onto the log message with no guaranteed separating space, so
