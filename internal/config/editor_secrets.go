@@ -96,48 +96,7 @@ func MaskSecrets(text string) (string, map[string]string) {
 	}
 	lines := splitLines(text)
 
-	type span struct {
-		key string
-		textSpan
-	}
-	var spans []span
-	add := func(key string, v *yaml.Node) {
-		if v.Kind != yaml.ScalarNode || v.Value == "" || v.Tag == "!!null" {
-			return
-		}
-		if s, ok := scalarSpan(lines, v); ok {
-			spans = append(spans, span{key: key, textSpan: s})
-		}
-	}
-	for _, sk := range secretKeys {
-		if sk.Path {
-			continue
-		}
-		v := lookupNode(&doc, sk.Key)
-		if v == nil {
-			continue
-		}
-		if sk.Map {
-			if v.Kind != yaml.MappingNode {
-				continue
-			}
-			for i := 0; i+1 < len(v.Content); i += 2 {
-				add(sk.Key+"."+v.Content[i].Value, v.Content[i+1])
-			}
-			continue
-		}
-		add(sk.Key, v)
-	}
-
-	// Replace from the end of the file backwards so earlier positions
-	// stay valid while later ones are rewritten.
-	sort.Slice(spans, func(i, j int) bool {
-		if spans[i].line != spans[j].line {
-			return spans[i].line > spans[j].line
-		}
-		return spans[i].col > spans[j].col
-	})
-	for _, s := range spans {
+	for _, s := range secretSpans(&doc, lines) {
 		first := []rune(lines[s.line])
 		last := []rune(lines[s.endLine])
 		var raw strings.Builder
@@ -161,18 +120,94 @@ func MaskSecrets(text string) (string, map[string]string) {
 	return out, values
 }
 
-// UnmaskSecrets puts each value back in place of its placeholder. A
-// placeholder with no value is left as it is, for the caller to refuse
-// (see SecretPlaceholders): writing it out would ship a file whose
-// secret is the literal text of a mask.
-func UnmaskSecrets(text string, values map[string]string) string {
-	return secretPlaceholderPattern.ReplaceAllStringFunc(text, func(m string) string {
-		key := secretPlaceholderPattern.FindStringSubmatch(m)[1]
-		if v, ok := values[key]; ok {
-			return v
+// keyedSpan is one secret setting's value and the placeholder key it is
+// masked under.
+type keyedSpan struct {
+	key string
+	textSpan
+}
+
+// secretSpans is where the value of each secret-holding setting
+// (secretKeys, Path ones excluded) sits in lines, sorted from the end of
+// the file backwards so earlier positions stay valid while later ones are
+// rewritten. Only a scalar at one of those settings counts: a mask
+// anywhere else -- a comment, another setting, a key -- is not a secret's
+// place.
+func secretSpans(doc *yaml.Node, lines []string) []keyedSpan {
+	var spans []keyedSpan
+	add := func(key string, v *yaml.Node) {
+		if v.Kind != yaml.ScalarNode || v.Value == "" || v.Tag == "!!null" {
+			return
 		}
-		return m
+		if s, ok := scalarSpan(lines, v); ok {
+			spans = append(spans, keyedSpan{key: key, textSpan: s})
+		}
+	}
+	for _, sk := range secretKeys {
+		if sk.Path {
+			continue
+		}
+		v := lookupNode(doc, sk.Key)
+		if v == nil {
+			continue
+		}
+		if sk.Map {
+			if v.Kind != yaml.MappingNode {
+				continue
+			}
+			for i := 0; i+1 < len(v.Content); i += 2 {
+				add(sk.Key+"."+v.Content[i].Value, v.Content[i+1])
+			}
+			continue
+		}
+		add(sk.Key, v)
+	}
+	sort.Slice(spans, func(i, j int) bool {
+		if spans[i].line != spans[j].line {
+			return spans[i].line > spans[j].line
+		}
+		return spans[i].col > spans[j].col
 	})
+	return spans
+}
+
+// UnmaskSecrets puts each value back in place of its placeholder, but
+// only where the placeholder stands as the whole value of the secret
+// setting it names -- the one place MaskSecrets would mask it again. A
+// placeholder anywhere else (a comment, a non-secret setting, a key, a
+// quoted string) is left as the literal text: a value put there would
+// come back out of MaskSecrets in the clear, and Carry forward, which
+// needs no unlock, hands its text back. Text that does not parse is
+// returned unchanged, placeholders and all, for the same reason: with no
+// positions there is no safe place. A placeholder with no value is left
+// as it is, for the caller to refuse (see SecretPlaceholders): writing
+// it out would ship a file whose secret is the literal text of a mask.
+func UnmaskSecrets(text string, values map[string]string) string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+		return text
+	}
+	lines := splitLines(text)
+	for _, s := range secretSpans(&doc, lines) {
+		if s.line != s.endLine {
+			continue // a placeholder is one token on one line
+		}
+		row := []rune(lines[s.line])
+		if string(row[s.col:s.endCol]) != SecretPlaceholder(s.key) {
+			continue
+		}
+		v, ok := values[s.key]
+		if !ok {
+			continue
+		}
+		// v may hold newlines (a block scalar); joinLines carries them.
+		lines[s.line] = string(row[:s.col]) + v + string(row[s.endCol:])
+	}
+	out := joinLines(lines)
+	if !strings.HasSuffix(text, "\n") {
+		out = strings.TrimSuffix(out, "\n")
+	}
+	return out
 }
 
 // lookupNode finds the value node at a dotted path in doc, nil when any

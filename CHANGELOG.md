@@ -675,6 +675,15 @@ rewritten.
 
 ### Security
 
+- **The config editor puts a masked secret back only at its own setting**
+  (#1347 follow-up, audit finding A6-S2). A `<<secret:...>>` placeholder
+  that had been moved into a comment or another setting used to be
+  replaced by its value wherever it stood, so Carry forward -- which does
+  not ask for the password again -- handed the running config's secrets
+  back in the clear to anyone holding an admin session cookie. Such a
+  placeholder now stays as literal text, and Download and Snapshot refuse
+  the file until it is removed or the value typed in.
+
 - **GitLab builds, signs and publishes the image by digest** (#1472, step
   1). A push to `preview` or a release tag builds the image once, tests
   and scans those exact bytes, pushes them to the GitLab registry, signs
