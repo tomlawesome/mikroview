@@ -381,9 +381,9 @@ func TestWriteAtRejectsOutOfRangeOffsets(t *testing.T) {
 // sends half an SSH version line and nothing more; the server must hang
 // up within the idle timeout rather than wait for ever.
 func TestConnectionThatNeverFinishesTheHandshakeIsClosedAfterIdleTimeout(t *testing.T) {
-	old := idleTimeoutNS
-	idleTimeoutNS = int64(100 * time.Millisecond)
-	t.Cleanup(func() { idleTimeoutNS = old })
+	old := idleTimeoutNS.Load()
+	idleTimeoutNS.Store(int64(100 * time.Millisecond))
+	t.Cleanup(func() { idleTimeoutNS.Store(old) })
 
 	h := newHarness(t, testKey(t))
 	conn, err := net.Dial("tcp", h.addr)
@@ -401,9 +401,9 @@ func TestConnectionThatNeverFinishesTheHandshakeIsClosedAfterIdleTimeout(t *test
 }
 
 func TestConnectionsBeyondTheGlobalLimitAreRefused(t *testing.T) {
-	old := maxConnections
-	maxConnections = 1
-	t.Cleanup(func() { maxConnections = old })
+	old := maxConnections.Load()
+	maxConnections.Store(1)
+	t.Cleanup(func() { maxConnections.Store(old) })
 
 	h := newHarness(t, testKey(t))
 	holder, err := net.Dial("tcp", h.addr)
@@ -429,9 +429,9 @@ func TestConnectionsBeyondTheGlobalLimitAreRefused(t *testing.T) {
 }
 
 func TestConnectionsBeyondThePerSourceLimitAreRefused(t *testing.T) {
-	old := maxConnectionsPerSource
-	maxConnectionsPerSource = 2
-	t.Cleanup(func() { maxConnectionsPerSource = old })
+	old := maxConnectionsPerSource.Load()
+	maxConnectionsPerSource.Store(2)
+	t.Cleanup(func() { maxConnectionsPerSource.Store(old) })
 
 	h := newHarness(t, testKey(t))
 	refused, admitted := 0, 0
@@ -458,9 +458,10 @@ func TestConnectionsBeyondThePerSourceLimitAreRefused(t *testing.T) {
 // The guard: limits must not break a legitimate upload, and a finished
 // connection must give its slot and per-source count back.
 func TestUploadStillSucceedsWithinTheLimitsAndReleasesItsSlot(t *testing.T) {
-	oldG, oldS := maxConnections, maxConnectionsPerSource
-	maxConnections, maxConnectionsPerSource = 1, 1
-	t.Cleanup(func() { maxConnections, maxConnectionsPerSource = oldG, oldS })
+	oldG, oldS := maxConnections.Load(), maxConnectionsPerSource.Load()
+	maxConnections.Store(1)
+	maxConnectionsPerSource.Store(1)
+	t.Cleanup(func() { maxConnections.Store(oldG); maxConnectionsPerSource.Store(oldS) })
 
 	h := newHarness(t, testKey(t))
 	tok := h.mintIngestToken(t, "r1")
