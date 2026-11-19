@@ -41,6 +41,7 @@ import {
 } from '../../lib/api'
 import { blocklistState } from '../../lib/blocklist.svelte'
 import Builder from './Builder.svelte'
+import { expectFocusInside, expectTabWraps, focusedTrigger } from '../dialogKit'
 
 function entry(key: string, name: string, over: Partial<BlocklistCatalogueEntry> = {}): BlocklistCatalogueEntry {
   return {
@@ -335,5 +336,42 @@ describe('Builder', () => {
     await openOn(builder())
     await fireEvent.click(screen.getByRole('button', { name: 'Back to the drop list' }))
     expect(blocklistState.open).toBe(false)
+  })
+})
+
+// #1539 C2 (decision 18a) and C3 (19a): the builder is a full-screen
+// aria-modal dialog. Escape closes it, focus moves in on open and Tab
+// wraps inside it (a keyboard user cannot leave it today), and closing
+// hands focus back to what opened it.
+describe('Builder: Escape and focus (#1539)', () => {
+  async function openWithTrigger() {
+    const trigger = focusedTrigger()
+    await openOn(builder())
+    return { trigger, dialog: screen.getByRole('dialog', { name: 'Block known-bad addresses' }) }
+  }
+
+  it('Escape closes it', async () => {
+    const { trigger } = await openWithTrigger()
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(blocklistState.open).toBe(false)
+    expect(screen.queryByRole('dialog', { name: 'Block known-bad addresses' })).toBeNull()
+    trigger.remove()
+  })
+
+  it('moves focus inside on open and wraps Tab and Shift+Tab at its ends', async () => {
+    const { trigger, dialog } = await openWithTrigger()
+    expectFocusInside(dialog)
+    expectTabWraps(dialog)
+    trigger.remove()
+  })
+
+  it('hands focus back to the trigger when it closes', async () => {
+    const { trigger, dialog } = await openWithTrigger()
+    dialog.querySelector<HTMLElement>('button')!.focus()
+    expect(document.activeElement).not.toBe(trigger)
+    blocklistState.reset()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Block known-bad addresses' })).toBeNull())
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
   })
 })

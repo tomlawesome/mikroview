@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/svelte'
 import EventDetailSheet from './EventDetailSheet.svelte'
+import { expectFocusInside, expectTabWraps, focusedTrigger } from './dialogKit'
 import type { FirewallEvent } from '../lib/types'
 
 function makeEvent(overrides: Partial<FirewallEvent> = {}): FirewallEvent {
@@ -57,5 +58,32 @@ describe('EventDetailSheet NAT row (#1151)', () => {
     for (const row of container.querySelectorAll('.row')) {
       expect(row.children.length, `${row.querySelector('.k')?.textContent} row`).toBe(2)
     }
+  })
+})
+
+// #1539 C3 (decision 19a): an aria-modal dialog owns focus -- it moves in
+// on open, Tab wraps inside it, and closing hands focus back to what
+// opened it.
+describe('EventDetailSheet owns focus (#1539 C3)', () => {
+  function mount() {
+    const trigger = focusedTrigger()
+    const view = render(EventDetailSheet, { props: { event: makeEvent(), deviceName: 'router1', onClose: () => {} } })
+    return { trigger, view, sheet: view.getByRole('dialog', { name: 'Event detail' }) }
+  }
+
+  it('moves focus inside on open and wraps Tab and Shift+Tab at its ends', () => {
+    const { trigger, sheet } = mount()
+    expectFocusInside(sheet)
+    expectTabWraps(sheet)
+    trigger.remove()
+  })
+
+  it('hands focus back to the trigger when it closes', () => {
+    const { trigger, view, sheet } = mount()
+    sheet.querySelector<HTMLElement>('button.close')!.focus()
+    expect(document.activeElement).not.toBe(trigger)
+    view.unmount()
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
   })
 })

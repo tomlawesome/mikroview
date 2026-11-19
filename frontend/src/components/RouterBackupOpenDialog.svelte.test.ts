@@ -15,6 +15,7 @@ vi.mock('../lib/api', () => ({
 import { setRouterBackupSwitch } from '../lib/api'
 import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
 
+
 describe('RouterBackupOpenDialog (#1361)', () => {
   it('the caveat points at the deliver-by row in Settings → router backups (#1494)', () => {
     render(RouterBackupOpenDialog, { props: { onopened: vi.fn(), oncancel: vi.fn() } })
@@ -82,5 +83,26 @@ describe('RouterBackupOpenDialog (#1361)', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('incorrect password'))
     expect(screen.getByLabelText('your password')).toBeTruthy()
     expect(onopened).not.toHaveBeenCalled()
+  })
+})
+
+// #1539 C2 (decision 18a): Escape closes every dialog. This one is a
+// dialog in behaviour (a password re-check over the page), so Escape is
+// cancel -- it hands the host `oncancel`, calls nothing, and a pressed
+// Escape in the field is not an open.
+describe('RouterBackupOpenDialog: Escape cancels (#1539 C2)', () => {
+  it('Escape in the password field tells the host to cancel and calls nothing', async () => {
+    vi.mocked(setRouterBackupSwitch).mockReset()
+    const oncancel = vi.fn()
+    const onopened = vi.fn()
+    render(RouterBackupOpenDialog, { props: { onopened, oncancel } })
+    const field = screen.getByLabelText('your password')
+    await fireEvent.input(field, { target: { value: 'hunter2' } })
+
+    await fireEvent.keyDown(field, { key: 'Escape' })
+
+    expect(oncancel).toHaveBeenCalledTimes(1)
+    expect(onopened).not.toHaveBeenCalled()
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalled()
   })
 })

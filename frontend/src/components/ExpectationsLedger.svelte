@@ -58,6 +58,21 @@
     void load()
   })
 
+  // Round 28's arm-then-confirm gesture (#1539 C1): the first click arms
+  // the row's Forget, the second acts, a click elsewhere or Escape
+  // disarms. One row armed at a time.
+  let armedId = $state<string | null>(null)
+
+  function onForgetClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedId === id) {
+      armedId = null
+      void forget(id)
+      return
+    }
+    armedId = id
+  }
+
   async function forget(id: string) {
     forgetting[id] = true
     const failure = await forgetExpectation(id)
@@ -88,6 +103,13 @@
   }
 </script>
 
+<svelte:window
+  onclick={() => (armedId = null)}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') armedId = null
+  }}
+/>
+
 <section class="expectations">
   <h3>What it has been told to expect</h3>
 
@@ -115,11 +137,12 @@
               <button
                 type="button"
                 class="forget"
+                class:armed={armedId === e.id}
                 disabled={forgetting[e.id]}
                 aria-label="Forget the expectation for {e.target}"
-                onclick={() => forget(e.id)}
+                onclick={(ev) => onForgetClick(ev, e.id)}
               >
-                {forgetting[e.id] ? 'forgetting…' : 'forget'}
+                {forgetting[e.id] ? 'forgetting…' : armedId === e.id ? 'confirm — it stops being expected' : 'forget'}
               </button>
             {/if}
           </span>
@@ -202,6 +225,11 @@
 
   .forget:hover:not(:disabled) {
     color: var(--accent);
+  }
+
+  .forget.armed,
+  .forget.armed:hover:not(:disabled) {
+    color: var(--alarm);
   }
 
   .forget:disabled {

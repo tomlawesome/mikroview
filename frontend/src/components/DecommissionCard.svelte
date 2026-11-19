@@ -19,6 +19,7 @@
   // so the line tying its card to it is accent ink at 1.8px rather than
   // round 49's hairline, and the card sits beside the ghost.
   import type { Placement } from '../lib/cardAnchor'
+  import { restoreFocus } from '../lib/focusTrap'
   import {
     GHOST_INK,
     forceRemoveContract,
@@ -127,6 +128,10 @@
   style={place ? `left:${place.left}px;top:${place.top}px` : undefined}
   role="dialog"
   tabindex="-1"
+  use:restoreFocus
+  onkeydown={(e) => {
+    if (e.key === 'Escape' && onclose) onclose()
+  }}
   aria-label={kind === 'offer' && offer
     ? `${offerHeadline(offer)} — watch the dead range for stragglers?`
     : kind === 'straggler'

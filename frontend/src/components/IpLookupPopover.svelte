@@ -6,6 +6,7 @@
   // renders above LiveTable's scrolling body instead of getting clipped
   // by that container's overflow, which an absolutely-positioned popover
   // anchored inside the table would be.
+  import { restoreFocus } from '../lib/focusTrap'
   import { ipLookupState } from '../lib/ipLookup.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
@@ -54,6 +55,7 @@
     {style}
     role="dialog"
     aria-label="IP investigation: {ipLookupState.anchor.ip}"
+    use:restoreFocus
   >
     <div class="header">
       <span class="ip">{ipLookupState.anchor.ip}</span>

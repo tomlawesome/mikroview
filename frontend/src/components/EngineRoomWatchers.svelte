@@ -285,6 +285,7 @@
     // conditionsBarRef above would point at whichever mounted last while
     // draftConditions and friends still belonged to the other (#1075).
     discardDraft()
+    armedVerb = null
     openRow = name
     draftName = d.label
     fields = paramFields(schemaFor(name), d.params)
@@ -315,6 +316,7 @@
   }
 
   function closePanel() {
+    armedVerb = null
     openRow = null
     replay = null
     copiedFrom = null
@@ -486,6 +488,22 @@
     busy = false
     errors[name] = err ?? undefined
     if (!err) closePanel()
+  }
+
+  // Round 28's arm-then-confirm gesture (#1539 C1), as EngineRoom's revoke
+  // uses it: the first click arms the verb, the second acts, a click
+  // elsewhere or Escape disarms. Clone stays one click (#787 decision C).
+  let armedVerb = $state<string | null>(null)
+
+  function onArmable(e: MouseEvent, verb: 'remove' | 'reset', name: string, act: (name: string) => void) {
+    e.stopPropagation()
+    const key = `${verb}:${name}`
+    if (armedVerb === key) {
+      armedVerb = null
+      act(name)
+      return
+    }
+    armedVerb = key
   }
 
   // Reset puts the detector's params back to exactly what it shipped
@@ -661,6 +679,13 @@
   }
 
 </script>
+
+<svelte:window
+  onclick={() => (armedVerb = null)}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') armedVerb = null
+  }}
+/>
 
 {#snippet scopeGroup(fieldsFor: string[])}
           <div class="group">
@@ -1216,8 +1241,14 @@
               clone
             </button>
             <span class="mid">·</span>
-            <button type="button" class="olink quiet" disabled={busy} onclick={() => removeRow(d.name)}>
-              remove
+            <button
+              type="button"
+              class="olink quiet"
+              class:armed={armedVerb === `remove:${d.name}`}
+              disabled={busy}
+              onclick={(e) => onArmable(e, 'remove', d.name, removeRow)}
+            >
+              {armedVerb === `remove:${d.name}` ? 'confirm — it is deleted for good' : 'remove'}
             </button>
             <span class="mid">·</span>
             <button type="button" class="olink quiet" disabled={busy} onclick={closePanel}>
@@ -1392,8 +1423,14 @@
 
           <div class="actions">
             <span class="actions-left">
-              <button type="button" class="quiet" disabled={busy} onclick={() => resetRow(d.name)}>
-                Reset to stock
+              <button
+                type="button"
+                class="quiet"
+                class:armed={armedVerb === `reset:${d.name}`}
+                disabled={busy}
+                onclick={(e) => onArmable(e, 'reset', d.name, resetRow)}
+              >
+                {armedVerb === `reset:${d.name}` ? 'confirm — its edits are lost' : 'Reset to stock'}
               </button>
               <!-- Offered on every row since #829. It was custom-only
                    under #810, when a shipped detector's logic was Go the
@@ -1750,6 +1787,11 @@
   }
   .olink.quiet {
     color: var(--fg-dim);
+  }
+  .olink.armed,
+  .quiet.armed,
+  .quiet.armed:hover:not(:disabled) {
+    color: var(--alarm);
   }
   .rename {
     margin-top: 16px;

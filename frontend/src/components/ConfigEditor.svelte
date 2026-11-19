@@ -193,6 +193,12 @@
       return
     }
     if (e.key !== 'Escape') return
+    // An armed Delete is the innermost layer: Escape only backs out of it.
+    if (armedDelete !== null) {
+      e.preventDefault()
+      armedDelete = null
+      return
+    }
     if (pending || askingGuess || noteOpen) {
       e.preventDefault()
       clearBars()

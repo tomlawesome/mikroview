@@ -19,6 +19,7 @@
   // about a deletion that will not happen is how real warnings stop
   // being read.
   import { tick } from 'svelte'
+  import { trapFocus } from '../lib/focusTrap'
   import { authState } from '../lib/auth.svelte'
   import { startSSOLink } from '../lib/api'
 
@@ -102,7 +103,7 @@
 
 {#if authState.showSSOLink}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Connect SSO" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Connect SSO" tabindex="-1" use:trapFocus>
       <div class="modal-header">
         <span class="title">Connect SSO to your account</span>
         <button type="button" class="close" onclick={close} aria-label="Close">✕</button>

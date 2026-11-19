@@ -370,6 +370,7 @@ describe('reset', () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
     await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — its edits are lost/ }))
     await settle()
     expect(api.resetDefinition).toHaveBeenCalledWith('port_scan')
   })
@@ -378,6 +379,7 @@ describe('reset', () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
     await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — its edits are lost/ }))
     await settle()
     expect(api.updateDefinition).not.toHaveBeenCalled()
   })
@@ -386,6 +388,7 @@ describe('reset', () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
     await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — its edits are lost/ }))
     await settle()
     expect(screen.getByText('When it fires')).toBeTruthy()
   })
@@ -395,6 +398,7 @@ describe('reset', () => {
     render(EngineRoomWatchers, { canEdit: true })
     await open()
     await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — its edits are lost/ }))
     await settle()
     expect(screen.getByText('no such definition')).toBeTruthy()
   })
@@ -1037,5 +1041,101 @@ describe('the custom detector drawer', () => {
     expect(screen.getByLabelText('add {Count} to what a flag says')).toBeTruthy()
     expect(screen.getByLabelText('add {SourceAddress} to what a flag says')).toBeTruthy()
     expect(screen.queryByLabelText('add {DestinationAddress} to what a flag says')).toBeNull()
+  })
+})
+
+// #1539 C1 (decision 15a) and C2 (18a): `remove` a custom detector and
+// `Reset to stock` are arm-then-confirm like their siblings (round 28),
+// with the consequence in the armed label. Today the first click acts.
+describe('remove and reset are arm-then-confirm (#1539 C1)', () => {
+  const armed = () => screen.getAllByRole('button').filter((b) => /^confirm — \S/.test(b.textContent?.trim() ?? ''))
+
+  it('remove: the first click arms it and deletes nothing', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+
+    expect(api.deleteDefinition).not.toHaveBeenCalled()
+    expect(armed()).toHaveLength(1)
+  })
+
+  it('remove: the second click deletes, exactly once', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+    await fireEvent.click(armed()[0])
+    await settle()
+
+    expect(api.deleteDefinition).toHaveBeenCalledTimes(1)
+    expect(api.deleteDefinition).toHaveBeenCalledWith('ssh_hammering')
+  })
+
+  it('remove: a click elsewhere disarms it', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+    await fireEvent.click(document.body)
+    await settle()
+
+    expect(armed()).toHaveLength(0)
+    expect(api.deleteDefinition).not.toHaveBeenCalled()
+  })
+
+  it('remove: Escape disarms it (#1539 C2)', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await settle()
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    await settle()
+
+    expect(armed()).toHaveLength(0)
+    expect(api.deleteDefinition).not.toHaveBeenCalled()
+  })
+
+  it('reset: the first click arms it with "its edits are lost" and resets nothing', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await settle()
+
+    expect(api.resetDefinition).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /^confirm — its edits are lost/ })).toBeTruthy()
+  })
+
+  it('reset: the second click resets, exactly once', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — its edits are lost/ }))
+    await settle()
+
+    expect(api.resetDefinition).toHaveBeenCalledTimes(1)
+    expect(api.resetDefinition).toHaveBeenCalledWith('port_scan')
+  })
+
+  it('reset: Escape disarms it (#1539 C2)', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset to stock' }))
+    await settle()
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'Reset to stock' })).toBeTruthy()
+    expect(api.resetDefinition).not.toHaveBeenCalled()
+  })
+
+  it('clone stays one click -- #787 decision C ruled "no prompt" for clone only', async () => {
+    render(EngineRoomWatchers, { canEdit: true })
+    await open('SSH hammering')
+    await fireEvent.click(screen.getAllByRole('button', { name: /clone/i })[0])
+    await settle()
+
+    expect(api.cloneDefinition).toHaveBeenCalledTimes(1)
   })
 })

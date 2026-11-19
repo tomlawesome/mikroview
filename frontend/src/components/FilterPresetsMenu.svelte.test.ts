@@ -120,6 +120,8 @@ describe('the saved list', () => {
 
     await fireEvent.click(forgets()[0])
     flushSync()
+    await fireEvent.click(forgets()[0])
+    flushSync()
 
     expect(presetState.presets.map((p) => p.name)).toEqual(['the guest vlan'])
     // Forgetting is housekeeping, often more than one at a time, so the
@@ -174,5 +176,59 @@ describe('save this filter as…', () => {
 
     expect(appState.hasActiveFilters).toBe(true)
     expect(container.querySelector('.fpsave')?.textContent?.trim()).toBe('save this filter as…')
+  })
+})
+
+// #1539 C1 (decision 15a) and C2 (18a): deleting a saved filter is
+// arm-then-confirm like its siblings (round 28). Today the first click on
+// `×` deletes.
+describe('forgetting a saved filter is arm-then-confirm (#1539 C1)', () => {
+  it('the first click arms that row with the consequence in the label and deletes nothing', async () => {
+    const { trigger, forgets } = renderMenu()
+    await open(trigger)
+    await fireEvent.click(forgets()[0])
+    flushSync()
+
+    expect(presetState.presets.map((p) => p.name)).toEqual(['drops only', 'the guest vlan'])
+    expect(forgets()[0].textContent?.trim()).toMatch(/^confirm — \S/)
+    expect(forgets()[1].textContent?.trim()).toBe('×')
+  })
+
+  it('the second click deletes only that one and leaves the list open', async () => {
+    const { trigger, forgets, menu } = renderMenu()
+    await open(trigger)
+    await fireEvent.click(forgets()[0])
+    flushSync()
+    await fireEvent.click(forgets()[0])
+    flushSync()
+
+    expect(presetState.presets.map((p) => p.name)).toEqual(['the guest vlan'])
+    expect(menu()).not.toBeNull()
+  })
+
+  it('a click on another row disarms the first (it arms the other instead)', async () => {
+    const { trigger, forgets } = renderMenu()
+    await open(trigger)
+    await fireEvent.click(forgets()[0])
+    flushSync()
+    await fireEvent.click(forgets()[1])
+    flushSync()
+
+    expect(presetState.presets).toHaveLength(2)
+    expect(forgets()[0].textContent?.trim()).toBe('×')
+    expect(forgets()[1].textContent?.trim()).toMatch(/^confirm — /)
+  })
+
+  it('Escape disarms it: the reopened menu shows `×` and the filter is still saved (#1539 C2)', async () => {
+    const { trigger, forgets } = renderMenu()
+    await open(trigger)
+    await fireEvent.click(forgets()[0])
+    flushSync()
+    await fireEvent.keyDown(document, { key: 'Escape' })
+    flushSync()
+    await open(trigger)
+
+    expect(presetState.presets).toHaveLength(2)
+    expect(forgets()[0].textContent?.trim()).toBe('×')
   })
 })

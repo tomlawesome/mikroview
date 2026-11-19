@@ -22,6 +22,7 @@
   // a text chip, never left as a footnote to be skimmed past. The chip
   // is accent-coloured in logged mode, but the distinction it carries is
   // the word, never the colour.
+  import { restoreFocus } from '../lib/focusTrap'
   import { routerLookupState as st, natChip, natTitle } from '../lib/routerLookup.svelte'
   import { appState } from '../lib/state.svelte'
   import RouterNatLookup from './RouterNatLookup.svelte'
@@ -81,7 +82,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if st.anchor}
-  <div bind:this={popoverEl} class="popover" {style} role="dialog" aria-label={title}>
+  <div bind:this={popoverEl} class="popover" {style} role="dialog" aria-label={title} use:restoreFocus>
     <div class="header">
       <span class="title">{title}</span>
       {#if st.mode === 'nat' && !st.loading && !st.error}
