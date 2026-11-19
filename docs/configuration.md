@@ -3938,7 +3938,8 @@ case.
   account until you lower it and restart.
 - **SSO can't create the first account.** While no account exists the
   SSO sign-in routes answer "setup required"; create the local admin
-  with the code first, then connect SSO -- see [SSO is additive: keep a
+  with the code first, add its second step, then connect SSO from the
+  account menu's **Use single sign-on** -- see [SSO is additive: keep a
   local admin](#sso-is-additive-keep-a-local-admin).
 
 **A setup code when you weren't expecting one means MikroView has no
