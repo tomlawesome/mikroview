@@ -13,5 +13,5 @@ lib/export.ts ~ lib/export.ts | 9 lines | 53 tokens
 lib/flags.svelte.ts ~ lib/flags.svelte.ts | 12 lines | 51 tokens
 lib/flags.svelte.ts ~ lib/flags.svelte.ts | 25 lines | 68 tokens
 lib/format.ts ~ lib/format.ts | 6 lines | 66 tokens
-lib/ipLookup.svelte.ts ~ lib/routerLookup.svelte.ts | 13 lines | 52 tokens
+lib/ipLookup.svelte.ts ~ lib/routerLookup.svelte.ts | 13 lines | 64 tokens
 lib/neonFx.ts ~ lib/neonFx.ts | 6 lines | 50 tokens

@@ -42,6 +42,7 @@
   //
   // The `TuneLogging*` names it imports keep theirs: they mirror the two
   // /api/tune-logging endpoints, and #1134 leaves those paths alone.
+  import FailureLine from './FailureLine.svelte'
   import { untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { policyState } from '../lib/policy.svelte'
@@ -460,7 +461,7 @@
             </p>
           </div>
 
-          {#if analyseError}<p class="load-error">{analyseError}</p>{/if}
+          {#if analyseError}<FailureLine verb="analyse" thing="the export" said={analyseError} />{/if}
 
           <button
             type="button"
@@ -502,7 +503,7 @@
               {/if}
             </div>
 
-            {#if renderError}<p class="load-error">{renderError}</p>{/if}
+            {#if renderError}<FailureLine verb="render" thing="the rules" said={renderError} />{/if}
             <button type="button" class="primary" onclick={render} disabled={rendering || work.selected.size === 0}>
               {rendering ? 'Rendering…' : `Render (${work.selected.size} selected)`}
             </button>

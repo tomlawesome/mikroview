@@ -79,6 +79,8 @@
   // that omits it is not the rule table. It stays unnameable: the row
   // is plain dim text with no rename affordance, for every tier.
   import { onMount } from 'svelte'
+  import GhostRows from './GhostRows.svelte'
+  import FailureLine from './FailureLine.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -1002,7 +1004,14 @@
       >
     </div>
 
-    {#if activeView === 'hosts'}
+    {#if entitiesState.loadError !== null}
+      <FailureLine verb="load" thing="the names" said={entitiesState.loadError} />
+    {/if}
+    {#if !entitiesState.loaded}
+      <GhostRows label="Reading the names…" rows={5} />
+    {:else if entitiesState.loadError !== null && !entitiesState.hasLoaded}
+      <!-- A failed first load: the line above stands alone. -->
+    {:else if activeView === 'hosts'}
       <table class="etable">
         <thead>
           <tr>

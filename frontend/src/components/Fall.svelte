@@ -21,6 +21,7 @@
   // What "boundary" means here is narrower than the ratified record asks
   // for, and that gap is deliberate and disclosed rather than invented
   // silently -- see lib/fall.svelte.ts's header comment and PR #620.
+  import FailureLine from './FailureLine.svelte'
   import { appState } from '../lib/state.svelte'
   import AccountMenu from './AccountMenu.svelte'
   import {
@@ -1306,7 +1307,7 @@
   {#if fallState.loading}
     <p class="state-msg">Reading pushed firewall rules…</p>
   {:else if fallState.error}
-    <p class="state-msg error" role="alert">Could not read the pushed rule tables: {fallState.error}</p>
+    <FailureLine verb="read" thing="the pushed rule tables" said={fallState.error} />
   {:else if windowError && windowEvents.length === 0}
     <!-- #737: a failed window load is not a quiet one. Without this, a
          fetchEventsWindow failure left every band's traffic at zero,
@@ -1316,7 +1317,7 @@
          there is no window data at all: once a load has ever succeeded,
          a later transient failure still has real (if ageing) events to
          draw instead of hiding them behind this message. -->
-    <p class="state-msg error" role="alert">Could not load the window: {windowError}</p>
+    <FailureLine verb="load" thing="the window" said={windowError} />
   {:else if allBands.length === 0 && !windowLoading}
     <!-- Unmissable, mid-page: an empty fall must read as waiting, never
          as broken or unbuilt (owner, 2026-08-30). -->
@@ -1873,10 +1874,6 @@
     color: var(--o-ink3, var(--o-ink2));
     font-size: 12.5px;
   }
-  .state-msg.error {
-    color: var(--o-drop);
-  }
-
   /* ── the rig ─────────────────────────────────────────────────────── */
   .rig {
     flex: 1;

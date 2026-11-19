@@ -13,6 +13,7 @@
   // the river and bridges are #866's; standing on a building (#868) is
   // this file's own "the reach" section below. #986 dropped height and
   // the plinth (#867): devices sit flat on their district plate.
+  import FailureLine from './FailureLine.svelte'
   import { tick, untrack } from 'svelte'
   import { restoreFocus } from '../lib/focusTrap'
   import { appState } from '../lib/state.svelte'
@@ -4311,7 +4312,7 @@
             both directions
           </label>
           {#if coverageState.error}
-            <p class="d-error">{coverageState.error}</p>
+            <FailureLine verb="load" thing="the coverage" said={coverageState.error} />
           {/if}
           <div class="btns">
             <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
@@ -4438,7 +4439,7 @@
           </div>
         </div>
       {/if}
-      {#if hostsState.error}<div class="s alarm">{hostsState.error}</div>{/if}
+      {#if hostsState.error}<FailureLine verb="load" thing="the hosts" said={hostsState.error} />{/if}
 
       <div class="acts">
         {#if standBuilding?.id === c.b.id && standReach?.topBlocked}
@@ -4489,7 +4490,7 @@
           <button type="button" class="no" onclick={() => (expectedScope = null)}>cancel</button>
           <span class="who">{expectedWho(authState.username, scope, expectedLines.length)}</span>
         </div>
-        {#if baselineState.error}<div class="s alarm">{baselineState.error}</div>{/if}
+        {#if baselineState.error}<FailureLine verb="load" thing="the baseline" said={baselineState.error} />{/if}
       </div>
     {/if}
   {/snippet}
@@ -5359,11 +5360,6 @@
     color: var(--fg-dim);
   }
 
-  .bcard .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
-  }
 
   /* The plaque's dim second line. The coverage words that used to sit
      here went with round 49 (#1016): the wall is the statement. */

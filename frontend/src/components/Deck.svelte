@@ -27,6 +27,7 @@
   // to render outside the deck, which meant it had no navigation on it
   // at all -- the owner's ruling is the same shell as every other page,
   // and this is that shell.
+  import FailureLine from './FailureLine.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -274,7 +275,7 @@
                   <Topography />
                 {:else if mapFailed}
                   <div class="map-failed">
-                    <p role="alert">The map could not be loaded.</p>
+                    <FailureLine verb="load" thing="the map" said="" />
                     <button onclick={loadMap}>Try again</button>
                   </div>
                 {:else}

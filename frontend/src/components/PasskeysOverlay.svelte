@@ -17,6 +17,7 @@
   // offer a passkey right now, or this browser is not at the address
   // they were made for. The row that opens this overlay is never
   // hidden (AccountMenu.svelte); this is where it says why.
+  import FailureLine from './FailureLine.svelte'
   import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
@@ -414,7 +415,7 @@
           {#if loadingList}
             <p class="muted">Loading…</p>
           {:else if listError}
-            <p class="error">{listError}</p>
+            <FailureLine verb="load" thing="the passkeys" said={listError} />
           {:else if passkeys.length === 0}
             <p>
               Add a passkey -- a fingerprint, face or device PIN -- as a second step at sign-in,

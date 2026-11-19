@@ -219,7 +219,7 @@ describe('HostDossier', () => {
 
     reject(new Error('boom'))
     await vi.waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
-    expect(screen.getByText('Could not assemble the dossier')).toBeTruthy()
+    expect(screen.getByText('Could not assemble the dossier: boom')).toBeTruthy()
 
     vi.mocked(fetchHostDossier).mockImplementation(async () => FIXTURE)
     await fireEvent.click(screen.getByText('Try again'))

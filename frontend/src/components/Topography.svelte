@@ -9,6 +9,7 @@
   // a render. An event counts once per interface it touches, matching
   // the old `e.inInterface === iface || e.outInterface === iface` OR
   // check: if in and out are the same interface, that is one count.
+  import FailureLine from './FailureLine.svelte'
   import type { ClientEvent } from '../lib/types'
   import { restoreFocus } from '../lib/focusTrap'
 
@@ -7088,7 +7089,7 @@
       {/if}
 
       {#if hostsState.error}
-        <p class="d-error">{hostsState.error}</p>
+        <FailureLine verb="load" thing="the hosts" said={hostsState.error} />
       {/if}
 
       <div class="acts">
@@ -7274,7 +7275,7 @@
             both directions
           </label>
           {#if coverageState.error}
-            <p class="d-error">{coverageState.error}</p>
+            <FailureLine verb="load" thing="the coverage" said={coverageState.error} />
           {/if}
           <div class="btns">
             <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
@@ -7322,7 +7323,7 @@
           <span class="who">{expectedWho(authState.username, scope, offScopeLines.length)}</span>
         </div>
         {#if baselineState.error}
-          <p class="d-error">{baselineState.error}</p>
+          <FailureLine verb="load" thing="the baseline" said={baselineState.error} />
         {/if}
       </div>
     {/if}
@@ -8652,12 +8653,6 @@
   .card .form .who {
     margin-left: auto;
     color: var(--fg-dim);
-  }
-
-  .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
   }
 
   /* --- the composer (round 2 scene 4) ------------------------------------ */
