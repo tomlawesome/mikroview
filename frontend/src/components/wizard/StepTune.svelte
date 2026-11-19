@@ -75,14 +75,26 @@
   // way -- and the count starts from this moment.
   const flash = new CopyFlash()
 
+  let copying = false
+
   async function copy() {
-    if (copied || chosenRules.length === 0) return
-    // A failed copy flips the button to "copy failed" for a moment and
-    // leaves the step uncopied, so it can be tried again; a successful one
-    // keeps the step's own persistent "Copied" state.
-    if (!(await flash.run('tune', () => copyToClipboard(block)))) return
-    wizardRun.tuneChosen = chosenRules
-    wizardRun.markTuneCopied(chosenRules.length)
+    if (copied || copying || chosenRules.length === 0) return
+    // Snapshot before the await: a rule toggled while the write is pending
+    // must not change what was copied or what the count starts from. A
+    // double-click during the await copies once.
+    const rules = chosenRules
+    const text = block
+    copying = true
+    try {
+      // The step counts as copied on either outcome (a person who copied
+      // the selectable block by hand must still be able to finish it); a
+      // failed write only adds the "copy failed" flash.
+      await flash.run('tune', () => copyToClipboard(text))
+    } finally {
+      copying = false
+    }
+    wizardRun.tuneChosen = rules
+    wizardRun.markTuneCopied(rules.length)
   }
 </script>
 
@@ -113,7 +125,7 @@
   <pre class="script tagblock" aria-label="Tagging block">{#if block}{block}{:else}<span class="sec"># nothing ticked</span>{/if}</pre>
   <div class="copyrow">
     <button type="button" class="primary" disabled={copied || chosenRules.length === 0} onclick={copy}>
-      {copied ? 'Copied' : flash.label('tune', `Copy — ${chosenRules.length} rule${chosenRules.length === 1 ? '' : 's'}`)}
+      {flash.label('tune', copied ? 'Copied' : `Copy — ${chosenRules.length} rule${chosenRules.length === 1 ? '' : 's'}`, { copied: 'Copied', failed: 'copy failed' })}
     </button>
     <span class="note">Safe to paste again; it sets, never adds.</span>
   </div>

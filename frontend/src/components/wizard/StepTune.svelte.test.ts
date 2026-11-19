@@ -354,17 +354,47 @@ describe('StepTune copy failure flash (#1542 C12)', () => {
     wizardRun.reset()
   })
 
-  it('flips to "copy failed", stays uncopied, and returns to its label', async () => {
+  it('flips to "copy failed", still marks the step copied, and returns to "Copied"', async () => {
     render(StepTune)
     await waitFor(() => expect(rows()).toHaveLength(5))
     const btn = copyButton()
-    const idle = btn.textContent?.trim()
     vi.useFakeTimers()
     await fireEvent.click(btn)
     await vi.advanceTimersByTimeAsync(10)
     expect(btn.textContent?.trim()).toBe('copy failed')
-    expect(wizardRun.tuneCopied).toBe(false)
+    expect(wizardRun.tuneCopied).toBe(true)
+    expect(wizardRun.tuneChosen).toHaveLength(5)
     await vi.advanceTimersByTimeAsync(1600)
-    expect(btn.textContent?.trim()).toBe(idle)
+    expect(btn.textContent?.trim()).toBe('Copied')
+  })
+
+  it('a second click while the write is pending does not copy twice', async () => {
+    let settle!: () => void
+    const writeText = vi.fn(() => new Promise<void>((r) => (settle = r)))
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(StepTune)
+    await waitFor(() => expect(rows()).toHaveLength(5))
+    const btn = copyButton()
+    await fireEvent.click(btn)
+    await fireEvent.click(btn)
+    expect(writeText).toHaveBeenCalledTimes(1)
+    settle()
+    await waitFor(() => expect(wizardRun.tuneCopied).toBe(true))
+  })
+
+  it('a rule toggled while the write is pending does not change the recorded snapshot', async () => {
+    let settle!: () => void
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: () => new Promise<void>((r) => (settle = r)) },
+    })
+    render(StepTune)
+    await waitFor(() => expect(rows()).toHaveLength(5))
+    await fireEvent.click(copyButton())
+    await fireEvent.click(boxes()[0])
+    settle()
+    await waitFor(() => expect(wizardRun.tuneCopied).toBe(true))
+    expect(wizardRun.tuneChosen).toHaveLength(5)
+    expect(wizardRun.tuneCopied).toBe(true)
   })
 })
