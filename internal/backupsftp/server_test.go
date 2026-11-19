@@ -85,34 +85,13 @@ func newHarness(t *testing.T, key *retention.Key) *harness {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
 
+	// Serve on the listener already open, so no readiness probe is
+	// needed: a probe connection holds a slot until the server notices it
+	// closed, and the connection-limit tests run with a single slot.
 	ctx, cancel := context.WithCancel(context.Background())
-	ready := make(chan struct{})
-	go func() {
-		go func() {
-			// crude readiness: retry-dial loop below handles the race,
-			// this just gives ListenAndServe a moment to bind first.
-			close(ready)
-		}()
-		_ = srv.ListenAndServe(ctx, addr)
-	}()
-	<-ready
+	go func() { _ = srv.Serve(ctx, ln) }()
 	t.Cleanup(cancel)
-
-	// Retry the dial briefly: ListenAndServe's net.Listen happens
-	// asynchronously above.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			c.Close()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("server never started listening on %s", addr)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 
 	return &harness{addr: addr, vault: v, tokens: tokens}
 }
