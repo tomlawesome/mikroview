@@ -49,7 +49,7 @@ export interface TuneProposal {
 
 // docs/routeros-setup.md step 3: the whole prefix, trailing '|'
 // included, stays within 15 characters (internal/routeros/commands.go's
-// maxLogPrefixLen). One initial and two bars leave twelve for the slug.
+// maxLogPrefixLen). One code letter and two bars leave twelve for the slug.
 const MAX_PREFIX = 15
 const MAX_SLUG = MAX_PREFIX - 3
 
@@ -94,12 +94,41 @@ export function slugFor(rule: Pick<RouterFilterRule, 'comment' | 'chain' | 'inIn
   }
 }
 
-// prefixFor is the convention's <ACTION>|<slug>|: the action's own
-// first letter, upper-cased, as internal/routeros.LogPrefixForAction
-// has it (A for accept, D for drop, R for reject, L for log).
+// prefixCodeFor is the convention's one-letter action code
+// (docs/routeros-setup.md step 3; internal/routeros/prefix.go's
+// actionFromCode, mirrored by lib/fall.svelte.ts's logPrefixSlug): A, D
+// and R for the three verdicts, and L for a rule that logs without
+// deciding the packet's fate -- action=log itself, and the filter actions
+// that hand the packet on to the next rule or chain: jump, return,
+// passthrough, add-src/dst-to-address-list, fasttrack-connection. An
+// action with no code here (tarpit) is one MikroView could not read back,
+// so proposeRules leaves it out rather than write a prefix that decodes
+// to nothing -- or, worse, to a verdict the rule never reached: the
+// action's own initial gave return R (read as reject) and
+// add-*-to-address-list A (read as accept). '' means no code.
+// internal/routeros.LogPrefixForAction (the server's per-rule render
+// behind Log every rule) still uses the initial; that is its own finding.
+const PREFIX_CODE: Readonly<Record<string, string>> = {
+  accept: 'A',
+  drop: 'D',
+  reject: 'R',
+  log: 'L',
+  jump: 'L',
+  return: 'L',
+  passthrough: 'L',
+  'add-src-to-address-list': 'L',
+  'add-dst-to-address-list': 'L',
+  'fasttrack-connection': 'L',
+}
+export function prefixCodeFor(action: string): string {
+  return PREFIX_CODE[action] ?? ''
+}
+
+// prefixFor is the convention's <ACTION>|<slug>|; '' for an action with
+// no code (callers check prefixCodeFor first).
 export function prefixFor(action: string, slug: string): string {
-  const initial = (action[0] ?? '?').toUpperCase()
-  return `${initial}|${slug}|`
+  const code = prefixCodeFor(action)
+  return code ? `${code}|${slug}|` : ''
 }
 
 // matcherFor addresses a rule the way the server's own render does:
@@ -134,7 +163,7 @@ export function proposeRules(rules: readonly RouterFilterRule[]): TuneProposal {
   }
   const out: TuneRule[] = []
   for (const r of rules) {
-    if (r.disabled === true || r.log || everyPacket(r)) continue
+    if (r.disabled === true || r.log || everyPacket(r) || !prefixCodeFor(r.action)) continue
     const key = boundaryKeyOf(r.chain, r.inInterface, r.outInterface)
     const b = byKey.get(key)
     if (!b || b.coverage !== 'dark') continue

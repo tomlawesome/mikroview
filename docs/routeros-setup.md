@@ -226,6 +226,8 @@ from the rule's `log-prefix`, using a compact convention:
 ```
 
 - `A` = accept, `D` = drop, `R` = reject, `L` = log-only/passthrough,
+  and any other rule that hands the packet on without deciding its fate
+  (jump, return, add-*-to-address-list, fasttrack-connection),
   `M` = mangle mark rule, `N` = NAT
 - `rule-slug` is a short, human-meaningful label (lowercase, hyphens)
 - **the trailing `|` is required** — RouterOS concatenates the log-prefix
