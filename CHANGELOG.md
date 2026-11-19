@@ -243,146 +243,66 @@ rewritten.
   berth and a router card's `Re-enrol…` both open this same ledger, the
   latter straight at Mint the token with a fresh one.
 
-### Fixed
+- **A config editor, and a refused config no longer stops MikroView
+  dead** (#1347). Admins can open the running `config.yaml` in the UI
+  (password again; a 15-minute unlock covers showing secrets and
+  downloading), see start-up's own checks on each line as they type, and
+  press **Carry forward** to rewrite an old file for this release:
+  removed settings dropped with the reason, sections moved into the
+  example's layout, values and comments kept. The result is a download
+  named `config.v<release>.yaml` -- MikroView never writes the config
+  file; keep the previous one beside it. Secrets are masked in the
+  editor and put back in the download. The last five snapshots of the
+  text are kept, sealed under the retention key and carried by
+  `-backup`, including one taken before every Carry forward. When
+  start-up refuses the config it now comes up in **setup-only mode**:
+  sign-in, `/api/healthz` (`"mode": "setup-only"`) and the editor, with
+  every other route answering 503 and nothing else running. It still
+  exits as before when there is no account to sign in with, when
+  `ui.allow` cannot be honoured, or when the accounts live in Postgres.
+  Every config MikroView writes, and `deploy/config.example.yaml`, now
+  opens with four header lines naming the schema (the settings it should
+  have: v0.6.1 is 7), the release that wrote it and its layout. See
+  docs/configuration.md's "The config editor" and "Setup-only mode".
 
-- **A recovery-key command killed while first creating the recovery pepper
-  no longer breaks every later one** (#1489, #1485). The pepper file now only
-  appears once it is complete, and two commands started together agree on one
-  pepper instead of one failing with "recovery pepper is unreadable".
-  The pepper is also created on filesystems that refuse hard links.
+- **A router's card names what an earlier setup left behind, with the exact
+  fix** (#1373). The push script now reports every logging action still
+  sending to this MikroView instance, not only the one named `mikroview` --
+  so another of MikroView's own actions from an earlier setup, or a
+  RouterOS built-in (`memory`, `remote`, `disk`, `echo`) repointed here by
+  one, shows up. Each gets a line on the router's card and, for an admin,
+  the exact commands in a "paste into the router's terminal" box: reset for
+  a repointed built-in, remove for anything else. The upgrade notice counts
+  routers with a leftover, and a refused sender's card says whose other
+  address it is when that address belongs to an enrolled router. See
+  docs/routeros-setup.md's "Cleaning up an earlier setup".
 
-- **A watchlist match with an oversized log line is now recorded** (#1471).
-  Its raw line is cut to the stored limit instead of the match being refused.
+- **Recovery codes can be regenerated without removing a second factor**
+  (#1331). Before this, the only way to a fresh set of ten was removing
+  a factor and adding it back — tolerable for a single authenticator
+  app, but an account holding several passkeys had to strip all of them
+  first, since the shared set is only cleared when the last factor
+  goes. The account menu's new **New recovery codes…** asks for your
+  password, then shows a fresh ten the same way setting up a factor
+  does; the old ten stop working the instant the new ones are
+  committed. Doesn't sign any session out — only a change to which
+  factors protect the account does that.
 
-- **`-restore` no longer refuses a v0.6 backup over a torn match-log
-  line** that v0.6 skipped; the line is left out and the restore says so.
+- **The setup wizard warns about RouterOS upgrades that break pasted
+  commands** (#1344, owner ruling on #1343). The drop-list setup card
+  shows, per connected router, every "from version X onward, this
+  affects Y" warning that applies to its reported version; first entry
+  is 7.24.3's removal of the GoDaddy Class 2 root from the router's
+  trust store. (The full-screen wizard that replaced the old setup
+  screen, #1381-#1386, does not show it.)
 
-- **`-backup` works on an install with a match log** (#1452). It read the
-  match log as a sealed document, which it never was, and stopped. It now
-  opens the sealed log with the key and carries its lines as plain JSON
-  lines, as v0.6 did; `-restore` seals them again under the restoring
-  install's key, so a v0.6 backup still restores.
-
-- **The data directory can move to a new path** (#1450). Each sealed
-  store file was bound to its own configured path, so a data directory
-  copied or moved to a different path -- a bare-metal install, or a
-  config naming a new directory -- was refused at start-up as altered.
-  From v0.7.0 every install has a key, so this would have hit everyone.
-  Files are now bound to their store's name instead: a file put in
-  another store's place is still refused, naming the store, and a file
-  not made with your key still never opens. A file sealed by an earlier
-  release opens once at the path it was sealed at and is re-sealed the
-  new way, which the log notes once per file; after that it can move.
-  The re-seal happens once the start has opened every store; a start
-  refused before then (a plaintext match log, say) leaves every file as
-  it was, so the release it came from still opens it.
-- **An open tab no longer keeps you signed in** (#1448). The live
-  view's connection checked the session every 30 seconds, and each check
-  counted as activity, so a tab left open stayed signed in until the
-  session's maximum lifetime (`auth.sessionMaxLifetime`, at most 24
-  hours), however long nobody touched it. The check now
-  changes nothing, so the session ends at the idle limit
-  (`auth.sessionTTL`, at most an hour) after your last real request, and
-  the connection closes with it. A session that is signed out, revoked or
-  ended by a password change still closes its connection at the next
-  check, as before (#375).
-- **Safari: the page no longer ends up 12 px too high after a lost
-  connection** (#1423). With the connection banner showing, tabbing to
-  the last name on the side rail scrolled the whole app up to show it,
-  and Safari kept that offset after the banner went away, cutting
-  off the top 12 px of every scene. The app's outer frame can no
-  longer scroll.
-- **The wizard's saved scripts paste whole on RouterOS 7.18** (#1360).
-  Before 7.19 the RouterOS console drops a line break typed inside a
-  quoted argument, so the push and backup scripts the wizard hands over
-  saved on a 7.18 router as one run-on line and did nothing. Their line
-  breaks now go in as `\n`, so each script is one console line and
-  saves the same on every release. Re-paste step 4 (and 6) on a 7.18
-  router.
-- **The hand-paste backup script in the RouterOS guide saves whole on
-  7.18** (#1412). `docs/routeros-setup.md` 7c printed the SFTP backup
-  script with its source over several lines, which a 7.18 console joins
-  into one run-on line that does nothing. It is now the same one line
-  the wizard prints, line breaks written as `\n`, and a test holds the
-  guide to the generator. If you pasted 7c by hand on a 7.18 router,
-  paste it again.
-- **The guide's hand-built push and HTTPS backup scripts save whole on
-  7.18** (#1416). Steps 4e and 7c-ii told you to escape the script's
-  quotes, backslashes and `$` before putting it in `source="…"`, but
-  not to join its lines, so on a 7.18 router it saved as one run-on
-  line that did nothing. The rule now says to write each line break as
-  `\n`, backslashes first, which makes it one console line; a test
-  applies the rule to the guide's own blocks and holds the result to
-  what the wizard prints. Checked on CHR 7.18.2 and 7.24.4. If you
-  built either script by hand on a 7.18 router, build and paste it
-  again.
-- **The drop list's setup card pastes on a router with no raw rules
-  yet** (#1413). Its firewall rule was added with `place-before=0`,
-  which RouterOS refuses on an empty raw table ("no such item", seen on
-  7.18.2 and 7.24.4), so the rule never went in. The card now adds the
-  rule plainly when the raw table is empty and first in the table
-  otherwise, as the blocklist builder's rules do.
-- **A router's own management services no longer come mixed in with
-  four of RouterOS's own runtime services** (#1405). A real router's
-  `/ip/service` table also returns `dhcpclient`, `btest`, `discover` and
-  `reverse-proxy` -- entries RouterOS runs itself, not things an
-  operator turns on or off -- and these used to show up in a router's
-  services list next to `telnet`, `ssh`, `www` and the rest. The push
-  script now marks each row so MikroView can tell them apart, and a
-  router still running the previous script is still handled correctly,
-  since MikroView falls back to a check of its own. A TLS service with
-  no certificate set, which a router reports as the literal word `none`,
-  now reads as no certificate rather than showing that word.
-- **On the wizard's blocklist step, the rail's first four rows no
-  longer look clickable** (#1417). They highlighted on hover but did
-  nothing when clicked. They now read as done steps you cannot go back
-  to, as they already do on Where setup stands; Where setup stands
-  itself stays clickable and takes you back there.
-
-### Removed
-
-- **`internal/auth` and `internal/oidc` are gone** (#1202). Authentication
-  runs on the [gauntlet](https://github.com/tomlawesome/gauntlet) library
-  (v0.4.3, Apache-2.0) instead, and the auth handler files in `internal/api` went
-  with them. Routes, paths and success bodies are unchanged, and existing
-  accounts, recovery keys and token values keep working. Recovery keys,
-  which are MikroView's own, moved to `internal/recoverykeys`.
-- **The keyless exception for accounts, tokens, recovery keys and the drop
-  list is gone** (#1202, ends #853 rule 6 and the 2026-09-18 drop-list
-  addendum; see `docs/decisions/event-retention.md`). No install runs
-  without a key any more.
-
-- **`backup.enabled` and `MIKROVIEW_BACKUP_ENABLED` are gone** (#1361):
-  the router-backup drop box's switch moved to Settings → router backups
-  (see Added above). A `config.yaml` that still sets `backup.enabled`
-  keeps loading -- that value seeds the switch's starting position the
-  first time this version runs with nothing stored yet, logged when it
-  does, and is never read again after that. Delete the key whenever
-  convenient; leaving it in place is harmless. `backup.listen` and
-  `backup.vaultDir` are unaffected and stay config-only.
-
-- **The first-run walk before the wizard is gone** (#1386, owner
-  decision 2026-09-30). A brand-new install no longer shows the attach,
-  connecting and "skip or tour" screens after the admin account is
-  made: the wizard's way in plays straight away, and the wizard asks
-  for the router lines once, in Paste once. The tour those screens led
-  to is kept -- see Added above for where it is offered now.
-
-- **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
-  `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
-  `GeoLite2-Country.mmdb`. MikroView downloads MaxMind's file itself
-  now: enter your MaxMind account ID and licence key on the Engine
-  Room's "Country and network owner" card instead, and delete the
-  mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
-  refuses to start and names the card. Remove the key.
-
-- **The Register step is gone for good** (#1493). A router is registered
-  the moment its enrol line is accepted: minting its token with your
-  password already confirmed it. Entities no longer reports an
-  unfinished Register step or offers **Finish registering…**, and
-  `POST /api/devices/{id}/registration` is removed. `registeredAt` is
-  still reported in `/api/devices`. Every new enrolment sets it to the
-  same moment as `enrolledAt`; older records keep their own date.
+- **The RouterOS upgrade warning also shows on the drop-list setup card**
+  (#1378, follow-up to #1344). The card fetches the setup commands the
+  warning is drawn from, once its own setup section is opened, and
+  shows the warning above them. (It also showed on the
+  account-creation journey; the wizard rewrite removed that.)
+  Still not shown on the Engine Room's clipboard-only "copy for
+  RouterOS" (#1344's own ruling).
 
 ### Changed
 
@@ -494,6 +414,261 @@ rewritten.
   copied Apple Private Relay's ranges verbatim, an exact-prefix overlap
   now classifies as VPN rather than Private Relay, the reverse of the
   old trie's tie-break.
+
+- **On-disk event history is on by default** (#1357, owner's decision).
+  `history.enabled` now defaults to `true`, and `install.sh` gives a
+  fresh install a key for it (`keys/history.key` in the app folder
+  volume, written by a throwaway helper container before mikroview
+  starts — never on this script's own command line or in its output),
+  so a plain `curl | sh` install keeps history with no setup step.
+  **If you upgrade:** with no `history:` block in your config and no
+  key mounted, MikroView still comes up exactly as before, memory-only
+  — the only new thing is a CFG-0080 warning at startup saying so and
+  how to mount a key if you want history now. But if you already mount
+  a key for the state store (#853's flags/entities/watchlist encryption, or
+  an earlier history key) and never wrote `history.enabled: false`
+  explicitly, this upgrade turns the on-disk event log on too — set
+  `history.enabled: false` first if you want to keep using that key for
+  the state store alone. Installing with Compose, or with the bare
+  `docker run` in docs/install.md, does not run `install.sh`: history
+  stays off there until you mount a key yourself (one command, in
+  docs/install.md and docs/configuration.md).
+
+### Removed
+
+- **`internal/auth` and `internal/oidc` are gone** (#1202). Authentication
+  runs on the [gauntlet](https://github.com/tomlawesome/gauntlet) library
+  (v0.4.3, Apache-2.0) instead, and the auth handler files in `internal/api` went
+  with them. Routes, paths and success bodies are unchanged, and existing
+  accounts, recovery keys and token values keep working. Recovery keys,
+  which are MikroView's own, moved to `internal/recoverykeys`.
+- **The keyless exception for accounts, tokens, recovery keys and the drop
+  list is gone** (#1202, ends #853 rule 6 and the 2026-09-18 drop-list
+  addendum; see `docs/decisions/event-retention.md`). No install runs
+  without a key any more.
+
+- **`backup.enabled` and `MIKROVIEW_BACKUP_ENABLED` are gone** (#1361):
+  the router-backup drop box's switch moved to Settings → router backups
+  (see Added above). A `config.yaml` that still sets `backup.enabled`
+  keeps loading -- that value seeds the switch's starting position the
+  first time this version runs with nothing stored yet, logged when it
+  does, and is never read again after that. Delete the key whenever
+  convenient; leaving it in place is harmless. `backup.listen` and
+  `backup.vaultDir` are unaffected and stay config-only.
+
+- **The first-run walk before the wizard is gone** (#1386, owner
+  decision 2026-09-30). A brand-new install no longer shows the attach,
+  connecting and "skip or tour" screens after the admin account is
+  made: the wizard's way in plays straight away, and the wizard asks
+  for the router lines once, in Paste once. The tour those screens led
+  to is kept -- see Added above for where it is offered now.
+
+- **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
+  `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
+  `GeoLite2-Country.mmdb`. MikroView downloads MaxMind's file itself
+  now: enter your MaxMind account ID and licence key on the Engine
+  Room's "Country and network owner" card instead, and delete the
+  mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
+  refuses to start and names the card. Remove the key.
+
+- **The Register step is gone for good** (#1493). A router is registered
+  the moment its enrol line is accepted: minting its token with your
+  password already confirmed it. Entities no longer reports an
+  unfinished Register step or offers **Finish registering…**, and
+  `POST /api/devices/{id}/registration` is removed. `registeredAt` is
+  still reported in `/api/devices`. Every new enrolment sets it to the
+  same moment as `enrolledAt`; older records keep their own date.
+
+- **The Theme button and its accent-colour picker are gone** (#1371,
+  owner's request; replacement is #492). Signal/Pulse/Nebula/Frequency/
+  Mono and the account menu's Theme control are removed wholesale — no
+  alias, no stored-preference migration. The app keeps the default
+  accent (Signal), styled directly in `:root` rather than through a
+  `[data-colorway]` switch.
+
+### Fixed
+
+- **A recovery-key command killed while first creating the recovery pepper
+  no longer breaks every later one** (#1489, #1485). The pepper file now only
+  appears once it is complete, and two commands started together agree on one
+  pepper instead of one failing with "recovery pepper is unreadable".
+  The pepper is also created on filesystems that refuse hard links.
+
+- **A watchlist match with an oversized log line is now recorded** (#1471).
+  Its raw line is cut to the stored limit instead of the match being refused.
+
+- **`-restore` no longer refuses a v0.6 backup over a torn match-log
+  line** that v0.6 skipped; the line is left out and the restore says so.
+
+- **`-backup` works on an install with a match log** (#1452). It read the
+  match log as a sealed document, which it never was, and stopped. It now
+  opens the sealed log with the key and carries its lines as plain JSON
+  lines, as v0.6 did; `-restore` seals them again under the restoring
+  install's key, so a v0.6 backup still restores.
+
+- **The data directory can move to a new path** (#1450). Each sealed
+  store file was bound to its own configured path, so a data directory
+  copied or moved to a different path -- a bare-metal install, or a
+  config naming a new directory -- was refused at start-up as altered.
+  From v0.7.0 every install has a key, so this would have hit everyone.
+  Files are now bound to their store's name instead: a file put in
+  another store's place is still refused, naming the store, and a file
+  not made with your key still never opens. A file sealed by an earlier
+  release opens once at the path it was sealed at and is re-sealed the
+  new way, which the log notes once per file; after that it can move.
+  The re-seal happens once the start has opened every store; a start
+  refused before then (a plaintext match log, say) leaves every file as
+  it was, so the release it came from still opens it.
+- **An open tab no longer keeps you signed in** (#1448). The live
+  view's connection checked the session every 30 seconds, and each check
+  counted as activity, so a tab left open stayed signed in until the
+  session's maximum lifetime (`auth.sessionMaxLifetime`, at most 24
+  hours), however long nobody touched it. The check now
+  changes nothing, so the session ends at the idle limit
+  (`auth.sessionTTL`, at most an hour) after your last real request, and
+  the connection closes with it. A session that is signed out, revoked or
+  ended by a password change still closes its connection at the next
+  check, as before (#375).
+- **Safari: the page no longer ends up 12 px too high after a lost
+  connection** (#1423). With the connection banner showing, tabbing to
+  the last name on the side rail scrolled the whole app up to show it,
+  and Safari kept that offset after the banner went away, cutting
+  off the top 12 px of every scene. The app's outer frame can no
+  longer scroll.
+- **The wizard's saved scripts paste whole on RouterOS 7.18** (#1360).
+  Before 7.19 the RouterOS console drops a line break typed inside a
+  quoted argument, so the push and backup scripts the wizard hands over
+  saved on a 7.18 router as one run-on line and did nothing. Their line
+  breaks now go in as `\n`, so each script is one console line and
+  saves the same on every release. Re-paste step 4 (and 6) on a 7.18
+  router.
+- **The hand-paste backup script in the RouterOS guide saves whole on
+  7.18** (#1412). `docs/routeros-setup.md` 7c printed the SFTP backup
+  script with its source over several lines, which a 7.18 console joins
+  into one run-on line that does nothing. It is now the same one line
+  the wizard prints, line breaks written as `\n`, and a test holds the
+  guide to the generator. If you pasted 7c by hand on a 7.18 router,
+  paste it again.
+- **The guide's hand-built push and HTTPS backup scripts save whole on
+  7.18** (#1416). Steps 4e and 7c-ii told you to escape the script's
+  quotes, backslashes and `$` before putting it in `source="…"`, but
+  not to join its lines, so on a 7.18 router it saved as one run-on
+  line that did nothing. The rule now says to write each line break as
+  `\n`, backslashes first, which makes it one console line; a test
+  applies the rule to the guide's own blocks and holds the result to
+  what the wizard prints. Checked on CHR 7.18.2 and 7.24.4. If you
+  built either script by hand on a 7.18 router, build and paste it
+  again.
+- **The drop list's setup card pastes on a router with no raw rules
+  yet** (#1413). Its firewall rule was added with `place-before=0`,
+  which RouterOS refuses on an empty raw table ("no such item", seen on
+  7.18.2 and 7.24.4), so the rule never went in. The card now adds the
+  rule plainly when the raw table is empty and first in the table
+  otherwise, as the blocklist builder's rules do.
+- **A router's own management services no longer come mixed in with
+  four of RouterOS's own runtime services** (#1405). A real router's
+  `/ip/service` table also returns `dhcpclient`, `btest`, `discover` and
+  `reverse-proxy` -- entries RouterOS runs itself, not things an
+  operator turns on or off -- and these used to show up in a router's
+  services list next to `telnet`, `ssh`, `www` and the rest. The push
+  script now marks each row so MikroView can tell them apart, and a
+  router still running the previous script is still handled correctly,
+  since MikroView falls back to a check of its own. A TLS service with
+  no certificate set, which a router reports as the literal word `none`,
+  now reads as no certificate rather than showing that word.
+- **On the wizard's blocklist step, the rail's first four rows no
+  longer look clickable** (#1417). They highlighted on hover but did
+  nothing when clicked. They now read as done steps you cannot go back
+  to, as they already do on Where setup stands; Where setup stands
+  itself stays clickable and takes you back there.
+
+- **Recovery codes and the way out when they fail** (#1345). While
+  recovery codes are on screen, closing or reloading the tab now asks
+  first (the codes are shown once). If a new second factor saves but its
+  recovery codes do not, the first-sign-in screen now says the second
+  step is on and offers Enter, instead of leaving the user on a screen
+  whose advice pointed at settings they could not reach; the error text
+  now points at the account menu's "New recovery codes…". Linking SSO
+  now says the recovery codes go too, and an admin clearing a user's
+  last second factor is told the same.
+
+- A preference changed while the first load of preferences fails no
+  longer snaps back; it is sent once a load succeeds (#1345 R5-F3). A
+  late sign-in error now shows under the method that sent it, not the
+  one switched to meanwhile (R4-F3). A slow Fall poll can no longer
+  overwrite a newer one (R4B-F2). Failing to list passkeys now behaves
+  like the other lists: an expired session goes to sign-in, anything
+  else shows the list's own error (Q5-F2). A restore refusal no longer
+  calls the stores "a mixture" when they all landed and only the router
+  backup vault or event history did not (FR9-F1).
+
+- **The setup wizard now says where each copy box goes** (#1368). Every
+  block meant for the router — trust the certificate, send logs, tag
+  rules, push router state, back up — carries "Paste into the router's
+  terminal (WinBox: New Terminal; WebFig: Terminal)" next to it, and a
+  one-line note on what it does. The history-key commands say plainly
+  they run on the MikroView machine instead. Labels that used to call a
+  terminal block "a script" ("the push scheduling script", "the backup
+  script") no longer do — an operator had pasted one into RouterOS's
+  Scripts window because that box has a Source field too, and nothing
+  said the block was terminal commands rather than a script to save.
+  `docs/routeros-setup.md`'s `<mikroview-host>` placeholder is now
+  `<mikroview-host:port>` throughout, with a note that the port is the
+  one in your browser's address bar.
+
+- **A router's HTTPS pushes no longer get refused because syslog was
+  pinned to a different address** (#1370). The Send logs block now
+  always sets `src-address=0.0.0.0` on the mikroview logging action, so
+  RouterOS picks the same address for syslog and for `/tool fetch`
+  pushes rather than a stale pin from an earlier paste holding syslog on
+  one address while pushes moved to another. The setup wizard and
+  routeros-setup.md no longer recommend pinning `src-address` anywhere —
+  the fix for a declared router that has gone silent is now to declare
+  the address it's actually arriving from, not to pin the router back
+  onto the old one.
+
+- **The blocked certificate step now shows the exact `tls.hosts` line to
+  paste** (#1365). It used to say "add 192.0.2.15 to tls.hosts in
+  config.yaml and restart" without ever showing the syntax. The step now
+  prints a copyable `hosts: [...]` line carrying every host already
+  configured plus the missing one, so pasting it can only add coverage —
+  never drop an address already there — and says where it goes
+  (config.yaml's `tls:` section on the MikroView machine, then restart).
+  The equivalent server log line (a router reaching MikroView by a name
+  its certificate does not cover) now gives the same one-line example.
+- **An account that lost its second factor, or was forced to change its
+  password, mid-session no longer sees bare "403" errors** (#1362).
+  Upgrading past 0.6.1 with a tab already open -- or any other route to a
+  live session on an account that now needs a second factor or a new
+  password -- used to leave every view showing the refusal as an
+  ordinary error ("Could not read the pushed rule tables: fetchDevices:
+  403") instead of the second-factor or change-password screen that
+  actually gets the account out. The frontend now recognises that
+  specific 403 and moves to the right screen on its own.
+
+- **GitHub's preview-image and RouterOS-freshness workflows build with the
+  right Go patch again** (#1356). `#1312` moved Go to 1.27.1 everywhere it
+  knew about, but `.github/workflows/docker.yml` and
+  `.github/workflows/routeros-freshness.yml` still pinned `actions/setup-go`
+  to 1.27.0, so every GitHub-side preview push failed `go.mod`'s minimum-Go
+  check and the mirrored `latest` promotion then failed too. Both now match
+  `go.mod`, `tools/supply-chain/pins-policy.mjs` reads every workflow's
+  `go-version` and fails the drift check if one disagrees, and Renovate's
+  "go toolchain" group now also tracks that pin so a future bump moves it
+  with the rest.
+- **On-disk event history is no longer deleted just because it is off**
+  (#1353). A config with the `history:` block missing, `enabled: false`,
+  or no key file used to make MikroView delete every retained day at
+  startup, with one info line after the fact. It now keeps the files,
+  retains nothing new, and logs a warning saying where they are and how
+  to turn history back on. Nothing in the config file deletes retained
+  history any more; deleting is only ever an admin choice made from
+  Settings. Turning history off from Settings still asks, then deletes.
+
+- **The header-scan linearity test no longer flakes on a busy host**
+  (#1376). `TestNextHeaderStartScalesLinearlyOnLongLTRun` now counts the
+  bytes `nextHeaderStart`'s scan actually visits instead of timing it, so
+  the ratio it checks can't be thrown off by other load on the machine.
 
 ### Security
 
@@ -635,193 +810,6 @@ rewritten.
   sessions and writes the audit record even when saving the recovery
   codes then fails (#1394). Both used to be skipped on that path, left
   for a retry that could never happen.
-
-### Added
-
-- **A config editor, and a refused config no longer stops MikroView
-  dead** (#1347). Admins can open the running `config.yaml` in the UI
-  (password again; a 15-minute unlock covers showing secrets and
-  downloading), see start-up's own checks on each line as they type, and
-  press **Carry forward** to rewrite an old file for this release:
-  removed settings dropped with the reason, sections moved into the
-  example's layout, values and comments kept. The result is a download
-  named `config.v<release>.yaml` -- MikroView never writes the config
-  file; keep the previous one beside it. Secrets are masked in the
-  editor and put back in the download. The last five snapshots of the
-  text are kept, sealed under the retention key and carried by
-  `-backup`, including one taken before every Carry forward. When
-  start-up refuses the config it now comes up in **setup-only mode**:
-  sign-in, `/api/healthz` (`"mode": "setup-only"`) and the editor, with
-  every other route answering 503 and nothing else running. It still
-  exits as before when there is no account to sign in with, when
-  `ui.allow` cannot be honoured, or when the accounts live in Postgres.
-  Every config MikroView writes, and `deploy/config.example.yaml`, now
-  opens with four header lines naming the schema (the settings it should
-  have: v0.6.1 is 7), the release that wrote it and its layout. See
-  docs/configuration.md's "The config editor" and "Setup-only mode".
-
-- **A router's card names what an earlier setup left behind, with the exact
-  fix** (#1373). The push script now reports every logging action still
-  sending to this MikroView instance, not only the one named `mikroview` --
-  so another of MikroView's own actions from an earlier setup, or a
-  RouterOS built-in (`memory`, `remote`, `disk`, `echo`) repointed here by
-  one, shows up. Each gets a line on the router's card and, for an admin,
-  the exact commands in a "paste into the router's terminal" box: reset for
-  a repointed built-in, remove for anything else. The upgrade notice counts
-  routers with a leftover, and a refused sender's card says whose other
-  address it is when that address belongs to an enrolled router. See
-  docs/routeros-setup.md's "Cleaning up an earlier setup".
-### Added
-
-- **Recovery codes can be regenerated without removing a second factor**
-  (#1331). Before this, the only way to a fresh set of ten was removing
-  a factor and adding it back — tolerable for a single authenticator
-  app, but an account holding several passkeys had to strip all of them
-  first, since the shared set is only cleared when the last factor
-  goes. The account menu's new **New recovery codes…** asks for your
-  password, then shows a fresh ten the same way setting up a factor
-  does; the old ten stop working the instant the new ones are
-  committed. Doesn't sign any session out — only a change to which
-  factors protect the account does that.
-### Added
-
-- **The setup wizard warns about RouterOS upgrades that break pasted
-  commands** (#1344, owner ruling on #1343). The drop-list setup card
-  shows, per connected router, every "from version X onward, this
-  affects Y" warning that applies to its reported version; first entry
-  is 7.24.3's removal of the GoDaddy Class 2 root from the router's
-  trust store. (The full-screen wizard that replaced the old setup
-  screen, #1381-#1386, does not show it.)
-
-### Added
-
-- **The RouterOS upgrade warning also shows on the drop-list setup card**
-  (#1378, follow-up to #1344). The card fetches the setup commands the
-  warning is drawn from, once its own setup section is opened, and
-  shows the warning above them. (It also showed on the
-  account-creation journey; the wizard rewrite removed that.)
-  Still not shown on the Engine Room's clipboard-only "copy for
-  RouterOS" (#1344's own ruling).
-
-### Removed
-
-- **The Theme button and its accent-colour picker are gone** (#1371,
-  owner's request; replacement is #492). Signal/Pulse/Nebula/Frequency/
-  Mono and the account menu's Theme control are removed wholesale — no
-  alias, no stored-preference migration. The app keeps the default
-  accent (Signal), styled directly in `:root` rather than through a
-  `[data-colorway]` switch.
-
-### Changed
-
-- **On-disk event history is on by default** (#1357, owner's decision).
-  `history.enabled` now defaults to `true`, and `install.sh` gives a
-  fresh install a key for it (`keys/history.key` in the app folder
-  volume, written by a throwaway helper container before mikroview
-  starts — never on this script's own command line or in its output),
-  so a plain `curl | sh` install keeps history with no setup step.
-  **If you upgrade:** with no `history:` block in your config and no
-  key mounted, MikroView still comes up exactly as before, memory-only
-  — the only new thing is a CFG-0080 warning at startup saying so and
-  how to mount a key if you want history now. But if you already mount
-  a key for the state store (#853's flags/entities/watchlist encryption, or
-  an earlier history key) and never wrote `history.enabled: false`
-  explicitly, this upgrade turns the on-disk event log on too — set
-  `history.enabled: false` first if you want to keep using that key for
-  the state store alone. Installing with Compose, or with the bare
-  `docker run` in docs/install.md, does not run `install.sh`: history
-  stays off there until you mount a key yourself (one command, in
-  docs/install.md and docs/configuration.md).
-
-### Fixed
-
-- **Recovery codes and the way out when they fail** (#1345). While
-  recovery codes are on screen, closing or reloading the tab now asks
-  first (the codes are shown once). If a new second factor saves but its
-  recovery codes do not, the first-sign-in screen now says the second
-  step is on and offers Enter, instead of leaving the user on a screen
-  whose advice pointed at settings they could not reach; the error text
-  now points at the account menu's "New recovery codes…". Linking SSO
-  now says the recovery codes go too, and an admin clearing a user's
-  last second factor is told the same.
-
-- A preference changed while the first load of preferences fails no
-  longer snaps back; it is sent once a load succeeds (#1345 R5-F3). A
-  late sign-in error now shows under the method that sent it, not the
-  one switched to meanwhile (R4-F3). A slow Fall poll can no longer
-  overwrite a newer one (R4B-F2). Failing to list passkeys now behaves
-  like the other lists: an expired session goes to sign-in, anything
-  else shows the list's own error (Q5-F2). A restore refusal no longer
-  calls the stores "a mixture" when they all landed and only the router
-  backup vault or event history did not (FR9-F1).
-
-- **The setup wizard now says where each copy box goes** (#1368). Every
-  block meant for the router — trust the certificate, send logs, tag
-  rules, push router state, back up — carries "Paste into the router's
-  terminal (WinBox: New Terminal; WebFig: Terminal)" next to it, and a
-  one-line note on what it does. The history-key commands say plainly
-  they run on the MikroView machine instead. Labels that used to call a
-  terminal block "a script" ("the push scheduling script", "the backup
-  script") no longer do — an operator had pasted one into RouterOS's
-  Scripts window because that box has a Source field too, and nothing
-  said the block was terminal commands rather than a script to save.
-  `docs/routeros-setup.md`'s `<mikroview-host>` placeholder is now
-  `<mikroview-host:port>` throughout, with a note that the port is the
-  one in your browser's address bar.
-
-- **A router's HTTPS pushes no longer get refused because syslog was
-  pinned to a different address** (#1370). The Send logs block now
-  always sets `src-address=0.0.0.0` on the mikroview logging action, so
-  RouterOS picks the same address for syslog and for `/tool fetch`
-  pushes rather than a stale pin from an earlier paste holding syslog on
-  one address while pushes moved to another. The setup wizard and
-  routeros-setup.md no longer recommend pinning `src-address` anywhere —
-  the fix for a declared router that has gone silent is now to declare
-  the address it's actually arriving from, not to pin the router back
-  onto the old one.
-
-- **The blocked certificate step now shows the exact `tls.hosts` line to
-  paste** (#1365). It used to say "add 192.0.2.15 to tls.hosts in
-  config.yaml and restart" without ever showing the syntax. The step now
-  prints a copyable `hosts: [...]` line carrying every host already
-  configured plus the missing one, so pasting it can only add coverage —
-  never drop an address already there — and says where it goes
-  (config.yaml's `tls:` section on the MikroView machine, then restart).
-  The equivalent server log line (a router reaching MikroView by a name
-  its certificate does not cover) now gives the same one-line example.
-- **An account that lost its second factor, or was forced to change its
-  password, mid-session no longer sees bare "403" errors** (#1362).
-  Upgrading past 0.6.1 with a tab already open -- or any other route to a
-  live session on an account that now needs a second factor or a new
-  password -- used to leave every view showing the refusal as an
-  ordinary error ("Could not read the pushed rule tables: fetchDevices:
-  403") instead of the second-factor or change-password screen that
-  actually gets the account out. The frontend now recognises that
-  specific 403 and moves to the right screen on its own.
-
-- **GitHub's preview-image and RouterOS-freshness workflows build with the
-  right Go patch again** (#1356). `#1312` moved Go to 1.27.1 everywhere it
-  knew about, but `.github/workflows/docker.yml` and
-  `.github/workflows/routeros-freshness.yml` still pinned `actions/setup-go`
-  to 1.27.0, so every GitHub-side preview push failed `go.mod`'s minimum-Go
-  check and the mirrored `latest` promotion then failed too. Both now match
-  `go.mod`, `tools/supply-chain/pins-policy.mjs` reads every workflow's
-  `go-version` and fails the drift check if one disagrees, and Renovate's
-  "go toolchain" group now also tracks that pin so a future bump moves it
-  with the rest.
-- **On-disk event history is no longer deleted just because it is off**
-  (#1353). A config with the `history:` block missing, `enabled: false`,
-  or no key file used to make MikroView delete every retained day at
-  startup, with one info line after the fact. It now keeps the files,
-  retains nothing new, and logs a warning saying where they are and how
-  to turn history back on. Nothing in the config file deletes retained
-  history any more; deleting is only ever an admin choice made from
-  Settings. Turning history off from Settings still asks, then deletes.
-
-- **The header-scan linearity test no longer flakes on a busy host**
-  (#1376). `TestNextHeaderStartScalesLinearlyOnLongLTRun` now counts the
-  bytes `nextHeaderStart`'s scan actually visits instead of timing it, so
-  the ratio it checks can't be thrown off by other load on the machine.
 
 ## [0.6.1] - 2026-09-24
 
