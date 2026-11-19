@@ -75,6 +75,7 @@ beforeEach(() => {
   entitiesState.list = []
   entitiesState.loaded = false
   entitiesState.loadError = null
+  entitiesState.hasLoaded = false
   auditState.reset()
   watchlistState.reset?.()
 })
@@ -142,5 +143,20 @@ describe('a failed first load says so, never a blank or endless ghost (#1540 rev
     expect(container.querySelector('.ghost-rows')).toBeNull()
     expect(screen.getByRole('alert').textContent).toContain('Could not load the names: boom')
     expect(container.querySelector('table.etable')).toBeNull()
+  })
+})
+
+describe('a failed refresh keeps what is already shown (#1540 review)', () => {
+  it('Entities: after a good load, a failed refresh shows the line above the tables', async () => {
+    fetchEntities.mockResolvedValueOnce([{ type: 'host', key: '192.0.2.5', label: 'printer' }])
+    const { container } = render(Entities)
+    await settle()
+    expect(container.querySelector('table.etable')).not.toBeNull()
+
+    fetchEntities.mockRejectedValue(new Error('boom'))
+    await entitiesState.refresh().catch(() => {})
+    await settle()
+    expect(screen.getByRole('alert').textContent).toContain('Could not load the names: boom')
+    expect(container.querySelector('table.etable')).not.toBeNull()
   })
 })
