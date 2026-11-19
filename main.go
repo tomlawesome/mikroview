@@ -8,7 +8,9 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	// Jitter only -- spreading instances' daily blocklist fetches so they
 	// do not all arrive at 00:00 UTC. Nothing drawn from this is a
@@ -2791,9 +2793,18 @@ func confirmSaved() bool {
 	return strings.EqualFold(strings.TrimSpace(answer), "saved")
 }
 
-func hasFlag(args []string, name string) bool {
+// forceFlag reports whether args carry the mode option -force. It is
+// parsed with the flag package, so -force, --force and -force=true all
+// work; other arguments (the path) are left to firstNonFlag.
+func forceFlag(args []string) bool {
 	for _, a := range args {
-		if a == name {
+		if a == "" || a[0] != '-' {
+			continue
+		}
+		fs := flag.NewFlagSet("mode", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		force := fs.Bool("force", false, "")
+		if fs.Parse([]string{a}) == nil && *force {
 			return true
 		}
 	}

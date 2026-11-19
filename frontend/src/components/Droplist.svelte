@@ -30,6 +30,7 @@
     fetchSetupCommands,
   } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { formatRelative } from '../lib/format'
   import type { DroplistResponse, SetupCommandsResponse } from '../lib/types'
   import UpgradeWarnings from './UpgradeWarnings.svelte'
@@ -155,8 +156,7 @@
 
   // --- the setup card (#1225): printed, never applied ---------------------
   let setupOpen = $state(false)
-  let copiedLabel = $state<string | null>(null)
-  let copiedTimer: ReturnType<typeof setTimeout> | undefined
+  const flash = new CopyFlash()
 
   // upgradeCommands (#1378): this card never fetched POST
   // /api/setup/commands before -- it prints its own four blocks
@@ -177,14 +177,8 @@
     })
   })
 
-  async function copyBlock(key: string, text: string) {
-    const ok = await copyToClipboard(text)
-    if (!ok) return
-    copiedLabel = key
-    if (copiedTimer) clearTimeout(copiedTimer)
-    copiedTimer = setTimeout(() => {
-      if (copiedLabel === key) copiedLabel = null
-    }, 1500)
+  function copyBlock(key: string, text: string) {
+    return flash.run(key, () => copyToClipboard(text))
   }
 
   // --- the add form --------------------------------------------------------
@@ -351,14 +345,14 @@
       <div class="rk">
         <code>{justMinted.key}</code>
         <button type="button" class="olink" onclick={() => copyBlock('reveal-key', justMinted?.key ?? '')}>
-          {copiedLabel === 'reveal-key' ? 'copied' : 'copy'}
+          {flash.label('reveal-key', 'copy')}
         </button>
       </div>
       <div class="rnote">shown once — mikroview does not keep it in the clear, so copy it now</div>
       <div class="rk">
         <code>{justMinted.scheduler}</code>
         <button type="button" class="olink" onclick={() => copyBlock('reveal-scheduler', justMinted?.scheduler ?? '')}>
-          {copiedLabel === 'reveal-scheduler' ? 'copied' : 'copy'}
+          {flash.label('reveal-scheduler', 'copy')}
         </button>
       </div>
       <button type="button" class="olink quiet" onclick={() => (justMinted = null)}>done</button>
@@ -393,28 +387,28 @@
         <span class="sblab">scheduler</span>
         <code>{resp.setup.scheduler}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-scheduler', resp.setup.scheduler)}>
-          {copiedLabel === 'setup-scheduler' ? 'copied' : 'copy'}
+          {flash.label('setup-scheduler', 'copy')}
         </button>
       </div>
       <div class="setupblock">
         <span class="sblab">drop rule</span>
         <code>{resp.setup.rule}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-rule', resp.setup.rule)}>
-          {copiedLabel === 'setup-rule' ? 'copied' : 'copy'}
+          {flash.label('setup-rule', 'copy')}
         </button>
       </div>
       <div class="setupblock">
         <span class="sblab">emergency: disable the rule</span>
         <code>{resp.setup.disableRule}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-disable', resp.setup.disableRule)}>
-          {copiedLabel === 'setup-disable' ? 'copied' : 'copy'}
+          {flash.label('setup-disable', 'copy')}
         </button>
       </div>
       <div class="setupblock">
         <span class="sblab">emergency: empty the list</span>
         <code>{resp.setup.emptyList}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-empty', resp.setup.emptyList)}>
-          {copiedLabel === 'setup-empty' ? 'copied' : 'copy'}
+          {flash.label('setup-empty', 'copy')}
         </button>
       </div>
     </div>

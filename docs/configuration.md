@@ -4118,7 +4118,7 @@ leaves them out cannot restore a working system, and you would find that
 out during a disaster. So treat the file exactly as you would the data
 directory. MikroView writes it `0600`, refuses to overwrite an existing
 file, and refuses to write into a world-readable directory unless you
-pass `--force`.
+pass `-force`.
 
 **Restoring never half-happens.** The file is fully parsed and checked
 before anything on disk is touched, and each store is written to a temp
@@ -4127,7 +4127,7 @@ existing state exactly as it was — which matters most for the accounts
 file, where the alternative to "unchanged" is "locked out".
 
 `-restore` refuses to overwrite stores that already exist unless you pass
-`--force`. Copy the data directory somewhere safe first if you want a way
+`-force`. Copy the data directory somewhere safe first if you want a way
 back to what's on it now — `-restore` does not do that for you.
 
 **Peak memory tracks the backup you actually have, not a worst case you
@@ -4152,7 +4152,7 @@ bind mount to volume, or volume to bind mount — so you don't hand-copy
 files and risk getting the ownership wrong.
 
 ```sh
-mikroview -migrate-data <destination-directory> [--force]
+mikroview -migrate-data <destination-directory> [-force]
 ```
 
 **Stop MikroView first.** Then run the image with the old location
@@ -4253,7 +4253,7 @@ match. A failure at any point leaves the source untouched.
 
 `-migrate-data` refuses:
 
-- a destination that isn't empty, unless you pass `--force`
+- a destination that isn't empty, unless you pass `-force`
 - a destination inside the source directory, or the source inside the
   destination
 - a symlink or other special file anywhere in the data directory
