@@ -230,7 +230,8 @@ cannot have that combine with a restart to silently wipe a router's list.
 ## Addendum, 2026-10-10: rule 6 and the drop-list exception end; the auth stores are the exception to "Postgres is unaffected" (#1202)
 
 **Status:** Decided (owner rulings 2, 11, 13 and 14 in
-`docs/decisions/gauntlet-adoption.md`, 2026-10-10). Merged
+`docs/decisions/gauntlet-adoption.md`, 2026-10-10; the sealing parts of
+rulings 2, 11 and 14 are superseded by ruling 19 there). Merged
 into `dev` (2026-11-13, aec97729) for v0.7.0 (was built on `feat/1202-gauntlet`).
 
 Authentication moves onto the gauntlet library, and its account store

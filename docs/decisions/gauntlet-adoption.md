@@ -213,7 +213,8 @@ still set `droplist.storePath` to `""`.
   already sealed open unchanged, byte for byte. Sealing in place, on
   files and on Postgres, applies only while the stored schema is below
   4 -- the first start of v0.7.0 -- and the schema moves to 4 only once
-  every auth store and the drop list have opened sealed (ruling 14).
+  every auth store and the drop list have opened sealed (ruling 14). [Superseded by ruling 19: no sealing in
+  place, at any schema.]
   From then on a plaintext document is refused, as an install with a
   key always refused one before. Gauntlet's
   `persist.Encrypt` is not used for files: it binds its label rather
@@ -587,7 +588,8 @@ decision the design above states.
   mikroview will not set `AllowPlaintextAtRest`. Every auth store
   (accounts, tokens, recovery-key digests, sign-in history) is sealed
   under the key, on the file and Postgres backends; existing plaintext
-  data is sealed in place on first open (`MigratePlaintext`). Ends the
+  data is sealed in place on first open (`MigratePlaintext`) [superseded by
+  ruling 19: plaintext is refused, never sealed]. Ends the
   #853 rule 6 exception for these stores. Needs a start-up refusal
   with a clear error code and message on mounting a key; a key mounted
   in `deploy/docker-compose.yml` and the install docs; a CHANGELOG entry
