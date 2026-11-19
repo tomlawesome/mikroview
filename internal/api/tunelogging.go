@@ -228,8 +228,9 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 
 // writeTuneLoggingRejection answers a *export.SecretFieldError with the
 // contract's 400 {"rejected":{"reason":...}} shape (application/json, the
-// one documented JSON refusal on this route; the frontend reads it as text); any other error --
-// including a *export.ControlCharError -- falls back to a plain 400.
+// one documented JSON refusal on this route; the frontend reads it as
+// text); any other error -- including a *export.ControlCharError --
+// falls back to a plain 400.
 func writeTuneLoggingRejection(w http.ResponseWriter, err error) {
 	var secretErr *export.SecretFieldError
 	if errors.As(err, &secretErr) {

@@ -313,7 +313,7 @@ func (s *Server) keepRequest(w http.ResponseWriter, r *http.Request) (device, ge
 	device = r.PathValue("device")
 	generation = r.PathValue("generation")
 	if device == "" || generation == "" {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		http.Error(w, "invalid request path", http.StatusBadRequest)
 		return "", "", false
 	}
 	return device, generation, true

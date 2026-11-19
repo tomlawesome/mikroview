@@ -141,3 +141,17 @@ func TestC17LogErrorAttrIsErr(t *testing.T) {
 		}
 	}
 }
+
+// A missing path value is a path error, not a body error (#1538 review).
+func TestKeepRequestEmptyPathSaysInvalidPath(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := httptest.NewRecorder()
+	asAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := s.keepRequest(w, r); ok {
+			t.Error("keepRequest accepted empty path values")
+		}
+	})).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != "invalid request path" {
+		t.Errorf("got %d %q, want 400 \"invalid request path\"", rec.Code, rec.Body.String())
+	}
+}
