@@ -856,6 +856,19 @@ describe('The ratified watch table (#676)', () => {
     expect(vi.mocked(fetchWatchlistEntries)).toHaveBeenCalledTimes(2)
   })
 
+  it('a failed pause names the action: "Could not pause this watch: <words>"', async () => {
+    vi.mocked(setWatchlistEnabled).mockResolvedValue('nope')
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: 'pause watch' }))
+    await settle()
+
+    expect(screen.getAllByRole('alert')[0].textContent).toContain('Could not pause this watch')
+    expect(screen.getAllByRole('alert')[0].textContent).toContain('nope')
+  })
+
   it('a paused entry offers "resume watch" instead', async () => {
     await renderWatchlist([entry('e1', 'paused watch', { enabled: false, source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
 

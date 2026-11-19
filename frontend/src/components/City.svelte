@@ -5360,11 +5360,6 @@
     color: var(--fg-dim);
   }
 
-  .bcard .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
-  }
 
   /* The plaque's dim second line. The coverage words that used to sit
      here went with round 49 (#1016): the wall is the statement. */

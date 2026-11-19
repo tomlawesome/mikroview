@@ -8655,12 +8655,6 @@
     color: var(--fg-dim);
   }
 
-  .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
-  }
-
   /* --- the composer (round 2 scene 4) ------------------------------------ */
   .composer {
     position: absolute;

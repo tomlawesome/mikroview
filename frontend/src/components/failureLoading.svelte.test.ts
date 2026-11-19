@@ -73,6 +73,8 @@ beforeEach(() => {
   appState.events = []
   appState.devices = []
   entitiesState.list = []
+  entitiesState.loaded = false
+  entitiesState.loadError = null
   auditState.reset()
   watchlistState.reset?.()
 })
@@ -121,5 +123,24 @@ describe('first load shows ghost rows, never a blank table (#1540 C5)', () => {
     const { container } = render(Watchlist)
     await settle()
     expect(container.querySelector('.ghost-rows')).not.toBeNull()
+  })
+})
+
+describe('a failed first load says so, never a blank or endless ghost (#1540 review)', () => {
+  it('Watchlist: a rejected first fetch clears the ghost rows and shows the failure line', async () => {
+    fetchWatchlistEntries.mockRejectedValue(new Error('boom'))
+    const { container } = render(Watchlist)
+    await settle()
+    expect(container.querySelector('.ghost-rows')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('Could not load the watches: boom')
+  })
+
+  it('Entities: a rejected fetch shows the failure line, not an empty table', async () => {
+    fetchEntities.mockRejectedValue(new Error('boom'))
+    const { container } = render(Entities)
+    await settle()
+    expect(container.querySelector('.ghost-rows')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('Could not load the names: boom')
+    expect(container.querySelector('table.etable')).toBeNull()
   })
 })

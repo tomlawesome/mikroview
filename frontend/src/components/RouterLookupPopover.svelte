@@ -213,10 +213,6 @@
     padding: 4px 0;
   }
 
-  .status.error {
-    color: var(--reject);
-  }
-
   .status code {
     font-family: var(--font-mono);
     font-size: 12px;

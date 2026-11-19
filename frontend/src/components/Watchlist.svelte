@@ -65,7 +65,7 @@
   import type { WatchlistEntryRequest } from '../lib/api'
 
   onMount(() => {
-    watchlistState.refresh()
+    watchlistState.refresh().catch(() => {})
     suggestState.refresh()
     // The boundary picker below (#806) is fed by the same real,
     // pushed-rule-derived boundary list the fall draws its bands from --
@@ -500,6 +500,12 @@
   let suggestDrawerId: string | null = $state(null)
   let pausingId = $state<string | null>(null)
   let wtError = $state<string | null>(null)
+  // Which action wtError belongs to, so the failure line names it (#1540).
+  let wtAction = $state({ verb: 'change', thing: 'this watch' })
+  function failWatch(verb: string, thing: string, err: string) {
+    wtAction = { verb, thing }
+    wtError = err
+  }
 
   function toggleWatchDrawer(id: string) {
     watchDrawerId = watchDrawerId === id ? null : id
@@ -553,7 +559,7 @@
     pausingId = e.id
     try {
       const err = await watchlistState.setEnabled(e.id, !e.enabled)
-      if (err) wtError = err
+      if (err) failWatch(e.enabled ? 'pause' : 'resume', 'this watch', err)
     } finally {
       pausingId = null
     }
@@ -794,7 +800,7 @@
     editSaving = true
     try {
       const err = await watchlistState.update(editingId, req)
-      if (err) wtError = err
+      if (err) failWatch('save', 'this watch', err)
       else editingId = null
     } finally {
       editSaving = false
@@ -813,7 +819,7 @@
     }
     armedRemoveId = null
     watchlistState.remove(e.id).then((err) => {
-      if (err) wtError = err
+      if (err) failWatch('remove', 'this watch', err)
     })
   }
 
@@ -826,7 +832,7 @@
     permittingKey = e.id + d.destIp + d.port
     try {
       const err = await watchlistState.promote(e.id, [d])
-      if (err) wtError = err
+      if (err) failWatch('permit', 'that destination', err)
     } finally {
       permittingKey = null
     }
@@ -839,7 +845,7 @@
     permittingKey = e.id + '*'
     try {
       const err = await watchlistState.promote(e.id, dests)
-      if (err) wtError = err
+      if (err) failWatch('permit', 'these destinations', err)
     } finally {
       permittingKey = null
     }
@@ -853,7 +859,7 @@
     fencingId = e.id
     try {
       const err = await watchlistState.setObserving(e.id, !e.observing)
-      if (err) wtError = err
+      if (err) failWatch('change', 'how this watch observes', err)
     } finally {
       fencingId = null
     }
@@ -1352,7 +1358,7 @@
     {#if WATCH_HEADING_ENABLED}
       <h3 id="watch-heading" class="section-title">Watches</h3>
     {/if}
-    {#if wtError}<FailureLine verb="change" thing="this watch" said={wtError} />{/if}
+    {#if wtError}<FailureLine verb={wtAction.verb} thing={wtAction.thing} said={wtError} />{/if}
     <!-- The table always renders, even with no watches at all: round 33
          hangs the suggestions body off the same table, so a page that
          dropped the table when the watchlist was empty would take the
@@ -1522,6 +1528,10 @@
                 next push. The audit log has who did it.
               </td>
             </tr>
+          {:else if watchlistState.loadError !== null}
+            <tr>
+              <td class="empty-row" colspan="6"><FailureLine verb="load" thing="the watches" said={watchlistState.loadError} /></td>
+            </tr>
           {:else if !watchlistState.loaded}
             <tr>
               <td class="empty-row" colspan="6"><GhostRows label="Reading the watches…" rows={4} /></td>
@@ -1611,7 +1621,7 @@
                               {/each}
                             </select></label
                           >
-                          {#if wtError}<FailureLine verb="change" thing="this watch" said={wtError} />{/if}
+                          {#if wtError}<FailureLine verb={wtAction.verb} thing={wtAction.thing} said={wtError} />{/if}
                         </div>
                         <div class="side wf-mode">
                           <span class="lab">and it means</span>

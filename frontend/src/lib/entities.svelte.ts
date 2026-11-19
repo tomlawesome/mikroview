@@ -14,10 +14,17 @@ class EntitiesState {
   // False until the first fetch lands, so the page can show ghost rows
   // rather than an empty table that reads as "no names yet" (#1540).
   loaded = $state(false)
+  // Why the last refresh failed, or null: a failed load must not read as
+  // an empty table of "no names yet" (#1540).
+  loadError = $state<string | null>(null)
 
   async refresh() {
     try {
       this.list = await fetchEntities()
+      this.loadError = null
+    } catch (err) {
+      this.loadError = err instanceof Error ? err.message : String(err)
+      throw err
     } finally {
       this.loaded = true
     }

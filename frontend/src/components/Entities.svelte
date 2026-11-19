@@ -80,6 +80,7 @@
   // is plain dim text with no rename affordance, for every tier.
   import { onMount } from 'svelte'
   import GhostRows from './GhostRows.svelte'
+  import FailureLine from './FailureLine.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -1005,6 +1006,8 @@
 
     {#if !entitiesState.loaded}
       <GhostRows label="Reading the names…" rows={5} />
+    {:else if entitiesState.loadError !== null}
+      <FailureLine verb="load" thing="the names" said={entitiesState.loadError} />
     {:else if activeView === 'hosts'}
       <table class="etable">
         <thead>

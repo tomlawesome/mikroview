@@ -1874,10 +1874,6 @@
     color: var(--o-ink3, var(--o-ink2));
     font-size: 12.5px;
   }
-  .state-msg.error {
-    color: var(--o-drop);
-  }
-
   /* ── the rig ─────────────────────────────────────────────────────── */
   .rig {
     flex: 1;
