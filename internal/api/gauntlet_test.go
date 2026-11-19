@@ -7,7 +7,10 @@ package api
 // to, mikroview's own refusals, the follow-ups mikroview's state needs
 // after gauntlet's account routes, and setup-only mode's narrower table.
 // Sign-in, sessions, doors and the account and token routes themselves
-// are gauntlet's, and its own suite covers them.
+// are gauntlet's, and its own suite covers them; the guards of theirs
+// that gauntlet's suite does not pin (last admin, SSO link and callback,
+// reset code kept out of logs, quoted error log line, TOTP removal) are
+// driven through the real binary in internal/authe2e (#1426).
 
 import (
 	"net/http"
