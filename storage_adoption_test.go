@@ -242,6 +242,36 @@ func TestRequireKeyRefusesWithoutAUsableKeyAndSaysWhy(t *testing.T) {
 	if !strings.Contains(buf.String(), short) || strings.Contains(buf.String(), "no key is mounted") {
 		t.Errorf("a configured-but-unusable key should be reported as that, naming the file: %s", buf)
 	}
+	if strings.Contains(buf.String(), "/dev/urandom") || !strings.Contains(buf.String(), "fewer than 32 bytes never sealed anything") {
+		t.Errorf("a short key must not be told to make a new one, and must be told it never sealed anything: %s", buf)
+	}
+
+	// #1426 (O1-S1): a key that exists but cannot be read must never be told
+	// to make a new one over it.
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	locked := filepath.Join(t.TempDir(), "locked.key")
+	if err := os.WriteFile(locked, []byte(strings.Repeat("k", 44)), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	log, buf = logCapture()
+	if requireKey(log, cfgWith(locked), "start the server") {
+		t.Fatal("started on a key it cannot read")
+	}
+	for _, want := range []string{"refusing to start the server", "CFG-0083", locked, "could not be used", "rather than making a new key"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("unreadable-key refusal lacks %q: %s", want, buf)
+		}
+	}
+	for _, bad := range []string{"no key is mounted", "/dev/urandom", "> mikroview/keys/history.key"} {
+		if strings.Contains(buf.String(), bad) {
+			t.Errorf("unreadable-key refusal must not contain %q: %s", bad, buf)
+		}
+	}
 }
 
 func TestReadDSNFile(t *testing.T) {

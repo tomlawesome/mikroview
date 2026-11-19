@@ -1470,11 +1470,18 @@ test:install-line:
         fi
       done
     - id1="$(docker container inspect --format '{{.Id}}' "$APP")"
+    - |
+      k1="$(docker run --rm -v "$APP-etc:/etc/mikroview:ro" alpine:3.24 sha256sum /etc/mikroview/keys/history.key)"
+      [ -n "$k1" ] || { echo "test:install-line: no history.key was made on the fresh run"; exit 1; }
     # The same line is also the upgrade line (#1240) -- running it twice
     # must stop and remove the first container, re-creating it on the
     # same two named volumes, not just leave it be.
     - echo "test:install-line -- running install.sh a second time"
     - sh install.sh
+    - |
+      k2="$(docker run --rm -v "$APP-etc:/etc/mikroview:ro" alpine:3.24 sha256sum /etc/mikroview/keys/history.key)"
+      [ "$k1" = "$k2" ] || { echo "test:install-line: history.key changed on the second run -- an upgrade must keep the key"; exit 1; }
+      echo "test:install-line: history.key survived the re-run unchanged"
     - |
       id2="$(docker container inspect --format '{{.Id}}' "$APP")"
       [ "$id1" != "$id2" ] || { echo "test:install-line: container was not re-created on the second run"; exit 1; }
@@ -1780,6 +1787,13 @@ gate:scenarios:quarantined:
   variables:
     MV_QUARANTINE: only
     MV_SHARD: "1/1"
+    # #1426 (D-F3): every scenario in scripts/quarantine.txt is a
+    # Firefox-only flake (docs/flakes.md: live-sw-navigation's worker
+    # fetch error only Firefox surfaces, live-viewer-surfaces' sightings
+    # all under Firefox), so under the default Chromium this job could
+    # never see them fail or grow a sighting. Quarantining a flake seen
+    # under another engine means revisiting this line.
+    MV_BROWSER: firefox
   cache:
     - *live_check_npm_cache_entry
   script:

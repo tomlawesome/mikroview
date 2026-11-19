@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -508,5 +509,42 @@ func TestPublicURLNotOverriddenByOIDC(t *testing.T) {
 	}
 	if c.PublicURL != "https://mikroview.home.lan:8443" {
 		t.Errorf("PublicURL = %q, want left exactly as configured", c.PublicURL)
+	}
+}
+
+// #1426 (O1-S1): the refusal for a key that exists but cannot be used must
+// never tell the operator to make a new one -- pasting that command over the
+// real key destroys everything sealed under it.
+func TestKeyRequiredUnusableKeyNeverSaysToMakeANewOne(t *testing.T) {
+	p := KeyRequired("/etc/mikroview/keys/history.key", false,
+		errors.New("retention: reading key file: open /etc/mikroview/keys/history.key: permission denied"))
+	out := Report([]Problem{p})
+	for _, want := range []string{"CFG-0083", "/etc/mikroview/keys/history.key", "could not be used", "rather than making a new key", "sudo chown 1000:1000"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unusable-key refusal lacks %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"/dev/urandom", "> mikroview/keys/history.key"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("unusable-key refusal must not carry %q:\n%s", bad, out)
+		}
+	}
+	if a, b := strings.Index(out, "rather than making a new key"), strings.Index(out, "chown"); a < 0 || b < 0 || a > b {
+		t.Errorf("the do-not-make-a-new-key warning must come before any instruction:\n%s", out)
+	}
+}
+
+// The first-install path still gets the command, but only conditionally.
+func TestKeyRequiredNoKeyStillSaysHowToMakeOneButOnlyWhenNoneExists(t *testing.T) {
+	p := KeyRequired("", true, errors.New("retention: no key file configured"))
+	out := Report([]Problem{p})
+	cmd := "head -c 32 /dev/urandom | base64 > mikroview/keys/history.key"
+	for _, want := range []string{"no key is mounted", cmd, "if no key exists yet", "Never write a new key over one that exists", "only if no key exists yet"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no-key refusal lacks %q:\n%s", want, out)
+		}
+	}
+	if a, b := strings.Index(out, "if no key exists yet"), strings.Index(out, "head -c 32"); a < 0 || b < 0 || a > b {
+		t.Errorf("the condition must come before the command:\n%s", out)
 	}
 }
