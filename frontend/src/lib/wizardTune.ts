@@ -165,9 +165,22 @@ export function tagBlock(table: readonly Pick<RouterFilterRule, 'ordinal' | 'com
 
 // undoBlock is the ledger's Undo for tagged rules: the same rules,
 // logging switched back off and the prefix cleared.
-export function undoBlock(table: readonly Pick<RouterFilterRule, 'ordinal' | 'comment'>[], chosen: readonly TuneRule[]): string {
+export function undoBlock(
+  table: readonly Pick<RouterFilterRule, 'ordinal' | 'comment'>[],
+  chosen: readonly Pick<RouterFilterRule, 'ordinal' | 'comment'>[],
+): string {
   return [...chosen]
     .sort((a, b) => a.ordinal - b.ordinal)
     .map((r) => `/ip firewall filter set ${matcherFor(table, r)} log=no log-prefix=""`)
     .join('\n')
+}
+
+// taggedInPush is what the push itself witnesses of tagging: the enabled
+// rules logging under the convention's prefix (<ACTION>|<slug>|, the same
+// logPrefixSlug the fall matches lines with), whoever set them -- this
+// wizard's tagging block, or docs/routeros-setup.md step 3 by hand. The
+// ledger reads it when a reopened run has no memory of its own Copy
+// (A2-F7), and the Undo for that row clears exactly these.
+export function taggedInPush<T extends Pick<RouterFilterRule, 'log' | 'logPrefix' | 'disabled'>>(rules: readonly T[]): T[] {
+  return rules.filter((r) => r.disabled !== true && r.log && logPrefixSlug(r.logPrefix) !== '')
 }

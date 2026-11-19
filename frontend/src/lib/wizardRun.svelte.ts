@@ -12,7 +12,14 @@
 // Nothing here connects to a router (the invariant in docs/decisions/observe-never-probe.md): every
 // field of `evidence` is a reading of what has arrived.
 
-import { createToken, deleteDevice, markSetupStep } from './api'
+import {
+  createToken,
+  deleteDevice,
+  fetchRouterRules,
+  markSetupStep,
+  type RouterFilterRule,
+  type RouterTable,
+} from './api'
 import { blocklistState } from './blocklist.svelte'
 import { hm as routerHm, hmLocal, num } from './blocklistBuild'
 import { appState } from './state.svelte'
@@ -42,7 +49,7 @@ import {
   type Tail,
   type TrackStation,
 } from './wizardRun'
-import type { TuneRule } from './wizardTune'
+import { taggedInPush, type TuneRule } from './wizardTune'
 
 // blockSection is one numbered, titled part of the paste-once block
 // (DESIGN.md, "3 · Paste once"): a title from TITLES (the same
@@ -93,6 +100,13 @@ class WizardRun {
   // The rules the tagging block was copied for (#1384): what the rail's
   // receipt counts, and what the ledger's Undo for tagged rules lists.
   tuneChosen = $state<TuneRule[]>([])
+  // The router's pushed rule table, read when the walk begins (A2-F7): the
+  // push's own witness of tagged rules, for a ledger reopened after the run
+  // that tagged them has forgotten its Copy. pushedFor is the router it was
+  // read for, so a reopen on the same router keeps the last read until the
+  // fresh one lands instead of flashing "left dark".
+  pushed = $state<RouterTable<RouterFilterRule> | null>(null)
+  pushedFor = ''
   undoOpen = $state<string | null>(null)
   showUndoAll = $state(false)
   // The first-run tail (#1360): offered is decided once, when the walk
@@ -216,6 +230,8 @@ class WizardRun {
       version: dev?.routerosVersion ?? '',
       ahead: dev?.routerosStanding === 'ahead-of-review',
       tagged: this.tuneCopied && this.decoded > this.decodedAtCopy,
+      taggedRules: taggedInPush(this.pushed?.rules ?? []).length,
+      taggedAt: this.pushed?.updatedAt ?? '',
       tokenUntil: hm(wizardState.enrolment?.expiresAt ?? ''),
       tail: this.tail,
       boundaries: fallState.boundaries.map((b) => ({
@@ -246,6 +262,25 @@ class WizardRun {
   get tailDevice(): string {
     if (wizardState.ledgerDevice) return wizardState.ledgerDevice
     return wizardState.devices.length === 1 ? wizardState.devices[0].id : ''
+  }
+
+  // rulesDevice is the router whose rule table the tagging is about: the
+  // walk's own, or on a bare Run setup… the first router whose push carried
+  // a rule table -- StepTune's own rule, so the Undo addresses the same
+  // table the tagging block did. An add-a-router walk with no record yet
+  // has no table of its own (#1397).
+  get rulesDevice(): string {
+    if (wizardState.ledgerDevice) return wizardState.ledgerDevice
+    if (wizardState.addingRouter) return ''
+    return wizardState.status?.devices.find((d) => d.pushedKinds && 'filter-rule' in d.pushedKinds)?.device ?? ''
+  }
+
+  private readPushed(device: string) {
+    fetchRouterRules(device)
+      .then((t) => {
+        if (this.pushedFor === device) this.pushed = t
+      })
+      .catch(() => {})
   }
 
   // tail is the first-run tail's standing, from the builder's own read of
@@ -434,6 +469,8 @@ class WizardRun {
     this.tailOffered = false
     this.tailSkipped = false
     this.tuneChosen = []
+    this.pushed = null
+    this.pushedFor = ''
     this.undoOpen = null
     this.showUndoAll = false
     this.decodedAtCopy = 0
@@ -454,7 +491,12 @@ class WizardRun {
   // already stand as evidence, so reading ev.enrol first would send it
   // straight back to the ledger it was asked to leave.
   begin() {
+    const rulesDevice = this.rulesDevice
+    const keep = rulesDevice && this.pushedFor === rulesDevice ? this.pushed : null
     this.reset()
+    this.pushed = keep
+    this.pushedFor = rulesDevice
+    if (rulesDevice) void this.readPushed(rulesDevice)
     // The tail is offered on the launch walk alone (owner, 2a): not on
     // Add another router or Re-enrol…, and not once record 8 holds a mark
     // or a witness -- Run setup… after either shows no sixth row.
