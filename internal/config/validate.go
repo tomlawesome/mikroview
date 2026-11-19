@@ -208,7 +208,7 @@ auth:
   maxBytes: 1073741824   # 1 GiB`,
 	"CFG-0083": `history:
   keyFile: /etc/mikroview/keys/history.key   # outside the data directory
-# made once with: head -c 32 /dev/urandom | base64 > mikroview/keys/history.key`,
+# made once, only if no key exists yet, with: head -c 32 /dev/urandom | base64 > mikroview/keys/history.key`,
 
 	"CFG-0022": `auth:
   adminPasskey: required   # or optional`,
@@ -523,18 +523,32 @@ func PasskeysPossible(publicURL string) bool {
 // configured (noKey true), or why a configured key could not be used.
 // Either way there is nothing to seal the account stores under, and
 // gauntlet will not hold them in the clear, so nothing starts.
+//
+// A configured key that could not be used is never answered with the
+// make-a-key command: the file may be the live key with a permission or
+// mount mistake, and `>` would truncate it (v0.7.0 audit O1-S1).
 func KeyRequired(keyFile string, noKey bool, keyErr error) Problem {
 	msg := "no key is mounted, and from v0.7.0 MikroView keeps its accounts, API tokens, recovery keys and sign-in history sealed under one -- there is no unencrypted mode, so nothing has been started or written"
+	remediation := "if no key exists yet, make one with `head -c 32 /dev/urandom | base64 > mikroview/keys/history.key` (the app folder's keys/history.key, " +
+		"read from /etc/mikroview in the container), or point history.keyFile -- or MIKROVIEW_HISTORY_KEY_FILE -- at a key file kept outside " +
+		"the data directory, then start again. Never write a new key over one that exists: anything sealed under it can only be opened with it. " +
+		"Keep a copy of the key somewhere safe: without it the sealed data cannot be read"
+	example := examplesByCode["CFG-0083"]
 	if !noKey {
 		msg = fmt.Sprintf("is set to %s but could not be used (%v), and from v0.7.0 MikroView keeps its accounts, API tokens, recovery keys and sign-in history sealed under it -- there is no unencrypted mode, so nothing has been started or written", keyFile, keyErr)
+		remediation = fmt.Sprintf("check the file at %s rather than making a new key: anything sealed under an existing key can only be opened with that key, "+
+			"and writing a fresh one over it loses the accounts, API tokens, recovery keys and retained history for good. If the file is there but "+
+			"MikroView cannot read it, make it readable by the account MikroView runs as (uid 1000 in the container: on the host, `sudo chown 1000:1000` "+
+			"then `chmod 600` on the file -- mikroview/keys/history.key in the Compose layout); if the setting points at the wrong place, point "+
+			"history.keyFile -- or MIKROVIEW_HISTORY_KEY_FILE -- at the right key file; then start again. A file holding fewer than 32 bytes never "+
+			"sealed anything and can be replaced with a fresh key. Keep a copy of the key somewhere safe: without it the sealed data cannot be read", keyFile)
+		example = "history:\n  keyFile: /etc/mikroview/keys/history.key   # the existing key, unchanged"
 	}
 	return Problem{
 		Code: "CFG-0083", Severity: SeverityFatal, Key: "history.keyFile", Message: msg,
-		Remediation: "make a key once with `head -c 32 /dev/urandom | base64 > mikroview/keys/history.key` (the app folder's keys/history.key, " +
-			"read from /etc/mikroview in the container), or point history.keyFile -- or MIKROVIEW_HISTORY_KEY_FILE -- at a key file kept outside " +
-			"the data directory, then start again. Keep a copy of the key somewhere safe: without it the sealed data cannot be read",
-		Example: examplesByCode["CFG-0083"],
-		Docs:    docsAnchor("CFG-0083"),
+		Remediation: remediation,
+		Example:     example,
+		Docs:        docsAnchor("CFG-0083"),
 	}
 }
 

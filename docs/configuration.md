@@ -1435,7 +1435,9 @@ keys and sign-in history sealed under this key and has no unencrypted
 mode for them, so it does not start — not the server, not setup-only
 mode, and not `-recover-admin-account`, `-transfer-admin`,
 `-clear-second-factor` or `-generate-recovery-keys`. Nothing is written
-before it stops. Make a key once and keep a copy somewhere safe:
+before it stops.
+
+**If the message says the key `is set to … but could not be used`, a key file already exists. Do not run the command below: it writes a new key over the old one, and everything sealed under the old key — accounts, API tokens, recovery keys and retained history — is lost for good.** Make the existing file readable by the account MikroView runs as instead (uid 1000 in the container: `sudo chown 1000:1000 mikroview/keys/history.key && chmod 600 mikroview/keys/history.key` on the host, as in [the install guide](install.md#the-key-make-it-once-before-the-first-start)), or point `history.keyFile` or `MIKROVIEW_HISTORY_KEY_FILE` at the right file. A file holding fewer than 32 bytes never sealed anything and can be replaced. Only when no key exists yet, make one once and keep a copy somewhere safe:
 
 ```sh
 head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
