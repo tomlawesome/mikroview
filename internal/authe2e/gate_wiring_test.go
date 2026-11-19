@@ -93,10 +93,10 @@ func TestGateErrorLogLineQuotesMethodPathAndError(t *testing.T) {
 	if r.Status != 500 {
 		t.Fatalf("test premise: reset with a read-only data directory = %s, want 500", r)
 	}
+	// The server's output reaches w.a.log() through a pipe copied in the
+	// background, so the 500 can arrive before its log line: wait for it.
 	want := `"POST" "/api/auth/users/` + id + `/reset-password": "`
-	if !strings.Contains(w.a.log(), want) {
-		t.Errorf("the log has no line with the method, path and error quoted (%s):\n%s", want, w.a.log())
-	}
+	waitLog(t, w.a, want)
 	// The marker may appear only inside the one real error line, quoted
 	// along with its request path; a forged second line carries the marker
 	// without that path and fails here.
