@@ -22,51 +22,45 @@
   // nothing to withhold and nothing to explain. What follows creation
   // is one of two routes:
   //
-  //   - OIDC configured: straight on to the provider to sign in
-  //     (startSSOLink), and the identity that comes back is linked to
-  //     the admin just created. The proof that it is the right person
-  //     is session continuity -- the browser that made the account is
-  //     the browser carried to the provider and back -- so no email is
-  //     compared, and none is stored.
+  //   - OIDC configured: every new local account is held at the
+  //     second-step door (gauntlet's must-enrol-factor gate; oidc/link
+  //     is not among the paths it admits), so the first run never hands
+  //     off to the provider. The confirmation names the order instead --
+  //     a second step first, then the account menu's "Use single
+  //     sign-on" (SSOLinkOverlay). There, session continuity plus the
+  //     password re-check is the proof that it is the right person, so
+  //     no email is compared, and none is stored.
   //   - No OIDC: the confirmation below, saying the account exists and
   //     where the provider's details go.
   //
   // The admin keeps its password when linked (auth.Store's
   // LinkOIDCIdentity), which is the whole point of the ruling: the
   // deployment always has a way in that does not need the provider.
-  import { register, startSSOLink } from '../lib/api'
+  import { register } from '../lib/api'
   import { authState } from '../lib/auth.svelte'
   import { wizardJourney } from '../lib/wizardJourney.svelte'
   import AuthScreen from './AuthScreen.svelte'
 
   let entered = $state(false)
   let created = $state(false)
-  // Set only when SSO was configured and the hand-off to it failed. The
-  // account exists by then, so this is a state to explain rather than
-  // an error to retry on the creation form.
-  let linkError = $state<string | null>(null)
-
   const confirmation = $derived(
-    linkError
-      ? `The account is ready, but MikroView couldn't hand you over to your identity provider: ${linkError} ` +
-        'Connect SSO from the account menu once it can be reached.'
+    authState.ssoAvailable
+      ? "You're signed in as the admin. Next you add a second step — an authenticator app or a passkey. After " +
+        'that, open the account menu and choose Use single sign-on to connect this account to your identity ' +
+        'provider; it keeps this password either way.'
       : "You're signed in as the admin. To add single sign-on later, put your provider details in the " +
         "oidc section of MikroView's config file and restart — you can connect this account to it " +
         'afterwards, and it keeps this password either way.',
   )
 
-  // Said before the redirect rather than after it: with SSO configured,
-  // creating the account sends the browser to the provider, and being
-  // bounced somewhere unannounced is how a sign-in page loses someone.
-  //
   // #1415: the form also asks for the one-time setup code from the
   // server's log (docs/design/screens/setup-code/DESIGN.md), so both
   // variants say so.
   const createSubtitle = $derived(
     authState.ssoAvailable
       ? "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes " +
-        'the admin — then you sign in with SSO to connect it, and this password stays as your way in if your ' +
-        'provider is ever unreachable.'
+        'the admin — then you add a second step and connect SSO from the account menu. This password stays as ' +
+        'your way in if your provider is ever unreachable.'
       : "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes the admin.",
   )
 
@@ -74,44 +68,10 @@
     setupCode: string,
     username: string,
     password: string,
-    forgetPassword: () => void,
+    _forgetPassword: () => void,
   ): Promise<string | null> {
     const err = await register(username, password, setupCode)
     if (err) return err
-
-    if (authState.ssoAvailable) {
-      // The account already exists by this point (register() above
-      // succeeded), so a thrown exception here -- api.ts's send() turns
-      // a dropped connection into an error string, but a body that is
-      // not JSON still throws -- must not propagate: it
-      // would skip both the redirect and the `created = true` below,
-      // leaving AuthScreen's handleSubmit forever mid-`await` and its
-      // submit button stuck on "Please wait…" with no way to retry
-      // register() against an account that is already made. Treated the
-      // same as startSSOLink() answering with an error string: the
-      // confirmation screen below, with a working way in.
-      //
-      // #1202 U10: the link needs the caller's own password; the one just
-      // chosen is handed over (no second prompt). The form's copy is
-      // emptied as the call is made, and nothing here keeps it after.
-      let result: { url: string } | string
-      try {
-        const call = startSSOLink(password)
-        forgetPassword()
-        result = await call
-      } catch (err) {
-        result = err instanceof Error ? err.message : String(err)
-      }
-      if (typeof result !== 'string') {
-        // A real top-level navigation, not a fetch: the provider has to
-        // see the browser to show its own sign-in page. The admin comes
-        // back to the ordinary app, where the wizard's plain auto-launch
-        // opens it without the way in -- the cost of the round trip.
-        location.href = result.url
-        return null
-      }
-      linkError = result
-    }
 
     created = true
     return null

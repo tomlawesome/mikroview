@@ -343,7 +343,7 @@ describe.each(actions)('$name asks the admin for their own password (#1202 revie
         expect(el.value).not.toContain('sw0rdfish-secret')
       }
     }
-    expect(JSON.stringify(usersState)).not.toContain('sw0rdfish-secret')
+    expect(visibleState(usersState)).not.toContain('sw0rdfish-secret')
   })
 
   it('does not keep the password in the store after a wrong password either', async () => {
@@ -354,12 +354,31 @@ describe.each(actions)('$name asks the admin for their own password (#1202 revie
     await begin(action.button)
     await typeAndConfirm('sw0rdfish-secret')
 
-    expect(JSON.stringify(usersState)).not.toContain('sw0rdfish-secret')
+    expect(visibleState(usersState)).not.toContain('sw0rdfish-secret')
   })
 })
 
 // Positive outcomes specific to each action, so "the prompt works" cannot
 // pass while the action itself is broken.
+// A $state class keeps its fields behind private #fields, so
+// JSON.stringify(instance) is always '{}'. Read every own and prototype
+// property (getters included) so a retained value would show up.
+function visibleState(obj: object): string {
+  const out: Record<string, unknown> = {}
+  for (let o: object | null = obj; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const name of Object.getOwnPropertyNames(o)) {
+      if (name === 'constructor' || name in out) continue
+      try {
+        const v = (obj as Record<string, unknown>)[name]
+        if (typeof v !== 'function') out[name] = v
+      } catch {
+        /* a getter that throws holds nothing readable */
+      }
+    }
+  }
+  return JSON.stringify(out)
+}
+
 describe('what each action does once the password is accepted (#1202 review U8)', () => {
   it('reset password shows the one-time code', async () => {
     const { mock } = await apiMock('resetUserPassword')

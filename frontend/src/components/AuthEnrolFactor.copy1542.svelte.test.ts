@@ -21,7 +21,7 @@ vi.mock('../lib/api', async (importOriginal) => {
     saveMyPreferences: vi.fn(),
   }
 })
-vi.mock('../lib/passkeys.svelte', () => ({ registerPasskey: vi.fn(), loginWithPasskey: vi.fn() }))
+vi.mock('../lib/passkeys.svelte', () => ({ registerPasskey: vi.fn(), loginWithPasskey: vi.fn(), passkeysSupported: vi.fn(() => true) }))
 vi.mock('../lib/qrcode', () => ({ qrCode: () => {} }))
 vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }))
 

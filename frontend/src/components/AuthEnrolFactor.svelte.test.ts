@@ -35,6 +35,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 vi.mock('../lib/passkeys.svelte', () => ({
   registerPasskey: vi.fn(),
   loginWithPasskey: vi.fn(),
+  passkeysSupported: vi.fn(() => true),
 }))
 
 // jsdom has no canvas 2D context for the real action to draw into; the

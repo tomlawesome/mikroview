@@ -3783,9 +3783,8 @@ the admin account**. That is the only option -- running without
 authentication was removed, and creating an account is the floor. It is
 a username and a password, plus the **setup code** from MikroView's own
 log (below); the username can't be an email address, and SSO is never
-offered in its place. What happens straight afterwards
-depends on whether your OIDC details are already in the config file --
-see [SSO is additive: keep a local
+offered in its place. What happens next -- the second step, then
+connecting SSO if you use it -- is under [SSO is additive: keep a local
 admin](#sso-is-additive-keep-a-local-admin). See
 [SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
 section is the configuration reference.
@@ -4719,15 +4718,19 @@ What this means in practice:
   MikroView never offers SSO instead of that, even when SSO is
   configured — the local account is step one either way, and SSO
   sign-in is refused until it exists.
-- **Then one of two things happens.** If your OIDC details are already
-  in the config file, MikroView sends you to your provider to sign in,
-  and connects the identity you sign in with to the admin account you
-  just created. It is the same browser throughout, which is how
-  MikroView knows it is the same person — it compares no email address,
-  and stores none. If the details are not there, MikroView says the
-  account has been created and that the OIDC settings go in the config
-  file; add them, restart, and connect the account from the account
-  menu whenever you like.
+- **Then MikroView asks for a second step.** Every new local account,
+  the admin's included, is held at the second-step screen (an
+  authenticator app or a passkey) before it can reach anything else —
+  see [docs/authenticator-app.md](authenticator-app.md). Once that is
+  done, if your OIDC details are already in the config file, open the
+  account menu and choose **Use single sign-on**: you are sent to your
+  provider, and the identity you sign in with is connected to the admin
+  account. It is the same browser and the same signed-in session
+  throughout, and MikroView asks for the admin's password again before
+  sending you — it compares no email address, and stores none. If the
+  details are not there, MikroView says so when the account is created;
+  add them, restart, and connect the account from the account menu
+  whenever you like.
 - **Connecting the admin to SSO keeps its password and its second
   factor.** Afterwards you can sign in either way: through your provider
   normally, or the break-glass path — username, password, and second

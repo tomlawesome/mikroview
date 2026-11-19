@@ -496,6 +496,13 @@ rewritten.
   the tls.hosts line to paste. The full-screen wizard had dropped the
   certificate step's blocked reading.
 
+- **First run with SSO configured no longer tries to send the new admin
+  to the identity provider straight after creating the account** -- that
+  request was always refused by the second-step door, which then replaced
+  the setup screen. The confirmation now says what actually comes next:
+  add a second step, then connect SSO from the account menu (Use single
+  sign-on). (v0.7.0 audit A1-F2)
+
 - **A recovery-key command killed while first creating the recovery pepper
   no longer breaks every later one** (#1489, #1485). The pepper file now only
   appears once it is complete, and two commands started together agree on one
