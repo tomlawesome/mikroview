@@ -1,6 +1,4 @@
-Recaptured at 3a2373c6 (2026-11-16) and the output was byte-for-byte
-identical to the committed image: AuthScreen.svelte and AuthLogin.svelte
-changed since the last capture, but not in what an authenticator-app
-account sees at "Enter your code". Recorded here because an identical
-recapture leaves git nothing to commit, so the image's own commit cannot
-move.
+Recaptured at f40cfbb2 (2026-11-19) from a seeded demo (scripts/demo-up.sh) and the output matched the committed image in
+what it shows (only clock times, ports, secrets and event rates differ): AuthScreen.svelte changed since the last capture, but the recapture was byte-for-byte identical to the committed image.
+Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
+cannot move.

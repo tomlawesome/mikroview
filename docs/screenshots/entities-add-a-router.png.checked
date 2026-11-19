@@ -1,4 +1,4 @@
-Recaptured at 761f0325 (2026-11-16) from a seeded demo and the output matched the committed image in
-what it shows (only clock times, ports and event rates differ): #1493's Entities.svelte change (Register button removed) is outside this crop of the routers row.
+Recaptured at f40cfbb2 (2026-11-19) from a seeded demo (scripts/demo-up.sh) and the output matched the committed image in
+what it shows (only clock times, ports, secrets and event rates differ): Entities.svelte's change is outside this crop of the routers row; same six router cards and the add berth.
 Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
 cannot move.

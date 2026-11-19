@@ -221,7 +221,7 @@ async function openWizardOnTheRouter(page) {
   // Minting is what opens the port, so the admin's password is re-typed
   // here -- the same field live-setup-wizard-router-mint.mjs drives.
   await page.fill('.wiz .body input[type="password"]', PASS)
-  await page.click('.wiz .foot button.primary:text-is("Mint the token")')
+  await page.click('.wiz .foot button.primary:text-is("Mint the ingest token")')
 
   // Minting moves the run to Paste once, which prints the block with a
   // real token as its last line, plus the "Token good until ..." line
