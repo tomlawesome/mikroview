@@ -105,8 +105,8 @@
       kind: 'text',
       text:
         authState.role === 'admin'
-          ? 'No RouterOS devices seen yet — your account menu ▸ Run setup… to point one at MikroView.'
-          : 'No RouterOS devices seen yet. Ask an administrator to run setup.',
+          ? 'No routers seen yet — your account menu ▸ Run setup… to point one at MikroView.'
+          : 'No routers seen yet. Ask an administrator to run setup.',
     }
   })
 </script>

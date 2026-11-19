@@ -20,7 +20,7 @@ export type StepId = 'router' | 'pass' | 'paste' | 'tune' | 'stand' | 'block'
 
 export const STEPS: readonly { id: StepId; title: string }[] = [
   { id: 'router', title: 'The router' },
-  { id: 'pass', title: 'Mint the token' },
+  { id: 'pass', title: 'Mint the ingest token' },
   { id: 'paste', title: 'Paste once' },
   { id: 'tune', title: 'Tag firewall rules' },
   { id: 'stand', title: 'Where setup stands' },
@@ -385,7 +385,7 @@ export function footSpec(s: RunAnswers, ev: Evidence, copyLabel = '', canCopy = 
     return {
       left: { label: 'Back', action: 'back-router', primary: false, disabled: false },
       hint: '',
-      right: [{ label: 'Mint the token', action: 'mint', primary: true, disabled: !s.pass }],
+      right: [{ label: 'Mint the ingest token', action: 'mint', primary: true, disabled: !s.pass }],
     }
   }
   if (st === 'paste' && s.stage === 'paste') {

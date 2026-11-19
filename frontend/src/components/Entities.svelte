@@ -758,7 +758,7 @@
     type="button"
     class="row-action"
     onclick={() => reEnrol(deviceId)}
-    aria-label="Re-enrol {label} — mint a fresh enrolment token for it"
+    aria-label="Re-enrol {label} — mint a fresh ingest token for it"
   >
     Re-enrol…
   </button>

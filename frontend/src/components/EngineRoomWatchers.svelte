@@ -1416,10 +1416,10 @@
                 Cancel
               </button>
               <button type="button" class="try" disabled={trying} onclick={() => tryRow(d.name)}>
-                {trying ? 'trying…' : 'Try'}
+                {trying ? 'trying…' : 'try'}
               </button>
               <button type="button" class="save" disabled={busy} onclick={() => save(d.name)}>
-                {saving[d.name] ? 'saving…' : 'Save'}
+                {saving[d.name] ? 'saving…' : 'save'}
               </button>
             </span>
           </div>

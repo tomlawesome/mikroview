@@ -634,7 +634,7 @@ class WizardState {
     // entry points meet, the same way rebinding's does.
     if (this.enrolMinting) return
     if (!this.enrolPassword) {
-      this.enrolmentError = 'Enter your password to mint a token.'
+      this.enrolmentError = 'Enter your password to mint an ingest token.'
       return
     }
     this.enrolmentError = null

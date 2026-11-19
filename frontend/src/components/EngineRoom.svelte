@@ -436,7 +436,7 @@
     let password: string | undefined
     if (authState.hasLocalPassword) {
       if (!soPassword) {
-        soError = 'Type your password to go on.'
+        soError = 'Enter your password to go on.'
         soField?.focus()
         return
       }
@@ -747,11 +747,11 @@
   async function submitMintKey() {
     keyError = null
     if (newKeyKind === 'ingest' && !newKeyDevice) {
-      keyError = 'An ingest key needs a device -- pick the router it speaks for.'
+      keyError = 'An ingest token needs a device — pick the router it speaks for.'
       return
     }
     if (!newKeyPassword) {
-      keyError = 'Type your password to mint a key.'
+      keyError = 'Enter your password to mint a key.'
       return
     }
     minting = true
@@ -926,7 +926,7 @@
     if (!action || adminBusy) return
     adminError = null
     if (!adminPassword) {
-      adminError = 'Type your password to go on.'
+      adminError = 'Enter your password to go on.'
       adminField?.focus()
       return
     }
@@ -1195,7 +1195,7 @@
           {/if}
           <div class="orow">
             <span>who may speak</span>
-            <span class="ov">holders of an ingest key — the keys group below</span>
+            <span class="ov">holders of an ingest token — the keys group below</span>
           </div>
           {#if geoipState.enabled === false}
             <!-- #1198: matches the country filter's own disabled row --
@@ -1324,7 +1324,7 @@
         <div class="stsection" id="keys">
           <h3>keys</h3>
           <p class="oghint">
-            which machines may speak — an ingest key lets one router push its state; a read-only key lets a reader
+            which machines may speak — an ingest token lets one router push its state; a read-only key lets a reader
             ask
           </p>
 

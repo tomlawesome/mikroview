@@ -602,7 +602,7 @@ describe('the aggregate bar (#648)', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const watchHalf = container.querySelector<SVGGElement>('.hbar-g[aria-label*="watcher"]')
+    const watchHalf = container.querySelector<SVGGElement>('.hbar-g[aria-label*="watch"]')
     expect(watchHalf).not.toBeNull()
     watchHalf!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 

@@ -119,7 +119,7 @@
                 aria-label="Forget the expectation for {e.target}"
                 onclick={() => forget(e.id)}
               >
-                {forgetting[e.id] ? 'forgetting…' : 'Forget'}
+                {forgetting[e.id] ? 'forgetting…' : 'forget'}
               </button>
             {/if}
           </span>

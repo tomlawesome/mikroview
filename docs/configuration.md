@@ -119,7 +119,7 @@ devices:
   which device a syslog source address belongs to, strongest evidence
   first: (a) a `devices[].sourceIp` you set above — you said so, so that
   wins outright; (b) failing that, the address the router enrolled from
-  — you minted it an enrolment token (the setup wizard's **Mint the token**
+  — you minted it an ingest token (the setup wizard's **Mint the ingest token**
   step, or **Re-enrol…** on its card) and the token's line arrived from
   that address (#1281; see
   [routeros-setup.md](routeros-setup.md#the-wizards-enrol-line)). There

@@ -299,14 +299,14 @@ describe('the stopped state’s line', () => {
 
 describe('the memory group’s on-restart row (round 43, #921)', () => {
   it('with history on, names the days that stay and the one thing that reads them', () => {
-    expect(restartRow(story())).toBe('the buffer clears — the 27 days on disk stay; trying a watcher reads them')
+    expect(restartRow(story())).toBe('the buffer clears — the 27 days on disk stay; trying a detector reads them')
     expect(restartRow(story({ held: { days: 1, oldest: '2026-09-02', newest: '2026-09-02', bytes: 3 * MIB } }))).toBe(
-      'the buffer clears — the 1 day on disk stays; trying a watcher reads it',
+      'the buffer clears — the 1 day on disk stays; trying a detector reads it',
     )
   })
 
   it('just turned on with nothing filed yet, claims no count', () => {
-    expect(restartRow(story({ held: null }))).toBe('the buffer clears — what is on disk stays; trying a watcher reads it')
+    expect(restartRow(story({ held: null }))).toBe('the buffer clears — what is on disk stays; trying a detector reads it')
   })
 
   it('off with a key points one storey down; no key says why nothing outlives it elsewhere', () => {

@@ -1493,7 +1493,7 @@
                   </div>
                   <div class="dwr-acts">
                     <button class="act" disabled={draftSaving} onclick={startWatching}>
-                      {draftSaving ? 'Saving…' : 'start watching'}
+                      {draftSaving ? 'saving…' : 'start watching'}
                     </button>
                     <button class="act quiet" onclick={discardDraft}>discard</button>
                   </div>
@@ -1619,7 +1619,7 @@
                         </div>
                         <div class="dwr-acts">
                           <button class="act" disabled={editSaving} onclick={saveEditWatch}>
-                            {editSaving ? 'Saving…' : 'save'}
+                            {editSaving ? 'saving…' : 'save'}
                           </button>
                           <button class="act quiet" onclick={cancelEditWatch}>cancel</button>
                         </div>
@@ -1719,14 +1719,14 @@
                             {/if}
                             <button class="act" disabled={fencingId === row.entry.id} onclick={() => toggleObserving(row.entry)}>
                               {fencingId === row.entry.id
-                                ? 'Saving…'
+                                ? 'saving…'
                                 : row.entry.observing
                                   ? `fence now · ${(row.entry.permitted ?? []).length} permitted`
                                   : 'learn again'}
                             </button>
                           {:else}
                             <button class="act" disabled={pausingId === row.entry.id} onclick={() => togglePause(row.entry)}>
-                              {pausingId === row.entry.id ? 'Saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
+                              {pausingId === row.entry.id ? 'saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
                             </button>
                           {/if}
                           {#if row.entry.source?.mac || row.entry.source?.ip}
@@ -1883,20 +1883,20 @@
                         <!-- ROUND 33 item 5: one verb, and nothing is
                              ever thrown away from here. -->
                         <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => unhideOne(c)}>
-                          {suggestBusyId === c.id ? 'Saving…' : 'bring it back'}
+                          {suggestBusyId === c.id ? 'saving…' : 'bring it back'}
                         </button>
                       {:else if c.stale}
                         <!-- ROUND 33 item 4: a stale one leads with the
                              honest verb, and keeps the other quiet. -->
                         <button class="act" disabled={suggestBusyId === c.id} onclick={() => hideOne(c)}>
-                          {suggestBusyId === c.id ? 'Saving…' : 'let it go'}
+                          {suggestBusyId === c.id ? 'saving…' : 'let it go'}
                         </button>
                         <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => acceptOne(c)}>
                           watch it anyway
                         </button>
                       {:else}
                         <button class="act" disabled={suggestBusyId === c.id} onclick={() => acceptOne(c)}>
-                          {suggestBusyId === c.id ? 'Saving…' : acceptVerb(c)}
+                          {suggestBusyId === c.id ? 'saving…' : acceptVerb(c)}
                         </button>
                         <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => hideOne(c)}>
                           not this
@@ -1984,7 +1984,7 @@
                           disabled={decommBusy || !decommReason.trim()}
                           onclick={() => forgetDecommissionWatch(row.watch)}
                         >
-                          {decommBusy ? 'Forgetting…' : 'forget this watch'}
+                          {decommBusy ? 'forgetting…' : 'forget this watch'}
                         </button>
                         <button class="act quiet" onclick={cancelDecommForget}>cancel</button>
                       {:else}

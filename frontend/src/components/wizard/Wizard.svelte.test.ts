@@ -91,7 +91,7 @@ function device(over: Partial<Device> = {}): Device {
   }
 }
 
-const TITLES = ['The router', 'Mint the token', 'Paste once', 'Tag firewall rules', 'Where setup stands']
+const TITLES = ['The router', 'Mint the ingest token', 'Paste once', 'Tag firewall rules', 'Where setup stands']
 
 function row(title: string): HTMLButtonElement {
   const found = rows().find((b) => b.querySelector('.step-title')?.textContent === title)
@@ -189,7 +189,7 @@ describe('Wizard: the full-screen shell', () => {
     await tick()
     expect(rows()[1].getAttribute('aria-current')).toBe('step')
     expect(rows()[1].title).toBe('')
-    expect(screen.getByRole('button', { name: 'Mint the token' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Mint the ingest token' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy()
   })
 
@@ -303,7 +303,7 @@ describe('Wizard: the full-screen shell', () => {
   // #1398: Re-enrol… on a router whose logs already stand lands on Mint
   // the token for it, not on the ledger its evidence would otherwise
   // place the walk at.
-  it('lands Re-enrol… on Mint the token even with the router already sending', async () => {
+  it('lands Re-enrol… on Mint the ingest token even with the router already sending', async () => {
     wizardState.devices = [device({ acceptedIp: '192.0.2.1', enrolledAt: '2026-09-27T14:03:04Z' })]
     wizardState.status = status({
       sources: [{ source: '192.0.2.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],

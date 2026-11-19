@@ -50,7 +50,7 @@
   {:else if configUpgradeState.error}
     <p class="empty error">Could not check for new settings: {configUpgradeState.error}</p>
   {:else if configUpgradeState.loaded && configUpgradeState.settings.length === 0}
-    <p class="empty">Nothing new -- every setting this version understands is already set.</p>
+    <p class="empty">Nothing new — every setting this version understands is already set.</p>
   {:else if configUpgradeState.loaded}
     <div class="head">
       <p class="intro">

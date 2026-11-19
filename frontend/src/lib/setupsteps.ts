@@ -777,7 +777,7 @@ const BACKUP_WAITING_NO_SCRIPT = 'Waiting for the first push.'
 // a token, and the address that line arrives from is the only address
 // this router's logs are accepted from afterwards.
 const SYSLOG_LEAD_ENROL =
-  ' The last line carries this router’s enrolment token, and the address it arrives from becomes the ' +
+  ' The last line carries this router’s ingest token, and the address it arrives from becomes the ' +
   'only address MikroView accepts this router’s logs from.'
 
 // syslogLead is the Send logs lead, with the enrolment sentence only
@@ -798,7 +798,7 @@ function syslogLead(enrolling: boolean): string {
 // in the component.
 const LEADS: Record<StepKey, string> = {
   ca: "The router has to trust MikroView's certificate authority before it will open a TLS connection. Run this on the router; it fetches the certificate and imports it.",
-  name: 'Give the router a name. MikroView creates it here, and the enrolment token the next step mints belongs to it — a token is minted for a named router, never for an address.',
+  name: 'Give the router a name. MikroView creates it here, and the ingest token the next step mints belongs to it — a token is minted for a named router, never for an address.',
   syslog: syslogLead(false),
   rules: 'The letter in the log-prefix is how MikroView knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   push: 'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
@@ -806,7 +806,7 @@ const LEADS: Record<StepKey, string> = {
   register:
     'Confirm this router is one you meant to add. MikroView records that you did — the name, and that it is ' +
     'here to stay. Registering grants the router nothing on its own: its logs are accepted because its ' +
-    'enrolment token arrived from its address, and that does not change here.',
+    'ingest token arrived from its address, and that does not change here.',
 }
 
 // CHECKED says where Next runs a check. Tagging rules can only count

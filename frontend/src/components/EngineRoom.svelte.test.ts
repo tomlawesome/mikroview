@@ -1009,7 +1009,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('on restart')).toBeTruthy()
-    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeTruthy()
+    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a detector reads them')).toBeTruthy()
     expect(screen.queryByText('persistence')).toBeNull()
     expect(screen.queryByText(/memory-only/)).toBeNull()
 
@@ -1113,8 +1113,8 @@ describe('The settings shelf (#633)', () => {
       await settle()
       await settle()
 
-      expect(screen.getByText('the buffer clears — the 5 days on disk stay; trying a watcher reads them')).toBeTruthy()
-      expect(screen.queryByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeNull()
+      expect(screen.getByText('the buffer clears — the 5 days on disk stay; trying a detector reads them')).toBeTruthy()
+      expect(screen.queryByText('the buffer clears — the 27 days on disk stay; trying a detector reads them')).toBeNull()
     } finally {
       vi.useRealTimers()
     }

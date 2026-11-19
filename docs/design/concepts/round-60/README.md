@@ -26,6 +26,10 @@ Shared decisions, whichever direction wins:
 - **Captions speak in the app's voice** — mono, lowercase, the sentences
   the app itself says ("blank because nothing is logged — not because
   nothing is sent").
+- **Casing split (#1541):** in-page controls and their busy labels are
+  lowercase (`save`, `saving…`, `forget`); modal overlays keep sentence case
+  (`Cancel`, `Close`, `Done`). Two registers, each consistent; the split is
+  deliberate.
 
 ## The directions
 

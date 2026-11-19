@@ -1983,7 +1983,7 @@
         // #1165: "1 hosts" on a district holding one.
         (d.buildings.length + d.more === 1 ? ' host' : ' hosts') +
         (!d.rulesPushed
-          ? ', no rule table has been pushed yet -- walls show no gates'
+          ? ', no rule table has been pushed yet — walls show no gates'
           : d.dark
             ? ', nothing logs here'
             : ''),
@@ -4169,7 +4169,7 @@
       {#if standComposeCommand}
         <pre class="cm-code">{standComposeCommand}</pre>
       {:else}
-        <p class="cm-b">nothing to draft from yet -- no destination port observed on this strand.</p>
+        <p class="cm-b">nothing to draft from yet — no destination port observed on this strand.</p>
       {/if}
       <div class="cm-f"><span>drafted · never run</span></div>
     </div>

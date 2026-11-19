@@ -1140,7 +1140,7 @@ describe('AuthState.consumeSSOErrorFromURL', () => {
 
     authState.consumeSSOErrorFromURL()
 
-    expect(authState.ssoError).toBe('SSO sign-in failed -- try again, or sign in with your password below.')
+    expect(authState.ssoError).toBe('SSO sign-in failed — try again, or sign in with your password below.')
     expect(location.search).toBe('?foo=bar')
   })
 
