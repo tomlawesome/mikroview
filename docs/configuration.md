@@ -2013,7 +2013,7 @@ schedule, script, lists and any fetched file. **Undo everything** in the
 foot removes everything the block made, by the `mv-bl-` and
 `mikroview blocklist:` names; it never touches the push script or the
 drop list's own rule. To stop dropping without removing anything,
-disable the rules: `/ip firewall raw disable [find comment~"^mikroview blocklist"]`;
+disable the rules, IPv4 and IPv6: `/ip firewall raw disable [find comment~"^mikroview blocklist"]; /ipv6 firewall raw disable [find comment~"^mikroview blocklist"]`;
 pasting the block again turns them back on.
 
 **RouterOS 7.18 and later only.** Below it the page refuses and shows the
