@@ -178,6 +178,9 @@ workflow:
   # byte-for-byte identical (#1317, check-release-surfaces.sh). It is a
   # sentence about a picture, and changes nothing the code does.
   - "docs/**/*.png.checked"
+  # The committed audit summary whose `Audited-through:` marker the
+  # merge gate reads (#1426). A record of a review, read by no code.
+  - ".agents/reviews/*.md"
   # The console transcript the weekly CHR exercise commits for the
   # RouterOS version it booted (#894, scripts/routeros-chr-open-mr.sh).
   # Same reasoning as the line above: it is a record of what a router
