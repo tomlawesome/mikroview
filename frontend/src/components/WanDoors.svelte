@@ -25,7 +25,7 @@
   import { formatRelative } from '../lib/format'
   import CopyButton from './CopyButton.svelte'
   import GhostRows from './GhostRows.svelte'
-  import type { WanDeviceDoors, WanDoor, WanService } from '../lib/api'
+  import type { WanDeviceDoors, WanDoor, WanService, WanUnjudged } from '../lib/api'
 
   const titleId = 'wan-doors-title'
   let sheetEl: HTMLDivElement | undefined = $state()
@@ -71,6 +71,13 @@
     return parts.join(' · ')
   }
 
+  // Line 2 of an unjudged row: the comment if any, then the condition
+  // verbatim. No marks: it is not "allowed through" and nothing was
+  // asked of the window.
+  function unjudgedLine(u: WanUnjudged): string {
+    return u.comment ? `${u.comment} · ${u.scope}` : u.scope
+  }
+
   function serviceLine(svc: WanService): string {
     return `${svc.name} · ${svc.port}/tcp · ${svc.address ? `from ${svc.address}` : 'any address'}`
   }
@@ -89,8 +96,14 @@
     return d.doors.filter((door) => Boolean(door.to))
   }
 
+  // The server always sends an array; an older one sends none, and
+  // that reads as nothing unjudged rather than a crash.
+  function unjudgedOf(d: WanDeviceDoors): WanUnjudged[] {
+    return d.unjudged ?? []
+  }
+
   function hasAnything(d: WanDeviceDoors): boolean {
-    return d.doors.length > 0 || (d.services !== null && d.services.length > 0)
+    return d.doors.length > 0 || unjudgedOf(d).length > 0 || (d.services !== null && d.services.length > 0)
   }
 </script>
 
@@ -163,6 +176,20 @@
                     <li>
                       <span class="peer">{door.label} {portText(door)} → {destinationText(door)}</span>
                       <span class="from">{markLine(door)}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+
+              {#if unjudgedOf(d).length > 0}
+                <p class="sub">not judged</p>
+                <!-- prettier-ignore -->
+                <p class="from" data-testid="wd-unjudged-{d.id}">These rules may be doors; MikroView cannot tell, because it is never sent a list's members or asked who an address is.</p>
+                <ul class="doors">
+                  {#each unjudgedOf(d) as u ((u.to ? 'nat' : 'filter') + u.label)}
+                    <li>
+                      <span class="peer">{u.label} {portText(u)} → {destinationText(u)}</span>
+                      <span class="from">{unjudgedLine(u)}</span>
                     </li>
                   {/each}
                 </ul>

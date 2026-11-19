@@ -665,11 +665,13 @@ func RouterOSUpgradeCommands() string {
 }
 
 // BlocklistDisableAll stops every blocklist rule dropping without
-// removing anything (round 2's undo note): the rules stay, disabled, and
-// a re-paste of the block turns them back on (its set branches name
-// disabled=no).
+// removing anything (round 2's undo note), IPv4 and IPv6: the rules
+// stay, disabled, and a re-paste of the block turns them back on (its
+// set branches name disabled=no). One line, since the page shows it
+// inline in a sentence; RouterOS reads ";" between the two commands.
+// A router with no IPv6 rules finds none and the second half is a no-op.
 func BlocklistDisableAll() string {
-	return `/ip firewall raw disable [find comment~"^mikroview blocklist"]`
+	return `/ip firewall raw disable [find comment~"^mikroview blocklist"]; /ipv6 firewall raw disable [find comment~"^mikroview blocklist"]`
 }
 
 // BlocklistUndoAll removes everything the builder left on the router,

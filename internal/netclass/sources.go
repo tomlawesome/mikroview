@@ -190,12 +190,13 @@ var ClassOrder = []Source{
 // is switched on.
 //
 // SourceApplePrivateRelay is a default alongside SourceX4BVPN, not an
-// opt-in extra: SourceX4BVPN's own upstream data includes Apple's ranges
-// (see that feed's own comment above), so leaving the corrective source
-// disabled by default would leave the exact false positive #114's
-// research called out as mattering most -- "this is a known VPN exit"
-// on an iPhone's ordinary Safari browsing -- live in the default
-// configuration.
+// opt-in extra. It was chosen as the corrective source: SourceX4BVPN's
+// own upstream data includes Apple's ranges (see that feed's own comment
+// above), and Private Relay once won that exact overlap. It no longer
+// does: ClassOrder checks VPN first (#1313), so an address both feeds
+// list reads as "known VPN exit" even with Private Relay on -- the false
+// positive #114's research called out as mattering most is live in the
+// default configuration again; ClassOrder's comment records why.
 var DefaultSources = []string{string(SourceTor), string(SourceApplePrivateRelay), string(SourceX4BVPN)}
 
 // KnownSources returns the full menu in registry order, for config

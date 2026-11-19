@@ -35,7 +35,17 @@ set -e
 
 has "docker image prune -f" "prunes dangling images (no -a, so the tagged image stays)"
 has "docker builder prune -af" "prunes the build cache"
-has "|| true" "a prune failure is guarded so it cannot fail the gate"
+# Check the two prune command lines themselves: a bare "|| true" elsewhere
+# in the script (the lock cleanup) must not satisfy this.
+for prune in "docker image prune -f" "docker builder prune -af"; do
+  lines="$(grep -E "^[[:space:]]*docker (image|builder) prune" "$SCRIPT" | grep -F -- "$prune" || true)"
+  if [ -n "$lines" ] && ! printf '%s\n' "$lines" | grep -vqE '\|\| true[[:space:]]*$'; then
+    echo "ok - '$prune' is guarded with || true so it cannot fail the gate"
+  else
+    echo "FAIL - '$prune' must be a command line ending in || true (found: $lines)"
+    fail=1
+  fi
+done
 has "==> tidy:" "tidy output is prefixed for gate-run.log"
 
 # The image prune must not carry -a/-af, or the tagged mv-gate:local image

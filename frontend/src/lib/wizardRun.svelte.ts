@@ -12,12 +12,19 @@
 // Nothing here connects to a router (the invariant in docs/decisions/observe-never-probe.md): every
 // field of `evidence` is a reading of what has arrived.
 
-import { createToken, deleteDevice, markSetupStep } from './api'
+import {
+  createToken,
+  deleteDevice,
+  fetchRouterRules,
+  markSetupStep,
+  type RouterFilterRule,
+  type RouterTable,
+} from './api'
 import { blocklistState } from './blocklist.svelte'
 import { hm as routerHm, hmLocal, num } from './blocklistBuild'
 import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
-import { RECORD_NUMBERS, SETUP_STEPS, TITLES } from './setupsteps'
+import { RECORD_NUMBERS, SETUP_STEPS, TITLES, caStep, type StepStatus } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import { wizardJourney } from './wizardJourney.svelte'
 import { tourState } from './tour.svelte'
@@ -42,7 +49,7 @@ import {
   type Tail,
   type TrackStation,
 } from './wizardRun'
-import type { TuneRule } from './wizardTune'
+import { taggedInPush, type TuneRule } from './wizardTune'
 
 // blockSection is one numbered, titled part of the paste-once block
 // (DESIGN.md, "3 · Paste once"): a title from TITLES (the same
@@ -74,10 +81,14 @@ class WizardRun {
   addr = $state('')
   // The password, held only between typing and Mint: wizardState takes
   // it for the one call and clears its own copy either way, and this
-  // copy goes with it.
+  // copy goes with it -- or with the walk, on Finish and on sign-out
+  // (clearSessionState).
   pass = $state('')
   push = $state<boolean | null>(null)
   backup = $state<boolean | null>(null)
+  // true once Copy carried a block with no backup part although Back up
+  // nightly was Yes (the drop box was closed, #1361): set by markCopied.
+  backupLeftOut = $state(false)
   copied = $state(false)
   // copiedAt is the track's own "copied" station timestamp (#1383): a
   // client-side moment, not a server receipt, because Copy itself is
@@ -90,6 +101,13 @@ class WizardRun {
   // The rules the tagging block was copied for (#1384): what the rail's
   // receipt counts, and what the ledger's Undo for tagged rules lists.
   tuneChosen = $state<TuneRule[]>([])
+  // The router's pushed rule table, read when the walk begins (A2-F7): the
+  // push's own witness of tagged rules, for a ledger reopened after the run
+  // that tagged them has forgotten its Copy. pushedFor is the router it was
+  // read for, so a reopen on the same router keeps the last read until the
+  // fresh one lands instead of flashing "left dark".
+  pushed = $state<RouterTable<RouterFilterRule> | null>(null)
+  pushedFor = ''
   undoOpen = $state<string | null>(null)
   showUndoAll = $state(false)
   // The first-run tail (#1360): offered is decided once, when the walk
@@ -118,6 +136,7 @@ class WizardRun {
       pass: this.pass,
       push: this.push,
       backup: this.backup,
+      backupLeftOut: this.backupLeftOut,
       copied: this.copied,
       tuneCopied: this.tuneCopied,
       tuneSkipped: this.tuneSkipped,
@@ -212,6 +231,8 @@ class WizardRun {
       version: dev?.routerosVersion ?? '',
       ahead: dev?.routerosStanding === 'ahead-of-review',
       tagged: this.tuneCopied && this.decoded > this.decodedAtCopy,
+      taggedRules: taggedInPush(this.pushed?.rules ?? []).length,
+      taggedAt: this.pushed?.updatedAt ?? '',
       tokenUntil: hm(wizardState.enrolment?.expiresAt ?? ''),
       tail: this.tail,
       boundaries: fallState.boundaries.map((b) => ({
@@ -222,12 +243,45 @@ class WizardRun {
     }
   }
 
+  // certificateProblem is caStep's 'blocked' reading (#1365) for the
+  // address the block tells the router to fetch /ca.crt from --
+  // wizardState.address, the same value refreshCommands renders into
+  // CaTrustCommands and refresh() asks the server to judge (#1507).
+  // Null when the certificate covers it, or no status has arrived.
+  // StepPaste renders it: the modal's ledger did, and the full-screen
+  // wizard (#1381) had no reader for it until now.
+  get certificateProblem(): StepStatus | null {
+    const st = wizardState.status
+    if (!st) return null
+    const s = caStep(st, wizardState.address)
+    return s.state === 'blocked' ? s : null
+  }
+
   // tailDevice is the router the tail builds for: the walk's own, or on
   // a bare Run setup… the instance's only router. With several and none
   // named there is no one router to write a block for, and no tail.
   get tailDevice(): string {
     if (wizardState.ledgerDevice) return wizardState.ledgerDevice
     return wizardState.devices.length === 1 ? wizardState.devices[0].id : ''
+  }
+
+  // rulesDevice is the router whose rule table the tagging is about: the
+  // walk's own, or on a bare Run setup… the first router whose push carried
+  // a rule table -- StepTune's own rule, so the Undo addresses the same
+  // table the tagging block did. An add-a-router walk with no record yet
+  // has no table of its own (#1397).
+  get rulesDevice(): string {
+    if (wizardState.ledgerDevice) return wizardState.ledgerDevice
+    if (wizardState.addingRouter) return ''
+    return wizardState.status?.devices.find((d) => d.pushedKinds && 'filter-rule' in d.pushedKinds)?.device ?? ''
+  }
+
+  private readPushed(device: string) {
+    fetchRouterRules(device)
+      .then((t) => {
+        if (this.pushedFor === device) this.pushed = t
+      })
+      .catch(() => {})
   }
 
   // tail is the first-run tail's standing, from the builder's own read of
@@ -292,6 +346,18 @@ class WizardRun {
     }
     sections.push({ id: 'syslog', title: TITLES.syslog, commands: steps.syslog.commands })
     return sections.filter((s) => s.commands)
+  }
+
+  // backupLeftOutWhy is the Paste step's one sentence when Back up
+  // nightly was Yes but the server left the backup part blank
+  // (commandStep.blocked, #1217). Live: Back to The router and
+  // opening the drop box re-renders the block (dropBoxSwitched) and
+  // this reads '' again. '' when nothing is left out.
+  get backupLeftOutWhy(): string {
+    const step = wizardState.commands?.steps.backup
+    if (this.backup !== true || !step || step.commands) return ''
+    if (step.blocked?.includes('backups-off')) return 'the drop box is closed, so a backup would have nowhere to arrive'
+    return 'MikroView could not build it — check the server log'
   }
 
   // blockText is what Copy puts on the clipboard and the folded `pre`
@@ -372,11 +438,19 @@ class WizardRun {
   // On success the wizard reopens at The router, the same door Add
   // another router uses, since forgetting a router is exactly "start
   // this router over from nothing." Returns an error string to show
-  // beside the button, or null once forgotten.
+  // beside the button, or null once forgotten. A Run setup… walk that
+  // fleet-wide evidence placed here (begin(), #1404) names no
+  // ledgerDevice: the router is the record enrolled from the evidence's
+  // sending address, the chain fleet.ts's routerAddress reads.
   private forgetting = false
   async forget(): Promise<string | null> {
-    const device = wizardState.ledgerDevice
-    if (!device || this.forgetting) return null
+    if (this.forgetting) return null
+    const from = this.evidence.from
+    const device =
+      wizardState.ledgerDevice ||
+      (from ? wizardState.devices.find((d) => d.acceptedIp === from || d.sourceIp === from)?.id : undefined) ||
+      ''
+    if (!device) return `MikroView holds no router record for ${this.name || 'this router'} — there is nothing to forget.`
     this.forgetting = true
     try {
       const err = await deleteDevice(device)
@@ -404,6 +478,8 @@ class WizardRun {
     this.tailOffered = false
     this.tailSkipped = false
     this.tuneChosen = []
+    this.pushed = null
+    this.pushedFor = ''
     this.undoOpen = null
     this.showUndoAll = false
     this.decodedAtCopy = 0
@@ -424,7 +500,12 @@ class WizardRun {
   // already stand as evidence, so reading ev.enrol first would send it
   // straight back to the ledger it was asked to leave.
   begin() {
+    const rulesDevice = this.rulesDevice
+    const keep = rulesDevice && this.pushedFor === rulesDevice ? this.pushed : null
     this.reset()
+    this.pushed = keep
+    this.pushedFor = rulesDevice
+    if (rulesDevice) void this.readPushed(rulesDevice)
     // The tail is offered on the launch walk alone (owner, 2a): not on
     // Add another router or Re-enrol…, and not once record 8 holds a mark
     // or a witness -- Run setup… after either shows no sixth row.
@@ -571,6 +652,9 @@ class WizardRun {
   markCopied() {
     this.copied = true
     this.copiedAt = new Date().toISOString()
+    // Snapshot at Copy on purpose: what went on the router is fixed from
+    // here; a later drop-box open does not put the backup script on it.
+    this.backupLeftOut = this.backup === true && !this.blockSections.some((s) => s.id === 'backup')
     this.stage = 'watch'
   }
 
@@ -673,6 +757,10 @@ class WizardRun {
     // is the fall it just left, so it gets no offer. Read once, up
     // front: `after` runs seconds later, once the way out has landed,
     // and finishTo by then belongs to whichever walk is open next.
+    // Finish leaves the walk, and whatever was typed into Mint and not
+    // spent goes with it: wizardState.close() below clears its own copy
+    // of the password, and this is the run's (v0.7.0 pre-release audit).
+    this.pass = ''
     const toFall = wizardState.finishTo !== 'fleet'
     const swap = () => {
       appState.view = toFall ? 'fall' : 'fleet'

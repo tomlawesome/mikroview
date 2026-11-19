@@ -273,6 +273,25 @@ describe('adding a passkey', () => {
     await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
     expect(screen.queryByRole('dialog', { name: /passkeys/i })).toBeNull()
   })
+
+  it('Escape closes the list screen', async () => {
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText(/add a passkey/i)
+    expect(screen.getByRole('dialog', { name: /passkeys/i })).toBeTruthy()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: /passkeys/i })).toBeNull()
+  })
+
+  it('Escape closes the add form', async () => {
+    await openAdding()
+    expect(screen.getByLabelText('Name')).toBeTruthy()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: /passkeys/i })).toBeNull()
+  })
 })
 
 // Closing mid-ceremony doesn't cancel it, it only unmounts the view -- a

@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  fetchTuneLoggingRender,
   beginPasskeyLogin,
   beginPasskeyRegistration,
   buildQuery,
@@ -1173,5 +1174,31 @@ describe('fetchSetupStatus carries the typed address (#1507)', () => {
     const fetchMock = stub()
     await (fetchSetupStatus as (a?: string) => Promise<unknown>)('')
     expect(String(fetchMock.mock.calls[0][0])).toBe('/api/setup/status')
+  })
+})
+
+describe('fetchTuneLoggingRender errors (#1546)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function failWith(status: number, text: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: false, status, text: async () => text })),
+    )
+    return fetchTuneLoggingRender({ device: 'core', export: 'x', selected: [0] })
+  }
+
+  it('shows the reason of a 400 rejected body', async () => {
+    expect(await failWith(400, JSON.stringify({ rejected: { reason: 'r' } }))).toBe('r')
+  })
+
+  it('shows a plain-text 500 as it is', async () => {
+    expect(await failWith(500, 'logging-only check failed')).toBe('logging-only check failed')
+  })
+
+  it('falls back to the named error when the body is empty', async () => {
+    expect(await failWith(502, '')).toBe('fetchTuneLoggingRender: 502')
   })
 })

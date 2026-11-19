@@ -246,7 +246,20 @@ func TestLoggingLeftoversRemovesANonBuiltinAction(t *testing.T) {
 // leftovers against, the same rule RouterSetup follows.
 func TestLoggingLeftoversDoesNotCompareAnAddressTheInstanceDoesNotKnow(t *testing.T) {
 	s := New()
-	s.NoteLoggingReport("core", loggingPage(t, routeros.WizardVersion, "firewall,info"), time.Now())
+	// A non-mikroview action sending to a remote with no address recorded:
+	// without the empty-address guard it would compare "" == "" and be
+	// named a leftover. (The stock page only holds the mikroview action,
+	// which is skipped by name before any comparison, so it proved nothing.)
+	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":3,
+ "records":[
+  {"type":"action","name":"old-syslog","target":"remote","remotePort":"514","remoteProtocol":"udp","remoteLogFormat":"syslog"},
+  {"type":"rule","topics":"firewall","action":"old-syslog","disabled":"no"}
+ ]}`
+	p, err := ingest.DecodePayload(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	s.NoteLoggingReport("core", p, time.Now())
 
 	if got := s.LoggingLeftovers("core", routeros.WizardLogging("", "", "a")); got != nil {
 		t.Errorf("leftovers = %+v, want nil -- nothing known to compare against", got)

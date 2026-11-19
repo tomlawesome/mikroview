@@ -146,6 +146,22 @@
     ed.close()
   }
 
+  // Setup-only mode has no Close: Sign out is the one way off the screen,
+  // and logout() clears the editor's text on its way out, so it asks the
+  // same way Close does when there are edits.
+  function requestSignOut() {
+    if (ed.edited) {
+      clearBars()
+      pending = {
+        message: `${UNSAVED} Sign out and lose them?`,
+        confirmLabel: 'Sign out without saving',
+        run: () => void authState.logout(),
+      }
+      return
+    }
+    void authState.logout()
+  }
+
   // --- snapshots ----------------------------------------------------------
 
   function whyLabel(why: string): string {
@@ -271,7 +287,7 @@
         </button>
       {/if}
       {#if setupOnly}
-        <button type="button" onclick={() => void authState.logout()}>Sign out</button>
+        <button type="button" onclick={requestSignOut}>Sign out</button>
       {:else}
         <button type="button" onclick={requestClose}>Close</button>
       {/if}
@@ -283,7 +299,9 @@
       <PasswordAgain
         prompt={ed.passwordFor === 'reveal'
           ? 'It has been more than 15 minutes since you entered your password. Enter it again to show the secrets.'
-          : 'It has been more than 15 minutes since you entered your password. Enter it again to download.'}
+          : ed.passwordFor === 'load'
+            ? 'It has been more than 15 minutes since you entered your password. Enter it again to load the snapshot.'
+            : 'It has been more than 15 minutes since you entered your password. Enter it again to download.'}
         submitLabel="Continue"
         busy={ed.unlocking}
         error={ed.passwordError}

@@ -976,6 +976,13 @@ damage a hostile or misbehaving LAN device can do:
   goroutines/file descriptors by opening connections and never closing
   them (`internal/syslog/tcp_listener.go`'s `ServeTCP`, which
   `internal/syslog/tls_listener.go` wraps in TLS).
+- The router-backup SFTP drop box does the same: at most 128 connections
+  at once and 8 from any one address, and a connection that goes two
+  minutes without sending anything -- including one that never finishes
+  the SSH handshake -- is closed, so a host that can reach port 47022
+  can't hold goroutines and file descriptors open indefinitely. Closing
+  the drop box in Settings also closes every connection still open on it
+  (`internal/backupsftp/server.go`'s `Serve`).
 - The WebSocket hub never blocks a slow browser tab from receiving
   events — a full per-client queue evicts its oldest event rather than
   applying backpressure to ingestion, and the drop count is surfaced to

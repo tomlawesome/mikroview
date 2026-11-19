@@ -220,7 +220,9 @@ func UndoCaTrustCommands(dialect string) string {
 // Still 6 after #1409, which changed the filter-rule and address-list
 // blocks on the same unreleased branch: one bump per released change to
 // the script is what tells a router it is behind, and no router has run
-// a 6 that lacks #1409's reads.
+// a 6 that lacks #1409's reads. Still 6, for the same reason, after
+// the filter-rule block gained inInterfaceList for the doors panel
+// (v0.7.0 pre-release audit, A4-F1).
 const WizardVersion = 6
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
@@ -457,7 +459,7 @@ var blockSpecs = map[string]blockSpec{
 		record: `{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ` +
 			`"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ` +
 			`"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ` +
-			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ` +
+			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "inInterfaceList"=($v->"in-interface-list"); "outInterface"=($v->"out-interface"); ` +
 			`"disabled"=[/ip/firewall/filter get ($v->".id") disabled]; ` +
 			`"packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}`,
 	},
@@ -1081,10 +1083,8 @@ const maxLogPrefixLen = 15
 // distinct from every other one (shortened or not) LogPrefixForAction
 // can produce: see TestLogPrefixForActionFitsAndDoesNotCollide, which
 // checks both properties for every action this package is known to
-// meet. An action not in this table falls through to LogPrefixForAction's
-// own length-safe truncation instead -- this table is for the ones worth
-// a slug a human reading the router's own log can still recognise, not
-// an exhaustive list of every RouterOS action there is.
+// meet. An action not in this table keeps its own name as the slug; every
+// action in logPrefixCode fits maxLogPrefixLen that way.
 var logPrefixSlug = map[string]string{
 	"add-src-to-address-list": "add-src-list",
 	"add-dst-to-address-list": "add-dst-list",
@@ -1093,46 +1093,47 @@ var logPrefixSlug = map[string]string{
 	"strip-ipv4-options":      "strip-ipv4",
 }
 
+// logPrefixCode is the first character of a log-prefix: the class the
+// decoder (internal/routeros/prefix.go actionFromCode) reads back for each
+// RouterOS action. A accept, D drop and R reject are the three filter
+// verdicts; L is a rule that logs without deciding the packet's fate; M a
+// mangle mark; N a NAT rewrite. An action not listed (tarpit, anything
+// unknown) has no code the decoder reads as what the rule does.
+var logPrefixCode = map[string]byte{
+	"accept": 'A', "drop": 'D', "reject": 'R',
+
+	"log": 'L', "jump": 'L', "return": 'L', "passthrough": 'L',
+	"add-src-to-address-list": 'L', "add-dst-to-address-list": 'L',
+	"fasttrack-connection": 'L', "notrack": 'L', "change-mss": 'L',
+	"change-ttl": 'L', "change-dscp": 'L', "clear-df": 'L',
+	"set-priority": 'L', "strip-ipv4-options": 'L', "route": 'L',
+	"sniff-pc": 'L', "sniff-tzsp": 'L',
+
+	"mark-connection": 'M', "mark-packet": 'M', "mark-routing": 'M',
+
+	"masquerade": 'N', "src-nat": 'N', "dst-nat": 'N', "redirect": 'N',
+	"netmap": 'N', "same": 'N',
+}
+
 // LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
 // bulk `[find action=...]` commands give a rule, applied to a single
-// action rather than to every rule of that action at once: D|drop|,
-// R|reject|, A|accept|, and <INITIAL>|<slug>| for everything else,
-// INITIAL being the action's own first letter, upper-cased, and slug
-// being the action name itself unless logPrefixSlug shortens it (S4 in
-// the v0.6.0 audit, #1304: several real RouterOS actions -- mangle's
-// mark-connection, both the filter and mangle add-*-to-address-list
-// actions -- render a prefix past maxLogPrefixLen with the action name
-// spelled out in full, which RouterOS's own log formatter can corrupt,
-// showing up on mikroview's side as an unrecognised prefix and an action
-// of "unknown" for every hit on that rule). #435's per-rule tune-logging
-// render step (POST /api/tune-logging/render) calls this so a rule
-// tagged individually gets the identical prefix bulk-tagging would have
-// given it, rather than a second convention that could drift from the
-// first. dialect is accepted for the same reason every other function in
-// this file takes one -- the seam a second dialect would use, not a
-// currently-live switch.
+// action: <code>|<slug>|, the code being the class the decoder reads back
+// (logPrefixCode) and the slug the action name unless logPrefixSlug
+// shortens it to stay within maxLogPrefixLen. It returns "" for an action
+// with no code (tarpit, anything unknown) rather than write a prefix that
+// decodes to the wrong verdict; callers must not tag such a rule. Note
+// accept/drop in nat/mangle/raw are not filter verdicts, but no caller
+// passes those tables. #435's per-rule tune-logging render calls this so a
+// rule tagged individually gets the prefix bulk-tagging would have given
+// it. dialect is the seam a second dialect would use, not a live switch.
 func LogPrefixForAction(action, dialect string) string {
-	if action == "" {
+	code, ok := logPrefixCode[action]
+	if !ok {
 		return ""
 	}
 	slug := action
 	if short, ok := logPrefixSlug[action]; ok {
 		slug = short
 	}
-	initial := strings.ToUpper(action[:1])
-	prefix := initial + "|" + slug + "|"
-	if len(prefix) > maxLogPrefixLen {
-		// An action neither short enough on its own nor named in
-		// logPrefixSlug above -- keep as much of it as fits rather than
-		// hand RouterOS a prefix its own log formatter can corrupt.
-		keep := maxLogPrefixLen - len(initial) - 2 // both '|' delimiters
-		if keep < 0 {
-			keep = 0
-		}
-		if keep > len(slug) {
-			keep = len(slug)
-		}
-		prefix = initial + "|" + slug[:keep] + "|"
-	}
-	return prefix
+	return string(code) + "|" + slug + "|"
 }

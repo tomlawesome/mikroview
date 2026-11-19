@@ -1,5 +1,5 @@
 # MikroView configuration -- keep these four lines; MikroView reads them.
-# schema: 7            (which settings this file should have; goes up when keys change)
+# schema: 8            (which settings this file should have; goes up when keys change)
 # written-by: mikroview v0.6.1
 # layout: 1            (the order and banners below)
 

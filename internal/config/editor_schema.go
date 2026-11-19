@@ -23,10 +23,12 @@ import (
 // any release whose key set changed -- a key added, removed or renamed
 // -- and is the number the editor writes into every file it produces.
 //
-// Still 7 with #1347: the editor added no config key (its snapshots
-// live beside the accounts store, like the Postgres adoption marker, not
-// at a path of their own), and no key has changed since v0.6.1.
-const CurrentSchema = 7
+// 8 for v0.7.0: geoip.dbPath went (#1352, country data is fetched at
+// run time) and geoip.cachePath, networks.home (#1481),
+// auth.adminPasskey and auth.signInsStorePath (#1202) arrived. The
+// editor itself (#1347) added no key: its snapshots live beside the
+// accounts store, not at a path of their own.
+const CurrentSchema = 8
 
 // CurrentLayout is the order and banners the editor writes a file in:
 // header, the settings that must be set, optional features, then the
@@ -51,6 +53,7 @@ var schemaByVersion = []struct {
 	{"v0.5.1", 5},
 	{"v0.6.0", 6},
 	{"v0.6.1", 7},
+	{"v0.7.0", 8},
 }
 
 // SchemaForVersion reports the schema a release reads, false for a
@@ -90,6 +93,7 @@ var keysIntroducedAt = map[int][]string{
 	},
 	6: {"configDrift.storePath", "deviceRegistry.storePath", "droplist.storePath", "seen.storePath"},
 	7: {"prefs.storePath", "publicUrl", "ui.allow"},
+	8: {"auth.adminPasskey", "auth.signInsStorePath", "geoip.cachePath", "networks.home"},
 }
 
 // Header is what the four header lines say.

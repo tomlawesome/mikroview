@@ -166,6 +166,24 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 	}
 }
 
+// TestSetupMarkAcceptsTheEighthStep: #1360's first-run tail records as
+// eight (setupsteps.ts RECORD_NUMBERS). The "past the last" row moves with
+// setup.MaxStep, so nothing else fails if MaxStep is lowered below 8 and
+// the tail's mark gets a 400 while the wizard advances anyway (#1267, #1257).
+func TestSetupMarkAcceptsTheEighthStep(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, s, ts)
+	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: 8, Outcome: "skipped"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/mark for step 8 = %d, want 200", resp.StatusCode)
+	}
+}
+
 // TestSetupMarkAcceptsTheSixthStep covers #1267: step 6 ("Back up the
 // router", round 45/#394) used to be refused with "step must be 1-5",
 // the same off-by-one TestSetupMarkRejectsNonsense's "past the last"

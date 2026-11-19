@@ -34,7 +34,7 @@ export const VALIDATE_PAUSE_MS = 600
 const PLACEHOLDER = /<<secret:([^>\s]+)>>/g
 
 /** What the inline password field is asking for. */
-type PasswordReason = 'open' | 'download' | 'reveal'
+type PasswordReason = 'open' | 'download' | 'reveal' | 'load'
 
 /** What the card shows about the running file, kept after the editor closes. */
 interface ConfigFileSummary {
@@ -422,6 +422,10 @@ class ConfigEditorState {
       this.error = `Could not load that snapshot: ${snap}`
       return
     }
+    if ('reauth' in snap) {
+      this.#askPassword('load', () => this.loadSnapshot(id))
+      return
+    }
     this.#cancelValidate()
     this.#revealedLines.clear()
     this.revealed = false
@@ -438,6 +442,10 @@ class ConfigEditorState {
     const snap = await fetchConfigSnapshot(id)
     if (typeof snap === 'string') {
       this.error = `Could not read that snapshot: ${snap}`
+      return
+    }
+    if ('reauth' in snap) {
+      this.#askPassword('download', () => this.downloadSnapshot(id))
       return
     }
     // Through the same download route as the editor's own text, so the

@@ -902,7 +902,7 @@ does `deploy/config.example.yaml`:
 
 ```
 # MikroView configuration -- keep these four lines; MikroView reads them.
-# schema: 7            (which settings this file should have; goes up when keys change)
+# schema: 8            (which settings this file should have; goes up when keys change)
 # written-by: mikroview v0.6.1
 # layout: 1            (the order and banners below)
 ```
@@ -910,7 +910,7 @@ does `deploy/config.example.yaml`:
 - **schema** is the set of settings the file was written for. It goes up
   by one in any release that adds, removes or renames a setting:
   v0.1.0 is 1, v0.2.0 is 2, v0.3.x is 3, v0.4.0 is 4, v0.5.x is 5, v0.6.0
-  is 6 and v0.6.1 is 7.
+  is 6, v0.6.1 is 7 and v0.7.0 is 8.
 - **written-by** is the MikroView release that wrote the file.
 - **layout** is the order the file is in: the header, the settings you
   must set, the optional features, then -- under a large banner --
@@ -1435,7 +1435,9 @@ keys and sign-in history sealed under this key and has no unencrypted
 mode for them, so it does not start — not the server, not setup-only
 mode, and not `-recover-admin-account`, `-transfer-admin`,
 `-clear-second-factor` or `-generate-recovery-keys`. Nothing is written
-before it stops. Make a key once and keep a copy somewhere safe:
+before it stops.
+
+**If the message says the key `is set to … but could not be used`, a key file already exists. Do not run the command below: it writes a new key over the old one, and everything sealed under the old key — accounts, API tokens, recovery keys and retained history — is lost for good.** Make the existing file readable by the account MikroView runs as instead (uid 1000 in the container: `sudo chown 1000:1000 mikroview/keys/history.key && chmod 600 mikroview/keys/history.key` on the host, as in [the install guide](install.md#the-key-make-it-once-before-the-first-start)), or point `history.keyFile` or `MIKROVIEW_HISTORY_KEY_FILE` at the right file. A file holding fewer than 32 bytes never sealed anything and can be replaced. Only when no key exists yet, make one once and keep a copy somewhere safe:
 
 ```sh
 head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
@@ -2013,7 +2015,7 @@ schedule, script, lists and any fetched file. **Undo everything** in the
 foot removes everything the block made, by the `mv-bl-` and
 `mikroview blocklist:` names; it never touches the push script or the
 drop list's own rule. To stop dropping without removing anything,
-disable the rules: `/ip firewall raw disable [find comment~"^mikroview blocklist"]`;
+disable the rules, IPv4 and IPv6: `/ip firewall raw disable [find comment~"^mikroview blocklist"]; /ipv6 firewall raw disable [find comment~"^mikroview blocklist"]`;
 pasting the block again turns them back on.
 
 **RouterOS 7.18 and later only.** Below it the page refuses and shows the
@@ -3781,9 +3783,8 @@ the admin account**. That is the only option -- running without
 authentication was removed, and creating an account is the floor. It is
 a username and a password, plus the **setup code** from MikroView's own
 log (below); the username can't be an email address, and SSO is never
-offered in its place. What happens straight afterwards
-depends on whether your OIDC details are already in the config file --
-see [SSO is additive: keep a local
+offered in its place. What happens next -- the second step, then
+connecting SSO if you use it -- is under [SSO is additive: keep a local
 admin](#sso-is-additive-keep-a-local-admin). See
 [SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
 section is the configuration reference.
@@ -3937,7 +3938,8 @@ case.
   account until you lower it and restart.
 - **SSO can't create the first account.** While no account exists the
   SSO sign-in routes answer "setup required"; create the local admin
-  with the code first, then connect SSO -- see [SSO is additive: keep a
+  with the code first, add its second step, then connect SSO from the
+  account menu's **Use single sign-on** -- see [SSO is additive: keep a
   local admin](#sso-is-additive-keep-a-local-admin).
 
 **A setup code when you weren't expecting one means MikroView has no
@@ -4717,15 +4719,19 @@ What this means in practice:
   MikroView never offers SSO instead of that, even when SSO is
   configured — the local account is step one either way, and SSO
   sign-in is refused until it exists.
-- **Then one of two things happens.** If your OIDC details are already
-  in the config file, MikroView sends you to your provider to sign in,
-  and connects the identity you sign in with to the admin account you
-  just created. It is the same browser throughout, which is how
-  MikroView knows it is the same person — it compares no email address,
-  and stores none. If the details are not there, MikroView says the
-  account has been created and that the OIDC settings go in the config
-  file; add them, restart, and connect the account from the account
-  menu whenever you like.
+- **Then MikroView asks for a second step.** Every new local account,
+  the admin's included, is held at the second-step screen (an
+  authenticator app or a passkey) before it can reach anything else —
+  see [docs/authenticator-app.md](authenticator-app.md). Once that is
+  done, if your OIDC details are already in the config file, open the
+  account menu and choose **Use single sign-on**: you are sent to your
+  provider, and the identity you sign in with is connected to the admin
+  account. It is the same browser and the same signed-in session
+  throughout, and MikroView asks for the admin's password again before
+  sending you — it compares no email address, and stores none. If the
+  details are not there, MikroView says so when the account is created;
+  add them, restart, and connect the account from the account menu
+  whenever you like.
 - **Connecting the admin to SSO keeps its password and its second
   factor.** Afterwards you can sign in either way: through your provider
   normally, or the break-glass path — username, password, and second
@@ -5656,13 +5662,13 @@ route keeps as-is, such as the preferences document, accept any keys.
 | `POST /api/setup/address` | admin-only (#1213): the address your routers reach this instance on, as typed into the setup ledger's header field; persisted beside the ledger's own marks and rendered into every router command the ledger shows |
 | `PUT /api/setup/backup-transport` | admin-only (#955): how the backup part of the wizard's Paste once script delivers its backup, set from Settings → router backups' deliver by row (#1494) -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
 | `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
-| `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
+| `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). A selected rule with no log-prefix of its own whose action has no code MikroView can read back (tarpit) answers 400 `{"rejected":{"reason":...}}` naming the rule (#1546). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- a state MikroView no longer starts in, since v0.7.0 needs a key) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 | `GET /api/config/upgrade` | admin-only (#1218): the "N new settings are available" notice and its ready-to-paste YAML (see [Upgrade notice](#upgrade-notice-issue-1218-optional)) |
 | `GET /api/upgrade` | open to any signed-in user (#1240): the version this data directory last ran, the running one, whether an admin has said `done`, and how many declared routers are still on the old setup. Two version strings and a count, so a tier below `GET /api/config/upgrade` |
 | `POST /api/upgrade/acknowledge` | admin-only (#1240): the upgrade notice's `done` -- an instance-wide, persisted statement that the routers have been dealt with. Audit-logged |
-| `POST /api/config/editor/open` | admin-only (#1347): given `{"password": "..."}`, re-checks it and unlocks the config editor for this session for 15 minutes. Returns `{text, path, changedSinceStart, header, schemaGuess, runningVersion, runningSchema}` -- `text` is the running config file as it is on disk now, with secret values masked as `<<secret:<key>>>`; `header` is `{schema, writtenBy, layout}` or `null`. 400 for a missing body, 401 for a wrong password, 429 after repeated wrong ones. Audited as `config.editor.open` |
+| `POST /api/config/editor/open` | admin-only (#1347): given `{"password": "..."}`, re-checks it and unlocks the config editor for this session for 15 minutes. Returns `{text, path, changedSinceStart, header, schemaGuess, runningVersion, runningSchema}` -- `text` is the running config file as it is on disk now, with secret values masked as `<<secret:<key>>>` (a placeholder is put back only as the whole value of the setting it names; moved anywhere else -- a comment, another setting -- it stays as that literal text); `header` is `{schema, writtenBy, layout}` or `null`. 400 for a missing body, 401 for a wrong password, 429 after repeated wrong ones. Audited as `config.editor.open` |
 | `GET /api/config/editor/summary` | admin-only, no password or unlock (nothing secret in it): `{path, header, schemaGuess, runningVersion, runningSchema, snapshotCount, changedSinceStart}` for the Engine Room's Config card -- facts about the running config file, never its text |
 | `GET /api/config/editor/reveal` | admin-only, within the unlock: `{"secrets": {"<key>": "<value>"}}`, each value exactly as written in the file, quotes included, so it can replace its placeholder. 401 with an `X-Config-Reauth` header (plain-text body) once the unlock has lapsed |
 | `POST /api/config/validate` | admin-only: given `{"text": "..."}`, the same checks start-up runs -- `{"problems": [{line, key, severity, message}]}`, `severity` `fatal` or `warning`, `line` 0 when a problem is not about one line |

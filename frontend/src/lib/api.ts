@@ -1959,9 +1959,11 @@ export async function fetchAuditLog(): Promise<AuditResult> {
 //
 // The account is the session's, never the body's; the body carries only
 // the caller's own password (#1202 U10, a rate-limited re-check), in the
-// body and nowhere else. Both callers are here -- SSOLinkOverlay.svelte
-// for an account already in the app, and AuthSetup.svelte immediately
-// after first-run creates the admin. A 401 #invalid-credentials is
+// body and nowhere else. The one caller is SSOLinkOverlay.svelte, for an
+// account already in the app: a first-run admin cannot call this
+// (gauntlet holds a new local account at the must-enrol-factor door,
+// which does not admit this path), so AuthSetup.svelte sends it here via
+// the account menu instead. A 401 #invalid-credentials is
 // INCORRECT_PASSWORD, a 429 and the two 409s their detail.
 export async function startSSOLink(password: string): Promise<{ url: string } | string> {
   const res = await postJSON('/api/auth/oidc/link', { password })
@@ -2660,7 +2662,15 @@ export async function fetchTuneLoggingRender(
 ): Promise<TuneLoggingRenderResponse | string> {
   const res = await postJSON('/api/tune-logging/render', req)
   if (res.ok) return res.json()
-  return (await errorText(res)) || `fetchTuneLoggingRender: ${res.status}`
+  const text = await errorText(res)
+  // The server's 400 refusals answer {"rejected":{"reason":"..."}}: show the reason.
+  try {
+    const reason = (JSON.parse(text) as { rejected?: { reason?: unknown } }).rejected?.reason
+    if (typeof reason === 'string' && reason) return reason
+  } catch {
+    // plain text: shown as it is
+  }
+  return text || `fetchTuneLoggingRender: ${res.status}`
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2892,6 +2902,19 @@ export interface WanDoor {
   lastSeen?: string
 }
 
+// One rule the endpoint could not place (A4-C1): it may be a door, but
+// the push never carries a list's members or who an address is.
+export interface WanUnjudged {
+  label: string
+  ordinal: number
+  dstPort: string
+  proto?: string
+  to?: WanDoorHost
+  comment?: string
+  // The condition, verbatim: "in-interface-list=WAN".
+  scope: string
+}
+
 export interface WanService {
   name: string
   port: number
@@ -2905,6 +2928,8 @@ export interface WanDeviceDoors {
   name?: string
   wan: string
   doors: WanDoor[]
+  // Optional: a server older than #1426 A4-C1 omits it; read as empty.
+  unjudged?: WanUnjudged[]
   // null means the router has never pushed /ip/service (#1329) --
   // distinct from an empty, pushed table.
   services: WanService[] | null
@@ -3052,10 +3077,11 @@ export async function deleteDecommissionWatch(id: string, reason?: string): Prom
 // --- The config editor (#1347) -------------------------------------------
 //
 // All admin-only. Opening asks for the password again and unlocks
-// Show secrets and Download for 15 minutes; once that lapses the two
-// answer 401 with an X-Config-Reauth header, which is told apart here from a
-// session that has actually ended (a plain 401) so the editor can ask
-// for the password inline rather than bouncing to the sign-in page.
+// Show secrets, Download and reading a snapshot for 15 minutes; once that
+// lapses the three answer 401 with an X-Config-Reauth header, which is told
+// apart here from a session that has actually ended (a plain 401) so the
+// editor can ask for the password inline rather than bouncing to the
+// sign-in page.
 
 /** The editor's unlock has lapsed: ask for the password and try again. */
 export interface ConfigReauth {
@@ -3164,10 +3190,11 @@ export async function createConfigSnapshot(text: string, note: string): Promise<
   return serverSaid(res)
 }
 
-export async function fetchConfigSnapshot(id: string): Promise<ConfigSnapshot | string> {
+export async function fetchConfigSnapshot(id: string): Promise<ConfigSnapshot | ConfigReauth | string> {
   const res = await fetch(`/api/config/snapshots/${encodeURIComponent(id)}`)
-  if (res.ok) return res.json()
-  return serverSaid(res)
+  if (await isReauth(res)) return { reauth: true }
+  if (!res.ok) return serverSaid(res)
+  return res.json()
 }
 
 export async function deleteConfigSnapshot(id: string): Promise<string | null> {

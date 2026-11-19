@@ -74,9 +74,11 @@ type editorSession struct {
 	// open, or a snapshot read back -- supplies it, and a secret typed
 	// over a placeholder replaces it on the next validate or Carry
 	// forward. Kept past the unlock window, because validate and Carry
-	// forward need it and do not need the unlock; the window guards
-	// reading the values out (Show, Download, a snapshot), not holding
-	// them, and the process holds the running config's secrets anyway.
+	// forward need it and do not need the unlock, and the process holds
+	// the running config's secrets anyway; the window guards reading the
+	// values out (Show, Download, a snapshot), not holding them; a value
+	// goes back only at its own setting (config.UnmaskSecrets), so
+	// validate and Carry forward never return one.
 	values   map[string]string
 	lastUsed time.Time
 }

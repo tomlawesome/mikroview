@@ -181,6 +181,15 @@ func TestMarkAcceptsTheWizardsSeventhStep(t *testing.T) {
 	}
 }
 
+// TestMarkAcceptsTheWizardsEighthStep: #1360's first-run tail is record
+// eight in setupsteps.ts; MaxStep lagging it again would refuse the mark.
+func TestMarkAcceptsTheWizardsEighthStep(t *testing.T) {
+	s := New()
+	if _, ok, err := s.NoteMark(8, MarkSkipped, "alex", "", time.Now()); err != nil || !ok {
+		t.Errorf("NoteMark refused step 8, but the first-run tail records under it: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 	s := New()
 	now := time.Now()

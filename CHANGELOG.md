@@ -262,8 +262,11 @@ rewritten.
   `ui.allow` cannot be honoured, or when the accounts live in Postgres.
   Every config MikroView writes, and `deploy/config.example.yaml`, now
   opens with four header lines naming the schema (the settings it should
-  have: v0.6.1 is 7), the release that wrote it and its layout. See
-  docs/configuration.md's "The config editor" and "Setup-only mode".
+  have: v0.6.1 reads 7, this release reads 8 -- `geoip.dbPath` went, and
+  `geoip.cachePath`, `networks.home`, `auth.adminPasskey` and
+  `auth.signInsStorePath` arrived), the release that wrote it and its
+  layout. See docs/configuration.md's "The config editor" and "Setup-only
+  mode".
 
 - **A router's card names what an earlier setup left behind, with the exact
   fix** (#1373). The push script now reports every logging action still
@@ -488,6 +491,25 @@ rewritten.
 
 ### Fixed
 
+- **The "Doors from the internet" panel now lists rules it could not
+  judge instead of dropping them** (#1426). A rule scoped to an interface
+  list or a source address may or may not be a door, since MikroView is
+  never sent a list's members; it shows under "not judged" with its
+  condition, is counted apart on the map (` · 3 · 2 not judged`), and the
+  all-clear line no longer prints past it.
+
+- **The setup wizard again warns when MikroView's certificate does not
+  cover the address the router is told to use** (#1426, #1365), and shows
+  the tls.hosts line to paste. The full-screen wizard had dropped the
+  certificate step's blocked reading.
+
+- **First run with SSO configured no longer tries to send the new admin
+  to the identity provider straight after creating the account** -- that
+  request was always refused by the second-step door, which then replaced
+  the setup screen. The confirmation now says what actually comes next:
+  add a second step, then connect SSO from the account menu (Use single
+  sign-on). (v0.7.0 audit A1-F2)
+
 - **A recovery-key command killed while first creating the recovery pepper
   no longer breaks every later one** (#1489, #1485). The pepper file now only
   appears once it is complete, and two commands started together agree on one
@@ -671,6 +693,15 @@ rewritten.
   the ratio it checks can't be thrown off by other load on the machine.
 
 ### Security
+
+- **The config editor puts a masked secret back only at its own setting**
+  (#1347 follow-up, audit finding A6-S2). A `<<secret:...>>` placeholder
+  that had been moved into a comment or another setting used to be
+  replaced by its value wherever it stood, so Carry forward -- which does
+  not ask for the password again -- handed the running config's secrets
+  back in the clear to anyone holding an admin session cookie. Such a
+  placeholder now stays as literal text, and Download and Snapshot refuse
+  the file until it is removed or the value typed in.
 
 - **GitLab builds, signs and publishes the image by digest** (#1472, step
   1). A push to `preview` or a release tag builds the image once, tests

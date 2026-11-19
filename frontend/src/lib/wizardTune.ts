@@ -49,7 +49,7 @@ export interface TuneProposal {
 
 // docs/routeros-setup.md step 3: the whole prefix, trailing '|'
 // included, stays within 15 characters (internal/routeros/commands.go's
-// maxLogPrefixLen). One initial and two bars leave twelve for the slug.
+// maxLogPrefixLen). One code letter and two bars leave twelve for the slug.
 const MAX_PREFIX = 15
 const MAX_SLUG = MAX_PREFIX - 3
 
@@ -94,12 +94,39 @@ export function slugFor(rule: Pick<RouterFilterRule, 'comment' | 'chain' | 'inIn
   }
 }
 
-// prefixFor is the convention's <ACTION>|<slug>|: the action's own
-// first letter, upper-cased, as internal/routeros.LogPrefixForAction
-// has it (A for accept, D for drop, R for reject, L for log).
+// prefixCodeFor is the convention's one-letter action code
+// (docs/routeros-setup.md step 3; internal/routeros/prefix.go's
+// actionFromCode, mirrored by lib/fall.svelte.ts's logPrefixSlug): A, D
+// and R for the three verdicts, and L for a rule that logs without
+// deciding the packet's fate -- action=log itself, and the filter actions
+// that hand the packet on to the next rule or chain: jump, return,
+// passthrough, add-src/dst-to-address-list, fasttrack-connection. An
+// action with no code here (tarpit) is one MikroView could not read back,
+// so proposeRules leaves it out rather than write a prefix that decodes
+// to nothing -- or, worse, to a verdict the rule never reached: the
+// action's own initial gave return R (read as reject) and
+// add-*-to-address-list A (read as accept). '' means no code.
+const PREFIX_CODE: Readonly<Record<string, string>> = {
+  accept: 'A',
+  drop: 'D',
+  reject: 'R',
+  log: 'L',
+  jump: 'L',
+  return: 'L',
+  passthrough: 'L',
+  'add-src-to-address-list': 'L',
+  'add-dst-to-address-list': 'L',
+  'fasttrack-connection': 'L',
+}
+function prefixCodeFor(action: string): string {
+  return Object.hasOwn(PREFIX_CODE, action) ? PREFIX_CODE[action] : ''
+}
+
+// prefixFor is the convention's <ACTION>|<slug>|; '' for an action with
+// no code (callers check prefixCodeFor first).
 export function prefixFor(action: string, slug: string): string {
-  const initial = (action[0] ?? '?').toUpperCase()
-  return `${initial}|${slug}|`
+  const code = prefixCodeFor(action)
+  return code ? `${code}|${slug}|` : ''
 }
 
 // matcherFor addresses a rule the way the server's own render does:
@@ -134,7 +161,7 @@ export function proposeRules(rules: readonly RouterFilterRule[]): TuneProposal {
   }
   const out: TuneRule[] = []
   for (const r of rules) {
-    if (r.disabled === true || r.log || everyPacket(r)) continue
+    if (r.disabled === true || r.log || everyPacket(r) || !prefixCodeFor(r.action)) continue
     const key = boundaryKeyOf(r.chain, r.inInterface, r.outInterface)
     const b = byKey.get(key)
     if (!b || b.coverage !== 'dark') continue
@@ -165,9 +192,22 @@ export function tagBlock(table: readonly Pick<RouterFilterRule, 'ordinal' | 'com
 
 // undoBlock is the ledger's Undo for tagged rules: the same rules,
 // logging switched back off and the prefix cleared.
-export function undoBlock(table: readonly Pick<RouterFilterRule, 'ordinal' | 'comment'>[], chosen: readonly TuneRule[]): string {
+export function undoBlock(
+  table: readonly Pick<RouterFilterRule, 'ordinal' | 'comment'>[],
+  chosen: readonly Pick<RouterFilterRule, 'ordinal' | 'comment'>[],
+): string {
   return [...chosen]
     .sort((a, b) => a.ordinal - b.ordinal)
     .map((r) => `/ip firewall filter set ${matcherFor(table, r)} log=no log-prefix=""`)
     .join('\n')
+}
+
+// taggedInPush is what the push itself witnesses of tagging: the enabled
+// rules logging under the convention's prefix (<ACTION>|<slug>|, the same
+// logPrefixSlug the fall matches lines with), whoever set them -- this
+// wizard's tagging block, or docs/routeros-setup.md step 3 by hand. The
+// ledger reads it when a reopened run has no memory of its own Copy
+// (A2-F7), and the Undo for that row clears exactly these.
+export function taggedInPush<T extends Pick<RouterFilterRule, 'log' | 'logPrefix' | 'disabled'>>(rules: readonly T[]): T[] {
+  return rules.filter((r) => r.disabled !== true && r.log && logPrefixSlug(r.logPrefix) !== '')
 }
