@@ -268,6 +268,8 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		// the array RouterOS sends rather than joined by the script.
 		`"connectionState"=($v->"connection-state")`,
 		`"inInterface"=($v->"in-interface")`,
+		// A4-F1: in-interface-list, so the doors panel can leave out list-scoped rules.
+		`"inInterfaceList"=($v->"in-interface-list")`,
 		`"outInterface"=($v->"out-interface")`,
 		// #435's rule counters -- the cost the Log every rule helper shows
 		// beside a tick-box before any logging is switched on -- and

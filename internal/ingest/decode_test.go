@@ -1391,3 +1391,23 @@ func TestAddressListCountRejectsUnknownFieldsAndNegativeCounts(t *testing.T) {
 	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":-1,"loadedAt":""}]}`)
 	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":1,"loadedAt":"2026\u0007"}]}`)
 }
+
+func TestFilterAndNATRuleRoundTripInInterfaceList(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"input","action":"accept","inInterfaceList":"LAN"},{"ordinal":1,"chain":"input","action":"accept","inInterface":"ether1"}]}`)
+	if len(p.FilterRules) != 2 {
+		t.Fatalf("len(FilterRules) = %d, want 2", len(p.FilterRules))
+	}
+	if got := p.FilterRules[0].InInterfaceList; got != "LAN" {
+		t.Errorf("FilterRules[0].InInterfaceList = %q, want LAN", got)
+	}
+	if got := p.FilterRules[1].InInterfaceList; got != "" {
+		t.Errorf("an absent inInterfaceList must decode as unset, got %q", got)
+	}
+	n := decodeOK(t, `{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","inInterfaceList":"LAN"}]}`)
+	if len(n.NATRules) != 1 || n.NATRules[0].InInterfaceList != "LAN" {
+		t.Errorf("NATRules = %+v, want InInterfaceList LAN", n.NATRules)
+	}
+	// Screened like every other text field.
+	decodeErr(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"input","action":"accept","inInterfaceList":"LAN\u0007"}]}`)
+	decodeErr(t, `{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","inInterfaceList":"LAN\u0007"}]}`)
+}

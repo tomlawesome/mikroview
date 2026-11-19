@@ -397,6 +397,9 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("inInterface", r.InInterface); err != nil {
 		return err
 	}
+	if err := validateFieldText("inInterfaceList", r.InInterfaceList); err != nil {
+		return err
+	}
 	return validateFieldText("outInterface", r.OutInterface)
 }
 
@@ -423,6 +426,9 @@ func (r NATRule) validate() error {
 		return err
 	}
 	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterfaceList", r.InInterfaceList); err != nil {
 		return err
 	}
 	if err := validateFieldText("outInterface", r.OutInterface); err != nil {
