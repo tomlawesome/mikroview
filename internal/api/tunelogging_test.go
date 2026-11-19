@@ -386,6 +386,36 @@ func TestTuneLoggingRenderRefusesRuleWithNoPrefixCode(t *testing.T) {
 	}
 }
 
+// TestTuneLoggingRenderNoActionIsAccept (#1546): RouterOS's filter action
+// defaults to accept and /export omits default values, so a rule written
+// without action= is an accept rule: it renders with the accept prefix
+// rather than being refused or left untagged.
+func TestTuneLoggingRenderNoActionIsAccept(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	const noAction = "add chain=forward comment=\"implicit accept\" in-interface=ether2\n"
+	const idx = 3
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: smallExport + noAction, Selected: []int{idx}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out tuneLoggingRenderResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	ex, err := export.Parse(out.Annotated)
+	if err != nil {
+		t.Fatalf("re-parsing Annotated failed: %v", err)
+	}
+	if got := ex.FilterRules[idx].LogPrefix; got != "A|accept|" {
+		t.Errorf("no-action rule prefix = %q, want A|accept|", got)
+	}
+}
+
 // TestTuneLoggingRenderEscapesDollarInComment is the render-endpoint
 // half of the export.Quote security fix: a rule comment out of an
 // uploaded /export is attacker-controlled (whoever can write a rule on

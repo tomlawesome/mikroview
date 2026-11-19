@@ -360,6 +360,17 @@ func TestLogPrefixForActionFitsAndDoesNotCollide(t *testing.T) {
 		"dst-nat", "masquerade", "netmap", "redirect", "same", "src-nat",
 	}
 
+	// Every key of logPrefixCode too, so a new over-long entry fails here.
+	listed := make(map[string]bool, len(actions))
+	for _, a := range actions {
+		listed[a] = true
+	}
+	for a := range logPrefixCode {
+		if !listed[a] {
+			actions = append(actions, a)
+		}
+	}
+
 	seen := make(map[string]string, len(actions))
 	for _, action := range actions {
 		got := LogPrefixForAction(action, "a")
