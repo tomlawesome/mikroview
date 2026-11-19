@@ -329,6 +329,63 @@ func TestTuneLoggingRenderProducesAnnotatedAndCommands(t *testing.T) {
 	}
 }
 
+// TestTuneLoggingRenderRefusesRuleWithNoPrefixCode (#1546): tarpit has
+// no log-prefix code the decoder reads back as tarpit, so a selected
+// tarpit rule with no prefix of its own is refused, naming the action
+// and the rule's index. With a prefix of its own it is rendered and
+// that prefix is kept.
+func TestTuneLoggingRenderRefusesRuleWithNoPrefixCode(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	const tarpitRule = "add action=tarpit chain=forward comment=\"hold\" in-interface=ether1 out-interface=bridge1\n"
+	const tarpitIdx = 3
+
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: smallExport + tarpitRule, Selected: []int{0, tarpitIdx}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var refused struct {
+		Rejected struct {
+			Reason string `json:"reason"`
+		} `json:"rejected"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&refused); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(refused.Rejected.Reason, "tarpit") || !strings.Contains(refused.Rejected.Reason, "3") {
+		t.Errorf("rejected.reason = %q, want it to name tarpit and rule index 3", refused.Rejected.Reason)
+	}
+
+	withPrefix := strings.Replace(tarpitRule, "comment=", "log-prefix=\"X|hold|\" comment=", 1)
+	body, _ = json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: smallExport + withPrefix, Selected: []int{0, tarpitIdx}})
+	resp2 := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("with its own prefix: status = %d, want 200", resp2.StatusCode)
+	}
+	var out tuneLoggingRenderResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Changed != 2 {
+		t.Errorf("Changed = %d, want 2", out.Changed)
+	}
+	ex, err := export.Parse(out.Annotated)
+	if err != nil {
+		t.Fatalf("re-parsing Annotated failed: %v", err)
+	}
+	if got := ex.FilterRules[tarpitIdx].LogPrefix; got != "X|hold|" {
+		t.Errorf("tarpit rule prefix in Annotated = %q, want X|hold|", got)
+	}
+}
+
 // TestTuneLoggingRenderEscapesDollarInComment is the render-endpoint
 // half of the export.Quote security fix: a rule comment out of an
 // uploaded /export is attacker-controlled (whoever can write a rule on
