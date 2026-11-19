@@ -47,6 +47,25 @@ beforeEach(() => {
   vi.mocked(fetchAuthSession).mockResolvedValue(session({ signedInSince: '2026-10-10T00:00:00Z' }))
 })
 
+// A $state class keeps its fields behind private #fields, so
+// JSON.stringify(instance) is always '{}'. Read every own and prototype
+// property (getters included) so a retained value would show up.
+function visibleState(obj: object): string {
+  const out: Record<string, unknown> = {}
+  for (let o: object | null = obj; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const name of Object.getOwnPropertyNames(o)) {
+      if (name === 'constructor' || name in out) continue
+      try {
+        const v = (obj as Record<string, unknown>)[name]
+        if (typeof v !== 'function') out[name] = v
+      } catch {
+        /* a getter that throws holds nothing readable */
+      }
+    }
+  }
+  return JSON.stringify(out)
+}
+
 describe('authState.signOutEverywhere passes the password on (#1202 review U9)', () => {
   // #1202 review U9
   it('signOutEverywhere(password) calls the api with that password, then re-reads the session', async () => {
@@ -87,10 +106,12 @@ describe('authState.signOutEverywhere passes the password on (#1202 review U9)',
   it('keeps no copy of the password on the store', async () => {
     vi.mocked(signOutEverywhere).mockResolvedValue(null)
     await authState.signOutEverywhere('sw0rdfish-secret')
-    expect(JSON.stringify(authState)).not.toContain('sw0rdfish-secret')
+    expect(visibleState(authState)).not.toContain('sw0rdfish-secret')
+    // The check must be able to see a field: the username is on the store.
+    expect(visibleState(authState)).toContain('state')
 
     vi.mocked(signOutEverywhere).mockResolvedValue('incorrect password')
     await authState.signOutEverywhere('sw0rdfish-secret')
-    expect(JSON.stringify(authState)).not.toContain('sw0rdfish-secret')
+    expect(visibleState(authState)).not.toContain('sw0rdfish-secret')
   })
 })

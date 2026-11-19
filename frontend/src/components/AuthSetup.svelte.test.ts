@@ -99,7 +99,50 @@ describe('AuthSetup', () => {
 
     expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
     expect(screen.getByRole('button', { name: /create account/i })).toBeTruthy()
-    expect(screen.getByText(/then you sign in with SSO to connect it/i)).toBeTruthy()
+    expect(screen.getByText(/connect SSO from the account menu/i)).toBeTruthy()
+  })
+
+  // A1-F2: the session register() just issued has no second factor, so the
+  // gate would refuse the provider hand-off; creation ends on the confirmation.
+  it('with OIDC configured, creation ends on the confirmation naming the second step and the account menu, never at the provider', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
+    expect(screen.getByText(/add a second step/i)).toBeTruthy()
+    expect(screen.getByText(/Use single sign-on/)).toBeTruthy()
+    expect(startSSOLink).not.toHaveBeenCalled()
+    expect(location.href).toBe('')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('hunter2222')
+  })
+
+  it('Continue after creation with OIDC configured re-reads the session and lands on the second-step door, not the app', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'alex',
+      role: 'admin',
+      ssoAvailable: true,
+      mustEnrolSecondFactor: true,
+    })
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await createTheAdmin()
+    await screen.findByText(/admin account created/i)
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
+    expect(authState.state).toBe('must-enrol-factor')
+    expect(wizardJourney.pending).toBe(false)
+    expect(startSSOLink).not.toHaveBeenCalled()
   })
 
   // Route one out of creation: OIDC is configured, so the browser that

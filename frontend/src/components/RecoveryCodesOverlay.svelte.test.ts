@@ -79,6 +79,14 @@ describe('a right password shows all ten fresh codes once', () => {
 
     const block = await screen.findByTestId('recovery-codes')
     expect(codes.every((c) => block.textContent?.includes(c))).toBe(true)
+
+    // The typed password is not left behind: after acknowledging, a reopened
+    // overlay starts on an empty field.
+    expect(document.body.textContent).not.toContain('hunter2')
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+    cleanup()
+    render(RecoveryCodesOverlay, { open: true })
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
   })
 
   // The codes exist in clear nowhere else once this closes -- same
@@ -121,6 +129,13 @@ describe('a right password shows all ten fresh codes once', () => {
     await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
 
     expect(screen.queryByRole('dialog', { name: /new recovery codes/i })).toBeNull()
+
+    // Cleared: a reopened overlay shows the gate with an empty password and
+    // none of the old codes.
+    cleanup()
+    render(RecoveryCodesOverlay, { open: true })
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+    expect(screen.queryByTestId('recovery-codes')).toBeNull()
   })
 })
 

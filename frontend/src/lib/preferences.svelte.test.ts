@@ -83,7 +83,9 @@ describe('preferencesState.ensureLoaded', () => {
   })
 
   it('falls back to empty defaults, without attempting migration, when the API is unreachable', async () => {
-    localStorage.setItem('mikroview-demoPref', 'pulse')
+    // A real legacy key, so a migration attempt on a failed load would both
+    // upload it and sweep it.
+    localStorage.setItem('mikroview:topography-altitude', 'region')
     vi.mocked(fetchMyPreferences).mockRejectedValue(new Error('network down'))
     const seen: unknown[] = []
     preferencesState.register('demoPref', (v) => seen.push(v))
@@ -94,7 +96,7 @@ describe('preferencesState.ensureLoaded', () => {
     expect(saveMyPreferences).not.toHaveBeenCalled()
     // The legacy key is left alone -- an unreachable API is not the
     // same thing as "the server record is genuinely empty".
-    expect(localStorage.getItem('mikroview-demoPref')).toBe('pulse')
+    expect(localStorage.getItem('mikroview:topography-altitude')).toBe('region')
   })
 
   it('never flushes a change made against a failed load -- the server keeps whatever else it had', async () => {
