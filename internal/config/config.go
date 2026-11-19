@@ -1154,12 +1154,13 @@ const (
 // events the ring holds, so a replay can reach further back than memory
 // does.
 //
-// Off unless two things are true: KeyFile names a readable key, and
-// Enabled is set. Both, deliberately. The key alone must not start
-// writing events to disk on an operator who mounted it for something
-// else -- #853 puts the state store and the warm-restart snapshots under
-// the same key -- and the switch alone cannot write anything, because
-// there is no unencrypted mode to fall back to. See
+// On only when two things are true: KeyFile names a readable key, and
+// Enabled is set. Enabled is on by default (#1357), so in a config that
+// does not set it the key is what decides: a mounted key starts
+// retention unless the operator switches it off, and with none it stays
+// off, because the switch alone cannot write anything -- there is no
+// unencrypted mode to fall back to. (#853 puts the state store and the
+// warm-restart snapshots under the same key.) See
 // docs/decisions/event-retention.md.
 //
 // Unlike Snapshot above, this holds custody data: event lines,
