@@ -403,21 +403,21 @@ func TestDoorLastSeen(t *testing.T) {
 		InInterface: "ether1", SrcIP: "203.0.113.53", DstIP: "203.0.113.1", DstPort: 22})
 
 	got := s.DoorLastSeen("core", "ether1", []DoorPort{
-		{Port: 22, Proto: "tcp"},
-		{Port: 500, Proto: "udp"},
-		{Port: 8443, Proto: "tcp"},
-		{Port: 445, Proto: "tcp"},
+		{Spec: "22", Proto: "tcp"},
+		{Spec: "500", Proto: "udp"},
+		{Spec: "8443", Proto: "tcp"},
+		{Spec: "445", Proto: "tcp"},
 	})
-	if _, ok := got[DoorPort{22, "tcp"}]; !ok {
+	if _, ok := got[DoorPort{"22", "tcp"}]; !ok {
 		t.Fatal("a public-source accept on the WAN interface must answer")
 	}
-	if _, ok := got[DoorPort{500, "udp"}]; !ok {
+	if _, ok := got[DoorPort{"500", "udp"}]; !ok {
 		t.Fatal("a dropped packet still arrived")
 	}
-	if _, ok := got[DoorPort{8443, "tcp"}]; ok {
+	if _, ok := got[DoorPort{"8443", "tcp"}]; ok {
 		t.Fatal("a private source is not from the internet")
 	}
-	if _, ok := got[DoorPort{445, "tcp"}]; ok {
+	if _, ok := got[DoorPort{"445", "tcp"}]; ok {
 		t.Fatal("traffic on another interface is not this WAN's arrival")
 	}
 	if len(got) != 2 {
@@ -432,26 +432,28 @@ func TestDoorLastSeenEmptyDeviceOrWanAnswersNothing(t *testing.T) {
 	s.Insert(Event{DeviceID: "core", Action: ActionAccept, Protocol: "tcp", Time: time.Now(),
 		InInterface: "ether1", SrcIP: "203.0.113.50", DstIP: "203.0.113.9", DstPort: 22})
 
-	if got := s.DoorLastSeen("", "ether1", []DoorPort{{Port: 22, Proto: "tcp"}}); len(got) != 0 {
+	if got := s.DoorLastSeen("", "ether1", []DoorPort{{Spec: "22", Proto: "tcp"}}); len(got) != 0 {
 		t.Fatalf("an empty device must answer nothing, got %+v", got)
 	}
-	if got := s.DoorLastSeen("core", "", []DoorPort{{Port: 22, Proto: "tcp"}}); len(got) != 0 {
+	if got := s.DoorLastSeen("core", "", []DoorPort{{Spec: "22", Proto: "tcp"}}); len(got) != 0 {
 		t.Fatalf("an empty wan must answer nothing, got %+v", got)
 	}
 }
 
-// A caller that names no port worth asking about -- an empty list, or one
-// holding only non-positive ports -- gets an empty answer without a scan.
-func TestDoorLastSeenNoValidPortsAnswersNothing(t *testing.T) {
+// A caller that asks about no door gets an empty answer without a scan,
+// and a door whose spec cannot be read is never answered: CoversPort
+// reports Unknown for it, never Covers. (An empty spec is not this case:
+// it is RouterOS's unset dst-port, every port, and a real ask.)
+func TestDoorLastSeenNoAsksOrUnreadableSpecAnswersNothing(t *testing.T) {
 	s := New(1000, time.Hour)
 	s.Insert(Event{DeviceID: "core", Action: ActionAccept, Protocol: "tcp", Time: time.Now(),
 		InInterface: "ether1", SrcIP: "203.0.113.50", DstIP: "203.0.113.9", DstPort: 22})
 
 	if got := s.DoorLastSeen("core", "ether1", nil); len(got) != 0 {
-		t.Fatalf("no ports asked must answer nothing, got %+v", got)
+		t.Fatalf("no doors asked must answer nothing, got %+v", got)
 	}
-	if got := s.DoorLastSeen("core", "ether1", []DoorPort{{Port: 0}, {Port: -1}}); len(got) != 0 {
-		t.Fatalf("only non-positive ports asked must answer nothing, got %+v", got)
+	if got := s.DoorLastSeen("core", "ether1", []DoorPort{{Spec: "abc", Proto: "tcp"}}); len(got) != 0 {
+		t.Fatalf("an unreadable spec must answer nothing, got %+v", got)
 	}
 }
 
@@ -459,7 +461,7 @@ func TestDoorLastSeenNoValidPortsAnswersNothing(t *testing.T) {
 // scanning a buffer that holds no events.
 func TestDoorLastSeenOverAnEmptyWindowAnswersNothing(t *testing.T) {
 	s := New(1000, time.Hour)
-	got := s.DoorLastSeen("core", "ether1", []DoorPort{{Port: 22, Proto: "tcp"}})
+	got := s.DoorLastSeen("core", "ether1", []DoorPort{{Spec: "22", Proto: "tcp"}})
 	if len(got) != 0 {
 		t.Fatalf("an empty store must answer nothing, got %+v", got)
 	}
@@ -476,11 +478,11 @@ func TestDoorLastSeenWalksBackwardThroughAWrappedRing(t *testing.T) {
 	s.Insert(Event{DeviceID: "core", Action: ActionAccept, Protocol: "udp", Time: time.Now(),
 		InInterface: "ether1", SrcIP: "203.0.113.51", DstIP: "203.0.113.9", DstPort: 500})
 
-	got := s.DoorLastSeen("core", "ether1", []DoorPort{{Port: 22, Proto: "tcp"}, {Port: 500, Proto: "udp"}})
-	if _, ok := got[DoorPort{22, "tcp"}]; !ok {
+	got := s.DoorLastSeen("core", "ether1", []DoorPort{{Spec: "22", Proto: "tcp"}, {Spec: "500", Proto: "udp"}})
+	if _, ok := got[DoorPort{"22", "tcp"}]; !ok {
 		t.Fatalf("want the wrapped buffer's own arrival still found, got %+v", got)
 	}
-	if _, ok := got[DoorPort{500, "udp"}]; !ok {
+	if _, ok := got[DoorPort{"500", "udp"}]; !ok {
 		t.Fatalf("want both doors found across the wrap, got %+v", got)
 	}
 }
@@ -501,8 +503,8 @@ func TestDoorLastSeenKeepsTheNewestArrivalOnRepeat(t *testing.T) {
 	// newer 22/tcp arrival is recorded, so the scan does not stop short --
 	// it must still walk back to the older, repeated 22/tcp event and hit
 	// the "already answered" branch rather than overwriting it.
-	got := s.DoorLastSeen("core", "ether1", []DoorPort{{Port: 22, Proto: "tcp"}, {Port: 999, Proto: "tcp"}})
-	seen, ok := got[DoorPort{22, "tcp"}]
+	got := s.DoorLastSeen("core", "ether1", []DoorPort{{Spec: "22", Proto: "tcp"}, {Spec: "999", Proto: "tcp"}})
+	seen, ok := got[DoorPort{"22", "tcp"}]
 	if !ok {
 		t.Fatal("want the repeated door answered")
 	}

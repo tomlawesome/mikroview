@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/ingest"
 )
 
 // The two reads behind #1018's tools on the living topology: "where is
@@ -669,19 +671,26 @@ func (s *Store) Trace(q TraceQuery) TraceResult {
 	return out
 }
 
-// DoorPort is one (port, proto) pair issue #1319's doors panel asks
-// "seen arriving" about. Proto "" matches either tcp or udp, the same
-// unset-means-any reading doorsFor gives a rule that names no protocol.
+// DoorPort is one door issue #1319's doors panel asks "seen
+// arriving" about: the rule's own dst-port spec, verbatim -- ""
+// (RouterOS's unset property, every port), a single port, a list
+// or a range, read by ingest.CoversPort the same way doorsFor
+// draws the door -- and its protocol. Proto "" matches either tcp
+// or udp, the same unset-means-any reading doorsFor gives a rule
+// that names no protocol.
 type DoorPort struct {
-	Port  int
+	Spec  string
 	Proto string
 }
 
-// DoorLastSeen answers, for each of ports, the most recent time the
+// DoorLastSeen answers, for each door in doors, the most recent time the
 // held window carried an inbound event from a public source arriving on
-// device's wan interface for that port -- the "seen arriving" mark
-// beside a pushed rule or service that "allowed through" it. A port
-// absent from the returned map arrived never in the window.
+// device's wan interface for that door -- the "seen arriving" mark
+// beside a pushed rule or service that "allowed through" it. A door
+// absent from the returned map had nothing arrive in the window. Each
+// door is matched by its own spec through ingest.CoversPort, so an
+// any-port or range door is answered from whatever traffic its rule
+// admits, and a list door from the newest arrival on any of its ports.
 //
 // This is deliberately not the same fact as PortRib/PortHost above: a
 // door is drawn "allowed through" from the pushed table alone, whether
@@ -693,16 +702,14 @@ type DoorPort struct {
 // the newest event exactly as Ports does, holding one RLock for the
 // whole pass -- and it stops the moment every asked-for door has its
 // answer, since anything further back can only be older.
-func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]time.Time {
+func (s *Store) DoorLastSeen(device, wan string, doors []DoorPort) map[DoorPort]time.Time {
 	out := map[DoorPort]time.Time{}
 	if device == "" || wan == "" {
 		return out
 	}
-	want := make(map[DoorPort]struct{}, len(ports))
-	for _, p := range ports {
-		if p.Port > 0 {
-			want[p] = struct{}{}
-		}
+	want := make(map[DoorPort]struct{}, len(doors))
+	for _, d := range doors {
+		want[d] = struct{}{}
 	}
 	if len(want) == 0 {
 		return out
@@ -726,7 +733,9 @@ func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]
 		if idx < 0 {
 			idx = s.capacity - 1
 		}
-		if e.DeviceID != device || e.InInterface != wan || e.DstPort <= 0 {
+		// No port check here: CoversPort judges it below, and admits a
+		// port-less arrival (DstPort 0) only for an unscoped door.
+		if e.DeviceID != device || e.InInterface != wan {
 			continue
 		}
 		ip, err := netip.ParseAddr(e.SrcIP)
@@ -734,11 +743,14 @@ func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]
 			continue
 		}
 		proto := strings.ToLower(e.Protocol)
-		for _, key := range [2]DoorPort{{e.DstPort, proto}, {e.DstPort, ""}} {
-			if _, asked := want[key]; !asked {
+		for key := range want {
+			if _, already := out[key]; already {
 				continue
 			}
-			if _, already := out[key]; already {
+			if key.Proto != "" && key.Proto != proto {
+				continue
+			}
+			if ingest.CoversPort(key.Spec, e.DstPort) != ingest.Covers {
 				continue
 			}
 			out[key] = e.ReceivedAt

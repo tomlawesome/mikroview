@@ -238,43 +238,23 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 		}
 	}
 
+	// One ask per door, keyed on the rule's own dst-port spec, so an
+	// any-port accept or a range forward is asked about exactly what its
+	// rule admits, and a list door carries the newest arrival on any of
+	// its ports.
 	if s.Store != nil && len(out.Doors) > 0 {
 		want := make([]store.DoorPort, 0, len(out.Doors))
 		for _, d := range out.Doors {
-			for _, p := range doorPortsOf(d.DstPort) {
-				want = append(want, store.DoorPort{Port: p, Proto: d.Proto})
-			}
+			want = append(want, store.DoorPort{Spec: d.DstPort, Proto: d.Proto})
 		}
 		seen := s.Store.DoorLastSeen(device, wan, want)
 		for i := range out.Doors {
-			for _, p := range doorPortsOf(out.Doors[i].DstPort) {
-				if t, ok := seen[store.DoorPort{Port: p, Proto: out.Doors[i].Proto}]; ok {
-					tt := t
-					out.Doors[i].LastSeen = &tt
-					break
-				}
+			if t, ok := seen[store.DoorPort{Spec: out.Doors[i].DstPort, Proto: out.Doors[i].Proto}]; ok {
+				tt := t
+				out.Doors[i].LastSeen = &tt
 			}
 		}
 	}
 
-	return out
-}
-
-// doorPortsOf reads a rule's own dst-port spec into the concrete ports
-// it names, the same "skip ranges, a rule table is bounded, traffic is
-// not" reading namedPorts (ports.go) gives the same field: a range
-// covers many ports and none of them is a single last-seen fact worth
-// asking about.
-func doorPortsOf(spec string) []int {
-	var out []int
-	for _, part := range strings.Split(spec, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" || strings.Contains(part, "-") {
-			continue
-		}
-		if n, err := strconv.Atoi(part); err == nil && n >= 1 && n <= 65535 {
-			out = append(out, n)
-		}
-	}
 	return out
 }
