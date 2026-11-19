@@ -160,7 +160,14 @@ trust caveat, the password (owner, 3a), open / cancel — and on success
 the caution gives way to "The drop box is open on port N — the router
 must be able to reach this host there." Yes and No stay per-router
 answers: a No never closes the drop box, a Yes never opens it, and a
-Yes with it still closed is allowed (the caution stays). Not on Paste
+Yes with it still closed is allowed (the caution stays). On Paste once
+the block then says so under Copy — "The backup part is left out — the
+drop box is closed, so a backup would have nowhere to arrive. Open the
+drop box from step 1, The router, and the part appears here; or paste
+without it and set up backups later from Settings → router backups." —
+and once copied without it, the backup station reads "left out · the
+drop box was closed", dashed and struck, and is not waited for; the
+ledger row points at Settings ▸ router backups. Not on Paste
 once: the choice is made here, and the block is built from it after the
 mint; opening from here after Back re-renders the block so its backup
 part appears. Nothing is said before the read has landed.

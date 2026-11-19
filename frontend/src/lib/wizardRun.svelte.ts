@@ -78,6 +78,9 @@ class WizardRun {
   pass = $state('')
   push = $state<boolean | null>(null)
   backup = $state<boolean | null>(null)
+  // true once Copy carried a block with no backup part although Back up
+  // nightly was Yes (the drop box was closed, #1361): set by markCopied.
+  backupLeftOut = $state(false)
   copied = $state(false)
   // copiedAt is the track's own "copied" station timestamp (#1383): a
   // client-side moment, not a server receipt, because Copy itself is
@@ -118,6 +121,7 @@ class WizardRun {
       pass: this.pass,
       push: this.push,
       backup: this.backup,
+      backupLeftOut: this.backupLeftOut,
       copied: this.copied,
       tuneCopied: this.tuneCopied,
       tuneSkipped: this.tuneSkipped,
@@ -292,6 +296,18 @@ class WizardRun {
     }
     sections.push({ id: 'syslog', title: TITLES.syslog, commands: steps.syslog.commands })
     return sections.filter((s) => s.commands)
+  }
+
+  // backupLeftOutWhy is the Paste step's one sentence when Back up
+  // nightly was Yes but the server left the backup part blank
+  // (commandStep.blocked, #1217). Live: Back to The router and
+  // opening the drop box re-renders the block (dropBoxSwitched) and
+  // this reads '' again. '' when nothing is left out.
+  get backupLeftOutWhy(): string {
+    const step = wizardState.commands?.steps.backup
+    if (this.backup !== true || !step || step.commands) return ''
+    if (step.blocked?.includes('backups-off')) return 'the drop box is closed, so a backup would have nowhere to arrive'
+    return 'MikroView could not build it — check the server log'
   }
 
   // blockText is what Copy puts on the clipboard and the folded `pre`
@@ -571,6 +587,9 @@ class WizardRun {
   markCopied() {
     this.copied = true
     this.copiedAt = new Date().toISOString()
+    // Snapshot at Copy on purpose: what went on the router is fixed from
+    // here; a later drop-box open does not put the backup script on it.
+    this.backupLeftOut = this.backup === true && !this.blockSections.some((s) => s.id === 'backup')
     this.stage = 'watch'
   }
 

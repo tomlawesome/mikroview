@@ -153,6 +153,12 @@
       </div>
     </div>
   {/if}
+  {#if wizardRun.backupLeftOutWhy}
+    <div class="cautionbox" aria-live="polite">
+      <b>The backup part is left out</b> — {wizardRun.backupLeftOutWhy}. Open the drop box from step 1, The router, and the
+      part appears here; or paste without it and set up backups later from Settings → router backups.
+    </div>
+  {/if}
   <div class="obs waiting">
     {wizardRun.copied
       ? 'Copied. Waiting for the router — the certificate fetch comes first.'
