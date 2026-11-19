@@ -283,7 +283,9 @@
       <PasswordAgain
         prompt={ed.passwordFor === 'reveal'
           ? 'It has been more than 15 minutes since you entered your password. Enter it again to show the secrets.'
-          : 'It has been more than 15 minutes since you entered your password. Enter it again to download.'}
+          : ed.passwordFor === 'load'
+            ? 'It has been more than 15 minutes since you entered your password. Enter it again to load the snapshot.'
+            : 'It has been more than 15 minutes since you entered your password. Enter it again to download.'}
         submitLabel="Continue"
         busy={ed.unlocking}
         error={ed.passwordError}

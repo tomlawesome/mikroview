@@ -3052,10 +3052,11 @@ export async function deleteDecommissionWatch(id: string, reason?: string): Prom
 // --- The config editor (#1347) -------------------------------------------
 //
 // All admin-only. Opening asks for the password again and unlocks
-// Show secrets and Download for 15 minutes; once that lapses the two
-// answer 401 with an X-Config-Reauth header, which is told apart here from a
-// session that has actually ended (a plain 401) so the editor can ask
-// for the password inline rather than bouncing to the sign-in page.
+// Show secrets, Download and reading a snapshot for 15 minutes; once that
+// lapses the three answer 401 with an X-Config-Reauth header, which is told
+// apart here from a session that has actually ended (a plain 401) so the
+// editor can ask for the password inline rather than bouncing to the
+// sign-in page.
 
 /** The editor's unlock has lapsed: ask for the password and try again. */
 export interface ConfigReauth {
@@ -3164,10 +3165,11 @@ export async function createConfigSnapshot(text: string, note: string): Promise<
   return serverSaid(res)
 }
 
-export async function fetchConfigSnapshot(id: string): Promise<ConfigSnapshot | string> {
+export async function fetchConfigSnapshot(id: string): Promise<ConfigSnapshot | ConfigReauth | string> {
   const res = await fetch(`/api/config/snapshots/${encodeURIComponent(id)}`)
-  if (res.ok) return res.json()
-  return serverSaid(res)
+  if (await isReauth(res)) return { reauth: true }
+  if (!res.ok) return serverSaid(res)
+  return res.json()
 }
 
 export async function deleteConfigSnapshot(id: string): Promise<string | null> {
