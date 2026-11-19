@@ -81,7 +81,8 @@ class WizardRun {
   addr = $state('')
   // The password, held only between typing and Mint: wizardState takes
   // it for the one call and clears its own copy either way, and this
-  // copy goes with it.
+  // copy goes with it -- or with the walk, on Finish and on sign-out
+  // (clearSessionState).
   pass = $state('')
   push = $state<boolean | null>(null)
   backup = $state<boolean | null>(null)
@@ -748,6 +749,10 @@ class WizardRun {
     // is the fall it just left, so it gets no offer. Read once, up
     // front: `after` runs seconds later, once the way out has landed,
     // and finishTo by then belongs to whichever walk is open next.
+    // Finish leaves the walk, and whatever was typed into Mint and not
+    // spent goes with it: wizardState.close() below clears its own copy
+    // of the password, and this is the run's (v0.7.0 pre-release audit).
+    this.pass = ''
     const toFall = wizardState.finishTo !== 'fleet'
     const swap = () => {
       appState.view = toFall ? 'fall' : 'fleet'
