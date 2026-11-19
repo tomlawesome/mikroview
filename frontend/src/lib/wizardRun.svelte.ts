@@ -438,11 +438,19 @@ class WizardRun {
   // On success the wizard reopens at The router, the same door Add
   // another router uses, since forgetting a router is exactly "start
   // this router over from nothing." Returns an error string to show
-  // beside the button, or null once forgotten.
+  // beside the button, or null once forgotten. A Run setup… walk that
+  // fleet-wide evidence placed here (begin(), #1404) names no
+  // ledgerDevice: the router is the record enrolled from the evidence's
+  // sending address, the chain fleet.ts's routerAddress reads.
   private forgetting = false
   async forget(): Promise<string | null> {
-    const device = wizardState.ledgerDevice
-    if (!device || this.forgetting) return null
+    if (this.forgetting) return null
+    const from = this.evidence.from
+    const device =
+      wizardState.ledgerDevice ||
+      (from ? wizardState.devices.find((d) => d.acceptedIp === from || d.sourceIp === from)?.id : undefined) ||
+      ''
+    if (!device) return `MikroView holds no router record for ${this.name || 'this router'} — there is nothing to forget.`
     this.forgetting = true
     try {
       const err = await deleteDevice(device)
