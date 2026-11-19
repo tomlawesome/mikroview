@@ -19,6 +19,13 @@ on:
 permissions:
   contents: read
 
+# #1202/#1426: gauntlet is fetched straight from GitHub, never through the
+# public Go proxy or checksum database (resolving it there would publish
+# the version permanently), the same as .gitlab-ci.yml and the Dockerfile.
+# GOPRIVATE also sets GONOSUMDB.
+env:
+  GOPRIVATE: "github.com/tomlawesome/gauntlet"
+
 jobs:
   freshness:
     name: A RouterOS release nobody has reviewed
