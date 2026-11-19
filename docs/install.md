@@ -258,7 +258,10 @@ the container — a container cannot firewall its own host:
   to the router, not the router's to MikroView — so restrict it on the
   host to your routers' addresses.
 - **The router-backup drop box's port (`47022/tcp`) is published but not
-  listening yet.** It is always mapped, because a container's own port
+  listening yet.** `install.sh` and `deploy/docker-compose.yml` always map
+  it (the `docker run` and Compose examples above leave it out, so add
+  `-p 47022:47022/tcp` or a `"47022:47022/tcp"` line if you want the drop
+  box), because a container's own port
   mapping can't be flipped on and off the way the switch that actually
   opens it can — see
   [docs/configuration.md](configuration.md#router-backups-over-sftp-issue-394).

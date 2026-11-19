@@ -8,7 +8,8 @@ and `install.sh` gives a fresh install a key so it actually retains
 something from the start. The mechanism below is unchanged: there is
 still no unencrypted mode, so memory-only is exactly what an install
 with no key mounted gets, on the same terms this document always
-described -- only which state a bare install with no config file lands
+described (superseded: see the addendum of 2026-10-10, a keyless install now
+refuses to start) -- only which state a bare install with no config file lands
 on has changed.
 
 ## Context
@@ -257,7 +258,7 @@ the rest of rules 2 and 3 stand.
 tokens, recovery-key digests and the new sign-in history. The drop list is
 sealed too, on the file backend, like every other file-backed store.
 
-**Sealing in place happens once.** A plaintext document an earlier keyless
+**[Superseded by ruling 19 of `gauntlet-adoption.md`: a plaintext document is refused at any schema, never sealed in place.]** **Sealing in place happens once.** A plaintext document an earlier keyless
 release left is sealed on the first start of v0.7.0 (stored schema below
 4), and the schema moves to 4 only after every auth store and the drop list
 are sealed. From then on a plaintext document is refused. This is the one

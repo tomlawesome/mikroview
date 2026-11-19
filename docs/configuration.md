@@ -451,7 +451,7 @@ rather than a lesser one.
 
 ### Router backups over SFTP (issue #394)
 
-Issue #394: a router's own scheduled script (the setup wizard's Paste once
+Issue #394: a router's own scheduled script (the setup wizard's Back up the router
 step prints it) pushes two files a night -- the binary `.backup` that
 restores the router whole, and the plain-text `.rsc` export kept for
 reading -- into a small SFTP server MikroView runs for exactly this.

@@ -31,7 +31,7 @@ rewritten.
   with nothing changed without it. Nothing else in the data directory is
   changed by the refused start.
 
-- **Admins need a passkey on an https domain** (#1202, owner ruling 1).
+- **Admins need a passkey on an https domain** (#1202, [owner ruling 1](docs/decisions/gauntlet-adoption.md#owner-rulings-2026-10-10)).
   With `auth.adminPasskey` unset and `publicUrl` an https domain name,
   an admin who has no passkey is held at a passkey enrolment screen on
   their next request after the upgrade, and can do nothing else until
@@ -343,7 +343,7 @@ rewritten.
 
 - **`internal/auth` and `internal/oidc` are gone** (#1202). Authentication
   runs on the [gauntlet](https://github.com/tomlawesome/gauntlet) library
-  (v0.4.1, Apache-2.0) instead, and the auth handler files in `internal/api` went
+  (v0.4.3, Apache-2.0) instead, and the auth handler files in `internal/api` went
   with them. Routes, paths and success bodies are unchanged, and existing
   accounts, recovery keys and token values keep working. Recovery keys,
   which are MikroView's own, moved to `internal/recoverykeys`.

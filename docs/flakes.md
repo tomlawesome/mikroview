@@ -94,7 +94,7 @@ testing-and-ci skill (owner, 2026-09-08).
   time) · `Error: page.reload: WebKit encountered an internal error` waiting
   for `networkidle`, at `live-browser.mjs:1027` from `live-city-reach.mjs:15`,
   before any check ran. Distinct from this scenario's existing
-  "Escape does not restore the exact pan position" heading above (different
+  "Escape does not restore the exact pan position" heading below (different
   symptom: an engine-level reload failure, not a settle-timing assertion).
   Matches the WebKit/`page.reload` internal error `gate-local.sh` already
   notes from a four-parallel-shard run on 2026-09-22 (its `--shard` comment).
