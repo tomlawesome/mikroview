@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/routeros"
@@ -153,5 +155,34 @@ func TestBackupRuntimeStartReportsAPortAlreadyInUse(t *testing.T) {
 	}
 	if open, _ := r.State(); open {
 		t.Fatal("a failed Start still reports the drop box as open")
+	}
+}
+
+// O1-R10: closing the drop box must also close connections already open,
+// not only the listener.
+func TestBackupRuntimeStopClosesConnectionsAlreadyOpen(t *testing.T) {
+	cfg := backupSwitchConfig(t, "127.0.0.1:0")
+	r := newBackupRuntime(context.Background(), quietLog(), cfg, unpersistedSettings(t), nil, nil)
+	t.Cleanup(r.Stop)
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
+	addr := r.ln.Addr().String()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err != nil {
+		t.Fatalf("the open connection never got the server banner: %v", err)
+	}
+
+	r.Stop()
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadAll(conn); err != nil {
+		t.Fatalf("Stop left an already-open connection alive: %v", err)
 	}
 }

@@ -336,22 +336,38 @@ func TestRouterBackupSwitchChangedBannerShowsARecentChange(t *testing.T) {
 // The owner's ruling on question 4a: the banner clears seven days after
 // each change, not never and not on a per-admin read.
 func TestRouterBackupSwitchChangedBannerClearsAfterSevenDays(t *testing.T) {
-	s := newAuthTestServer(t)
-	set, err := settings.Open(filepath.Join(t.TempDir(), "settings.json"))
-	if err != nil {
-		t.Fatal(err)
+	// Probe either side of the seven-day edge, not just "now" and a
+	// clearly-old change, so a shortened or lengthened window is caught.
+	cases := []struct {
+		name string
+		age  time.Duration
+		want bool
+	}{
+		{"one hour ago", time.Hour, true},
+		{"three days ago", 3 * 24 * time.Hour, true},
+		{"six days ago", 6 * 24 * time.Hour, true},
+		{"seven days and an hour ago", 7*24*time.Hour + time.Hour, false},
+		{"eight days ago", 8 * 24 * time.Hour, false},
 	}
-	s.Settings = set
-	if err := set.SetBackup(settings.Backup{
-		Enabled:   false,
-		ChangedAt: time.Now().Add(-8 * 24 * time.Hour),
-		ChangedBy: "alice",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, ok := s.routerBackupSwitchChanged(); ok {
-		t.Error("a change from eight days ago still shows the banner")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			set, err := settings.Open(filepath.Join(t.TempDir(), "settings.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.Settings = set
+			if err := set.SetBackup(settings.Backup{
+				Enabled:   false,
+				ChangedAt: time.Now().Add(-tc.age),
+				ChangedBy: "alice",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := s.routerBackupSwitchChanged(); ok != tc.want {
+				t.Errorf("change from %s: banner shown = %v, want %v", tc.name, ok, tc.want)
+			}
+		})
 	}
 }
 
