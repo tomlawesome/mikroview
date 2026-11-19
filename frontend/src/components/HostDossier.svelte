@@ -103,10 +103,9 @@
   }
 
   // Focus moves into the card on open and back to the trigger on close
-  // (lib/dossier.svelte.ts holds the trigger). Not a trap: like the
-  // app's other overlays this closes on Esc or a backdrop click, and
-  // lib/focusTrap.ts's own comment reserves the real trap for the one
-  // control that has no other route.
+  // (lib/dossier.svelte.ts holds the trigger). The card is aria-modal, so
+  // it also traps Tab (use:trapFocus, #1539 C3); it still closes on Esc
+  // or a backdrop click.
   $effect(() => {
     if (dossierState.isOpen && sheetEl) sheetEl.focus()
   })

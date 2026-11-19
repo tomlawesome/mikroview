@@ -490,12 +490,6 @@
     if (!err) closePanel()
   }
 
-  // Reset puts the detector's params back to exactly what it shipped
-  // with. It leaves scope alone, because the server's reset does
-  // (handleDefinitionsReset resets params only) -- a button that also
-  // silently cleared an operator's host exclusions would be doing
-  // something nobody pressed it for. The panel stays open on the freshly
-  // stock values, so the operator can see what reset actually did.
   // Round 28's arm-then-confirm gesture (#1539 C1), as EngineRoom's revoke
   // uses it: the first click arms the verb, the second acts, a click
   // elsewhere or Escape disarms. Clone stays one click (#787 decision C).
@@ -512,6 +506,12 @@
     armedVerb = key
   }
 
+  // Reset puts the detector's params back to exactly what it shipped
+  // with. It leaves scope alone, because the server's reset does
+  // (handleDefinitionsReset resets params only) -- a button that also
+  // silently cleared an operator's host exclusions would be doing
+  // something nobody pressed it for. The panel stays open on the freshly
+  // stock values, so the operator can see what reset actually did.
   async function resetRow(name: string) {
     busy = true
     saving[name] = true

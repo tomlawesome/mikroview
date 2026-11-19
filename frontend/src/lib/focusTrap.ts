@@ -9,10 +9,10 @@
 // The dialogs that ask for something rather than merely show it need it
 // too (#1182): Change password's two fields were unreachable by
 // keyboard, because focus never moved into the dialog and Tab then
-// walked the page behind it. Where an overlay is one of several ways to
-// reach the same page (EventDetailSheet, ...), letting focus wander is
-// still fine -- the trap goes where not being able to leave is the
-// point, not on every dialog in the app.
+// walked the page behind it. Since #1539 C3 every aria-modal dialog traps
+// (EventDetailSheet, HostDossier, WanDoors, the blocklist Builder and
+// the overlays above). Non-modal dialogs and pop-ups must not hold Tab,
+// so they use restoreFocus below, which only hands focus back on close.
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
