@@ -74,9 +74,11 @@ if docker container inspect "$name" >/dev/null 2>&1; then
   removed_existing=1
 fi
 
-# On-disk event history is on by default (#1357), and there is no
-# unencrypted mode -- it needs a key mounted at keys/history.key in the
-# app folder volume, or it simply stays off (docs/configuration.md).
+# MikroView seals the accounts, API tokens, recovery keys, sign-in
+# history and the on-disk event history (on by default, #1357) under one
+# key mounted at keys/history.key in the app folder volume, and refuses
+# to start without it (CFG-0083, docs/configuration.md) -- there is no
+# unencrypted mode.
 # Give a fresh install one, the same way docs/configuration.md tells an
 # operator to make one by hand, but generated inside a throwaway helper
 # container rather than on this shell: the key material then never
@@ -106,7 +108,7 @@ key_err="$(docker run --rm -v "${etc_vol}:/etc/mikroview" alpine:3.24 sh -c '
     chmod 600 /etc/mikroview/keys/history.key
   ' 2>&1 >/dev/null)" || key_rc=$?
 case "$key_rc" in
-  0) echo "install.sh: on-disk event history is on by default -- a key for it now lives in the ${etc_vol} volume at keys/history.key. Back it up: losing it makes the retained history unreadable." ;;
+  0) echo "install.sh: a key now lives in the ${etc_vol} volume at keys/history.key. MikroView seals the accounts, API tokens, recovery keys, sign-in history and the on-disk event history under it, and will not start without it. Back it up somewhere apart from the data volume (a password manager, or an encrypted backup): losing it locks you out of this instance for good -- the accounts become unreadable, no recovery key can help, and there is no way to recover a lost key. docs/install.md shows how to copy it out of the volume." ;;
   3) : ;; # already there -- told about it on an earlier run, and left alone
   *) echo "install.sh: could not check for or create a history encryption key in ${etc_vol} (docker run exited ${key_rc}${key_err:+: $key_err}) -- nothing in the volume was changed, so a key already there is untouched; mikroview will refuse to start until one is mounted, since it keeps accounts and tokens sealed under it (see docs/install.md)" >&2 ;;
 esac
