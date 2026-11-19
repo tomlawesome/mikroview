@@ -443,7 +443,7 @@ describe('snapshots', () => {
     await settle()
     expect(openConfigEditor).toHaveBeenCalledWith('hunter2')
     expect(fetchConfigSnapshot).toHaveBeenCalledTimes(2)
-    expect(vi.mocked(fetchConfigSnapshot).mock.calls.map((c) => c[0])).toEqual(['s2', 's2'])
+    expect(vi.mocked(fetchConfigSnapshot).mock.calls.map((c) => c[0])).toEqual(['s1', 's1'])
     expect(downloadConfig).toHaveBeenCalledWith('old text')
     expect(saveBlob).toHaveBeenCalledWith('config.v0.7.0.yaml', blob)
     expect(textarea().value).toBe(TEXT)
