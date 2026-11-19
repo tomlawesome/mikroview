@@ -186,7 +186,7 @@
                 <!-- prettier-ignore -->
                 <p class="from" data-testid="wd-unjudged-{d.id}">These rules may be doors; MikroView cannot tell, because it is never sent a list's members or asked who an address is.</p>
                 <ul class="doors">
-                  {#each unjudgedOf(d) as u (u.label)}
+                  {#each unjudgedOf(d) as u ((u.to ? 'nat' : 'filter') + u.label)}
                     <li>
                       <span class="peer">{u.label} {portText(u)} → {destinationText(u)}</span>
                       <span class="from">{unjudgedLine(u)}</span>

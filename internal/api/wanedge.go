@@ -167,14 +167,11 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 	//   - a non-empty SrcAddress/SrcAddressList: the rule restricts who
 	//     may use it, and this endpoint has no way to tell whether that
 	//     restriction names the internet or the operator's own LAN
-	//     (`src-address-list=LAN` is the worked example) -- and the
-	//     panel's own fixed caveat already says the list here may be
-	//     incomplete, never that it may be wrong.
+	//     (`src-address-list=LAN` is the worked example).
 	//   - a non-empty InInterfaceList: the rule is scoped to an interface
 	//     list, and the push carries the list's name but never its members,
 	//     so this endpoint cannot tell `in-interface-list=LAN` from
-	//     `in-interface-list=WAN`. Both are left out -- the panel's caveat
-	//     covers a door it does not list, not one it lists wrongly. A push
+	//     `in-interface-list=WAN`. A push
 	//     from a script that predates the field leaves it "", and the rule
 	//     is listed as before until the script is re-pasted.
 	//

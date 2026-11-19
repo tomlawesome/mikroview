@@ -2928,7 +2928,8 @@ export interface WanDeviceDoors {
   name?: string
   wan: string
   doors: WanDoor[]
-  unjudged: WanUnjudged[]
+  // Optional: a server older than #1426 A4-C1 omits it; read as empty.
+  unjudged?: WanUnjudged[]
   // null means the router has never pushed /ip/service (#1329) --
   // distinct from an empty, pushed table.
   services: WanService[] | null
