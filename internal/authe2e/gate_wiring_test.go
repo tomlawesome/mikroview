@@ -77,7 +77,7 @@ func TestGateErrorLogLineQuotesMethodPathAndError(t *testing.T) {
 	readOnlyData(t, w.a)
 
 	// An encoded-newline path on gate routes: whatever they answer, no line
-	// of the log may start with the injected text.
+	// of the log may carry the injected text outside a quoted path.
 	const forged = "forged-entry-marker"
 	for _, p := range []string{
 		"/api/auth/users/zz%0A12:00:00%20ERROR%20gate%20" + forged + "/reset-password",
@@ -100,12 +100,15 @@ func TestGateErrorLogLineQuotesMethodPathAndError(t *testing.T) {
 	if !strings.Contains(w.a.log(), want) {
 		t.Errorf("the log has no line with the method, path and error quoted (%s):\n%s", want, w.a.log())
 	}
+	// The marker may appear only inside the one real error line, quoted
+	// along with its request path; a forged second line carries the marker
+	// without that path and fails here.
 	for _, l := range strings.Split(w.a.log(), "\n") {
-		if strings.Contains(l, forged) && !logLineStart.MatchString(l) {
-			t.Errorf("a log line starts with request-supplied text: %q", l)
+		if !strings.Contains(l, forged) {
+			continue
 		}
-		if strings.HasPrefix(strings.TrimSpace(l), forged) {
-			t.Errorf("a request path forged a log line: %q", l)
+		if !strings.Contains(l, `"/api/auth/`) {
+			t.Errorf("a log line carries request-supplied text outside a quoted path: %q", l)
 		}
 	}
 }

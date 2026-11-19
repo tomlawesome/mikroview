@@ -46,8 +46,9 @@ func linkURL(t *testing.T, c *client, pass, query string) string {
 }
 
 // The link door: refused without the CSRF header, without a session, and for
-// an account that is already SSO-only; and it links the session's account,
-// never one named in the body.
+// an account that is already SSO-only; a body naming another account is
+// refused (the link request type rejects unknown fields); and a link with a
+// plain body links the session's account only.
 func TestSSOLinkDoorRefusesNoCSRFNoSessionAndSSOOnlyAndLinksTheSessionAccount(t *testing.T) {
 	t.Parallel()
 	idp := newFakeIdP(t)
@@ -69,9 +70,16 @@ func TestSSOLinkDoorRefusesNoCSRFNoSessionAndSSOOnlyAndLinksTheSessionAccount(t 
 	r = w.a.client().post("/api/auth/oidc/link", map[string]string{"password": u.pass})
 	wantStatus(t, "link without a session", r, 401)
 
-	// The target is the session's account; a name in the request changes nothing.
+	// A body naming another account is refused (unknown JSON field -> 400)
+	// and links nothing.
+	r = c.post("/api/auth/oidc/link", map[string]string{"password": u.pass, "username": victim.name})
+	wantStatus(t, "link with a username in the body", r, 400)
+	if row := userRow(t, w.c, "door-victim"); row == nil || row["sso"] == true {
+		t.Errorf("a body naming the victim linked it: %v", row)
+	}
+	// The target is the session's account, sealed from the session.
 	idp.who("subject-door", "door-user")
-	loc := linkURL(t, c, u.pass, "?username="+victim.name+"&userId=x&id=x")
+	loc := linkURL(t, c, u.pass, "")
 	wantRedirect(t, "link callback", idp.finish(t, c, loc), "/?ssoLinked=1")
 	if row := userRow(t, w.c, "door-user"); row == nil || row["sso"] != true {
 		t.Errorf("the session's own account was not linked: %v", row)
@@ -80,7 +88,10 @@ func TestSSOLinkDoorRefusesNoCSRFNoSessionAndSSOOnlyAndLinksTheSessionAccount(t 
 		t.Errorf("an account named in the body was linked: %v", row)
 	}
 
-	// Now SSO-only: a second link is refused with 409.
+	// Now SSO-only and connected: a second link is refused with 409. No route
+	// yields an SSO-only account that is not also connected (linking and SSO
+	// provisioning both set the subject), so this pins the 409 for that
+	// state, not the SSO-only guard separately from the already-connected one.
 	r = c.post("/api/auth/oidc/link", map[string]string{"password": u.pass})
 	if r.Status != 409 {
 		t.Errorf("link for an already SSO-only account = %s, want 409", r)
