@@ -166,9 +166,11 @@ $(block internal/persist 50 50)" \
   internal/persist: 62" \
 --section postgres-floors
 
+# persist sits 3 points over its floor (inside RATCHET_SLACK), so only the
+# unmeasured matchlog can fail this run.
 expect 1 "section mode flags a postgres-floors package never measured in the profile" \
 "mode: set
-$(block internal/persist 70 30)" \
+$(block internal/persist 65 35)" \
 "postgres-floors:
   internal/persist: 62
   internal/matchlog: 58" \
