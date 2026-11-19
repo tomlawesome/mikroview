@@ -118,7 +118,7 @@ const PREFIX_CODE: Readonly<Record<string, string>> = {
   'add-dst-to-address-list': 'L',
   'fasttrack-connection': 'L',
 }
-export function prefixCodeFor(action: string): string {
+function prefixCodeFor(action: string): string {
   return Object.hasOwn(PREFIX_CODE, action) ? PREFIX_CODE[action] : ''
 }
 

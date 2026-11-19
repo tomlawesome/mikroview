@@ -7,7 +7,6 @@ package authe2e
 // the real binary.
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -63,8 +62,6 @@ func TestResetCodeNeverReachesTheAuditLogOrServerLogs(t *testing.T) {
 		}
 	}
 }
-
-var logLineStart = regexp.MustCompile(`^\s*\d\d:\d\d:\d\d (INFO|WARN|ERROR|DEBUG) `)
 
 // MOVES-M5: when a gate request fails with an error that has no user-facing
 // message, the server log line quotes method, path and error, so a request

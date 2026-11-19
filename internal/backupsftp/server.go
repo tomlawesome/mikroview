@@ -113,12 +113,12 @@ func idleTimeout() time.Duration {
 type idleConn struct{ net.Conn }
 
 func (c idleConn) Read(p []byte) (int, error) {
-	_ = c.Conn.SetReadDeadline(time.Now().Add(idleTimeout()))
+	_ = c.SetReadDeadline(time.Now().Add(idleTimeout()))
 	return c.Conn.Read(p)
 }
 
 func (c idleConn) Write(p []byte) (int, error) {
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(idleTimeout()))
+	_ = c.SetWriteDeadline(time.Now().Add(idleTimeout()))
 	return c.Conn.Write(p)
 }
 
