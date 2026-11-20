@@ -678,6 +678,7 @@ lint:script-tests:
     - bash scripts/ci-reuse-gate.test.sh
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
+    - bash scripts/release-readiness.test.sh
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
     - bash scripts/routeros-chr-open-mr.test.sh
