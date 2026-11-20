@@ -205,3 +205,19 @@ describe('MaxMind', () => {
     expect(row('maxmind').querySelector('button')?.textContent?.trim()).toBe('remove')
   })
 })
+
+// #1539 C2 (decision 18a): Escape disarms an armed control, same as a
+// click elsewhere. Today it leaves the remove button armed.
+describe('Escape disarms remove (#1539 C2)', () => {
+  it('an armed remove goes back to "remove" on Escape and deletes nothing', async () => {
+    render(GeoSources, { props: { settings: withIpinfo(), onchanged: vi.fn() } })
+    const remove = screen.getByRole('button', { name: 'remove' })
+    await fireEvent.click(remove)
+    expect(remove.textContent?.trim()).toBe('confirm — delete the key')
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(remove.textContent?.trim()).toBe('remove')
+    expect(removeGeoIpinfoToken).not.toHaveBeenCalled()
+  })
+})

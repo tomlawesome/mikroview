@@ -3,6 +3,7 @@
   // Single instance mounted once at the app root (see App.svelte) -- same
   // fixed-position-from-trigger-coordinates approach as IpLookupPopover.svelte,
   // driven by lib/portLookup.svelte.ts's shared singleton.
+  import { restoreFocus } from '../lib/focusTrap'
   import { portLookupState } from '../lib/portLookup.svelte'
 
   const POPOVER_WIDTH = 260
@@ -47,6 +48,7 @@
     {style}
     role="dialog"
     aria-label="Port lookup: {portLookupState.anchor.port}"
+    use:restoreFocus
   >
     <div class="header">
       <span class="port">Port {portLookupState.anchor.port}</span>

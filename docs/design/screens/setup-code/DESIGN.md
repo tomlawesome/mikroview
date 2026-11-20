@@ -120,3 +120,9 @@ no account exists yet -- create the first admin with setup code xxxx-xxxx-xxxx-x
   restore) prints a new code rather than letting the first visitor in.
 
 Written 2026-10-02.
+
+2026-11-19 (v0.7.0 audit A1-F2): the post-creation hand-off to the
+provider was removed -- gauntlet holds a new local account at the
+second-step door, which does not admit oidc/link -- so the confirmation
+and subtitle now name the order: second step, then Use single sign-on
+from the account menu.

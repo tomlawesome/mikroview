@@ -10,7 +10,7 @@
 // Round 32 (#767): keys (under ingest) and people (under account) are
 // mounted directly in the card, in its own row grammar, replacing the
 // retired EngineRoomDoors.svelte and its USERS_DOOR_ENABLED/
-// TOKENS_DOOR_ENABLED flags outright -- no shim, per AGENTS.md's
+// TOKENS_DOOR_ENABLED flags outright -- no shim, per docs/development.md's
 // "removals are wholesale". Both groups are gated on isAdmin: GET
 // /api/tokens and GET /api/auth/users are both admin-only server-side
 // (#657), so a `user` or `viewer` session gets neither group at all, not
@@ -1009,7 +1009,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('on restart')).toBeTruthy()
-    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeTruthy()
+    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a detector reads them')).toBeTruthy()
     expect(screen.queryByText('persistence')).toBeNull()
     expect(screen.queryByText(/memory-only/)).toBeNull()
 
@@ -1113,8 +1113,8 @@ describe('The settings shelf (#633)', () => {
       await settle()
       await settle()
 
-      expect(screen.getByText('the buffer clears — the 5 days on disk stay; trying a watcher reads them')).toBeTruthy()
-      expect(screen.queryByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeNull()
+      expect(screen.getByText('the buffer clears — the 5 days on disk stay; trying a detector reads them')).toBeTruthy()
+      expect(screen.queryByText('the buffer clears — the 27 days on disk stay; trying a detector reads them')).toBeNull()
     } finally {
       vi.useRealTimers()
     }

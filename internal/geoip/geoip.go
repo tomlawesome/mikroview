@@ -4,8 +4,8 @@
 // source has it -- to the network that owns the address (#1352).
 //
 // Three sources, each an MMDB file this instance fetches for itself at
-// runtime and caches on disk; nothing ships in the image (AGENTS.md,
-// "List and lookup data"):
+// runtime and caches on disk; nothing ships in the image (docs/decisions/scope-and-companion-projects.md,
+// "Why list and lookup data is fetched, never vendored"):
 //
 //   - DB-IP IP-to-Country Lite: the no-setup default. No account, no
 //     key, a new file each month.

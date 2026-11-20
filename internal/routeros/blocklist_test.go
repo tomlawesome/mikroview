@@ -652,8 +652,37 @@ func TestBlocklistShownFoldsOnlySources(t *testing.T) {
 				}
 				sb.WriteString(s.Text)
 			}
-			if want := elided(p.Steps[i]); sb.String() != strings.ReplaceAll(want, "…", "…") {
+			if want := elided(p.Steps[i]); sb.String() != want {
 				t.Errorf("part %d line %d shows %q, want %q", p.Ordinal, i, sb.String(), want)
+			}
+			// Independently of elideSources: the shown text is the step with
+			// only source="..." bodies cut -- each unmarked piece is the
+			// step's own text, in order, starting at its start and ending at
+			// its end, and every cut opens straight after source=" .
+			step, pos := p.Steps[i], 0
+			var pieces []string
+			cur := ""
+			for _, s := range line {
+				if s.Mark == MarkElided {
+					pieces, cur = append(pieces, cur), ""
+					continue
+				}
+				cur += s.Text
+			}
+			pieces = append(pieces, cur)
+			if !strings.HasPrefix(step, pieces[0]) || !strings.HasSuffix(step, pieces[len(pieces)-1]) {
+				t.Errorf("part %d line %d: the shown line does not keep the step's start and end", p.Ordinal, i)
+			}
+			for j, pc := range pieces {
+				at := strings.Index(step[pos:], pc)
+				if at < 0 {
+					t.Errorf("part %d line %d: shown text %q is not in the step after offset %d", p.Ordinal, i, pc, pos)
+					break
+				}
+				pos += at + len(pc)
+				if j < len(pieces)-1 && !strings.HasSuffix(pc, `source="`) {
+					t.Errorf("part %d line %d: a cut does not open after source=\": %q", p.Ordinal, i, pc)
+				}
 			}
 		}
 	}
@@ -667,5 +696,60 @@ func TestBlocklistShownFoldsOnlySources(t *testing.T) {
 	}
 	if strings.Join(marked, " ") != "http-max-redirect-count=2 :deserialize from=json :onerror" {
 		t.Errorf("first loader's fold marks %q", marked)
+	}
+}
+
+// A4-F5: the disable-all line must reach every raw menu the block writes.
+func TestDisableAllReachesEveryRawMenuTheBlockWrites(t *testing.T) {
+	spam := defaultChoice(t, "spamhaus", true)
+	spam.IPv6 = true
+	block, err := BlocklistBlock(BlocklistRequest{RouterOSVersion: "7.24.4", Lists: []BlocklistChoice{spam}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := block.CopyText()
+	dis := BlocklistDisableAll()
+	for _, menu := range []string{"/ip firewall raw", "/ipv6 firewall raw"} {
+		if !strings.Contains(text, menu+" add ") {
+			t.Errorf("the block writes no rules in %s, so the test proves nothing", menu)
+		}
+		if !strings.Contains(dis, menu+` disable [find comment~"^mikroview blocklist`) {
+			t.Errorf("BlocklistDisableAll does not disable the blocklist rules in %s: %q", menu, dis)
+		}
+	}
+	if strings.Contains(dis, "\n") || strings.Contains(dis, "remove") {
+		t.Errorf("BlocklistDisableAll must be one line and never remove: %q", dis)
+	}
+}
+
+// A4-T5: the cut is checked against literal commands, not against the
+// function that makes the cut: a body holding escaped quotes and an escaped
+// backslash is folded whole, and the arguments after it are kept.
+func TestElideSourcesFoldsOnlyTheBody(t *testing.T) {
+	join := func(spans []Span) (string, []string) {
+		var all strings.Builder
+		var folded []string
+		for _, s := range spans {
+			all.WriteString(s.Text)
+			if s.Mark == MarkElided {
+				folded = append(folded, s.Text)
+			}
+		}
+		return all.String(), folded
+	}
+	cases := []struct{ name, in, want string }{
+		{"no source", `/ip firewall raw add chain=prerouting comment="x"`, `/ip firewall raw add chain=prerouting comment="x"`},
+		{"escaped quotes in the body", `/system script add name=a source="x \"quoted\" y" policy=read comment="c"`, `/system script add name=a source="…" policy=read comment="c"`},
+		{"a body ending in an escaped backslash", `/system script add name=a source="ends\\" policy=read`, `/system script add name=a source="…" policy=read`},
+		{"two sources", `/a source="one \"1\"" x=1; /b source="two" y=2`, `/a source="…" x=1; /b source="…" y=2`},
+	}
+	for _, c := range cases {
+		got, folded := join(elideSources(c.in))
+		if got != c.want {
+			t.Errorf("%s: shown %q, want %q", c.name, got, c.want)
+		}
+		if want := strings.Count(c.in, `source="`); len(folded) != want {
+			t.Errorf("%s: %d folds, want %d", c.name, len(folded), want)
+		}
 	}
 }

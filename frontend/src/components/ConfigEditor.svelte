@@ -12,6 +12,7 @@
   //
   // No editor library, deliberately: a textarea with wrapping off keeps
   // one text line to one screen line, which is all the gutter needs.
+  import FailureLine from './FailureLine.svelte'
   import { configEditorState } from '../lib/configEditor.svelte'
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
@@ -145,6 +146,22 @@
     ed.close()
   }
 
+  // Setup-only mode has no Close: Sign out is the one way off the screen,
+  // and logout() clears the editor's text on its way out, so it asks the
+  // same way Close does when there are edits.
+  function requestSignOut() {
+    if (ed.edited) {
+      clearBars()
+      pending = {
+        message: `${UNSAVED} Sign out and lose them?`,
+        confirmLabel: 'Sign out without saving',
+        run: () => void authState.logout(),
+      }
+      return
+    }
+    void authState.logout()
+  }
+
   // --- snapshots ----------------------------------------------------------
 
   function whyLabel(why: string): string {
@@ -193,6 +210,12 @@
       return
     }
     if (e.key !== 'Escape') return
+    // An armed Delete is the innermost layer: Escape only backs out of it.
+    if (armedDelete !== null) {
+      e.preventDefault()
+      armedDelete = null
+      return
+    }
     if (pending || askingGuess || noteOpen) {
       e.preventDefault()
       clearBars()
@@ -264,7 +287,7 @@
         </button>
       {/if}
       {#if setupOnly}
-        <button type="button" onclick={() => void authState.logout()}>Sign out</button>
+        <button type="button" onclick={requestSignOut}>Sign out</button>
       {:else}
         <button type="button" onclick={requestClose}>Close</button>
       {/if}
@@ -276,7 +299,9 @@
       <PasswordAgain
         prompt={ed.passwordFor === 'reveal'
           ? 'It has been more than 15 minutes since you entered your password. Enter it again to show the secrets.'
-          : 'It has been more than 15 minutes since you entered your password. Enter it again to download.'}
+          : ed.passwordFor === 'load'
+            ? 'It has been more than 15 minutes since you entered your password. Enter it again to load the snapshot.'
+            : 'It has been more than 15 minutes since you entered your password. Enter it again to download.'}
         submitLabel="Continue"
         busy={ed.unlocking}
         error={ed.passwordError}
@@ -394,7 +419,7 @@
             </span>
           </h3>
           {#if ed.checkError}
-            <p class="quiet error">Could not check the text: {ed.checkError}</p>
+            <FailureLine verb="check" thing="the text" said={ed.checkError} />
           {:else if ed.problems.length === 0 && !ed.checking}
             <p class="quiet">No problems found. MikroView would start with this file.</p>
           {/if}
@@ -414,7 +439,7 @@
         <section class="snaps">
           <h3>Snapshots</h3>
           {#if ed.snapshotsError}
-            <p class="quiet error">Could not list the snapshots: {ed.snapshotsError}</p>
+            <FailureLine verb="list" thing="the snapshots" said={ed.snapshotsError} />
           {:else if ed.snapshotsLoaded && ed.snapshots.length === 0}
             <p class="quiet">None yet. Snapshot keeps a copy of the text; Carry forward keeps one of the file before it changes anything.</p>
           {/if}
@@ -595,8 +620,7 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .msg.error,
-  .quiet.error {
+  .msg.error {
     color: var(--reject);
   }
 

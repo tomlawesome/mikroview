@@ -392,10 +392,10 @@ await modal().locator('.actions button.confirm:text-is("Confirm")').click()
 await Promise.race([
   modal().locator('[data-testid="recovery-codes"]').waitFor({ timeout: 10000 }),
   modal().locator('text=Authenticator app turned on').waitFor({ timeout: 10000 }),
-  modal().locator('.error').waitFor({ timeout: 10000 }),
+  modal().locator('.error:not(:empty)').waitFor({ timeout: 10000 }),
 ])
-if ((await modal().locator('.error').count()) > 0) {
-  console.error(`confirming the TOTP code failed: ${await modal().locator('.error').textContent()}`)
+if ((await modal().locator('.error:not(:empty)').count()) > 0) {
+  console.error(`confirming the TOTP code failed: ${await modal().locator('.error:not(:empty)').textContent()}`)
   process.exit(1)
 }
 if ((await modal().locator('[data-testid="recovery-codes"]').count()) > 0) {

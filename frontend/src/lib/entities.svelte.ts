@@ -11,9 +11,27 @@ import type { Entity } from './types'
 // always exactly what the server has.
 class EntitiesState {
   list = $state<Entity[]>([])
+  // False until the first fetch lands, so the page can show ghost rows
+  // rather than an empty table that reads as "no names yet" (#1540).
+  loaded = $state(false)
+  // Why the last refresh failed, or null: a failed load must not read as
+  // an empty table of "no names yet" (#1540).
+  loadError = $state<string | null>(null)
+  // True once any fetch has succeeded: a later failed refresh then keeps
+  // the names already held rather than hiding them (#1540).
+  hasLoaded = $state(false)
 
   async refresh() {
-    this.list = await fetchEntities()
+    try {
+      this.list = await fetchEntities()
+      this.loadError = null
+      this.hasLoaded = true
+    } catch (err) {
+      this.loadError = err instanceof Error ? err.message : String(err)
+      throw err
+    } finally {
+      this.loaded = true
+    }
   }
 
   async upsert(entity: Entity): Promise<string | null> {

@@ -13,7 +13,7 @@
 // not carry. A camera shape says "something about this host's name or
 // the ports it answered on looked like a camera" -- it never says
 // mikroview identified a camera, and no other surface may read it that
-// way. Mikroview never probes anything (AGENTS.md), so every input
+// way. Mikroview never probes anything (docs/decisions/observe-never-probe.md), so every input
 // below arrived on its own: a label an operator typed, a name the
 // router pushed, and ports and peers seen in the log stream.
 //

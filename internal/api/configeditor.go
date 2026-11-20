@@ -74,9 +74,11 @@ type editorSession struct {
 	// open, or a snapshot read back -- supplies it, and a secret typed
 	// over a placeholder replaces it on the next validate or Carry
 	// forward. Kept past the unlock window, because validate and Carry
-	// forward need it and do not need the unlock; the window guards
-	// reading the values out (Show, Download, a snapshot), not holding
-	// them, and the process holds the running config's secrets anyway.
+	// forward need it and do not need the unlock, and the process holds
+	// the running config's secrets anyway; the window guards reading the
+	// values out (Show, Download, a snapshot), not holding them; a value
+	// goes back only at its own setting (config.UnmaskSecrets), so
+	// validate and Carry forward never return one.
 	values   map[string]string
 	lastUsed time.Time
 }
@@ -159,18 +161,21 @@ func (s *Server) editorUnlocked(r *http.Request, now time.Time) bool {
 	return !st.unlockedAt.IsZero() && now.Sub(st.unlockedAt) <= editorUnlockWindow
 }
 
+// reauthHeader names the response header that tells the frontend an
+// unlock has lapsed, the way gauntlet's door uses X-Auth-Gate. The body
+// stays plain text like every other route.
+const reauthHeader = "X-Config-Reauth"
+
 // writeReauth is the refusal every unlock-gated route gives once the
-// window has lapsed: 401 with {"reauth":true}, the frontend's cue to ask
-// for the password again rather than to sign the admin out.
+// window has lapsed: 401 with the X-Config-Reauth header, the frontend's
+// cue to ask for the password again rather than to sign the admin out.
 func writeReauth(w http.ResponseWriter) {
-	writeJSON(w, http.StatusUnauthorized, map[string]any{
-		"reauth": true,
-		"error":  "the config editor's unlock has lapsed -- enter your password again",
-	})
+	w.Header().Set(reauthHeader, "required")
+	http.Error(w, "the config editor's unlock has lapsed -- enter your password again", http.StatusUnauthorized)
 }
 
 func writeEditorError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	http.Error(w, msg, status)
 }
 
 // editorGate is the check every editor route starts with: an admin

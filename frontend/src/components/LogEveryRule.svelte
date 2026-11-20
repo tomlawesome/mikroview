@@ -42,6 +42,7 @@
   //
   // The `TuneLogging*` names it imports keep theirs: they mirror the two
   // /api/tune-logging endpoints, and #1134 leaves those paths alone.
+  import FailureLine from './FailureLine.svelte'
   import { untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { policyState } from '../lib/policy.svelte'
@@ -50,6 +51,7 @@
   import { logEveryRuleWorkState as work } from '../lib/logEveryRuleWork.svelte'
   import { fetchTuneLoggingAnalyse, fetchTuneLoggingRender } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { downloadText } from '../lib/export'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
   import {
@@ -146,7 +148,7 @@
       work.adoptDevice()
       analyseError = null
       renderError = null
-      copied = ''
+      flash.key = null
       // A request still in flight was asked about the router we have
       // just left. Retiring the tokens discards its answer wherever it
       // lands -- including in an instance of this card that has since
@@ -180,7 +182,7 @@
   let renderingToken = $state(0)
   const rendering = $derived(renderingToken !== 0 && renderingToken === work.renderToken)
   let renderError = $state<string | null>(null)
-  let copied = $state('')
+  const flash = new CopyFlash()
 
   // The one intake. Every door into the drop zone -- a dropped file, a
   // chosen file, a paste -- ends here, so a second export always lands
@@ -256,8 +258,7 @@
     // but anything the call can still throw (a 200 whose body is not
     // JSON) would otherwise skip everything below -- including the line
     // that frees the button, leaving it reading "Analysing…" for a
-    // request that ended. Same shape as AuthSetup.svelte's startSSOLink
-    // call, and for the same reason.
+    // request that ended.
     let res: TuneLoggingAnalyseResponse | string
     try {
       res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
@@ -318,12 +319,7 @@
   }
 
   async function copy(text: string, label: string) {
-    const ok = await copyToClipboard(text)
-    if (ok) {
-      copied = label
-      setTimeout(() => (copied = ''), 1500)
-      work.resultSaved = true
-    }
+    if (await flash.run(label, () => copyToClipboard(text))) work.resultSaved = true
   }
 
   // The guard (issue's own invariant list, "Warn on leave"): held only
@@ -464,7 +460,7 @@
             </p>
           </div>
 
-          {#if analyseError}<p class="load-error">{analyseError}</p>{/if}
+          {#if analyseError}<FailureLine verb="analyse" thing="the export" said={analyseError} />{/if}
 
           <button
             type="button"
@@ -506,7 +502,7 @@
               {/if}
             </div>
 
-            {#if renderError}<p class="load-error">{renderError}</p>{/if}
+            {#if renderError}<FailureLine verb="render" thing="the rules" said={renderError} />{/if}
             <button type="button" class="primary" onclick={render} disabled={rendering || work.selected.size === 0}>
               {rendering ? 'Rendering…' : `Render (${work.selected.size} selected)`}
             </button>
@@ -524,11 +520,11 @@
                   Download {work.device}-logging.rsc
                 </button>
                 <button type="button" onclick={() => copy(rr.annotated, 'annotated')}>
-                  {copied === 'annotated' ? 'Copied' : 'Copy the annotated export'}
+                  {flash.label('annotated', 'Copy the annotated export')}
                 </button>
                 <pre>{rr.commands}</pre>
                 <button type="button" onclick={() => copy(rr.commands, 'commands')}>
-                  {copied === 'commands' ? 'Copied' : 'Copy'}
+                  {flash.label('commands', 'Copy')}
                 </button>
               </div>
             {/if}

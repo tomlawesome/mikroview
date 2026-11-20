@@ -225,6 +225,62 @@ describe('StepPaste: the block and Copy', () => {
     expect(written.split('\n')[0]).toBe('# 1 · Trust the certificate')
   })
 
+  // A2-F1: the drop box is closed, so the server blanks the backup part
+  // and lists why. The wizard must say so and must not wait for it.
+  const BACKUP_BLOCKED = { commands: '', note: '', blocked: ['backups-off'] }
+  function leftOutCommands() {
+    return commands({ backup: BACKUP_BLOCKED, backupSchedule: BACKUP_BLOCKED })
+  }
+
+  it('says why the backup part is left out when the drop box is closed', async () => {
+    wizardState.commands = leftOutCommands()
+    landOnPaste()
+    render(StepPaste)
+    await tick()
+    expect(norm(screen.getByText(/^3 parts, in order/).textContent)).toMatch(
+      /^3 parts, in order — trust the certificate, push router state, send logs — and the enrol line last\./,
+    )
+    expect(block()).not.toContain('Back up the router')
+    expect(norm(document.querySelector('.cautionbox')?.textContent)).toBe(
+      'The backup part is left out — the drop box is closed, so a backup would have nowhere to arrive. Open the drop box from step 1, The router, and the part appears here; or paste without it and set up backups later from Settings → router backups.',
+    )
+  })
+
+  it('says nothing about a left-out backup part when the part is present', async () => {
+    render(StepPaste)
+    await tick()
+    expect(document.querySelector('.cautionbox')).toBeNull()
+  })
+
+  it('Copy with the backup part left out stops waiting for a backup; with it present, still waits', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: () => Promise.resolve() },
+    })
+    wizardState.commands = leftOutCommands()
+    landOnPaste()
+    const first = render(StepPaste)
+    await tick()
+    await fireEvent.click(copyButton())
+    await tick()
+    expect(wizardRun.backupLeftOut).toBe(true)
+    expect(wizardRun.answers.backupLeftOut).toBe(true)
+    const b = wizardRun.trackStations.find((x) => x.id === 'backup')
+    expect(b?.state).toBe('skip')
+    expect(b?.st).toBe('left out · the drop box was closed')
+    first.unmount()
+
+    wizardRun.reset()
+    wizardState.commands = commands()
+    landOnPaste()
+    render(StepPaste)
+    await tick()
+    await fireEvent.click(copyButton())
+    await tick()
+    expect(wizardRun.backupLeftOut).toBe(false)
+    expect(wizardRun.trackStations.find((x) => x.id === 'backup')?.state).not.toBe('skip')
+  })
+
   it('Next is disabled until Copy, in the shell', async () => {
     render(Wizard)
     await tick()
@@ -422,5 +478,118 @@ describe('StepPaste: the refused-sender recovery', () => {
     // Never an accept by itself: only the mint happened, and the walk's
     // own "since" moved to now, so the old refusal drops out on its own.
     await waitFor(() => expect(document.querySelector('.warnbox')).toBeNull())
+  })
+})
+
+// A2-F2 (#1365): the certificate does not cover the address the block tells
+// the router to use. The router refuses the CA fetch and nothing arrives.
+describe('StepPaste: the certificate does not cover the address (#1365)', () => {
+  const WARN =
+    'MikroView\'s certificate does not cover 192.0.2.15, so the router will refuse it ("name verification failed"). Paste the block below into config.yaml\'s tls: section, replacing its tls.hosts line, and restart mikroview, then come back — the router needs no change, the same CA signs the new certificate.'
+  const PASTE = 'hosts: ["localhost", "127.0.0.1", "192.0.2.15"]'
+
+  function uncovered() {
+    return status({
+      instance: {
+        ...status().instance,
+        hosts: [],
+        effectiveHosts: ['localhost', '127.0.0.1'],
+        certificateCoversAddress: false,
+        addressHost: '192.0.2.15',
+      },
+    })
+  }
+  function covered() {
+    return status({
+      instance: {
+        ...status().instance,
+        hosts: ['192.0.2.15'],
+        effectiveHosts: ['192.0.2.15'],
+        certificateCoversAddress: true,
+        addressHost: '192.0.2.15',
+      },
+    })
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchSetupStatus).mockResolvedValue(status())
+    vi.mocked(fetchDevices).mockResolvedValue([device()])
+    vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    vi.mocked(fetchRouterBackups).mockResolvedValue({
+      enabled: true,
+      keyUnreadable: false,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      lock: 'open',
+    } as never)
+    vi.mocked(fetchSetupCommands).mockResolvedValue(commands())
+    vi.mocked(fetchEvents).mockResolvedValue({ events: [], hasMore: false, windowStart: '', serverTime: '' })
+    wizardState.reset()
+    wizardRun.reset()
+    wizardState.commands = commands()
+    landOnPaste()
+    wizardState.address = '192.0.2.15:8080'
+    wizardState.open = true
+  })
+
+  afterEach(() => {
+    wizardState.reset()
+    wizardRun.reset()
+    vi.clearAllMocks()
+  })
+
+  it('shows the tls.hosts line to paste above the block', async () => {
+    wizardState.status = uncovered()
+    render(StepPaste)
+    await tick()
+    const warn = document.querySelector('.warnbox')
+    expect(warn).not.toBeNull()
+    expect(norm(warn?.textContent)).toContain(WARN)
+    expect(document.querySelector('.warnbox pre')?.textContent).toBe(PASTE)
+    const blockPre = screen.getByLabelText('The block to paste')
+    expect(blockPre).toBeTruthy()
+    expect(warn!.compareDocumentPosition(blockPre) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
+
+  it('keeps the warning through the router\'s turn', async () => {
+    wizardState.status = uncovered()
+    // landOnPaste's fixture router is already enrolled; nothing at all has
+    // arrived on this walk, which is the case the warning matters for.
+    wizardState.devices = []
+    wizardRun.markCopied()
+    render(StepPaste)
+    await tick()
+    expect(screen.getByText('Copied. Waiting for the router — the certificate fetch comes first.')).toBeTruthy()
+    const warn = document.querySelector('.warnbox')
+    expect(warn).not.toBeNull()
+    expect(norm(warn?.textContent)).toContain('MikroView\'s certificate does not cover 192.0.2.15')
+    expect(document.querySelector('.warnbox pre')?.textContent).toBe(PASTE)
+    expect(screen.queryByText(/arrived without the enrol line/)).toBeNull()
+  })
+
+  it('says nothing when the certificate covers the address', async () => {
+    wizardState.status = covered()
+    render(StepPaste)
+    await tick()
+    expect(document.querySelector('.warnbox')).toBeNull()
+    expect(screen.queryByText(/does not cover/)).toBeNull()
+    expect(screen.getByText('Nothing has arrived yet. Copy, paste, and this line will say what the router did.')).toBeTruthy()
+    wizardRun.markCopied()
+    await tick()
+    expect(document.querySelector('.warnbox')).toBeNull()
+  })
+
+  it('the warning goes once the server reports coverage', async () => {
+    wizardState.status = uncovered()
+    render(StepPaste)
+    await tick()
+    expect(document.querySelector('.warnbox')).not.toBeNull()
+    expect(document.querySelector('.warnbox pre')?.textContent).toBe(PASTE)
+    wizardState.status = covered()
+    await tick()
+    expect(document.querySelector('.warnbox')).toBeNull()
   })
 })

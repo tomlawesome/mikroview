@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // SetupOnly is what setup-only mode (#1347) can still use from a config

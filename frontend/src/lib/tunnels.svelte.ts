@@ -4,7 +4,7 @@
 // ingest side: per-device WireGuard interface/peer state and ppp-active
 // sessions. Same shape as zones.svelte.ts's own refresh() over
 // fetchRouterAddresses -- these are mikroview's own pushed tables, read
-// per device, never a live probe (AGENTS.md: mikroview observes; it
+// per device, never a live probe (docs/decisions/observe-never-probe.md: mikroview observes; it
 // never scans or connects).
 import { fetchRouterPPPActive, fetchRouterWireguard, type RouterPPPSession, type RouterWireguardPeer } from './api'
 import { appState } from './state.svelte'

@@ -348,12 +348,15 @@ func TestDeletingAUserRevokesTheirTokensAndSessionsAndTheLastAdminStays(t *testi
 		t.Error("the deleted user's session still works")
 	}
 
-	// The remaining (last) admin cannot be deleted.
+	// The remaining (last) admin cannot be deleted. Self-delete answers
+	// conflict for a different reason elsewhere, so the class must be the
+	// gate's own last-admin guard (#1426 A1-F6).
 	d := w.c.del("/api/auth/users/"+adminID, map[string]string{"password": w.admin.pass})
-	if d.Status != 409 || (d.problemClass() != "last-admin" && d.problemClass() != "conflict") {
-		t.Errorf("deleting the last admin = %s, want 409 last-admin (or conflict, for the signed-in account)", d)
-	}
-	if !w.c.session(t).Authenticated {
-		t.Error("the last admin lost their session")
+	wantProblem(t, "deleting the last admin", d, 409, "last-admin")
+	// The same guard stops demoting the last admin, a path that is not a delete.
+	dm := w.c.put("/api/auth/users/"+adminID+"/role", map[string]string{"role": "user", "password": w.admin.pass, "code": w.admin.code(t, w.a, 0)})
+	wantProblem(t, "demoting the last admin", dm, 409, "last-admin")
+	if !w.c.session(t).Authenticated || w.c.session(t).Role != "admin" {
+		t.Error("the last admin lost their session or role")
 	}
 }

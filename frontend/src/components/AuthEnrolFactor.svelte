@@ -13,8 +13,8 @@
   // deliberately no way to skip -- no cancel, no SSO -- and the mono
   // caption says so: the server 403s everything but the enrolment routes
   // while this state holds, so a skip here would be a lie. The one
-  // exception (#1202): a passkey-only door at an address that cannot make
-  // a passkey offers a sign-out, and a link to the address that can --
+  // exception (#1202): a passkey-only door at an address, or in a browser,
+  // that cannot make a passkey offers a sign-out, and a link to the address that can --
   // otherwise the person is stuck with no way forward at all.
   //
   // Enrolment logic and copy are AuthenticatorOverlay's and
@@ -27,8 +27,9 @@
   import { authState } from '../lib/auth.svelte'
   import { ApiError, STEP_EXPIRED, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
   import { leaveGuard } from '../lib/leaveGuard.svelte'
-  import { registerPasskey } from '../lib/passkeys.svelte'
+  import { passkeysSupported, registerPasskey } from '../lib/passkeys.svelte'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { qrCode } from '../lib/qrcode'
   import Fullfall from './Fullfall.svelte'
 
@@ -54,7 +55,7 @@
   let name = $state('')
   let password = $state('')
   let recoveryCodes = $state<string[]>([])
-  let codesCopied = $state(false)
+  const flash = new CopyFlash()
   let error = $state<string | null>(null)
   let busy = $state(false)
   // #1202 U13: where focus goes after the codes screen's call fails or
@@ -93,8 +94,15 @@
   // stays visible, disabled, with one line why. Same deployment/address
   // check as the overlay's unavailableReason, collapsed to the mockup's
   // one drawn line.
+  // Browser capability is the third check -- the one passkeysUsableAt
+  // applies for AuthLogin/AuthScreen. Without it a browser lacking the
+  // WebAuthn JSON helpers is shown a live key that can only fail, and on
+  // the passkey-only door fail with no way out (v0.7.0 audit A1-S1).
+  const browserCanPasskey = passkeysSupported()
   const passkeyUsable = $derived(
-    authState.passkeyStatus === 'ready' && location.origin === authState.passkeyOrigin,
+    browserCanPasskey &&
+      authState.passkeyStatus === 'ready' &&
+      location.origin === authState.passkeyOrigin,
   )
 
   // #1202: where a passkey can be made, when it is not here -- only an
@@ -123,7 +131,7 @@
   function startAgain(message: string) {
     recoveryCodes = []
     pendingConfirmation = false
-    codesCopied = false
+    flash.key = null
     codesLost = false
     code = ''
     name = ''
@@ -326,7 +334,7 @@
   }
 
   async function copyCodes() {
-    codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
+    await flash.run('codes', () => copyToClipboard(recoveryCodes.join('\n')))
   }
 
   // "I have saved these". A held first factor (#1202) goes live only once
@@ -401,10 +409,14 @@
           aria-label={passkeyOnly
             ? passkeyUsable
               ? 'Add a passkey'
-              : 'Add a passkey: passkeys unavailable at this address'
+              : browserCanPasskey
+                ? 'Add a passkey: passkeys unavailable at this address'
+                : 'Add a passkey: passkeys unavailable in this browser'
             : passkeyUsable
               ? 'Add a second step: choose a kind'
-              : 'Add a second step: passkeys unavailable at this address'}
+              : browserCanPasskey
+                ? 'Add a second step: passkeys unavailable at this address'
+                : 'Add a second step: passkeys unavailable in this browser'}
         >
           {#if passkeyOnly}
             <!-- #1202: the admin passkey rule -- one key, no app option. -->
@@ -453,8 +465,15 @@
                   </svg>
                 </span>
                 <span class="cname">Passkey</span>
-                <span class="cdesc">passkeys need a web address, and you&rsquo;re viewing
-                  MikroView at {location.host}{passkeyOnly ? '.' : ' — your authenticator app works everywhere.'}</span>
+                <span class="cdesc">
+                  {#if browserCanPasskey}
+                    passkeys need a web address, and you&rsquo;re viewing
+                    MikroView at {location.host}{passkeyOnly ? '.' : ' — your authenticator app works everywhere.'}
+                  {:else}
+                    this browser can&rsquo;t create a passkey &mdash; try updating it, or
+                    {passkeyOnly ? 'sign in from a newer browser.' : 'use your authenticator app instead.'}
+                  {/if}
+                </span>
               </span>
             {/if}
           </div>
@@ -627,7 +646,7 @@
               <span class="rc">{rc}</span>
             {/each}
           </div>
-          <button class="copy" type="button" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
+          <button class="copy" type="button" onclick={copyCodes}>{flash.label('codes', 'Copy all', { copied: 'Copied', failed: 'Copy failed' })}</button>
           {#if !passkeyOnly}
             <p class="aside">Your ten recovery codes cover your authenticator app and
               your passkeys alike.</p>

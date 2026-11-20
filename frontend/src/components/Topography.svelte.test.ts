@@ -16,7 +16,7 @@ vi.mock('../lib/api', async (importOriginal) => ({
   fetchTrace: vi.fn(),
   fetchWanDoors: vi.fn(async () => ({ devices: [] })),
 }))
-import { fetchTrace, type TraceResponse } from '../lib/api'
+import { fetchTrace, fetchWanDoors, type TraceResponse } from '../lib/api'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { zonesState } from '../lib/zones.svelte'
@@ -602,7 +602,7 @@ describe('the aggregate bar (#648)', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const watchHalf = container.querySelector<SVGGElement>('.hbar-g[aria-label*="watcher"]')
+    const watchHalf = container.querySelector<SVGGElement>('.hbar-g[aria-label*="watch"]')
     expect(watchHalf).not.toBeNull()
     watchHalf!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
@@ -3348,6 +3348,8 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     vi.restoreAllMocks()
     wanDoorsState.close()
     wanDoorsState.devices = []
+    wanDoorsState.loading = false
+    wanDoorsState.error = null
   })
 
   // #1319: the boundary card gains one last row exactly when its own
@@ -3395,6 +3397,104 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     const card = openInternetCard(container)
     const row = [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
     expect(row!.textContent?.trim()).toBe('Doors from the internet · none')
+  })
+
+  // A5-F1: the map must not say "none" about a security posture it has
+  // not read yet, or could not read.
+  const doorsRow = (card: HTMLElement) =>
+    [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+  const anchorText = (container: HTMLElement) => container.querySelector('.isl-card .doors-anchor-t')!.textContent
+  const restoreWanDoors = () => vi.mocked(fetchWanDoors).mockImplementation(async () => ({ devices: [] }))
+
+  it('says the doors are still being read, not "none", while the first read is in flight (A5-F1)', async () => {
+    let land!: (r: { devices: import('../lib/api').WanDeviceDoors[] }) => void
+    vi.mocked(fetchWanDoors).mockReturnValue(new Promise((res) => { land = res }))
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    void wanDoorsState.refresh()
+    flushSync()
+
+    expect(anchorText(container)).toBe('Doors from the internet · reading…')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · reading…')
+
+    land({ devices: [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [{ label: '#5', ordinal: 5, dstPort: '22' }], services: null }] })
+    await vi.waitFor(() => expect(wanDoorsState.loading).toBe(false))
+    flushSync()
+    expect(anchorText(container)).toBe('Doors from the internet · 1')
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · 1')
+    restoreWanDoors()
+  })
+
+  it('says the doors could not be read, not "none", after the read fails (A5-F1)', async () => {
+    vi.mocked(fetchWanDoors).mockRejectedValue(new Error('fetchWanDoors: 500'))
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    await wanDoorsState.refresh()
+    flushSync()
+
+    expect(wanDoorsState.error).toBe('Could not read the pushed tables')
+    expect(wanDoorsState.loading).toBe(false)
+    expect(anchorText(container)).toBe('Doors from the internet · could not read')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · could not read')
+    restoreWanDoors()
+  })
+
+  it('still says "· none" once a read has landed and counted nothing (A5-F1 guard)', async () => {
+    vi.mocked(fetchWanDoors).mockResolvedValue({ devices: [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [], services: null }] })
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    await wanDoorsState.refresh()
+    flushSync()
+
+    expect(wanDoorsState.error).toBeNull()
+    expect(wanDoorsState.loading).toBe(false)
+    expect(anchorText(container)).toBe('Doors from the internet · none')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · none')
+    restoreWanDoors()
+  })
+
+  // A4-C1: rules the endpoint could not judge are counted apart, so "none"
+  // is only ever a true all-clear.
+  it.each([
+    [3, 0, 'Doors from the internet · 3'],
+    [3, 2, 'Doors from the internet · 3 · 2 not judged'],
+    [0, 2, 'Doors from the internet · none known · 2 not judged'],
+    [0, 0, 'Doors from the internet · none'],
+  ])('doorsTail with %i doors and %i unjudged reads "%s" (A4-C1)', (doors, unjudged, text) => {
+    guestDark()
+    const door = (n: number) => ({ label: `#${n}`, ordinal: n, dstPort: '22' })
+    const rule = (n: number) => ({ label: `#${n + 50}`, ordinal: n + 50, dstPort: '8291', scope: 'in-interface-list=WAN' })
+    wanDoorsState.devices = [
+      {
+        id: 'router1', name: 'router1', wan: 'ether1',
+        doors: Array.from({ length: doors }, (_, i) => door(i + 1)),
+        services: null,
+        unjudged: Array.from({ length: unjudged }, (_, i) => rule(i + 1)),
+      },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(anchorText(container)).toBe(text)
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe(text)
+  })
+
+  it('sums unjudged across devices for the map (A4-C1)', () => {
+    wanDoorsState.devices = [
+      { id: 'a', name: 'a', wan: 'ether1', doors: [], services: null, unjudged: [{ label: '#1', ordinal: 1, dstPort: '', scope: 'src-address=203.0.113.0/24' }] },
+      { id: 'b', name: 'b', wan: 'ether1', doors: [], services: null, unjudged: [{ label: '#2', ordinal: 2, dstPort: '', scope: 'src-address-list=LAN' }, { label: '#3', ordinal: 3, dstPort: '', scope: 'src-address-list=LAN' }] },
+    ]
+    expect((wanDoorsState as unknown as { totalUnjudged: number }).totalUnjudged).toBe(3)
   })
 
   it('opens the doors panel from the internet anchor itself', () => {
@@ -4220,9 +4320,9 @@ describe('living hosts on the 2D map (#1016)', () => {
       flushSync()
 
       act(openCard(container)!, 'dismiss ▸')!.click()
-      await vi.waitFor(() => expect(container.querySelector('.card .d-error')).not.toBeNull())
+      await vi.waitFor(() => expect(container.querySelector('.card [role="alert"]')).not.toBeNull())
 
-      expect(container.querySelector('.card .d-error')?.textContent).toContain('403')
+      expect(container.querySelector('.card [role="alert"]')?.textContent).toContain('403')
       // Still on the map: nothing was written, so nothing is taken away.
       expect(dots(container).length).toBe(1)
     })

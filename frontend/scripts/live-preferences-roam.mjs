@@ -136,7 +136,9 @@ check(
 
 await page.click(`${BOX} .fsaved`)
 await page.waitForSelector(`${BOX} .fpmenu`, { state: 'visible', timeout: 5000 })
+// The × is arm-then-confirm (#1539): arm, then confirm.
 await page.click(`${BOX} .fpmenu .fprow:has-text("${PRESET_NAME}") .fpx`)
+await page.click(`${BOX} .fpmenu .fprow:has-text("${PRESET_NAME}") .fpx.armed`)
 await page.keyboard.press('Escape')
 
 await goTo(page, 'Settings')

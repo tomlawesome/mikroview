@@ -20,7 +20,7 @@
 //
 // So this records nothing the feed did not already show and asks the
 // network nothing -- mikroview observes, it never probes (see
-// AGENTS.md). A value is here only because an event carrying it arrived.
+// docs/decisions/observe-never-probe.md). A value is here only because an event carrying it arrived.
 //
 // # What a field is
 //

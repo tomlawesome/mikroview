@@ -1589,7 +1589,7 @@ export type Scope = '' | 'internal' | 'external'
 // for how the two sides (plus their scope and country) swap together.
 // srcCountry/dstCountry are the owner-ratified country section of that
 // issue -- see lib/countryMatch.ts. Per the project's dev-stage norm
-// (AGENTS.md "Removals are wholesale"), the retired `ip` field is not
+// (docs/development.md, "Removals are wholesale"), the retired `ip` field is not
 // migrated: a saved preset or bookmarked URL that still carries it simply
 // stops applying that half of its filter.
 export interface Filters {
@@ -1899,6 +1899,15 @@ export interface SetupStatus {
     // covers localhost/127.0.0.1 only, which is the most common reason
     // a router's first fetch fails.
     hosts: string[]
+    // The list the certificate is actually issued for: hosts, or the
+    // generated defaults when hosts is empty (#1507).
+    effectiveHosts?: string[]
+    // The server's answer to "does the certificate cover the address":
+    // case-insensitive, and true when no certificate is in play. The
+    // front end reads it and never compares names itself.
+    certificateCoversAddress?: boolean
+    // The stored address with any port removed; empty when none is set.
+    addressHost?: string
     syslogPort: string
     syslogEnabled: boolean
     // The operator's own answer (#1213) to "what address can your

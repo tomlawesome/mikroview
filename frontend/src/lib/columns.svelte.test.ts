@@ -128,7 +128,7 @@ describe('column visibility (#729)', () => {
 // measured against the pre-#1149/#1197 column widths, which have since
 // grown enough that it no longer covered the width (1600) the reopened
 // bug was reported at -- see columns.svelte.ts's own comment on
-// NARROW_BREAKPOINT for the math.
+// COLUMN_NARROW_BREAKPOINT for the math.
 describe('the narrow starting column set (#1150, #1117)', () => {
   const NARROW_HIDDEN = ['mac', 'iface', 'nat']
 
@@ -208,7 +208,7 @@ describe('the narrow starting column set (#1150, #1117)', () => {
 // #1117 (reopened twice: !1029, !1051): the release screenshot at
 // 1600x900, v7 defaults, showed DST ADDRESS cut to "10.0." and RULE to
 // three letters. Widening individual columns never touched the real
-// cause -- NARROW_BREAKPOINT (above) still let all fifteen columns try
+// cause -- COLUMN_NARROW_BREAKPOINT (above) still let all fifteen columns try
 // to fit at 1600px, and they cannot: Deck.svelte reserves its own 30px
 // roll-rail plus a 14px+14px card-body inset (58px) before the table
 // gets anything, and Rule can never draw below its own 140px floor.

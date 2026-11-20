@@ -11,8 +11,8 @@ job's answer cannot have changed" from "run it and find out."
 The reuse gate (ported from Orbit's `scripts/ci/reuse-gate.sh`, orbit #898)
 closes that gap for the jobs expensive enough to be worth it. It never
 changes *whether* a job runs at all -- that is the docs-only lane's job
-(`*docs_only_paths` / `*code_paths` in `.gitlab-ci.yml`, and AGENTS.md, "The
-docs-only lane") -- only whether a job that would run repeats real work it
+(`*docs_only_paths` / `*code_paths` in `.gitlab-ci.yml`, and "The docs-only
+lane" below) -- only whether a job that would run repeats real work it
 has already done on this same merge request.
 
 ### How it decides
@@ -115,6 +115,41 @@ dedicated read-only token limits what a leak of it could reach.
 
 Until `CI_REUSE_TOKEN` exists, nothing changes: every candidate job runs
 exactly as it did before #1066. Creating it is what turns reuse on.
+
+## The docs-only lane (#1038)
+
+`.gitlab-ci.yml` skips the jobs a prose change cannot break. Two lists at
+the top of that file, `*docs_only_paths` and `*code_paths`, and every gated
+job asks them in one order: a code path changed -> run; else a docs path
+changed -> never; else run. The last rung is the safety property. Skipping
+is opt-in against the docs list and is never a fallback, so a path in
+neither list, an empty diff, or a pipeline whose diff GitLab cannot compute
+runs the full set. Do not reorder those rungs, and do not try to express
+"docs only" in a single `changes:` -- it asks whether *any* listed path
+changed, so one list alone would skip a merge request that touched `main.go`
+and `README.md` together.
+
+Four jobs stay outside the lane on purpose, and each says so in a comment
+where it is defined:
+
+- `test:go` -- five tests read and assert on `docs/configuration.md`.
+- `test:build-checks` -- runs the markdown anchor and link check.
+- `security:gitleaks` -- a secret pastes into prose as easily as into code.
+- `gate:image` -- near-free when `live-check.Dockerfile` is unchanged, and
+  three other jobs pull the tag it publishes.
+
+`policy:promotion-hop` and `sync:mirror-to-github` are outside it too:
+neither keys off the diff at all.
+
+`lint:changed-paths-guard` closes the one gap the ladder cannot: it runs
+unconditionally and goes red naming any changed path in neither list, with
+the instruction to add its tree to `*code_paths`. Its script reads the lists
+from `.gitlab-ci.yml`; `scripts/ci-changed-paths-guard.test.sh` is its test.
+
+Adding a job: it gets `<<: *dev_or_mr_code` (or `*dev_or_mr_code_frontend`)
+only if a documentation change genuinely cannot fail it. If in doubt use
+plain `*dev_or_mr` -- running a job that did not need to run costs minutes;
+skipping one that did costs a green pipeline that tested nothing.
 
 ## Upgrade fixtures (`testdata/upgrade/`, #1239, #1247)
 

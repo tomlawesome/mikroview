@@ -17,7 +17,7 @@
 // It also covers the thing the removal itself risks: /api/detectors and
 // /api/watchlist/entries are gone with no alias and no friendlier-error
 // stub, so a stale caller must get a plain 404. A shim quietly surviving
-// the removal is exactly what AGENTS.md's "removals are wholesale" rule
+// the removal is exactly what the "removals are wholesale" rule (docs/development.md)
 // exists to prevent, and it would not be visible in any Go test that
 // only asks the routes that do exist.
 //
@@ -248,7 +248,7 @@ check(
 for (const id of [createdID, cloned.body?.id, inverted.body?.id]) {
   if (!id) continue
   const removed = await api('DELETE', `/api/definitions/${encodeURIComponent(id)}`)
-  check(removed.status === 200, `the custom definition ${id} is deleted (${removed.status})`)
+  check(removed.status === 204, `the custom definition ${id} is deleted (${removed.status})`)
 }
 
 const finalList = await api('GET', '/api/definitions')

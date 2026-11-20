@@ -61,7 +61,7 @@ export function passkeysUsableAt(origin: string | undefined): boolean {
 // explained to them.
 function describeCeremonyError(err: unknown): string {
   if (err instanceof DOMException) {
-    return "That didn't complete -- try again, or use another way in."
+    return "That didn't complete — try again, or use another way in."
   }
   return err instanceof Error ? err.message : String(err)
 }
@@ -79,7 +79,7 @@ function describeCeremonyError(err: unknown): string {
 // here unchanged, before the browser is ever asked for anything.
 export async function registerPasskey(name: string, password: string): Promise<PasskeyRegistrationFinish | string> {
   if (!passkeysSupported()) {
-    return "This browser can't create a passkey -- try updating it, or use your authenticator app instead."
+    return "This browser can't create a passkey — try updating it, or use your authenticator app instead."
   }
   const begin = await beginPasskeyRegistration(password)
   if (typeof begin === 'string') return begin
@@ -93,7 +93,7 @@ export async function registerPasskey(name: string, password: string): Promise<P
   } catch (err) {
     return describeCeremonyError(err)
   }
-  if (!credential) return "That didn't complete -- try again, or use another way in."
+  if (!credential) return "That didn't complete — try again, or use another way in."
 
   const json = (credential as unknown as { toJSON(): unknown }).toJSON()
   return finishPasskeyRegistration(json, name)
@@ -105,7 +105,7 @@ export async function registerPasskey(name: string, password: string): Promise<P
 // or error text otherwise.
 export async function loginWithPasskey(): Promise<string | null> {
   if (!passkeysSupported()) {
-    return "This browser can't use a passkey -- use another way in below."
+    return "This browser can't use a passkey — use another way in below."
   }
   // #1202 U11: a #step-expired answering the assertion means only the
   // passkey ceremony lapsed; the pending login still holds, so the
@@ -136,7 +136,7 @@ async function passkeyLoginCeremony(): Promise<string | null> {
   } catch (err) {
     return describeCeremonyError(err)
   }
-  if (!credential) return "That didn't complete -- try again, or use another way in."
+  if (!credential) return "That didn't complete — try again, or use another way in."
 
   const json = (credential as unknown as { toJSON(): unknown }).toJSON()
   return submitPasskeyLoginAssertion(json)

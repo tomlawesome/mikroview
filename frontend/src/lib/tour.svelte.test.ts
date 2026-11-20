@@ -181,6 +181,16 @@ describe('wizardRun.finish()', () => {
     expect(tourState.offering).toBe(true)
   })
 
+  it('leaves nothing typed into Mint behind when the walk is finished (A2-S3)', () => {
+    wizardState.open = true
+    wizardState.finishTo = 'fall'
+    wizardRun.pass = 'correct horse'
+    wizardRun.finish()
+
+    expect(wizardState.open).toBe(false)
+    expect(wizardRun.pass).toBe('')
+  })
+
   it('never offers it after an add-a-router walk, which lands on the fleet', () => {
     wizardState.open = true
     wizardState.finishTo = 'fleet'

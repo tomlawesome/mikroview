@@ -57,9 +57,9 @@ class DossierState {
         this.data = d
         this.loading = false
       },
-      () => {
+      (err) => {
         if (id !== this.requestId || this.ip !== ip) return
-        this.error = 'Could not assemble the dossier'
+        this.error = err instanceof Error ? err.message : String(err)
         this.loading = false
       },
     )

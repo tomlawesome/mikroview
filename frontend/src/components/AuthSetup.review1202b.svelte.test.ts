@@ -52,20 +52,26 @@ async function createTheAdmin(password: string) {
   await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
 }
 
-describe('the first-run hand-off to SSO sends the password just chosen (#1202 review U10)', () => {
-  // #1202 review U10
-  it('hands startSSOLink the password the admin account was created with', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
-    authState.ssoAvailable = true
+describe('the first-run password goes to register and nowhere else (#1202 review U10, A1-F2)', () => {
+  // A1-F2: replaces the two hand-off tests; the gate refuses the hand-off
+  // from a session with no second factor, so none is made.
+  it.each([true, false])(
+    'the password just chosen goes to register and nowhere else: startSSOLink is never called (ssoAvailable %s)',
+    async (sso) => {
+      vi.mocked(register).mockResolvedValue(null)
+      vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+      authState.ssoAvailable = sso
 
-    render(AuthSetup)
-    await createTheAdmin('hunter2222')
+      render(AuthSetup)
+      await createTheAdmin('sw0rdfish-secret')
 
-    await waitFor(() => expect(startSSOLink).toHaveBeenCalledOnce())
-    expect(startSSOLink).toHaveBeenCalledWith('hunter2222')
-    await waitFor(() => expect(location.href).toBe('https://idp.example/authorize'))
-  })
+      expect(await screen.findByText(/admin account created/i)).toBeTruthy()
+      expect(register).toHaveBeenCalledWith('alex', 'sw0rdfish-secret', expect.any(String))
+      expect(startSSOLink).not.toHaveBeenCalled()
+      expect(location.href).toBe('')
+      expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
+    },
+  )
 
   // #1202 review U10: pair -- no OIDC, no hand-off, so no password goes anywhere.
   it('without OIDC configured, startSSOLink is never called', async () => {
@@ -77,21 +83,5 @@ describe('the first-run hand-off to SSO sends the password just chosen (#1202 re
 
     expect(await screen.findByText(/admin account created/i)).toBeTruthy()
     expect(startSSOLink).not.toHaveBeenCalled()
-  })
-
-  // #1202 review U10: a refusal of the hand-off (a wrong password cannot happen here, but a 429 can)
-  // lands on the confirmation, which still says the account was created, and leaves no password on the page.
-  it('a refused hand-off is shown on the confirmation, which still says the account was created, with no password left on the page', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockResolvedValue('too many attempts, try again later')
-    authState.ssoAvailable = true
-
-    render(AuthSetup)
-    await createTheAdmin('sw0rdfish-secret')
-
-    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
-    expect(screen.getByText(/too many attempts/i)).toBeTruthy()
-    expect(location.href).toBe('')
-    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
   })
 })

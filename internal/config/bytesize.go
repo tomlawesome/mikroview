@@ -80,7 +80,7 @@ func (b ByteSize) String() string {
 	}
 }
 
-// UnmarshalText makes ByteSize a YAML scalar via yaml.v3's
+// UnmarshalText makes ByteSize a YAML scalar via the yaml package's
 // encoding.TextUnmarshaler fallback (the same mechanism time.Duration
 // uses internally, just not built in for arbitrary types) -- so
 // store.maxMemory reads directly out of the config file with no

@@ -144,7 +144,7 @@ func toRouterBackupGenerations(gens []backupvault.Generation) []routerBackupGene
 // never sees this group at all.
 func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 
@@ -185,7 +185,7 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 // gets to invent).
 func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	device := r.PathValue("device")
@@ -254,7 +254,7 @@ func (s *Server) handleRouterBackupProtect(w http.ResponseWriter, r *http.Reques
 	}
 	var req routerBackupKeepRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	now := time.Now()
@@ -293,7 +293,7 @@ func (s *Server) handleRouterBackupComment(w http.ResponseWriter, r *http.Reques
 	}
 	var req routerBackupKeepRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if err := s.Vault.SetComment(device, generation, req.Comment); err != nil {
@@ -307,13 +307,13 @@ func (s *Server) handleRouterBackupComment(w http.ResponseWriter, r *http.Reques
 // keepRequest is the gate and the path values the three share.
 func (s *Server) keepRequest(w http.ResponseWriter, r *http.Request) (device, generation string, ok bool) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return "", "", false
 	}
 	device = r.PathValue("device")
 	generation = r.PathValue("generation")
 	if device == "" || generation == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request path", http.StatusBadRequest)
 		return "", "", false
 	}
 	return device, generation, true

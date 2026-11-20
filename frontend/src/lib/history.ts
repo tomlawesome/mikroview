@@ -419,9 +419,9 @@ export function restartRow(s: HistorySettings | null): string {
   if (!s.keyed) return `${clears} — nothing outlives it`
   if (!s.enabled) return `${clears} — nothing outlives it; days can be kept on disk below`
   const n = s.held?.days ?? 0
-  if (n === 1) return `${clears} — the 1 day on disk stays; trying a watcher reads it`
-  if (n > 1) return `${clears} — the ${n} days on disk stay; trying a watcher reads them`
-  return `${clears} — what is on disk stays; trying a watcher reads it`
+  if (n === 1) return `${clears} — the 1 day on disk stays; trying a detector reads it`
+  if (n > 1) return `${clears} — the ${n} days on disk stay; trying a detector reads them`
+  return `${clears} — what is on disk stays; trying a detector reads it`
 }
 
 /**

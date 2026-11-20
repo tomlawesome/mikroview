@@ -110,7 +110,7 @@ if (!allArrived) {
 }
 
 // A page-load failure or a selector that never appears must still print a
-// RESULT: line (see AGENTS.md's live-check trap notes) -- every wait below
+// RESULT: line (see .claude/skills/live-check/SKILL.md) -- every wait below
 // is either non-throwing (waitUntil, page.isVisible) or explicitly
 // try/caught, never a bare page.waitForSelector/locator.waitFor that could
 // throw uncaught mid-scenario.

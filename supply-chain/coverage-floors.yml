@@ -142,14 +142,13 @@ floors:
                              # readDSNFile, openStorage and
                              # watchForCertificateReload -- these are the
                              # flows the live-check gate exercises at the
-                             # integration level (AGENTS.md, "The gate
-                             # blocks the merge, in CI"), not unit tests.
+                             # integration level (docs/runner-host.md, "The gate
+                             # in CI"), not unit tests.
                              # Raising this is out of scope for #1333.
 
   # --- below the 70% band: known debt ---
   cmd/demo-history: 82      # 82.1% measured 2026-11-18 (#1537). Dev-data seeding tool for
-                             # demos (AGENTS.md, "Demos the owner
-                             # reviews") -- not shipped in the release
+                             # demos (docs/demos.md) -- not shipped in the release
                              # binary.
   internal/evict: 100       # #1328 added the first direct test of its
                              # contract; 100% measured 2026-09-27.
@@ -197,13 +196,13 @@ floors:
   internal/engine: 85
   internal/entities: 94
   internal/flags: 94
-  internal/geoip: 82         # 83.4% after #1352 added the three runtime
-                             # sources (100% on the earlier, smaller package)
+  internal/geoip: 86         # 86.8-87.2% on batch-b for v0.7.0 (#1537; the figure varies run to run); was 82
+                             # at 83.4% after #1352 added the three runtime sources
   internal/hosts: 94
   internal/hub: 100
   internal/ipscope: 100     # new with #1481; 100.0% measured 2026-11-18 (#1537)
   internal/logging: 92
-  internal/naming: 89
+  internal/naming: 95         # 95.5% after #1537 covered RuleProvenance and Device
   internal/netclass: 90
   internal/oui: 84
   internal/prefs: 87

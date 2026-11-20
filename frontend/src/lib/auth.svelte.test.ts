@@ -75,6 +75,7 @@ import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
 import { wizardState } from './wizard.svelte'
+import { wizardRun } from './wizardRun.svelte'
 import { logEveryRuleWorkState } from './logEveryRuleWork.svelte'
 import { tokensState } from './tokens.svelte'
 import { usersState } from './users.svelte'
@@ -132,6 +133,7 @@ beforeEach(() => {
   // a test that doesn't care about preferences at all isn't left with
   // an unhandled rejection from an unmocked resolution.
   preferencesState.reset()
+  wizardRun.reset()
   vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
   vi.mocked(saveMyPreferences).mockResolvedValue(null)
 })
@@ -855,6 +857,21 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     watchlistState.loaded = true
   })
 
+  it('clears the admin password typed into the wizard\'s Mint step (A2-S3)', async () => {
+    wizardRun.pass = 'correct horse'
+    await authState.logout()
+    expect(wizardRun.pass).toBe('')
+  })
+
+  it('clears it when the server logout failed and the page stays up (A2-S3)', async () => {
+    vi.mocked(logout).mockResolvedValue('network down')
+    wizardRun.pass = 'correct horse'
+    const err = await authState.logout()
+    expect(err).toBe('network down')
+    expect(pageReload.now).not.toHaveBeenCalled()
+    expect(wizardRun.pass).toBe('')
+  })
+
   it('resets appState to its initial values', async () => {
     await authState.logout()
 
@@ -1140,7 +1157,7 @@ describe('AuthState.consumeSSOErrorFromURL', () => {
 
     authState.consumeSSOErrorFromURL()
 
-    expect(authState.ssoError).toBe('SSO sign-in failed -- try again, or sign in with your password below.')
+    expect(authState.ssoError).toBe('SSO sign-in failed — try again, or sign in with your password below.')
     expect(location.search).toBe('?foo=bar')
   })
 

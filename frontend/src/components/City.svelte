@@ -13,7 +13,9 @@
   // the river and bridges are #866's; standing on a building (#868) is
   // this file's own "the reach" section below. #986 dropped height and
   // the plinth (#867): devices sit flat on their district plate.
+  import FailureLine from './FailureLine.svelte'
   import { tick, untrack } from 'svelte'
+  import { restoreFocus } from '../lib/focusTrap'
   import { appState } from '../lib/state.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -1983,7 +1985,7 @@
         // #1165: "1 hosts" on a district holding one.
         (d.buildings.length + d.more === 1 ? ' host' : ' hosts') +
         (!d.rulesPushed
-          ? ', no rule table has been pushed yet -- walls show no gates'
+          ? ', no rule table has been pushed yet — walls show no gates'
           : d.dark
             ? ', nothing logs here'
             : ''),
@@ -4169,7 +4171,7 @@
       {#if standComposeCommand}
         <pre class="cm-code">{standComposeCommand}</pre>
       {:else}
-        <p class="cm-b">nothing to draft from yet -- no destination port observed on this strand.</p>
+        <p class="cm-b">nothing to draft from yet — no destination port observed on this strand.</p>
       {/if}
       <div class="cm-f"><span>drafted · never run</span></div>
     </div>
@@ -4249,6 +4251,7 @@
       style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
       bind:this={bcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{c.d.name} to {c.gate.toward}: this boundary, {COVERAGE_WORD[c.gate.coverage]}"
       onpointerenter={cardGrace.hold}
@@ -4309,7 +4312,7 @@
             both directions
           </label>
           {#if coverageState.error}
-            <p class="d-error">{coverageState.error}</p>
+            <FailureLine verb="load" thing="the coverage" said={coverageState.error} />
           {/if}
           <div class="btns">
             <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
@@ -4351,6 +4354,7 @@
       style={hostPlace ? `left:${R2(hostPlace.left)}px;top:${R2(hostPlace.top)}px` : undefined}
       bind:this={hcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{c.b.name}: {hostWord(c.h)}"
       onpointerenter={hostGrace.hold}
@@ -4435,7 +4439,7 @@
           </div>
         </div>
       {/if}
-      {#if hostsState.error}<div class="s alarm">{hostsState.error}</div>{/if}
+      {#if hostsState.error}<FailureLine verb="load" thing="the hosts" said={hostsState.error} />{/if}
 
       <div class="acts">
         {#if standBuilding?.id === c.b.id && standReach?.topBlocked}
@@ -4486,7 +4490,7 @@
           <button type="button" class="no" onclick={() => (expectedScope = null)}>cancel</button>
           <span class="who">{expectedWho(authState.username, scope, expectedLines.length)}</span>
         </div>
-        {#if baselineState.error}<div class="s alarm">{baselineState.error}</div>{/if}
+        {#if baselineState.error}<FailureLine verb="load" thing="the baseline" said={baselineState.error} />{/if}
       </div>
     {/if}
   {/snippet}
@@ -4512,6 +4516,7 @@
       style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
       bind:this={rcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={roadAria(rc.road.id)}
       onpointerenter={roadGrace.hold}
@@ -4617,6 +4622,7 @@
       style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
       bind:this={rcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={roadAria(lc.id)}
       onpointerenter={roadGrace.hold}
@@ -4717,6 +4723,7 @@
       style={dropPlace ? `left:${R2(dropPlace.left)}px;top:${R2(dropPlace.top)}px` : undefined}
       bind:this={dcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={dropTitle}
       onpointerenter={dropGrace.hold}
@@ -5353,11 +5360,6 @@
     color: var(--fg-dim);
   }
 
-  .bcard .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
-  }
 
   /* The plaque's dim second line. The coverage words that used to sit
      here went with round 49 (#1016): the wall is the statement. */

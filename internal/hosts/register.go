@@ -17,7 +17,7 @@
 //
 // This package holds the "was ever there" half. It records nothing the
 // feed did not already show and asks the network nothing -- mikroview
-// observes, it never probes (see AGENTS.md) -- so a host exists here
+// observes, it never probes (see docs/decisions/observe-never-probe.md) -- so a host exists here
 // only because an event carrying it arrived.
 //
 // # What counts as a host

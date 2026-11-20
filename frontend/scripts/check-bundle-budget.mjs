@@ -51,9 +51,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(here, '..', 'dist')
 
 // An absent build is a failure, not a skip. A check that quietly passes
-// when its input is missing is the exact failure mode AGENTS.md warns
-// about for CI gates (see its TypeScript-pin example) -- it would report
-// green having measured nothing.
+// when its input is missing would report green having measured nothing.
 if (!existsSync(distDir)) {
   console.error(
     `${distDir} does not exist -- the frontend has not been built.\n` +

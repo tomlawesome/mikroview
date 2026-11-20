@@ -75,7 +75,7 @@ func (s *Server) handleRouterBackupDiff(w http.ResponseWriter, r *http.Request) 
 	// string was wrong -- which would answer a question they were never
 	// entitled to ask.
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	device := r.PathValue("device")
@@ -116,7 +116,7 @@ func (s *Server) handleRouterBackupDiff(w http.ResponseWriter, r *http.Request) 
 // false, so a caller's only job is to stop.
 func (s *Server) readBackupText(w http.ResponseWriter, r *http.Request, device, generation string) (string, bool) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return "", false
 	}
 	// Same gate handleRouterBackupDownload goes through (#1262:

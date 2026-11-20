@@ -42,6 +42,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 vi.mock('../lib/passkeys.svelte', () => ({
   registerPasskey: vi.fn(),
   loginWithPasskey: vi.fn(),
+  passkeysSupported: vi.fn(() => true),
 }))
 
 vi.mock('../lib/qrcode', () => ({
@@ -49,7 +50,7 @@ vi.mock('../lib/qrcode', () => ({
 }))
 
 import { enrolTOTP, fetchAuthSession, fetchMyPreferences, logout, saveMyPreferences } from '../lib/api'
-import { registerPasskey } from '../lib/passkeys.svelte'
+import { passkeysSupported, registerPasskey } from '../lib/passkeys.svelte'
 import { authState, pageReload } from '../lib/auth.svelte'
 import { preferencesState } from '../lib/preferences.svelte'
 import AuthEnrolFactor from './AuthEnrolFactor.svelte'
@@ -379,6 +380,70 @@ describe('the passkey-only door at an address that cannot make a passkey (#1202 
     expect(container.querySelector('a')).toBeNull()
     expect(screen.queryByRole('button', { name: /sign out|log out/i })).toBeNull()
   })
+})
+
+// A1-S1 -- a browser that cannot create a passkey.
+describe('the passkey-only door in a browser that cannot make a passkey (v0.7.0 audit A1-S1)', () => {
+  beforeEach(() => {
+    authState.state = 'must-enrol-passkey'
+    authState.mustEnrolSecondFactor = false
+    authState.mustEnrolPasskey = true
+    authState.role = 'admin'
+    authState.passkeyStatus = 'ready'
+    authState.passkeyOrigin = location.origin
+  })
+
+  it('unsupported browser at the right address: the Passkey key is off with the reason, and there is a sign-out', () => {
+    vi.mocked(passkeysSupported).mockReturnValue(false)
+
+    const { container } = render(AuthEnrolFactor)
+
+    expect(screen.queryByRole('button', { name: /passkey/i })).toBeNull()
+    expect(screen.getByText(/this browser can.t create a passkey/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign out|log out/i })).toBeTruthy()
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.querySelector('section.state')?.getAttribute('aria-label')).toBe(
+      'Add a passkey: passkeys unavailable in this browser',
+    )
+  })
+
+  it('the sign-out on that door signs out', async () => {
+    vi.mocked(passkeysSupported).mockReturnValue(false)
+    render(AuthEnrolFactor)
+
+    await fireEvent.click(screen.getByRole('button', { name: /sign out|log out/i }))
+
+    await vi.waitFor(() => expect(authState.state).toBe('unauthenticated'))
+    expect(logout).toHaveBeenCalled()
+  })
+
+  // Legitimate path: must not be over-gated.
+  it('capable browser at the right address: the Passkey key is live and there is no sign-out', () => {
+    vi.mocked(passkeysSupported).mockReturnValue(true)
+
+    const { container } = render(AuthEnrolFactor)
+
+    expect(screen.getByRole('button', { name: /passkey/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /sign out|log out/i })).toBeNull()
+    expect(screen.queryByText(/can.t create a passkey/i)).toBeNull()
+    expect(container.querySelector('a')).toBeNull()
+  })
+})
+
+// A1-S1 -- the two-key door.
+it('two-key door in an unsupported browser: the Passkey key is off and points at the authenticator app, which stays live', () => {
+  vi.mocked(passkeysSupported).mockReturnValue(false)
+
+  const { container } = render(AuthEnrolFactor)
+
+  const app = screen.getByRole('button', { name: /authenticator app/i }) as HTMLButtonElement
+  expect(app.disabled).toBe(false)
+  expect(screen.queryByRole('button', { name: /^passkey/i })).toBeNull()
+  expect(screen.getByText(/try updating it, or use your authenticator app instead/i)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /sign out|log out/i })).toBeNull()
+  expect(container.querySelector('section.state')?.getAttribute('aria-label')).toBe(
+    'Add a second step: passkeys unavailable in this browser',
+  )
 })
 
 // U6 -- wording that is only true once the factor is confirmed.

@@ -386,12 +386,12 @@ func vaultUnlockLimiterKey(r *http.Request) string {
 // handleRouterBackupUnlock opens the vault for the calling session.
 func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	sessionID := s.requestSessionID(r)
@@ -433,7 +433,7 @@ func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request
 // opened it.
 func (s *Server) handleRouterBackupLock(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	if !s.Vault.PassphraseSet() {
@@ -454,12 +454,12 @@ func (s *Server) handleRouterBackupLock(w http.ResponseWriter, r *http.Request) 
 // handleRouterBackupSetPassphrase turns the lock on.
 func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	sessionID := s.requestSessionID(r)
@@ -498,12 +498,12 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 // passphrase currently on it.
 func (s *Server) handleRouterBackupRemovePassphrase(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
@@ -551,12 +551,12 @@ type vaultPassphraseChangeRequest struct {
 // unlocked stays unlocked, and one who was not stays that way too.
 func (s *Server) handleRouterBackupChangePassphrase(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseChangeRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 

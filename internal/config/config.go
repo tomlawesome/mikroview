@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
 )
@@ -1154,12 +1154,13 @@ const (
 // events the ring holds, so a replay can reach further back than memory
 // does.
 //
-// Off unless two things are true: KeyFile names a readable key, and
-// Enabled is set. Both, deliberately. The key alone must not start
-// writing events to disk on an operator who mounted it for something
-// else -- #853 puts the state store and the warm-restart snapshots under
-// the same key -- and the switch alone cannot write anything, because
-// there is no unencrypted mode to fall back to. See
+// On only when two things are true: KeyFile names a readable key, and
+// Enabled is set. Enabled is on by default (#1357), so in a config that
+// does not set it the key is what decides: a mounted key starts
+// retention unless the operator switches it off, and with none it stays
+// off, because the switch alone cannot write anything -- there is no
+// unencrypted mode to fall back to. (#853 puts the state store and the
+// warm-restart snapshots under the same key.) See
 // docs/decisions/event-retention.md.
 //
 // Unlike Snapshot above, this holds custody data: event lines,
@@ -1173,7 +1174,7 @@ type History struct {
 	// decoration: whoever copies the directory copies both.
 	//
 	// Not a key value, and not an environment variable -- a path to a
-	// file the operator mounts, per AGENTS.md's secret rule.
+	// file the operator mounts, per the house secret rule.
 	KeyFile string `yaml:"keyFile"`
 	// Enabled is the operator's switch, beside the memory slider. Off
 	// at startup stops retaining; it never deletes what an earlier run
@@ -2142,7 +2143,7 @@ func applyEnv(cfg *Config) {
 	}
 	// MIKROVIEW_HISTORY_KEY_FILE is a path, never the key itself.
 	// There is deliberately no environment variable carrying key
-	// material: AGENTS.md's secret rule keeps secrets out of the
+	// material: the house secret rule keeps secrets out of the
 	// environment, where a process listing, a crash dump or a container
 	// inspect would expose them.
 	if v := os.Getenv("MIKROVIEW_HISTORY_KEY_FILE"); v != "" {

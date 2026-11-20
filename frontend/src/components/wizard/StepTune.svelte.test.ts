@@ -330,3 +330,71 @@ describe('StepTune in the shell: Skip and the receipt', () => {
     expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false)
   })
 })
+
+describe('StepTune copy failure flash (#1542 C12)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchSetupStatus).mockResolvedValue(status(12))
+    vi.mocked(fetchDevices).mockResolvedValue([device()])
+    vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    vi.mocked(fetchRouterRules).mockResolvedValue({ available: true, updatedAt: '2026-09-27T14:03:31Z', rules: TABLE })
+    wizardState.reset()
+    wizardRun.reset()
+    landOnTune()
+    wizardRun.tuneCopied = false
+    wizardState.open = true
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error('denied')) },
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    wizardState.reset()
+    wizardRun.reset()
+  })
+
+  it('flips to "copy failed", still marks the step copied, and returns to "Copied"', async () => {
+    render(StepTune)
+    await waitFor(() => expect(rows()).toHaveLength(5))
+    const btn = copyButton()
+    vi.useFakeTimers()
+    await fireEvent.click(btn)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(btn.textContent?.trim()).toBe('copy failed')
+    expect(wizardRun.tuneCopied).toBe(true)
+    expect(wizardRun.tuneChosen).toHaveLength(5)
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(btn.textContent?.trim()).toBe('Copied')
+  })
+
+  it('a second click while the write is pending does not copy twice', async () => {
+    let settle!: () => void
+    const writeText = vi.fn(() => new Promise<void>((r) => (settle = r)))
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(StepTune)
+    await waitFor(() => expect(rows()).toHaveLength(5))
+    const btn = copyButton()
+    await fireEvent.click(btn)
+    await fireEvent.click(btn)
+    expect(writeText).toHaveBeenCalledTimes(1)
+    settle()
+    await waitFor(() => expect(wizardRun.tuneCopied).toBe(true))
+  })
+
+  it('a rule toggled while the write is pending does not change the recorded snapshot', async () => {
+    let settle!: () => void
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: () => new Promise<void>((r) => (settle = r)) },
+    })
+    render(StepTune)
+    await waitFor(() => expect(rows()).toHaveLength(5))
+    await fireEvent.click(copyButton())
+    await fireEvent.click(boxes()[0])
+    settle()
+    await waitFor(() => expect(wizardRun.tuneCopied).toBe(true))
+    expect(wizardRun.tuneChosen).toHaveLength(5)
+    expect(wizardRun.tuneCopied).toBe(true)
+  })
+})

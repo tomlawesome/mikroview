@@ -8,7 +8,7 @@
 // for the journey's frames, starting from strokes that look like the
 // DOM's (2.5px wide, 13px long, one of the fall's inks).
 //
-// Ported as drawn (AGENTS.md, "Building a ratified design"); the one
+// Ported as drawn (docs/design/screens/README.md, "Building a ratified design"); the one
 // change is that the canvas element is handed in rather than looked up
 // by id, so WizardJourney.svelte owns it.
 

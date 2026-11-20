@@ -409,3 +409,41 @@ describe('the blocklist builder door', () => {
     blocklistState.reset()
   })
 })
+
+// #1539 C2 (decision 18a): Escape disarms an armed control, same as a
+// click elsewhere. Today each stays armed (red) after Escape.
+describe('Escape disarms every armed control (#1539 C2)', () => {
+  it('an armed entry remove goes back to "remove" on Escape and deletes nothing', async () => {
+    render(Droplist, { props: { resp: resp({ entries: [entry] }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    expect(screen.getByRole('button', { name: /^confirm/ })).toBeTruthy()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+    expect(deleteDroplistEntry).not.toHaveBeenCalled()
+  })
+
+  it('an armed revoke goes back to "revoke" on Escape and revokes nothing', async () => {
+    render(Droplist, { props: { resp: resp({ key: { present: true } as never }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    expect(screen.getByRole('button', { name: /^confirm/ })).toBeTruthy()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
+    expect(revokeDroplistKey).not.toHaveBeenCalled()
+  })
+
+  it('an armed replace key goes back to "replace key" on Escape', async () => {
+    render(Droplist, { props: { resp: resp({ key: { present: true } as never }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'replace key' }))
+    expect(screen.getByRole('button', { name: /^confirm/ })).toBeTruthy()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'replace key' })).toBeTruthy()
+  })
+})

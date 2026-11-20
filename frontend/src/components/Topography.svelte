@@ -9,7 +9,9 @@
   // a render. An event counts once per interface it touches, matching
   // the old `e.inInterface === iface || e.outInterface === iface` OR
   // check: if in and out are the same interface, that is one count.
+  import FailureLine from './FailureLine.svelte'
   import type { ClientEvent } from '../lib/types'
+  import { restoreFocus } from '../lib/focusTrap'
 
   export function tunnelEventCounts(events: readonly ClientEvent[]): Map<string, number> {
     const counts = new Map<string, number>()
@@ -199,6 +201,20 @@
   })
 
   const isAdmin = $derived(authState.role === 'admin')
+  /** The tail of both "Doors from the internet" labels (the internet
+   * anchor's row and the boundary card's row). The sheet's own states in
+   * the sheet's own order (WanDoors.svelte), so the map never reads
+   * "none" for an answer it does not yet have, or failed to get: "none"
+   * is a security-posture statement and is only printed once a read has
+   * landed and counted nothing. */
+  const doorsTail = $derived.by((): string => {
+    if (wanDoorsState.loading && wanDoorsState.devices.length === 0) return ' · reading…'
+    if (wanDoorsState.error) return ' · could not read'
+    const doors = wanDoorsState.totalDoors
+    const unjudged = wanDoorsState.totalUnjudged
+    if (unjudged === 0) return doors > 0 ? ` · ${doors}` : ' · none'
+    return doors > 0 ? ` · ${doors} · ${unjudged} not judged` : ` · none known · ${unjudged} not judged`
+  })
 
   /** Component-unique prefix for this instance's SVG ids. */
   const uid = $props.id()
@@ -3539,7 +3555,7 @@
   const watchesZeroLine = 'no watches yet'
 
   const watchPanelGroupLabel = $derived(
-    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watcher${watcherTotal === 1 ? '' : 's'}, broken first`,
+    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watch${watcherTotal === 1 ? '' : 'es'}, broken first`,
   )
 
   // Same handoff as activateFlagRow above, for the watchlist tab.
@@ -4709,7 +4725,7 @@
         class="hbar-g"
         role="button"
         tabindex="0"
-        aria-label="{agg.watchCount} watcher{agg.watchCount === 1 ? '' : 's'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
+        aria-label="{agg.watchCount} watch{agg.watchCount === 1 ? '' : 'es'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
         onclick={openWatchlist}
         onkeydown={(e) => {
           if (e.key === 'Enter') openWatchlist(e)
@@ -4960,7 +4976,7 @@
           aria-expanded={expandedDial === 'watchlist'}
           aria-controls="{uid}-watch-panel"
           onclick={() => toggleDialPanel('watchlist')}
-          aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
+          aria-label="{watcherTotal} watch{watcherTotal === 1 ? '' : 'es'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
         >
           <svg viewBox="0 0 56 56" aria-hidden="true">
             {#if watcherTotal === 0}
@@ -5773,7 +5789,7 @@
                    the row would sit across the bar's lower half and its
                    flag count (#1430), so it drops beneath the bar instead. -->
               <text x="-82" y={internetAggregate && !filterOn ? 64 : 52} class="n-sub doors-anchor-t"
-                >Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}</text
+                >Doors from the internet{doorsTail}</text
               >
             </g>
           {/if}
@@ -6830,6 +6846,7 @@
       style={lineCardPlace ? `left:${R2(lineCardPlace.left)}px;top:${R2(lineCardPlace.top)}px` : undefined}
       bind:this={lineCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{reachSideName} → {counterpartName(lineCard.counterpart)}: the ports on this line"
       onpointerenter={lineGrace.hold}
@@ -6925,7 +6942,7 @@
   {/if}
 
   {#if reach && compose}
-    <div class="composer" role="dialog" aria-label="Draft a rule for this strand">
+    <div class="composer" role="dialog" use:restoreFocus aria-label="Draft a rule for this strand">
       <div class="portpanel">
         <h4>
           {compose.direction === 'out'
@@ -6981,7 +6998,7 @@
         {:else}
           <p class="cmdnote">pick a port — the command drafts itself from what was observed</p>
         {/if}
-        <button class="composer-close" onclick={() => (compose = null)}>Close</button>
+        <button class="composer-close" onclick={() => (compose = null)}>close</button>
       </div>
     </div>
   {/if}
@@ -7011,6 +7028,7 @@
       style={hostCardPlace ? `left:${R2(hostCardPlace.left)}px;top:${R2(hostCardPlace.top)}px` : undefined}
       bind:this={hostCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="The host {d.label}"
       onpointerenter={hostGrace.hold}
@@ -7085,7 +7103,7 @@
       {/if}
 
       {#if hostsState.error}
-        <p class="d-error">{hostsState.error}</p>
+        <FailureLine verb="load" thing="the hosts" said={hostsState.error} />
       {/if}
 
       <div class="acts">
@@ -7198,6 +7216,7 @@
       style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
       bind:this={cardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="The {pairName(boundaryCard.from, boundaryCard.to)} boundary"
       onpointerenter={cardGrace.hold}
@@ -7247,7 +7266,7 @@
              what the pushed tables let it reach. The internet anchor
              above opens the same panel. -->
         <button type="button" class="s doors-row" onclick={() => wanDoorsState.open()}>
-          Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}
+          Doors from the internet{doorsTail}
         </button>
       {/if}
 
@@ -7270,7 +7289,7 @@
             both directions
           </label>
           {#if coverageState.error}
-            <p class="d-error">{coverageState.error}</p>
+            <FailureLine verb="load" thing="the coverage" said={coverageState.error} />
           {/if}
           <div class="btns">
             <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
@@ -7318,7 +7337,7 @@
           <span class="who">{expectedWho(authState.username, scope, offScopeLines.length)}</span>
         </div>
         {#if baselineState.error}
-          <p class="d-error">{baselineState.error}</p>
+          <FailureLine verb="load" thing="the baseline" said={baselineState.error} />
         {/if}
       </div>
     {/if}
@@ -7354,6 +7373,7 @@
       style={offCardPlace ? `left:${R2(offCardPlace.left)}px;top:${R2(offCardPlace.top)}px` : undefined}
       bind:this={offCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="Off the baseline on the {pairName(openOffDrawn.r.from, openOffDrawn.r.to)} rib"
       onpointerenter={offGrace.hold}
@@ -7490,7 +7510,7 @@
     <!-- The node info card (#648, rounds 22-23): a small glass card --
          name, address, lane, open warnings, actions -- anchored to the
          click, clamped inside the viewport. -->
-    <div class="node-card" role="dialog" aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
+    <div class="node-card" role="dialog" use:restoreFocus aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
       <button class="nc-close" onclick={closeNodeCard} aria-label="Close">✕</button>
       <b class="nc-name">{nodeCard.name}</b>
       {#if nodeCard.address}<span class="nc-addr">{nodeCard.address}</span>{/if}
@@ -8647,12 +8667,6 @@
   .card .form .who {
     margin-left: auto;
     color: var(--fg-dim);
-  }
-
-  .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
   }
 
   /* --- the composer (round 2 scene 4) ------------------------------------ */

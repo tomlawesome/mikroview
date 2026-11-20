@@ -320,11 +320,13 @@ describe('Builder: a mint with no token value, and a stale error (#1202 review U
     stubMint(MINTED_WITHOUT_VALUE)
     await openOn(builder())
     const field = await passwordField()
-    const baseline = announced()
 
     await typeAndEnter(field)
 
-    await waitFor(() => expect(announced()).not.toBe(baseline))
+    // The error itself, not merely a change in the live region (which also
+    // moves while the mint is pending).
+    await waitFor(() => expect(document.body.textContent).toMatch(/did not send the key.s value/i))
+    expect(announced()).toMatch(/did not send the key.s value/i)
     expect(
       vi.mocked(fetchBlocklistCommands).mock.calls.every(([req]) => !(req as { token?: string }).token),
     ).toBe(true)

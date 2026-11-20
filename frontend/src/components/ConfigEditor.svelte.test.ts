@@ -33,6 +33,7 @@ import {
   validateConfig,
 } from '../lib/api'
 import { saveBlob } from '../lib/export'
+import { authState } from '../lib/auth.svelte'
 import { configEditorState, VALIDATE_PAUSE_MS } from '../lib/configEditor.svelte'
 import type { ConfigEditorOpen, ConfigSnapshotSummary } from '../lib/types'
 import ConfigEditor from './ConfigEditor.svelte'
@@ -390,6 +391,122 @@ describe('snapshots', () => {
     expect(saveBlob).toHaveBeenCalledWith('config.v0.7.0.yaml', blob)
     expect(textarea().value).toBe(TEXT)
   })
+
+  it('Load into editor asks for the password again when the unlock has lapsed, then loads the snapshot', async () => {
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
+    vi.mocked(fetchConfigSnapshot)
+      .mockResolvedValueOnce({ reauth: true })
+      .mockResolvedValueOnce({ ...SNAPS[0], text: 'from the snapshot' })
+    await openEditor()
+    vi.mocked(openConfigEditor).mockClear()
+    vi.mocked(openConfigEditor).mockResolvedValue(opened({ text: 'a fresh copy that must not replace the edits' }))
+
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Load into editor' })[0])
+    await settle()
+    expect(screen.getByText('It has been more than 15 minutes since you entered your password. Enter it again to load the snapshot.')).toBeTruthy()
+    expect(screen.getByLabelText('Password')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(textarea().value).toBe(TEXT)
+
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await settle()
+    expect(openConfigEditor).toHaveBeenCalledWith('hunter2')
+    expect(fetchConfigSnapshot).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchConfigSnapshot).mock.calls.map((c) => c[0])).toEqual(['s1', 's1'])
+    expect(textarea().value).toBe('from the snapshot')
+    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(screen.getByRole('status').textContent).toBe('Snapshot loaded into the editor.')
+  })
+
+  it('snapshot Download asks for the password again when the unlock has lapsed, then downloads through the download route', async () => {
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
+    vi.mocked(fetchConfigSnapshot)
+      .mockResolvedValueOnce({ reauth: true })
+      .mockResolvedValueOnce({ ...SNAPS[1], text: 'old text' })
+    const blob = new Blob(['x'])
+    vi.mocked(downloadConfig).mockResolvedValue({ filename: 'config.v0.7.0.yaml', blob })
+    await openEditor()
+    vi.mocked(openConfigEditor).mockClear()
+    vi.mocked(openConfigEditor).mockResolvedValue(opened())
+
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Download' })[1])
+    await settle()
+    expect(screen.getByText(/more than 15 minutes .* Enter it again to download/)).toBeTruthy()
+    expect(screen.getByLabelText('Password')).toBeTruthy()
+    expect(downloadConfig).not.toHaveBeenCalled()
+    expect(saveBlob).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await settle()
+    expect(openConfigEditor).toHaveBeenCalledWith('hunter2')
+    expect(fetchConfigSnapshot).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchConfigSnapshot).mock.calls.map((c) => c[0])).toEqual(['s1', 's1'])
+    expect(downloadConfig).toHaveBeenCalledWith('old text')
+    expect(saveBlob).toHaveBeenCalledWith('config.v0.7.0.yaml', blob)
+    expect(textarea().value).toBe(TEXT)
+    expect(screen.queryByLabelText('Password')).toBeNull()
+  })
+
+  it('a snapshot that is gone still shows the plain error, with no password field', async () => {
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
+    vi.mocked(fetchConfigSnapshot).mockResolvedValue('no such snapshot')
+    await openEditor()
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Load into editor' })[0])
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe('Could not load that snapshot: no such snapshot')
+    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(textarea().value).toBe(TEXT)
+  })
+})
+
+describe('Sign out in setup-only mode', () => {
+  async function openSetupOnly() {
+    const logout = vi.spyOn(authState, 'logout').mockResolvedValue(null)
+    vi.mocked(openConfigEditor).mockResolvedValue(opened())
+    await configEditorState.open('pw')
+    render(ConfigEditor, { props: { setupOnly: true } })
+    await settle()
+    return logout
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('asks before signing out when there are edits, and Keep editing keeps them', async () => {
+    const logout = await openSetupOnly()
+    await type(TEXT + '\n# edit')
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(logout).not.toHaveBeenCalled()
+    expect(screen.getByText(/Sign out and lose them\?/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign out without saving' })).toBeTruthy()
+    expect(textarea().value).toBe(TEXT + '\n# edit')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(logout).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Sign out and lose them\?/)).toBeNull()
+    expect(textarea().value).toBe(TEXT + '\n# edit')
+    expect(configEditorState.edited).toBe(true)
+  })
+
+  it('Sign out without saving signs out', async () => {
+    const logout = await openSetupOnly()
+    await type(TEXT + '\n# edit')
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out without saving' }))
+    expect(logout).toHaveBeenCalledTimes(1)
+  })
+
+  it('signs out at once when nothing was edited', async () => {
+    const logout = await openSetupOnly()
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/lose them\?/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign out without saving' })).toBeNull()
+  })
 })
 
 describe('closing', () => {
@@ -414,5 +531,27 @@ describe('closing', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Close without saving' }))
     expect(configEditorState.visible).toBe(false)
     expect(configEditorState.text).toBe('')
+  })
+})
+
+// #1539 C2 (decision 18a): Escape disarms an armed control. Escape here
+// already has layers (bars, then the password step, then close); an
+// armed Delete is the innermost one, so the first Escape only backs out
+// of it -- "back out, nothing lost" -- and the editor stays open.
+describe('Escape disarms an armed snapshot delete (#1539 C2)', () => {
+  it('backs out of the armed Delete on Escape, deletes nothing and leaves the editor open', async () => {
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
+    await openEditor()
+
+    const first = () => document.querySelectorAll('.snap .del')[0] as HTMLButtonElement
+    await fireEvent.click(first())
+    expect(first().textContent?.trim()).toBe('Delete for good?')
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await settle()
+
+    expect(configEditorState.visible).toBe(true)
+    expect(first().textContent?.trim()).toBe('Delete')
+    expect(deleteConfigSnapshot).not.toHaveBeenCalled()
   })
 })

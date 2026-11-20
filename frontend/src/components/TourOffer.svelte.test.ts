@@ -17,6 +17,7 @@ import { authState } from '../lib/auth.svelte'
 import { preferencesState } from '../lib/preferences.svelte'
 import { tourState } from '../lib/tour.svelte'
 import TourOffer from './TourOffer.svelte'
+import { focusedTrigger } from './dialogKit'
 
 beforeEach(() => {
   authState.role = 'admin'
@@ -63,5 +64,22 @@ describe('TourOffer', () => {
     expect(tourState.offering).toBe(false)
     expect(tourState.active).toBe(false)
     expect(preferencesState.get('tour')).toEqual({ offered: true })
+  })
+})
+
+// #1539 C3 (decision 19a): a non-modal dialog returns focus to what had it
+// when it opened. A keyboard user who tabbed into the offer and said
+// "not now" lands back where they were, not on <body>.
+describe('TourOffer returns focus (#1539 C3)', () => {
+  it('Escape hands focus back to the element that had it before the offer rose', async () => {
+    const trigger = focusedTrigger()
+    render(TourOffer)
+    screen.getByRole('button', { name: 'begin the tour' }).focus()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(tourState.offering).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
   })
 })

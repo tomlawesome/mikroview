@@ -20,7 +20,7 @@
   // own row grammar -- the two doors EngineRoomDoors.svelte used to draw
   // below the shelf behind USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED
   // (round 30/#700/#691 had unmounted both). That component and its
-  // flags are retired outright (no shim -- see AGENTS.md's "removals
+  // flags are retired outright (no shim -- see docs/development.md's "removals
   // are wholesale"); usersState/tokensState and their create/remove/
   // revoke calls are the same ones it used.
   //
@@ -73,7 +73,7 @@
   import { tokensState } from '../lib/tokens.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
-  import { portOf } from '../lib/setupsteps'
+  import { listenPort } from '../lib/format'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
   import type {
     SetupStatus,
@@ -436,7 +436,7 @@
     let password: string | undefined
     if (authState.hasLocalPassword) {
       if (!soPassword) {
-        soError = 'Type your password to go on.'
+        soError = 'Enter your password to go on.'
         soField?.focus()
         return
       }
@@ -747,11 +747,11 @@
   async function submitMintKey() {
     keyError = null
     if (newKeyKind === 'ingest' && !newKeyDevice) {
-      keyError = 'An ingest key needs a device -- pick the router it speaks for.'
+      keyError = 'An ingest token needs a device — pick the router it speaks for.'
       return
     }
     if (!newKeyPassword) {
-      keyError = 'Type your password to mint a key.'
+      keyError = 'Enter your password to mint a key.'
       return
     }
     minting = true
@@ -926,7 +926,7 @@
     if (!action || adminBusy) return
     adminError = null
     if (!adminPassword) {
-      adminError = 'Type your password to go on.'
+      adminError = 'Enter your password to go on.'
       adminField?.focus()
       return
     }
@@ -1174,7 +1174,7 @@
             <circle cx="372" cy="45" r="4" fill="var(--accept)" />
             {#if status}
               <text x="396" y="41" class="sp-k">
-                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
+                {listenPort(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
               </text>
             {/if}
             {#if epsText}
@@ -1188,14 +1188,14 @@
             <div class="orow">
               <span>syslog listener</span>
               <span class="ov">
-                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
+                {listenPort(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
                 <span class="yaml">set in config.yaml; the page shows what is, the file decides</span>
               </span>
             </div>
           {/if}
           <div class="orow">
             <span>who may speak</span>
-            <span class="ov">holders of an ingest key — the keys group below</span>
+            <span class="ov">holders of an ingest token — the keys group below</span>
           </div>
           {#if geoipState.enabled === false}
             <!-- #1198: matches the country filter's own disabled row --
@@ -1324,7 +1324,7 @@
         <div class="stsection" id="keys">
           <h3>keys</h3>
           <p class="oghint">
-            which machines may speak — an ingest key lets one router push its state; a read-only key lets a reader
+            which machines may speak — an ingest token lets one router push its state; a read-only key lets a reader
             ask
           </p>
 
