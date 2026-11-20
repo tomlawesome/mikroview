@@ -65,6 +65,8 @@
   // (EventRow.svelte, EventDetailSheet.svelte) -- reused rather than
   // reimplemented, same as e51193b2 did for the stream side (#1200).
   import IpInvestigateButton from './IpInvestigateButton.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { plainWords } from '../lib/plainWords'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
@@ -200,7 +202,7 @@
   let error = $state<string | null>(null)
 
   function reportFailure(action: string, err: unknown) {
-    error = err instanceof Error ? `${action}: ${err.message}` : `${action} failed`
+    error = `${action}: ${plainWords(err)}`
   }
 
   let expandedId: string | null = $state(null)
@@ -1007,7 +1009,7 @@
 <div class="flags-page">
   <div class="flags scrollbar">
     {#if error}
-      <p class="mutation-error" role="alert">{error}</p>
+      <FailureLine text={error} />
     {/if}
 
     <!-- No heading over the table (#697/#700): round 30 draws the flags
@@ -1762,11 +1764,6 @@
 
   /* Same treatment Watchlist and Entities give their own mutation
      errors, so a failed clear reads the same way everywhere. */
-  .mutation-error {
-    margin: 0;
-    color: var(--reject);
-    font-size: 12px;
-  }
 
 
   /* The ratified table (round 29, `#s7`'s `.panel table`): the record's

@@ -382,7 +382,7 @@ describe('removing an account whose tokens could not be revoked (#1202 review U1
     await typeAndConfirm('hunter2')
 
     expect(screen.getByText('kai')).toBeTruthy()
-    expect(screen.getByText('the account could not be deleted')).toBeTruthy()
+    expect(screen.getByText('Could not remove this person: the account could not be deleted')).toBeTruthy()
     expect(screen.queryAllByText(/revoke.*tokens|tokens.*revoke/i)).toHaveLength(0)
   })
 

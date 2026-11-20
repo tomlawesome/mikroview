@@ -716,7 +716,7 @@ describe('LiveTable distinguishes a failed fetch from a confirmed empty result (
     const { container } = render(LiveTable, {})
     flushSync()
 
-    const empty = container.querySelector('.empty')
+    const empty = container.querySelector('.failure-line')
     expect(empty).not.toBeNull()
     expect(empty?.textContent).not.toContain('No events match the current filters.')
     expect(empty?.textContent?.toLowerCase()).toMatch(/could not load|failed|error/)

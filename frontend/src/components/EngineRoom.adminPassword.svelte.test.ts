@@ -320,7 +320,7 @@ describe.each(actions)('$name asks the admin for their own password (#1202 revie
     await begin(action.button)
     await typeAndConfirm('hunter2')
 
-    expect(screen.getByText('the last admin cannot be changed')).toBeTruthy()
+    expect(screen.getByText(/: the last admin cannot be changed$/)).toBeTruthy()
   })
 
   it('on success the prompt is gone and the password is not left on the page or in the store', async () => {

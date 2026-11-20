@@ -59,7 +59,7 @@ describe('auditState.refresh', () => {
     await auditState.refresh()
 
     expect(auditState.loaded).toBe(true)
-    expect(auditState.error).toBe('network unreachable')
+    expect(auditState.error).toBe('Could not load the audit log: network unreachable')
     // The stale list from the prior successful fetch is left alone --
     // same reasoning as appState.fetchFailed's own doc comment: a failed
     // refresh is not "zero entries".
@@ -69,7 +69,7 @@ describe('auditState.refresh', () => {
   it('clears a previous error once a later refresh succeeds', async () => {
     vi.mocked(fetchAuditLog).mockRejectedValueOnce(new Error('boom'))
     await auditState.refresh()
-    expect(auditState.error).toBe('boom')
+    expect(auditState.error).toBe('Could not load the audit log: boom')
 
     vi.mocked(fetchAuditLog).mockResolvedValueOnce({ entries: [], hasMore: false })
     await auditState.refresh()

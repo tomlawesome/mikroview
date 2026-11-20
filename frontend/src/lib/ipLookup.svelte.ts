@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { geoLookup, lookupIp } from './api'
+import { plainWords } from './plainWords'
 import { ownerLabel } from './geo'
 import { appState } from './state.svelte'
 import type { ReputationResult } from './types'
@@ -62,7 +63,7 @@ class IpLookupState {
       },
       (err) => {
         if (id !== this.requestId) return
-        this.error = err instanceof Error ? err.message : String(err)
+        this.error = plainWords(err)
         this.loading = false
       },
     )

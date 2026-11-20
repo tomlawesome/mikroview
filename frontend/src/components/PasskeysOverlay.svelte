@@ -18,6 +18,7 @@
   // they were made for. The row that opens this overlay is never
   // hidden (AccountMenu.svelte); this is where it says why.
   import FailureLine from './FailureLine.svelte'
+  import { couldNot, NO_ANSWER } from '../lib/plainWords'
   import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
@@ -196,7 +197,7 @@
       // #1202: STEP_EXPIRED is the ceremony running out, not a dead
       // session -- its words say to start again, and this step is where.
       if (typeof result === 'string') {
-        addError = result
+        addError = couldNot('add', 'this passkey', result)
         return
       }
       addPassword = ''
@@ -266,7 +267,7 @@
           authState.handleUnauthorized()
           return
         }
-        codesError = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        codesError = couldNot('confirm', 'the codes', err instanceof ApiError ? err.message : NO_ANSWER)
         void focusWhenReady(() => saveButton)
         return
       } finally {
@@ -295,7 +296,7 @@
     renameError = null
     const err = await renamePasskey(id, name)
     if (err) {
-      renameError = err
+      renameError = couldNot('rename', 'this passkey', err)
       return
     }
     passkeys = passkeys.map((p) => (p.id === id ? { ...p, name } : p))
@@ -324,7 +325,7 @@
     try {
       const result = await disablePasskey(removingId, removePassword)
       if (typeof result === 'string') {
-        removeError = result
+        removeError = couldNot('remove', 'this passkey', result)
         return
       }
       // #1253: this was the account's last second factor -- the server
@@ -439,7 +440,7 @@
                       <button type="button" class="pk-icon" onclick={submitRename} aria-label="Save name">✓</button>
                       <button type="button" class="pk-icon" onclick={cancelRename} aria-label="Cancel rename">✕</button>
                     </div>
-                    {#if renameError}<p class="error">{renameError}</p>{/if}
+                    {#if renameError}<FailureLine text={renameError} />{/if}
                   {:else}
                     <div class="pk-main">
                       <span class="pk-name">{row.name}</span>
@@ -487,7 +488,7 @@
               <input type="password" bind:value={addPassword} autocomplete="current-password" />
             </label>
           {/if}
-          {#if addError}<p class="error">{addError}</p>{/if}
+          {#if addError}<FailureLine text={addError} />{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={() => (step = 'list')} disabled={addBusy}>Cancel</button>
@@ -551,7 +552,7 @@
             Password
             <input type="password" bind:value={removePassword} autocomplete="current-password" />
           </label>
-          {#if removeError}<p class="error">{removeError}</p>{/if}
+          {#if removeError}<FailureLine text={removeError} />{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={cancelRemove} disabled={removeBusy}>Cancel</button>

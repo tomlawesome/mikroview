@@ -28,6 +28,7 @@ import {
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
+import { couldNot, plainWords } from './plainWords'
 import {
   buildLedger,
   firstOpenStep,
@@ -275,9 +276,9 @@ class WizardState {
     try {
       error = await saveSetupBackupTransport(transport)
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err)
+      error = plainWords(err)
     }
-    this.backupTransportError = error
+    this.backupTransportError = error ? couldNot('switch', 'the backup transport', error) : null
     if (error) return
     this.backupTransport = transport
     this.backupTransportInitialized = true
@@ -304,9 +305,10 @@ class WizardState {
       return
     }
     try {
-      this.addressSaveError = await saveSetupAddress(this.address)
+      const refused = await saveSetupAddress(this.address)
+      this.addressSaveError = refused ? couldNot('save', 'the address', refused) : null
     } catch (err) {
-      this.addressSaveError = err instanceof Error ? err.message : String(err)
+      this.addressSaveError = couldNot('save', 'the address', err)
     }
   }
 
@@ -433,7 +435,7 @@ class WizardState {
         this.backupTransportInitialized = true
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e)
+      this.error = couldNot('read', 'the setup status', e)
     }
   }
 

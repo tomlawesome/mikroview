@@ -231,7 +231,7 @@ describe('adding a passkey', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(registerPasskey).toHaveBeenCalledWith('this laptop', 'wrong')
-    expect(await screen.findByText('incorrect password')).toBeTruthy()
+    expect(await screen.findByText('Could not add this passkey: incorrect password')).toBeTruthy()
     expect(authState.passkeyCount).toBe(0)
     expect(screen.getByLabelText('Name')).toHaveProperty('value', 'this laptop')
   })
@@ -350,7 +350,7 @@ describe('removing a passkey', () => {
     await fireEvent.click(screen.getByRole('button', { name: /remove passkey/i }))
 
     expect(disablePasskey).toHaveBeenCalledWith('cred-1', 'wrong')
-    expect(await screen.findByText('wrong password')).toBeTruthy()
+    expect(await screen.findByText('Could not remove this passkey: wrong password')).toBeTruthy()
     // Still on the removing screen, naming the same row -- nothing was
     // removed.
     expect(screen.getByText(/this removes "this laptop"/i)).toBeTruthy()

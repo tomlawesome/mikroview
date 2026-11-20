@@ -200,7 +200,7 @@ describe('the drop box switch (#1361)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
     await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
     await fireEvent.click(screen.getByRole('button', { name: 'open' }))
-    await waitFor(() => expect(screen.getByText('incorrect password')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Could not open the drop box: incorrect password')).toBeTruthy())
     expect(screen.getByLabelText('your password')).toBeTruthy()
     expect(onswitchchanged).not.toHaveBeenCalled()
   })
@@ -269,7 +269,7 @@ describe('a router at rest', () => {
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
 
     expect((await screen.findByRole('alert')).textContent).toBe(
-      "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+      "Could not download this file: it was refused, and mikroview couldn't refresh the lock status. Try again.",
     )
   })
 
@@ -282,7 +282,7 @@ describe('a router at rest', () => {
       props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('The download failed. Try again.')
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not download this file: the download failed. Try again.')
   })
 
   it('clears a previous download error once a later download succeeds', async () => {

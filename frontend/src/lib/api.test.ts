@@ -41,6 +41,7 @@ import {
   submitLoginFactor,
   submitPasskeyLoginAssertion,
 } from './api'
+import { NO_ANSWER } from './plainWords'
 import { emptyFilters } from './types'
 
 // buildQuery's `ip` forwarding is refetchWithFilters()'s only path back to
@@ -493,8 +494,7 @@ describe('a dropped connection is a refusal, not a throw', () => {
     stubDroppedConnection()
     const result = await mintDroplistKey('203.0.113.9', 'correct horse')
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
-    expect(result).toContain('Failed to fetch')
+    expect(result).toBe(NO_ANSWER)
   })
 
   // #1447: the mint re-checks the admin's password, so the body carries it.
@@ -517,21 +517,21 @@ describe('a dropped connection is a refusal, not a throw', () => {
     stubDroppedConnection()
     const result = await revokeDroplistKey()
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
+    expect(result).toBe(NO_ANSWER)
   })
 
   it('PUT: saveSetupBackupTransport returns the reason as a string', async () => {
     stubDroppedConnection()
     const result = await saveSetupBackupTransport('sftp')
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
+    expect(result).toBe(NO_ANSWER)
   })
 
   it('PATCH: setRouterBackupComment returns the reason as a string', async () => {
     stubDroppedConnection()
     const result = await setRouterBackupComment('core', 'g1', 'note')
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
+    expect(result).toBe(NO_ANSWER)
   })
 })
 

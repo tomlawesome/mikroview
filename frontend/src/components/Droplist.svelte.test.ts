@@ -260,7 +260,7 @@ describe('the pull key', () => {
     render(Droplist, { props: { resp: resp(), onrefresh } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
     await typePasswordAndSubmit('wrong')
-    await waitFor(() => expect(screen.getByText('password is incorrect')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Could not mint the key: password is incorrect')).toBeTruthy())
     expect(screen.queryByText(/shown once/)).toBeNull()
     expect(onrefresh).not.toHaveBeenCalled()
   })
@@ -358,7 +358,7 @@ describe('the add form', () => {
     await fireEvent.input(screen.getByLabelText('reason'), { target: { value: 'why' } })
     await fireEvent.click(screen.getByRole('button', { name: 'add' }))
 
-    expect(screen.getByText('the address is not valid')).toBeTruthy()
+    expect(screen.getByText('Could not add this address: the address is not valid')).toBeTruthy()
     expect((screen.getByLabelText('address') as HTMLInputElement).value).toBe('not-an-address')
   })
 

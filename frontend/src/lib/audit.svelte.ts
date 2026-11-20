@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { fetchAuditLog } from './api'
+import { couldNot } from './plainWords'
 import type { AuditEntry } from './types'
 
 // Admin-only view of the admin-action accountability log (issue #112) --
@@ -26,7 +27,7 @@ class AuditState {
       this.hasMore = res.hasMore
       this.error = null
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err)
+      this.error = couldNot('load', 'the audit log', err)
     } finally {
       this.loaded = true
     }

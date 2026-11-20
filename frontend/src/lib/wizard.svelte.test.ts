@@ -158,7 +158,7 @@ describe('a thrown call surfaces the same way a refusal does', () => {
 
     await wizardState.saveAddress()
 
-    expect(wizardState.addressSaveError).toBe('network unreachable')
+    expect(wizardState.addressSaveError).toBe('Could not save the address: network unreachable')
   })
 
   it('setBackupTransport, without silently applying the switch it never confirmed', async () => {
@@ -168,7 +168,7 @@ describe('a thrown call surfaces the same way a refusal does', () => {
 
     await wizardState.setBackupTransport('https')
 
-    expect(wizardState.backupTransportError).toBe('network unreachable')
+    expect(wizardState.backupTransportError).toBe('Could not switch the backup transport: network unreachable')
     expect(wizardState.backupTransport).toBe('sftp')
   })
 })

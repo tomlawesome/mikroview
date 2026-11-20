@@ -8,6 +8,7 @@ import {
   forceRemoveDecommissionGhost,
   undoDecommissionRetirement,
 } from './api'
+import { couldNot } from './plainWords'
 import type { DecommissionOffer, DecommissionWatch } from './types'
 
 // The decommission surface's state (#460): what is being offered, and
@@ -55,7 +56,7 @@ class DecommissionsState {
       this.evidenceComplete = evidenceComplete
       this.error = null
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e)
+      this.error = couldNot('load', 'the decommission offers', e)
     }
     this.loaded = true
   }

@@ -34,6 +34,8 @@
   import { formatRelative } from '../lib/format'
   import type { DroplistResponse, SetupCommandsResponse } from '../lib/types'
   import UpgradeWarnings from './UpgradeWarnings.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
 
   let {
     resp,
@@ -101,7 +103,7 @@
     const result = await mintDroplistKey(wizardState.address, password)
     submittingKey = false
     if (typeof result === 'string') {
-      keyError = result
+      keyError = couldNot('mint', 'the key', result)
       password = ''
       // The field was disabled while the request ran, which drops focus:
       // put the person back in it to try again.
@@ -147,7 +149,7 @@
     const err = await revokeDroplistKey()
     submittingKey = false
     if (err) {
-      keyError = err
+      keyError = couldNot('revoke', 'the key', err)
       return
     }
     justMinted = null
@@ -197,7 +199,7 @@
     const result = await createDroplistEntry({ cidr: newCidr.trim(), reason: newReason.trim(), flagID: newFlagID })
     adding = false
     if (typeof result === 'string') {
-      addError = result
+      addError = couldNot('add', 'this address', result)
       return
     }
     if (result.warning) addWarning = result.warning
@@ -242,7 +244,7 @@
     removeError = null
     const err = await deleteDroplistEntry(cidr)
     if (err) {
-      removeError = err
+      removeError = couldNot('remove', 'this address', err)
       return
     }
     await onrefresh()
@@ -338,7 +340,7 @@
       <button type="button" class="olink quiet" disabled={submittingKey} onclick={cancelPassword}>cancel</button>
     </div>
   {/if}
-  {#if keyError}<p class="oghint err" role="alert">{keyError}</p>{/if}
+  {#if keyError}<div class="oghint"><FailureLine text={keyError} /></div>{/if}
 
   {#if justMinted}
     <div class="reveal">
@@ -441,7 +443,7 @@
       {adding ? 'adding…' : 'add'}
     </button>
   </div>
-  {#if addError}<p class="oghint err" role="alert">{addError}</p>{/if}
+  {#if addError}<div class="oghint"><FailureLine text={addError} /></div>{/if}
   {#if addWarning}<p class="oghint">{addWarning}</p>{/if}
 
   {#if sortedEntries.length === 0}
@@ -472,7 +474,7 @@
       </div>
     {/each}
   {/if}
-  {#if removeError}<p class="oghint err" role="alert">{removeError}</p>{/if}
+  {#if removeError}<div class="oghint"><FailureLine text={removeError} /></div>{/if}
 </div>
 
 <style>
@@ -526,11 +528,6 @@
     font-size: 11.5px;
     font-style: italic;
     color: var(--fg-dim);
-  }
-
-  .oghint.err {
-    color: var(--reject);
-    font-style: normal;
   }
 
   .oghint.dfoot {

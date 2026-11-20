@@ -578,7 +578,7 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'copy for RouterOS' }))
     await settle()
 
-    expect(screen.getByText('setup is locked while a restore is in progress')).toBeTruthy()
+    expect(screen.getByText('Could not copy the router commands: setup is locked while a restore is in progress')).toBeTruthy()
     expect(screen.queryByText('copied for RouterOS')).toBeNull()
   })
 

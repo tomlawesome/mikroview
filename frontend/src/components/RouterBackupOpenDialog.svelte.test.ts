@@ -80,7 +80,7 @@ describe('RouterBackupOpenDialog (#1361)', () => {
     render(RouterBackupOpenDialog, { props: { onopened, oncancel: vi.fn() } })
     await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
     await fireEvent.click(screen.getByRole('button', { name: 'open' }))
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('incorrect password'))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Could not open the drop box: incorrect password'))
     expect(screen.getByLabelText('your password')).toBeTruthy()
     expect(onopened).not.toHaveBeenCalled()
   })

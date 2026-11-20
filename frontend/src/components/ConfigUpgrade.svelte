@@ -16,6 +16,8 @@
   import { configUpgradeState } from '../lib/configUpgrade.svelte'
   import { copyToClipboard } from '../lib/clipboard'
   import { CopyFlash } from '../lib/copyFlash.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { plainWords } from '../lib/plainWords'
 
   onMount(() => {
     configUpgradeState.refresh()
@@ -41,7 +43,7 @@
   {#if closed}
     <!-- nothing: closed for this visit only -->
   {:else if configUpgradeState.error}
-    <p class="empty error">Could not check for new settings: {configUpgradeState.error}</p>
+    <FailureLine verb="check for" thing="new settings" said={plainWords(configUpgradeState.error)} />
   {:else if configUpgradeState.loaded && configUpgradeState.settings.length === 0}
     <p class="empty">Nothing new — every setting this version understands is already set.</p>
   {:else if configUpgradeState.loaded}
@@ -103,10 +105,6 @@
     color: var(--fg-dim);
     font-size: 13px;
     padding: 10px 0;
-  }
-
-  .empty.error {
-    color: var(--reject);
   }
 
   /* Same paste-block shape as SetupWizard.svelte's .paste/pre.script/

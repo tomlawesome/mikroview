@@ -20,6 +20,8 @@
   // outlined buttons (wizard.css). Same markup, same words, same acts.
 
   import { setRouterBackupSwitch } from '../lib/api'
+  import { couldNot } from '../lib/plainWords'
+  import FailureLine from './FailureLine.svelte'
   import type { RouterBackupSwitchState } from '../lib/types'
 
   let {
@@ -43,7 +45,7 @@
     const result = await setRouterBackupSwitch(true, password)
     submitting = false
     if (typeof result === 'string') {
-      error = result
+      error = couldNot('open', 'the drop box', result)
       return
     }
     password = ''
@@ -82,7 +84,7 @@
       }}
     />
   </label>
-  {#if error}<p class="err" role="alert">{error}</p>{/if}
+  {#if error}<div class="err"><FailureLine text={error} /></div>{/if}
   <span class="acts">
     <button type="button" class="act" disabled={submitting} onclick={cancel}>cancel</button>
     <button type="button" class="act go" disabled={submitting || !password} onclick={submit}>
@@ -157,7 +159,6 @@
 
   .settings .err {
     font-size: 11.5px;
-    color: var(--reject);
   }
 
   .settings .acts {
@@ -213,7 +214,6 @@
 
   .wizard .err {
     font-size: 12.5px;
-    color: var(--warn);
   }
 
   .wizard .act.go:not(:disabled) {
