@@ -904,7 +904,7 @@ describe('Entities named-things table (#675)', () => {
     // B's own editor is still the one open, and A's refusal never
     // resurfaced over it.
     expect(container.querySelectorAll('.rename-input')).toHaveLength(1)
-    expect(container.querySelector('.rename-error')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(getByText('router-a')).toBeTruthy()
   })
 

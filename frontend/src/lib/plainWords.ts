@@ -41,7 +41,9 @@ export const NO_ANSWER = "can't reach MikroView — check the connection and try
 // fetch" (a TypeError, no response) takes NO_ANSWER. The server's own
 // words pass through verbatim.
 export function plainWords(err: unknown): string {
-  if (err instanceof TypeError) return NO_ANSWER
+  // Only the browsers' no-answer TypeErrors (Chromium, Firefox, Safari);
+  // any other TypeError is a code bug and keeps its own words.
+  if (err instanceof TypeError && /^(Failed to fetch|NetworkError when attempting to fetch|Load failed)/.test(err.message)) return NO_ANSWER
   const text = err instanceof Error ? err.message : String(err ?? '')
   const bare = /^[A-Za-z]\w*: (\d{3})$/.exec(text)
   if (bare) return wordsForStatus(Number(bare[1]))
