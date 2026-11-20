@@ -726,7 +726,8 @@ lint:script-tests:
 lint:go:
   stage: lint
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
@@ -759,7 +760,8 @@ lint:go:
 lint:frontend:
   stage: lint
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
   image: node:26-alpine
@@ -906,7 +908,8 @@ lint:jscpd:
 lint:supply-chain-pins:
   stage: lint
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): reads files and a policy; installs only bash and git.
   tags: [light]
   image: node:26-alpine
@@ -1026,7 +1029,8 @@ test:frontend:
 test:build-checks:
   stage: test
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
@@ -2094,7 +2098,8 @@ perf:promotion:
 security:semgrep:
   stage: security
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: semgrep/semgrep:1.184.0
   <<: *dev_or_mr_code
@@ -2166,7 +2171,8 @@ security:semgrep:
 security:gosec:
   stage: security
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # Stays on big: gosec loads the whole module graph and peaks at ~6.7 GB,
   # over the light lane's 6 GB cap.
   # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
@@ -2237,7 +2243,8 @@ security:gosec:
 security:govulncheck:
   stage: security
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
@@ -2324,7 +2331,8 @@ security:zizmor:
 security:npm-audit:
   stage: security
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
@@ -2398,7 +2406,8 @@ security:npm-audit:
 security:licence-policy:
   stage: security
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   <<: [*dev_or_mr_code, *git_safe]
@@ -2431,7 +2440,8 @@ security:licence-policy:
 security:gitleaks:
   stage: security
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
@@ -2516,7 +2526,8 @@ security:gitleaks:
 security:trivy-fs:
   extends: .trivy
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     # Full-severity report kept as the SARIF artifact for visibility only --
@@ -2553,7 +2564,8 @@ security:trivy-fs:
 security:trivy-config:
   extends: .trivy
   # #1537: uses no other job's output, so it starts at once.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     - trivy config --ignorefile .trivyignore.yaml --exit-code 1 --severity HIGH,CRITICAL .
