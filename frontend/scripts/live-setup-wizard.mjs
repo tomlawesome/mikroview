@@ -74,7 +74,8 @@ const stripArrivals = async (route) => {
 const { page, consoleErrors } = await session({
   dismissSetup: false,
   mocksApi: true,
-  routes: [['**/api/setup/status', stripArrivals]],
+  // The trailing * also catches ?address=, which the wizard's status read carries once it has an address (#1507).
+  routes: [['**/api/setup/status*', stripArrivals]],
 })
 
 // Its own traffic, so the shell is not empty when the wizard opens over

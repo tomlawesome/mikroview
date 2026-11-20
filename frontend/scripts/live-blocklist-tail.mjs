@@ -50,7 +50,8 @@ const myDevice = async (route) => {
 const { page, consoleErrors } = await session({
   mocksApi: true,
   routes: [
-    ['**/api/setup/status', onlyMine],
+    // The trailing * also catches ?address=, which the wizard's status read carries once it has an address (#1507).
+    ['**/api/setup/status*', onlyMine],
     ['**/api/devices', myDevice],
   ],
 })

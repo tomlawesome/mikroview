@@ -42,7 +42,8 @@ const { page, consoleErrors } = await session({
   mocksApi: true,
   routes: [
     [
-      '**/api/setup/status',
+      // The trailing * also catches ?address=, which the wizard's status read carries once it has an address (#1507).
+      '**/api/setup/status*',
       async (route) => {
         const res = await route.fetch()
         const body = await res.json()

@@ -214,7 +214,8 @@ for (const label of [
 // reason the wizard's own router-mint scenario does it: not a fake shape,
 // just the one field ("sources not yet heard from") this instance
 // cannot otherwise be made to show on demand.
-await page.route('**/api/setup/status', async (route) => {
+// The trailing * also catches ?address=, which the wizard's status read carries once it has an address (#1507).
+await page.route('**/api/setup/status*', async (route) => {
   const res = await route.fetch()
   const body = await res.json()
   body.sources = (body.sources ?? []).map(({ syslogFirstSeenAt, caFetchedAt, ...s }) => s)
