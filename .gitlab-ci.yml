@@ -721,6 +721,9 @@ lint:script-tests:
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
     - bash scripts/routeros-chr-open-mr.test.sh
+    # #1550: the allow file in the shape the private-details hook accepts,
+    # checked by the hook's own allow-shape.awk (fetched from ai/agent-config
+    # at a pinned commit) against the mounted rules' ids.
     - node --test scripts/jscpd-baseline.test.mjs
 
 lint:go:
