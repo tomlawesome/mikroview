@@ -67,6 +67,7 @@ COUNT=0
 chk() { local n="$1"; shift; COUNT=$((COUNT + 1))
   if "$@"; then echo "ok - $n"; else echo "FAIL - $n"; fail=1; fi; }
 eq() { [ "$1" = "$2" ]; }
+# shellcheck disable=SC2053  # $p is a pattern on purpose
 glob() { local p="${2//\[/\\[}"; p="${p//\]/\\]}"; [[ "$1" == $p ]]; }  # glob <value> <pattern>; [ ] are literal, * ? wild
 has() { grep -qF -- "$2" <<<"$1"; }
 hasnt() { ! grep -qF -- "$2" <<<"$1"; }
@@ -179,7 +180,7 @@ rec_commit() {  # rec_commit <sed script> [steps]: rewrite and commit the record
 new() {  # new <preview|main> ; knobs: VER, TAGS, REMOTE_NAME
   LEG="$1"; N=$((N + 1))
   V="${VER:-1.2.3}"; REMOTE="${REMOTE_NAME:-origin}"
-  case "$LEG" in preview) T=preview; SRC=dev; TGT=preview;; main) T=main; SRC=preview; TGT=main;; esac
+  case "$LEG" in preview) T=preview; SRC=dev;; main) T=main; SRC=preview;; esac
   local W="$TMP/case$N"; REMOTE_DIR="$W/remote.git"; WORK="$W/work"
   mkdir -p "$W"
   git init -q --bare "$REMOTE_DIR"
