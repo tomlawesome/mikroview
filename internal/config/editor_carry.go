@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Change is one thing Carry forward did to a config text, for the
@@ -116,7 +116,7 @@ func layoutPosition(key string) (section, index int) {
 // blank line of the operator's own is kept; what changed is listed, and
 // the problems are ValidateText's verdict on the result.
 //
-// It works on the text, not on a re-encoding of parsed YAML: yaml.v3 can
+// It works on the text, not on a re-encoding of parsed YAML: the yaml package can
 // re-emit a document, but it moves comments between nodes and loses
 // blank lines, and "keeps the operator's comments" has to mean all of
 // them, where they were. The parser is used only to find where each key

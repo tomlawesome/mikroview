@@ -57,6 +57,13 @@
   }
 </script>
 
+<!-- Escape is cancel (#1539 C2), wherever focus is. -->
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Escape' && !submitting) cancel()
+  }}
+/>
+
 <div class="dbox {look}">
   <p class="caveat">
     RouterOS never checks who it is sending to — anyone on the path between your router and MikroView could read the

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -508,5 +509,76 @@ func TestPublicURLNotOverriddenByOIDC(t *testing.T) {
 	}
 	if c.PublicURL != "https://mikroview.home.lan:8443" {
 		t.Errorf("PublicURL = %q, want left exactly as configured", c.PublicURL)
+	}
+}
+
+// #1426 (O1-S1): the refusal for a key that exists but cannot be used must
+// never tell the operator to make a new one -- pasting that command over the
+// real key destroys everything sealed under it.
+func TestKeyRequiredUnusableKeyNeverSaysToMakeANewOne(t *testing.T) {
+	p := KeyRequired("/etc/mikroview/keys/history.key", false,
+		errors.New("retention: reading key file: open /etc/mikroview/keys/history.key: permission denied"))
+	out := Report([]Problem{p})
+	for _, want := range []string{"CFG-0083", "/etc/mikroview/keys/history.key", "could not be used", "rather than making a new key", "sudo chown 1000:1000"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unusable-key refusal lacks %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"/dev/urandom", "> mikroview/keys/history.key"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("unusable-key refusal must not carry %q:\n%s", bad, out)
+		}
+	}
+	if a, b := strings.Index(out, "rather than making a new key"), strings.Index(out, "chown"); a < 0 || b < 0 || a > b {
+		t.Errorf("the do-not-make-a-new-key warning must come before any instruction:\n%s", out)
+	}
+}
+
+// The first-install path still gets the command, but only conditionally.
+func TestKeyRequiredNoKeyStillSaysHowToMakeOneButOnlyWhenNoneExists(t *testing.T) {
+	p := KeyRequired("", true, errors.New("retention: no key file configured"))
+	out := Report([]Problem{p})
+	cmd := "head -c 32 /dev/urandom | base64 > mikroview/keys/history.key"
+	for _, want := range []string{"no key is mounted", cmd, "if no key exists yet", "Never write a new key over one that exists", "only if no key exists yet"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no-key refusal lacks %q:\n%s", want, out)
+		}
+	}
+	if a, b := strings.Index(out, "if no key exists yet"), strings.Index(out, "head -c 32"); a < 0 || b < 0 || a > b {
+		t.Errorf("the condition must come before the command:\n%s", out)
+	}
+}
+
+// #1426 (O1-S1) break attempt: every other way a present key can be
+// unusable (a missing file at the configured path, a directory, a short
+// key, no error at all, a path that is empty) and the setup-only variant
+// for an unreadable history section must also never offer the make-a-key
+// command unconditionally -- one pasted over a real key loses everything
+// sealed under it.
+func TestKeyRequiredEveryUnusableCaseNeverOffersAnUnguardedNewKey(t *testing.T) {
+	cases := map[string]Problem{
+		"missing file":   KeyRequired("/etc/mikroview/keys/history.key", false, errors.New("retention: reading key file: open /etc/mikroview/keys/history.key: no such file or directory")),
+		"a directory":    KeyRequired("/etc/mikroview/keys/history.key", false, errors.New("retention: reading key file: read /etc/mikroview/keys/history.key: is a directory")),
+		"short key":      KeyRequired("/etc/mikroview/keys/history.key", false, errors.New("retention: key file holds fewer than 32 bytes of key material")),
+		"nil error":      KeyRequired("/etc/mikroview/keys/history.key", false, nil),
+		"empty path":     KeyRequired("", false, errors.New("retention: reading key file: open : no such file or directory")),
+		"history broken": KeyRequiredHistoryUnreadable("/etc/mikroview/keys/history.key"),
+	}
+	for name, p := range cases {
+		out := Report([]Problem{p})
+		if !strings.Contains(out, "CFG-0083") {
+			t.Errorf("%s: not a CFG-0083 report:\n%s", name, out)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if !strings.Contains(line, "/dev/urandom") && !strings.Contains(line, "> mikroview/keys/history.key") {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(line), "only if no key exists yet") && !strings.Contains(strings.ToLower(line), "if no key exists yet") {
+				t.Errorf("%s: offers a new key with no 'only if no key exists' guard on the line:\n%s", name, line)
+			}
+		}
+		if name != "history broken" && strings.Contains(out, "/dev/urandom") {
+			t.Errorf("%s: a key that exists but is unusable must not carry the make-a-key command:\n%s", name, out)
+		}
 	}
 }

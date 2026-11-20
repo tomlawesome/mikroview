@@ -139,6 +139,9 @@ describe.each([
     await typeAndConfirm(confirm, 'sw0rdfish-secret')
 
     expect(await screen.findByText(/failed to fetch/i)).toBeTruthy()
+    // Offered again, not stuck on "Redirecting…" with a disabled field.
+    expect(field().disabled).toBe(false)
+    expect((screen.getByRole('button', { name: confirm }) as HTMLButtonElement).disabled).toBe(false)
     expect(new XMLSerializer().serializeToString(document.body)).not.toContain('sw0rdfish-secret')
   })
 

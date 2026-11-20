@@ -179,7 +179,8 @@ async function api(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // A 204 (every DELETE since #1538) carries no body to parse.
+  return { status: res.status(), body: res.status() < 400 && res.status() !== 204 ? await res.json() : null }
 }
 const watchLan = await api('POST', '/api/definitions', {
   name: 'live layout watch lan',

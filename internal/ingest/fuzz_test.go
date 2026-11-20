@@ -9,7 +9,7 @@ import (
 
 // FuzzDecodePayload is this package's contribution to the "unauthenticated
 // -- or in this case, authenticated but still attacker-shaped -- input"
-// fuzz targets AGENTS.md asks for. POST /api/ingest/routeros requires a
+// fuzz targets the project's security standards ask for. POST /api/ingest/routeros requires a
 // valid ingest token, but that token only proves which device is
 // speaking, not that the bytes it sends are well-formed: a compromised
 // router, a buggy router-side script, or a leaked token (any read-capable

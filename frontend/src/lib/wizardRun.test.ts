@@ -81,7 +81,7 @@ describe('the rail', () => {
     const rows = railRows(freshAnswers(), ev())
     expect(rows.map((r) => r.title)).toEqual([
       'The router',
-      'Mint the token',
+      'Mint the ingest token',
       'Paste once',
       'Tag firewall rules',
       'Where setup stands',
@@ -168,6 +168,17 @@ describe('everything chosen has arrived', () => {
   })
 })
 
+describe('everything chosen has arrived: a backup left out of the block (A2-F1)', () => {
+  it('does not wait for a backup that was left out of the block', () => {
+    const s = answered({ backupLeftOut: true })
+    const e = ev({ cert: '2026-09-27T14:03:00Z', enrol: '2026-09-27T14:03:04Z', push: '2026-09-27T14:04:00Z' })
+    expect(arrivedAll(s, e)).toBe(true)
+    expect(footSpec({ ...s, stage: 'watch', copied: true }, e).right[0].disabled).toBe(false)
+    // Yes with the part present still waits.
+    expect(arrivedAll(answered(), e)).toBe(false)
+  })
+})
+
 describe('the footer', () => {
   it('holds Next until all four are answered', () => {
     const f = footSpec(freshAnswers(), ev())
@@ -177,10 +188,10 @@ describe('the footer', () => {
     expect(footSpec(answered(), ev()).hint).toBe('')
   })
 
-  it('offers Back and Mint the token on the password step', () => {
+  it('offers Back and Mint the ingest token on the password step', () => {
     const f = footSpec(answered({ q: 4 }), ev())
     expect(f.left?.label).toBe('Back')
-    expect(f.right[0]).toMatchObject({ label: 'Mint the token', disabled: true })
+    expect(f.right[0]).toMatchObject({ label: 'Mint the ingest token', disabled: true })
     expect(footSpec(answered({ q: 4, pass: 'x' }), ev()).right[0].disabled).toBe(false)
   })
 
@@ -324,6 +335,26 @@ describe('the router’s turn: the track', () => {
   })
 })
 
+describe('the router’s turn: a backup left out of the block (A2-F1)', () => {
+  it('reads a backup left out of the block as set aside, with the cause', () => {
+    const st = trackStations(answered({ backupLeftOut: true, stage: 'watch', copied: true }), ev({ cert: 'x', enrol: 'y', push: 'z' }), '2026-09-27T14:02:00Z')
+    const b = st.find((x) => x.id === 'backup')
+    expect(b).toEqual({ id: 'backup', lab: 'backup', st: 'left out · the drop box was closed', state: 'skip' })
+  })
+})
+
+describe('rules tagged, read from the push alone (A2-F7)', () => {
+  it('rail receipt, track station and strip chip read the push’s tagged rules the same way', () => {
+    const s = answered({ stage: 'done' })
+    const e = ev({ cert: '2026-09-27T14:02:58Z', enrol: '2026-09-27T14:03:04Z', push: '2026-09-27T14:03:31Z', taggedRules: 4, taggedAt: '2026-09-27T14:23:31Z' })
+    expect(rowState(s, e, 'tune')).toEqual({ cls: 'done', ink: 'rules', receipt: '4 rules tagged · pushed 14:23:31' })
+    expect(trackStations(s, e, 't').at(-1)).toEqual({ id: 'rules', lab: '4 rules', st: 'pushed 14:23:31', state: 'done' })
+    expect(chipsFor(s, e)).toContainEqual({ kind: 'rules', text: '4 rules' })
+    // The in-run path is unchanged.
+    expect(rowState(answered({ chosenCount: 4, tunedAt: '14:03:57' }), ev({ tagged: true }), 'tune').receipt).toBe('4 rules tagged · 14:03:57')
+  })
+})
+
 describe('✓ · Where setup stands: the ledger (#1385)', () => {
   it('reads certificate and logs as always done, in their own ink, with Undo', () => {
     const rows = ledgerRows(answered(), ev({ cert: '2026-09-27T14:02:58Z', enrol: '2026-09-27T14:03:04Z', from: '192.0.2.1', lines: 69 }))
@@ -353,6 +384,21 @@ describe('✓ · Where setup stands: the ledger (#1385)', () => {
     expect(rows.find((r) => r.t === 'Nightly backup')).toMatchObject({ done: true, ink: 'backup', u: 'backup' })
     const rules = rows.find((r) => r.t === 'Rules tagged')!
     expect(rules).toMatchObject({ done: true, ink: 'rules', u: 'tune', r: '4 rules log · since 14:06:00' })
+  })
+
+  it('reads a backup left out of the block as set aside, pointing at Settings, with no Undo', () => {
+    const rows = ledgerRows(answered({ backupLeftOut: true }), ev({ cert: 'x', enrol: 'y', push: 'z', from: '192.0.2.1' }))
+    const r = rows.find((x) => x.t === 'Backup')
+    expect(r).toEqual({ done: false, t: 'Backup', r: 'left out · the drop box was closed · Settings ▸ router backups', ink: '', u: '' })
+    expect(rows.find((x) => x.t === 'Nightly backup')).toBeUndefined()
+    expect(undoOrder(rows)).not.toContain('backup')
+  })
+
+  it('reads rules as tagged from the push alone when the run has no memory of its own Copy (A2-F7)', () => {
+    const rows = ledgerRows(answered({ push: true }), ev({ taggedRules: 4, taggedAt: '2026-09-27T14:23:31Z', boundaries: [{ lane: 'x', watched: true, dark: false }] }))
+    expect(rows.find((r) => r.t === 'Rules tagged')).toMatchObject({ done: true, ink: 'rules', u: 'tune', r: '4 rules log · pushed 14:23:31' })
+    expect(rows.some((r) => r.t === 'Rules')).toBe(false)
+    expect(undoOrder(rows)).toEqual(['cert', 'logs', 'push', 'backup', 'tune'])
   })
 
   it('names how many boundaries log nothing when rules were left dark', () => {

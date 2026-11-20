@@ -28,7 +28,7 @@
   // separate "Manage entries" card list and its own add/edit form
   // (#243, #649) pre-dated that table and were retired wholesale once
   // every capability they carried was reachable from the drawer instead
-  // (AGENTS.md's "removals are wholesale" -- no flag, no dead code kept
+  // (the "removals are wholesale" rule, docs/development.md -- no flag, no dead code kept
   // reachable behind one, since nothing here still needs it).
   import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
@@ -50,6 +50,8 @@
   // paraphrasing the ghost's card in new words. See decommission.ts's
   // own file comment for why the sentences all live there.
   import { decommissionsState } from '../lib/decommission.svelte'
+  import GhostRows from './GhostRows.svelte'
+  import FailureLine from './FailureLine.svelte'
   import { forgetContract, ghostNote, ghostStateOf, retiredNote, watchlistRowText } from '../lib/decommission'
   import type {
     DecommissionWatch,
@@ -63,7 +65,7 @@
   import type { WatchlistEntryRequest } from '../lib/api'
 
   onMount(() => {
-    watchlistState.refresh()
+    watchlistState.refresh().catch(() => {})
     suggestState.refresh()
     // The boundary picker below (#806) is fed by the same real,
     // pushed-rule-derived boundary list the fall draws its bands from --
@@ -498,6 +500,12 @@
   let suggestDrawerId: string | null = $state(null)
   let pausingId = $state<string | null>(null)
   let wtError = $state<string | null>(null)
+  // Which action wtError belongs to, so the failure line names it (#1540).
+  let wtAction = $state({ verb: 'change', thing: 'this watch' })
+  function failWatch(verb: string, thing: string, err: string) {
+    wtAction = { verb, thing }
+    wtError = err
+  }
 
   function toggleWatchDrawer(id: string) {
     watchDrawerId = watchDrawerId === id ? null : id
@@ -551,7 +559,7 @@
     pausingId = e.id
     try {
       const err = await watchlistState.setEnabled(e.id, !e.enabled)
-      if (err) wtError = err
+      if (err) failWatch(e.enabled ? 'pause' : 'resume', 'this watch', err)
     } finally {
       pausingId = null
     }
@@ -792,7 +800,7 @@
     editSaving = true
     try {
       const err = await watchlistState.update(editingId, req)
-      if (err) wtError = err
+      if (err) failWatch('save', 'this watch', err)
       else editingId = null
     } finally {
       editSaving = false
@@ -811,7 +819,7 @@
     }
     armedRemoveId = null
     watchlistState.remove(e.id).then((err) => {
-      if (err) wtError = err
+      if (err) failWatch('remove', 'this watch', err)
     })
   }
 
@@ -824,7 +832,7 @@
     permittingKey = e.id + d.destIp + d.port
     try {
       const err = await watchlistState.promote(e.id, [d])
-      if (err) wtError = err
+      if (err) failWatch('permit', 'that destination', err)
     } finally {
       permittingKey = null
     }
@@ -837,7 +845,7 @@
     permittingKey = e.id + '*'
     try {
       const err = await watchlistState.promote(e.id, dests)
-      if (err) wtError = err
+      if (err) failWatch('permit', 'these destinations', err)
     } finally {
       permittingKey = null
     }
@@ -851,7 +859,7 @@
     fencingId = e.id
     try {
       const err = await watchlistState.setObserving(e.id, !e.observing)
-      if (err) wtError = err
+      if (err) failWatch('change', 'how this watch observes', err)
     } finally {
       fencingId = null
     }
@@ -950,7 +958,7 @@
   // are no sub-tabs: the Watchlist/Matches/Suggestions strip and the two
   // components behind it are gone outright rather than left unmounted
   // behind a flag, because #771 gives both the capabilities they carried
-  // a drawn home here. AGENTS.md's "removals are wholesale" applies once
+  // a drawn home here. The "removals are wholesale" rule (docs/development.md) applies once
   // nothing still needs the old surface to reach them.
   //
   // The cross-watch matches view the retired Matches tab also offered
@@ -1324,6 +1332,11 @@
     armedRemoveId = null
     armedReset = false
   }}
+  onkeydown={(e) => {
+    if (e.key !== 'Escape') return
+    armedRemoveId = null
+    armedReset = false
+  }}
 />
 
 <div class="watchlist-page">
@@ -1345,7 +1358,7 @@
     {#if WATCH_HEADING_ENABLED}
       <h3 id="watch-heading" class="section-title">Watches</h3>
     {/if}
-    {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
+    {#if wtError}<FailureLine verb={wtAction.verb} thing={wtAction.thing} said={wtError} />{/if}
     <!-- The table always renders, even with no watches at all: round 33
          hangs the suggestions body off the same table, so a page that
          dropped the table when the watchlist was empty would take the
@@ -1471,7 +1484,7 @@
                            up. -->
                       <p class="wf-prov">{draftProvenance}</p>
                     {/if}
-                    {#if draftError}<p class="error" role="alert">{draftError}</p>{/if}
+                    {#if draftError}<FailureLine verb="create" thing="this watch" said={draftError} />{/if}
                   </div>
                   <div class="side wf-mode">
                     <span class="lab">and it means</span>
@@ -1493,7 +1506,7 @@
                   </div>
                   <div class="dwr-acts">
                     <button class="act" disabled={draftSaving} onclick={startWatching}>
-                      {draftSaving ? 'Saving…' : 'start watching'}
+                      {draftSaving ? 'saving…' : 'start watching'}
                     </button>
                     <button class="act quiet" onclick={discardDraft}>discard</button>
                   </div>
@@ -1514,6 +1527,14 @@
                 Every watch is gone as of {formatHM(startedOverAt)}; the suggestions below are being rebuilt from the
                 next push. The audit log has who did it.
               </td>
+            </tr>
+          {:else if watchlistState.loadError !== null}
+            <tr>
+              <td class="empty-row" colspan="6"><FailureLine verb="load" thing="the watches" said={watchlistState.loadError} /></td>
+            </tr>
+          {:else if !watchlistState.loaded}
+            <tr>
+              <td class="empty-row" colspan="6"><GhostRows label="Reading the watches…" rows={4} /></td>
             </tr>
           {:else if sortedWatchRows.length === 0}
             <tr>
@@ -1600,7 +1621,7 @@
                               {/each}
                             </select></label
                           >
-                          {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
+                          {#if wtError}<FailureLine verb={wtAction.verb} thing={wtAction.thing} said={wtError} />{/if}
                         </div>
                         <div class="side wf-mode">
                           <span class="lab">and it means</span>
@@ -1619,7 +1640,7 @@
                         </div>
                         <div class="dwr-acts">
                           <button class="act" disabled={editSaving} onclick={saveEditWatch}>
-                            {editSaving ? 'Saving…' : 'save'}
+                            {editSaving ? 'saving…' : 'save'}
                           </button>
                           <button class="act quiet" onclick={cancelEditWatch}>cancel</button>
                         </div>
@@ -1650,7 +1671,7 @@
                               {/each}
                             </ul>
                             {#if olderError[row.entry.id]}
-                              <p class="error" role="alert">{olderError[row.entry.id]}</p>
+                              <FailureLine verb="load" thing="older matches" said={olderError[row.entry.id]} />
                             {/if}
                             {#if canLoadOlder(row.entry)}
                               <button
@@ -1719,14 +1740,14 @@
                             {/if}
                             <button class="act" disabled={fencingId === row.entry.id} onclick={() => toggleObserving(row.entry)}>
                               {fencingId === row.entry.id
-                                ? 'Saving…'
+                                ? 'saving…'
                                 : row.entry.observing
                                   ? `fence now · ${(row.entry.permitted ?? []).length} permitted`
                                   : 'learn again'}
                             </button>
                           {:else}
                             <button class="act" disabled={pausingId === row.entry.id} onclick={() => togglePause(row.entry)}>
-                              {pausingId === row.entry.id ? 'Saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
+                              {pausingId === row.entry.id ? 'saving…' : row.entry.enabled ? 'pause watch' : 'resume watch'}
                             </button>
                           {/if}
                           {#if row.entry.source?.mac || row.entry.source?.ip}
@@ -1800,7 +1821,7 @@
           </tr>
 
           {#if suggestError}
-            <tr><td colspan="6"><p class="error" role="alert">{suggestError}</p></td></tr>
+            <tr><td colspan="6"><FailureLine verb="update" thing="the suggestions" said={suggestError} /></td></tr>
           {/if}
 
           {#if openSuggestions.length === 0}
@@ -1883,20 +1904,20 @@
                         <!-- ROUND 33 item 5: one verb, and nothing is
                              ever thrown away from here. -->
                         <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => unhideOne(c)}>
-                          {suggestBusyId === c.id ? 'Saving…' : 'bring it back'}
+                          {suggestBusyId === c.id ? 'saving…' : 'bring it back'}
                         </button>
                       {:else if c.stale}
                         <!-- ROUND 33 item 4: a stale one leads with the
                              honest verb, and keeps the other quiet. -->
                         <button class="act" disabled={suggestBusyId === c.id} onclick={() => hideOne(c)}>
-                          {suggestBusyId === c.id ? 'Saving…' : 'let it go'}
+                          {suggestBusyId === c.id ? 'saving…' : 'let it go'}
                         </button>
                         <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => acceptOne(c)}>
                           watch it anyway
                         </button>
                       {:else}
                         <button class="act" disabled={suggestBusyId === c.id} onclick={() => acceptOne(c)}>
-                          {suggestBusyId === c.id ? 'Saving…' : acceptVerb(c)}
+                          {suggestBusyId === c.id ? 'saving…' : acceptVerb(c)}
                         </button>
                         <button class="act quiet" disabled={suggestBusyId === c.id} onclick={() => hideOne(c)}>
                           not this
@@ -1921,7 +1942,7 @@
   {#if decommissionRows.length > 0}
     <section class="section decomm-section" aria-label="Decommission watches">
       <h3 class="section-title">Decommission watches</h3>
-      {#if decommError}<p class="error" role="alert">{decommError}</p>{/if}
+      {#if decommError}<FailureLine verb="forget" thing="this watch" said={decommError} />{/if}
       <table class="watch-table">
         <thead>
           <tr>
@@ -1984,7 +2005,7 @@
                           disabled={decommBusy || !decommReason.trim()}
                           onclick={() => forgetDecommissionWatch(row.watch)}
                         >
-                          {decommBusy ? 'Forgetting…' : 'forget this watch'}
+                          {decommBusy ? 'forgetting…' : 'forget this watch'}
                         </button>
                         <button class="act quiet" onclick={cancelDecommForget}>cancel</button>
                       {:else}
@@ -2024,11 +2045,6 @@
     gap: 14px;
   }
 
-  .error {
-    margin: 0;
-    color: var(--reject);
-    font-size: 12px;
-  }
 
   .section {
     display: flex;

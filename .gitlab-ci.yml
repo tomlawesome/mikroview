@@ -14,8 +14,8 @@
 #
 # The live-check gate runs here too, sharded, since #1004: the `gate`
 # stage below. It used to be kept off CI on purpose -- 36 minutes holding
-# one host -- and the second-host loop on `dev` (AGENTS.md, "The gate runs
-# on `dev`") is still there until the CI gate has proven itself.
+# one host -- and the second-host loop on `dev` (docs/runner-host.md, "The dev loop
+# is retired") is still there until the CI gate has proven itself.
 # ============================================================
 #
 # Runner: rootless-Docker executor, single group runner, untagged jobs only.
@@ -154,7 +154,7 @@ workflow:
 # the accumulated batch, not the last commit. Promotions therefore see
 # code and run everything, which is what a promotion has to do.
 #
-# Not every job is gated. AGENTS.md ("The docs-only lane") lists the ones
+# Not every job is gated. docs/quality-strategy.md ("The docs-only lane") lists the ones
 # that always run and why -- Go tests read docs/configuration.md, and
 # test:build-checks link-checks the markdown, so prose really can fail
 # them, and a leaked secret can sit in a paragraph as easily as in code.
@@ -178,6 +178,9 @@ workflow:
   # byte-for-byte identical (#1317, check-release-surfaces.sh). It is a
   # sentence about a picture, and changes nothing the code does.
   - "docs/**/*.png.checked"
+  # The committed audit summary whose `Audited-through:` marker the
+  # merge gate reads (#1426). A record of a review, read by no code.
+  - ".agents/reviews/*.md"
   # The console transcript the weekly CHR exercise commits for the
   # RouterOS version it booted (#894, scripts/routeros-chr-open-mr.sh).
   # Same reasoning as the line above: it is a record of what a router
@@ -1470,11 +1473,18 @@ test:install-line:
         fi
       done
     - id1="$(docker container inspect --format '{{.Id}}' "$APP")"
+    - |
+      k1="$(docker run --rm -v "$APP-etc:/etc/mikroview:ro" alpine:3.24 sha256sum /etc/mikroview/keys/history.key)"
+      [ -n "$k1" ] || { echo "test:install-line: no history.key was made on the fresh run"; exit 1; }
     # The same line is also the upgrade line (#1240) -- running it twice
     # must stop and remove the first container, re-creating it on the
     # same two named volumes, not just leave it be.
     - echo "test:install-line -- running install.sh a second time"
     - sh install.sh
+    - |
+      k2="$(docker run --rm -v "$APP-etc:/etc/mikroview:ro" alpine:3.24 sha256sum /etc/mikroview/keys/history.key)"
+      [ "$k1" = "$k2" ] || { echo "test:install-line: history.key changed on the second run -- an upgrade must keep the key"; exit 1; }
+      echo "test:install-line: history.key survived the re-run unchanged"
     - |
       id2="$(docker container inspect --format '{{.Id}}' "$APP")"
       [ "$id1" != "$id2" ] || { echo "test:install-line: container was not re-created on the second run"; exit 1; }
@@ -1727,8 +1737,8 @@ gate:scenarios:
 
 # #1306: dev -> preview also runs the scenario suite under Firefox and
 # WebKit, not only Chromium -- owner ruling 2026-09-20. The live-check
-# image already carries all three engines (AGENTS.md, "The second host
-# live-check runs on"); #659 shipped a static `style` attribute Chromium
+# image already carries all three engines (docs/runner-host.md, "Browser
+# engines"); #659 shipped a static `style` attribute Chromium
 # tolerates and Firefox refuses under this app's CSP, past a
 # Chromium-only gate, found only by the owner opening the app -- these
 # two engines are part of the dev -> preview promotion specifically so
@@ -1780,6 +1790,13 @@ gate:scenarios:quarantined:
   variables:
     MV_QUARANTINE: only
     MV_SHARD: "1/1"
+    # #1426 (D-F3): every scenario in scripts/quarantine.txt is a
+    # Firefox-only flake (docs/flakes.md: live-sw-navigation's worker
+    # fetch error only Firefox surfaces, live-viewer-surfaces' sightings
+    # all under Firefox), so under the default Chromium this job could
+    # never see them fail or grow a sighting. Quarantining a flake seen
+    # under another engine means revisiting this line.
+    MV_BROWSER: firefox
   cache:
     - *live_check_npm_cache_entry
   script:
@@ -1833,6 +1850,8 @@ gate:scripts:
     - scripts/check-upgrade-fixtures-recorded.test.sh
     - scripts/live-web-dist.test.sh
     - scripts/gate-summary.test.sh
+    - scripts/demo-up.test.sh
+    - scripts/precheck.test.sh
   artifacts:
     when: always
     paths:
@@ -2095,8 +2114,8 @@ security:gosec:
   # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
   # failed before it started -- an image pull failure, which reads like
   # a registry outage rather than a tag that was never published.
-  # Bumped to the current release while here, per AGENTS.md's
-  # pin-to-latest rule (#912).
+  # Bumped to the current release while here (#912); Renovate
+  # tracks it now (docs/gitlab-delivery.md, "Dependency pins").
   #
   # entrypoint: [""] for the same reason gitleaks and trivy below carry
   # it: this image's entrypoint is a wrapper that execs `/bin/gosec $@`,

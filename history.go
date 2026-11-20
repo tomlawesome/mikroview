@@ -36,8 +36,10 @@ func historyDirectory(cfg config.Config) string {
 // caller resolves that and hands the result in (newHistoryRuntime,
 // which is the only caller); keyFile and dir stay config-only.
 //
-// Off is the default and a first-class outcome, not a degraded one:
-// nil, nil means memory-only and nothing is wrong. What must never
+// Off is a first-class outcome, not a degraded one: nil means
+// memory-only and nothing is wrong. Enabled defaults to true (#1357), so
+// with no key mounted -- the ordinary case below -- this is where a
+// default install ends up. What must never
 // happen is retention silently not running while the operator believes
 // it is, so every path that ends without a store says so in the log,
 // once, at startup -- while the operator is still watching.

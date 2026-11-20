@@ -7,7 +7,7 @@ prototypes, the screenshots and the verbatim verdict trail; the same
 trail is on #1374. This document is the consolidated record the build
 implements from. The prototype is reference for execution quality:
 **port its markup and CSS, never build from an impression of it**
-(AGENTS.md, "Building a ratified design"); where this text and the
+(docs/design/screens/README.md, "Building a ratified design"); where this text and the
 prototype disagree, this text wins.
 
 It replaces the modal design below ("Superseded: the wizard as a
@@ -19,7 +19,7 @@ forward, its modal, its seven steps and its finish do not.
 The wizard is a **full screen**, not a modal: the bar, the strip, the
 step rail, the body, the footer. It is still a **claim ledger** — every
 check is an observation, MikroView never connects to the router (the
-AGENTS.md invariant), each step ends on evidence or is set aside — and
+invariant in docs/decisions/observe-never-probe.md), each step ends on evidence or is set aside — and
 still **stateless beyond the evidence**: receipts are server-side, so
 closing never loses progress and reopening shows the ledger as it
 stands.
@@ -29,7 +29,7 @@ Five steps:
 | # | Step | Character |
 |---|---|---|
 | 1 | The router | one form — name, address, push Yes / No, backup Yes / No; Next when all four are answered |
-| 2 | Mint the token | asks for the password at the moment of minting; the token's life is 15 minutes; Reroll asks again |
+| 2 | Mint the ingest token | asks for the password at the moment of minting; the token's life is 15 minutes; Reroll asks again |
 | 3 | Paste once | one block built from the answers, the enrol line last; Copy; then the router's turn — the track — until everything chosen has arrived |
 | 4 | Tag firewall rules | a rule list proposed from the push; tick, Copy, paste — the only second paste; Skip leaves them dark |
 | ✓ | Where setup stands | the ledger: what stands on evidence, what was set aside, Undo per row, undo everything; Add another router; Finish |
@@ -160,15 +160,22 @@ trust caveat, the password (owner, 3a), open / cancel — and on success
 the caution gives way to "The drop box is open on port N — the router
 must be able to reach this host there." Yes and No stay per-router
 answers: a No never closes the drop box, a Yes never opens it, and a
-Yes with it still closed is allowed (the caution stays). Not on Paste
+Yes with it still closed is allowed (the caution stays). On Paste once
+the block then says so under Copy — "The backup part is left out — the
+drop box is closed, so a backup would have nowhere to arrive. Open the
+drop box from step 1, The router, and the part appears here; or paste
+without it and set up backups later from Settings → router backups." —
+and once copied without it, the backup station reads "left out · the
+drop box was closed", dashed and struck, and is not waited for; the
+ledger row points at Settings ▸ router backups. Not on Paste
 once: the choice is made here, and the block is built from it after the
 mint; opening from here after Back re-renders the block so its backup
 part appears. Nothing is said before the read has landed.
 
-**2 · Mint the token.** Lead: "Your password, to mint <name>'s token.
+**2 · Mint the ingest token.** Lead: "Your password, to mint <name>'s token.
 Minting opens the log port for <address>, for 15 minutes, so it asks for
 your password at that moment. The token goes at the end of the block."
-One password field; Back; **Mint the token** primary. (#1291's model:
+One password field; Back; **Mint the ingest token** primary. (#1291's model:
 minting is what opens the port, so it asks every time.)
 
 **3 · Paste once.** Lead: "One paste. N parts, in order — <titles> — and
@@ -262,7 +269,7 @@ wear these same tokens.
 
 "Add another router" from the ledger, and the Entities routers row's
 "+ add a router" berth (#1284), open this same wizard at **The router**;
-**Re-enrol…** on a router card opens it at **Mint the token** for that
+**Re-enrol…** on a router card opens it at **Mint the ingest token** for that
 router with a fresh token. There is no separate router ledger: the
 five steps are the router ledger, with the certificate as one of the
 paste's parts rather than a step of its own. Refused senders are

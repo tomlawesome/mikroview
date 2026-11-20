@@ -282,3 +282,25 @@ describe('the restart statement (#795)', () => {
     expect(chip(container)).toBeNull()
   })
 })
+
+// #1539 C2 (decision 18a): Escape disarms an armed control, same as a
+// click elsewhere. Today it leaves the clear-all bubble red.
+describe('Escape disarms clear all (#1539 C2)', () => {
+  it('an armed clear-all goes back to "clear all" on Escape and clears nothing', async () => {
+    authState.role = 'user'
+    flagsState.list = [testFlag()]
+    render(Docket)
+    await Promise.resolve()
+    flushSync()
+
+    const bubble = screen.getByRole('button', { name: 'clear all' })
+    bubble.click()
+    flushSync()
+    expect(bubble.textContent?.trim()).toBe('confirm')
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    flushSync()
+
+    expect(bubble.textContent?.trim()).toBe('clear all')
+  })
+})

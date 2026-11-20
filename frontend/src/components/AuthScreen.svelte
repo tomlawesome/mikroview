@@ -103,8 +103,8 @@
     onSubmitFactor?: (code: string) => Promise<string | null>
     setupCode?: boolean
     // forgetPassword empties both password fields; a caller that has
-    // spent the password (AuthSetup, handing it to the SSO link) calls it
-    // so the form keeps no copy a moment longer than it must (#1202 U10).
+    // finished with the password calls it so the form keeps no copy a
+    // moment longer than it must (#1202 U10).
     onSubmitSetup?: (
       setupCode: string,
       username: string,

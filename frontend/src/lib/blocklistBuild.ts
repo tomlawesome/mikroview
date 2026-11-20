@@ -8,7 +8,7 @@
 //
 // Nothing here holds RouterOS syntax: every command line comes from the
 // server (internal/routeros/blocklist.go). Nothing here talks to a
-// router either; MikroView never connects to one (AGENTS.md).
+// router either; MikroView never connects to one (docs/decisions/observe-never-probe.md).
 
 import type {
   BlocklistBuilder,

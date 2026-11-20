@@ -30,7 +30,7 @@ const RATE = 201649 / (9 * 3600)
 
 // Round 39 is the specification, so these assert its own numbers rather
 // than whatever the code happens to produce. If the drawing and the
-// build ever disagree, that is a defect (AGENTS.md, "Building a
+// build ever disagree, that is a defect (docs/design/screens/README.md, "Building a
 // ratified design"), and this is where it shows.
 describe('round 39 draws these exact figures', () => {
   it('places the handle where the drawing places it', () => {

@@ -578,13 +578,13 @@ describe('LogEveryRule device pick', () => {
     await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
     await typeExport(container)
     await clickAnalyse()
-    await waitFor(() => expect(container.querySelector('.load-error')).toBeTruthy())
+    await waitFor(() => expect(container.querySelector('[role="alert"]')).toBeTruthy())
 
     const select = container.querySelector('#ler-device') as HTMLSelectElement
     await fireEvent.change(select, { target: { value: 'edge-2' } })
 
     await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
-    expect(container.querySelector('.load-error')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
   // Clearing on the switch is not enough on its own. A request already
@@ -637,7 +637,13 @@ describe('LogEveryRule device pick', () => {
 
     settle('edge-1 has not been observed for long enough yet')
     await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
-    expect(container.querySelector('.load-error')).toBeNull()
+    // Positive first: the analyse call really was made and has now
+    // settled, so the absence below is the stale result being dropped,
+    // not an error line that never had a chance to appear.
+    expect(vi.mocked(fetchTuneLoggingAnalyse)).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
   // The highlight the topography hands over, guarded because clearing
@@ -792,7 +798,7 @@ describe('LogEveryRule device pick', () => {
     await typeExport(container)
     await clickAnalyse()
 
-    await waitFor(() => expect(container.querySelector('.load-error')?.textContent).toContain('Failed to fetch'))
+    await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('Failed to fetch'))
     expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -848,5 +854,39 @@ describe('LogEveryRule survives the deck unmounting and remounting the card (#11
     const second = render(LogEveryRule)
     await waitFor(() => expect(second.container.querySelector('.render-result')).toBeTruthy())
     expect(second.container.querySelector('.render-result pre')?.textContent).toBe(renderResponse().commands)
+  })
+})
+
+describe('LogEveryRule copy label flip (#1542 C12)', () => {
+  async function toRender(container: HTMLElement) {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBe(1))
+    await fireEvent.click(screen.getByRole('button', { name: /^Render/ }))
+    await waitFor(() => expect(container.querySelector('.render-result')).toBeTruthy())
+  }
+
+  it('flips to lowercase "copied" and returns to its label', async () => {
+    const { container } = render(LogEveryRule)
+    await toRender(container)
+    const btn = screen.getByRole('button', { name: 'Copy the annotated export' })
+    vi.useFakeTimers()
+    await fireEvent.click(btn)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(btn.textContent?.trim()).toBe('copied')
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(btn.textContent?.trim()).toBe('Copy the annotated export')
+    vi.useRealTimers()
+  })
+
+  it('flips to "copy failed" when the copy fails', async () => {
+    const { container } = render(LogEveryRule)
+    await toRender(container)
+    vi.mocked(copyToClipboard).mockResolvedValue(false)
+    const btn = screen.getByRole('button', { name: 'Copy the annotated export' })
+    await fireEvent.click(btn)
+    await waitFor(() => expect(btn.textContent?.trim()).toBe('copy failed'))
   })
 })

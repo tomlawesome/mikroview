@@ -63,7 +63,7 @@
   } from '../lib/backups'
   import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
-  import { portOf } from '../lib/setupsteps'
+  import { listenPort } from '../lib/format'
   import { saveSetupBackupTransport } from '../lib/api'
   import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
   import type {
@@ -337,11 +337,11 @@
   async function submitSet() {
     formError = null
     if (runeCount(newPassphrase) < lock.minPassphraseLength) {
-      formError = `the vault passphrase must be at least ${lock.minPassphraseLength} characters`
+      formError = `The vault passphrase must be at least ${lock.minPassphraseLength} characters.`
       return
     }
     if (newPassphrase !== confirmPassphrase) {
-      formError = "the two don't match"
+      formError = "The two do not match."
       return
     }
     submitting = true
@@ -358,15 +358,15 @@
   async function submitChange() {
     formError = null
     if (!currentPassphrase) {
-      formError = 'enter the current vault passphrase'
+      formError = "Enter the current vault passphrase."
       return
     }
     if (runeCount(newPassphrase) < lock.minPassphraseLength) {
-      formError = `the vault passphrase must be at least ${lock.minPassphraseLength} characters`
+      formError = `The vault passphrase must be at least ${lock.minPassphraseLength} characters.`
       return
     }
     if (newPassphrase !== confirmPassphrase) {
-      formError = "the two don't match"
+      formError = "The two do not match."
       return
     }
     submitting = true
@@ -428,11 +428,11 @@
     if (!keepTarget) return
     const comment = keepComment.trim()
     if (comment.length === 0) {
-      formError = 'say why you are keeping it'
+      formError = "Say why you are keeping it."
       return
     }
     if (runeCount(comment) > MAX_KEEP_COMMENT) {
-      formError = `at most ${MAX_KEEP_COMMENT} characters`
+      formError = `At most ${MAX_KEEP_COMMENT} characters.`
       return
     }
     submitting = true
@@ -621,7 +621,7 @@
     <span>drop box</span>
     <span class="ov">
       {#if dropBoxOpen}
-        open on port {portOf(resp.port ?? '')}
+        open on port {listenPort(resp.port ?? '')}
         · <button type="button" class="olink" disabled={switchSubmitting} onclick={closeDropBox}>close</button>
       {:else}
         closed
@@ -712,7 +712,7 @@
           {#if httpsTransport}
             HTTPS to the ingest channel — the drop box's port is not used
           {:else}
-            SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of
+            SFTP on port {listenPort(resp.port)} · a drop box the router writes into and nothing reads out of
           {/if}
         </span>
       </div>
@@ -946,7 +946,7 @@
           {#if httpsTransport}
             HTTPS to the ingest channel — the drop box's port is not used
           {:else}
-            SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of
+            SFTP on port {listenPort(resp.port)} · a drop box the router writes into and nothing reads out of
           {/if}
         </span>
       </div>

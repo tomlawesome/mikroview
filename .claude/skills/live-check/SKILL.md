@@ -1,6 +1,6 @@
 ---
 name: live-check
-description: Stand up a real mikroview and drive it in a real browser. Runs continuously on dev after merges, and once clean before dev -> preview; on a branch by choice, not by rule.
+description: Stand up a real mikroview and drive it in a real browser. CI runs it as the blocking gate on every MR and dev pipeline; run it by hand to reproduce a red gate job or to try another browser engine.
 ---
 
 # Live check
@@ -11,11 +11,10 @@ firewall events, and drives it in Chromium via Playwright.
 
 Not the test suite. Run it in addition, not instead.
 
-**It is not a step before a merge.** Since 2026-09-02 a PR merges on green
-CI plus review; the gate runs on `dev` in a loop on the second host, and a
-new failure against the previous run is filed against that merge window and
-fixed forward. It blocks only `dev -> preview`. AGENTS.md, "The gate runs
-on `dev`, after the merge", has the rule and the reasoning.
+**CI runs it; you do not run it before a cut.** Since 2026-09-08 the gate
+is a blocking stage on every MR and `dev` pipeline, and no loop runs
+anywhere. Run it by hand only to reproduce a red gate job. docs/runner-host.md, "The
+gate in CI", has the rule and the reasoning.
 
 **It does not have to run here.** `make live-check-remote` runs the same gate
 on the second host, so this machine stays free for the 35-50 minutes it takes.

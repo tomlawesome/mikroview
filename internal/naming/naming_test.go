@@ -3,6 +3,11 @@
 package naming
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -421,5 +426,106 @@ func TestDeviceProvenanceEntityNamesADiscoveredRouter(t *testing.T) {
 	p = r.DeviceProvenance("10.0.0.10")
 	if p.Name != "" || p.Source != SourceNone || p.Fixed() {
 		t.Errorf("Provenance = %+v, want an unnamed, editable device", p)
+	}
+}
+
+// namingSourceConstants returns every Source* string constant declared in
+// naming.go, read from the source so a constant added later is covered
+// without anyone editing this test.
+func namingSourceConstants(t *testing.T) map[string]string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "naming.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse naming.go: %v", err)
+	}
+	out := map[string]string{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, id := range vs.Names {
+				if !strings.HasPrefix(id.Name, "Source") || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				v, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", id.Name, err)
+				}
+				out[id.Name] = v
+			}
+		}
+	}
+	return out
+}
+
+func TestEverySourceConstantHasAnOperatorNote(t *testing.T) {
+	consts := namingSourceConstants(t)
+	// Guard against the scan silently finding nothing (or too little).
+	for _, must := range []string{"SourceEntity", "SourceConfig", "SourceConfigDevice", "SourceRouterUnknown"} {
+		if _, ok := consts[must]; !ok {
+			t.Fatalf("scan did not find %s; found %v", must, consts)
+		}
+	}
+	for name, value := range consts {
+		if value == SourceNone {
+			continue // nothing names the key: no "from" line is correct
+		}
+		if strings.TrimSpace(SourceNote(value)) == "" {
+			t.Errorf("%s (%q) has an empty SourceNote", name, value)
+		}
+	}
+}
+
+// RuleProvenance: an entity label beats the config.yaml name and is
+// reported as the entity source; a rule nothing names is SourceNone.
+// Neither case may gate an edit on a router.
+func TestRuleProvenanceEntityWinsAndMissIsNone(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypeRule, Key: "r13", Label: "UI label"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Entities: es, Rules: map[string]string{"r13": "YAML label"}}
+
+	p := r.RuleProvenance("r13")
+	if p.Name != "UI label" || p.Label != "UI label" || p.Source != SourceEntity || p.RouterWins() {
+		t.Errorf("RuleProvenance(r13) = %+v, want the entity label as %q", p, SourceEntity)
+	}
+	p = r.RuleProvenance("unknown")
+	if p.Name != "" || p.Source != SourceNone || p.RouterWins() {
+		t.Errorf("RuleProvenance(unknown) = %+v, want unnamed", p)
+	}
+	if p := (Resolver{}).RuleProvenance("r13"); p.Source != SourceNone {
+		t.Errorf("zero Resolver RuleProvenance = %+v, want none", p)
+	}
+}
+
+// Device: "" for an empty id even when a config entry exists for "",
+// the entity layer names what config does not, and a miss -- with or
+// without an entity store -- is "" so the caller shows the raw id.
+func TestDeviceLookupFallbacks(t *testing.T) {
+	store, _ := entities.Open("")
+	if _, err := store.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "192.0.2.9", Label: "lab crs"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Devices: map[string]string{"": "bogus", "border": "Border Router"}, Entities: store}
+
+	if got := r.Device(""); got != "" {
+		t.Errorf("Device(\"\") = %q, want empty", got)
+	}
+	if got := r.Device("192.0.2.9"); got != "lab crs" {
+		t.Errorf("Device(192.0.2.9) = %q, want the entity label", got)
+	}
+	if got := r.Device("nope"); got != "" {
+		t.Errorf("Device(nope) = %q, want empty", got)
+	}
+	if got := (Resolver{Devices: map[string]string{"border": "B"}}).Device("other"); got != "" {
+		t.Errorf("Device without entities = %q, want empty", got)
 	}
 }

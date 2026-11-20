@@ -22,6 +22,8 @@
   // a text chip, never left as a footnote to be skimmed past. The chip
   // is accent-coloured in logged mode, but the distinction it carries is
   // the word, never the colour.
+  import { restoreFocus } from '../lib/focusTrap'
+  import FailureLine from './FailureLine.svelte'
   import { routerLookupState as st, natChip, natTitle } from '../lib/routerLookup.svelte'
   import { appState } from '../lib/state.svelte'
   import RouterNatLookup from './RouterNatLookup.svelte'
@@ -81,7 +83,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if st.anchor}
-  <div bind:this={popoverEl} class="popover" {style} role="dialog" aria-label={title}>
+  <div bind:this={popoverEl} class="popover" {style} role="dialog" aria-label={title} use:restoreFocus>
     <div class="header">
       <span class="title">{title}</span>
       {#if st.mode === 'nat' && !st.loading && !st.error}
@@ -98,7 +100,7 @@
     {:else if st.loading}
       <div class="status">Loading…</div>
     {:else if st.error}
-      <div class="status error">{st.error}</div>
+      <FailureLine verb="look up" thing="this router" said={st.error} />
     {:else if !st.available}
       <div class="status">
         No rule table pushed by “{st.deviceName}” yet — this data arrives via the RouterOS push
@@ -209,10 +211,6 @@
   .status {
     color: var(--fg-dim);
     padding: 4px 0;
-  }
-
-  .status.error {
-    color: var(--reject);
   }
 
   .status code {

@@ -97,7 +97,7 @@ docs/configuration.md — nothing here changes for you.
 address its syslog comes from (#1281). From this version on, a syslog
 source is accepted only once it is the address you declared under
 `devices:` in config.yaml (`sourceIp`), or once it has redeemed a
-one-time enrolment token you mint for it from the Entities screen. Until
+one-time ingest token you mint for it from the Entities screen. Until
 then, its lines are refused and shown under "Refused senders" rather
 than counted at all.
 
@@ -112,7 +112,7 @@ Enrol it by hand:
    press **+ add a router** first if it has never pushed anything at all
    — routers that only send logs, never a push, have no entry to enrol
    until you add one by name).
-2. Press **Re-enrol…** to open the setup wizard at **Mint the token**.
+2. Press **Re-enrol…** to open the setup wizard at **Mint the ingest token**.
 3. Give your password. MikroView opens
    the syslog port for that one address while the token is pending, and
    asks who you are because minting the token is what opens it — holding

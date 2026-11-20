@@ -4,15 +4,15 @@
 # Run the live-check gate on the second host, from the tree you are sitting in.
 #
 # Why this exists: the gate takes 35-50 minutes and holds the machine it runs
-# on, which is the bottleneck #673's image was built to relieve. AGENTS.md's
-# "The second host live-check runs on" has the account and its limits.
+# on, which is the bottleneck #673's image was built to relieve. docs/runner-host.md's
+# "The account" section has the account and its limits.
 #
 # Transport is `git push` over SSH into a bare repo on the host. Not rsync,
 # and not a clone from GitHub or GitLab:
 #
 #   - Both repos are private and that account deliberately holds no
-#     credential, so it cannot pull. AGENTS.md: "Never put a token on that
-#     host ... If a step seems to need one, the step is wrong." Pushing
+#     credential, so it cannot pull. docs/runner-host.md's "The account" section:
+#     "Never put a token on that host ... If a step seems to need one, the step is wrong." Pushing
 #     authenticates from this side instead, so nothing lands over there.
 #   - Only new objects cross after the first run, and node_modules and the
 #     worktrees/ trees never do -- git simply does not carry them. That is a

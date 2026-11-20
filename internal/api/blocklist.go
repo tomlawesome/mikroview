@@ -24,7 +24,7 @@ import (
 // /api/droplist: the block re-sets the router's push script with a
 // fresh ingest token and writes enforcement onto the router, so it is a
 // setup task in the same tier as minting the drop list's key. MikroView
-// never runs any of it -- it prints commands (AGENTS.md, "MikroView
+// never runs any of it -- it prints commands (docs/decisions/observe-never-probe.md, "MikroView
 // observes; it never scans or connects") -- and never serves, copies or
 // vendors a list: the catalogue below is names, URLs, terms and recipes.
 //

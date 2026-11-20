@@ -3,7 +3,7 @@
 Ratified: round 2 (`round-2/README.md`, `catalogue.md`, `builder.html`,
 `tail.html`) plus the owner's answers on the issue — 9b, 11a, 12a, 13,
 14a, 15, 17a, 18, and 2026-10-01: 1b+1c (seven lists), 2a (the tail as
-drawn). Build it as drawn (AGENTS.md, "Building a ratified design"); where
+drawn). Build it as drawn (README.md in docs/design/screens, "Building a ratified design"); where
 these notes amend the drawing they say so, under "Decisions". Written for
 an Opus 5.5 builder (owner, 2026-10-01: "Fable designs, Opus 5.5 builds").
 
@@ -13,8 +13,8 @@ is stale — this build bumps to **6**.
 
 Invariants that bind every part: MikroView never connects to the router
 (it prints commands); the router fetches each list from its source and
-MikroView never serves, copies or vendors list data (AGENTS.md, "List and
-lookup data"; dependencies-and-data skill) — the catalogue is names, URLs,
+MikroView never serves, copies or vendors list data (docs/decisions/scope-and-companion-projects.md, "Why list and
+lookup data..."; dependencies-and-data skill) — the catalogue is names, URLs,
 terms and recipes only; a feed's attribution travels with the data
 (Spamhaus: credit and © in each entry's comment).
 

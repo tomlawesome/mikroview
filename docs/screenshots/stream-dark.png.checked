@@ -1,0 +1,4 @@
+Recaptured at f40cfbb2 (2026-11-19) from a seeded demo (scripts/demo-up.sh) and the output matched the committed image in
+what it shows (only clock times, ports, secrets and event rates differ): LiveTable.svelte and columns.svelte.ts changed, but the stream shows the same columns and rows; live rows differ as they always do.
+Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
+cannot move.

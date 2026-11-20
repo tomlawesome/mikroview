@@ -858,7 +858,7 @@ func (s *Store) Devices() []string {
 // caller must not read it as old, unsupported, or anything else.
 //
 // The version is the router's own claim about itself, unverified by
-// construction: mikroview never connects to a router (AGENTS.md,
+// construction: mikroview never connects to a router (docs/decisions/observe-never-probe.md,
 // "mikroview observes; it never scans or connects"), so there is nothing
 // to check it against. Scoped to the pushing device for the same reason
 // every other read here is -- see HostName.

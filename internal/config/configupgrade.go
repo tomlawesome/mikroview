@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // MissingSetting is one optional configuration section this build

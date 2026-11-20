@@ -40,6 +40,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 vi.mock('../lib/passkeys.svelte', () => ({
   registerPasskey: vi.fn(),
   loginWithPasskey: vi.fn(),
+  passkeysSupported: vi.fn(() => true),
 }))
 
 vi.mock('../lib/qrcode', () => ({

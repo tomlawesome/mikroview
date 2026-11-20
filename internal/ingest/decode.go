@@ -185,7 +185,7 @@ func (p Payload) RecordCount() int {
 }
 
 // DecodePayload strictly decodes and validates a RouterOS ingest payload
-// from r. Strict in the sense AGENTS.md asks of anything parsing
+// from r. Strict in the sense the project's security standards ask of anything parsing
 // attacker-shaped input: unknown fields are refused rather than silently
 // ignored, every bound in this file is enforced before a Payload is ever
 // returned, and a payload that fails any check is refused whole rather
@@ -397,6 +397,9 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("inInterface", r.InInterface); err != nil {
 		return err
 	}
+	if err := validateFieldText("inInterfaceList", r.InInterfaceList); err != nil {
+		return err
+	}
 	return validateFieldText("outInterface", r.OutInterface)
 }
 
@@ -423,6 +426,9 @@ func (r NATRule) validate() error {
 		return err
 	}
 	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterfaceList", r.InInterfaceList); err != nil {
 		return err
 	}
 	if err := validateFieldText("outInterface", r.OutInterface); err != nil {

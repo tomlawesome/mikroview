@@ -1063,8 +1063,8 @@ func TestHandleDefinitionsDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
 
 	if _, ok := s.Definitions.Get(entry.ID); ok {

@@ -300,6 +300,7 @@ describe('StepStand: the ledger (#1385)', () => {
     await tick()
 
     await fireEvent.click(screen.getByRole('button', { name: /forget rb5009 on MikroView/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — the router must enrol again/ }))
     await waitFor(() => expect(wizardRun.answers.stage).toBe('ask'))
 
     expect(deleteDevice).toHaveBeenCalledTimes(1)
@@ -317,9 +318,88 @@ describe('StepStand: the ledger (#1385)', () => {
     await tick()
 
     await fireEvent.click(screen.getByRole('button', { name: /forget rb5009 on MikroView/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — the router must enrol again/ }))
     await waitFor(() => expect(screen.getByText('device is declared in config.yaml')).toBeTruthy())
 
     expect(wizardState.ledgerDevice).toBe('rb5009')
+  })
+
+  // A2-S5: Admin > Run setup... names no router (launch() clears
+  // ledgerDevice); begin() takes the name from the evidence's address.
+  function landOnUnnamedDoor() {
+    landOnStand()
+    wizardState.ledgerDevice = ''
+    wizardState.addingRouter = false
+    wizardRun.name = '192.0.2.1'
+  }
+
+  it('forget on a Run setup… walk that names no router forgets the router enrolled from the evidence’s address (A2-S5)', async () => {
+    landOnUnnamedDoor()
+    render(StepStand)
+    await tick()
+    await fireEvent.click(screen.getByRole('button', { name: 'undo everything on the router first' }))
+    await tick()
+    await fireEvent.click(screen.getByRole('button', { name: /forget 192\.0\.2\.1 on MikroView — its token, its enrolment and its record/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — the router must enrol again/ }))
+    await waitFor(() => expect(deleteDevice).toHaveBeenCalledWith('rb5009'))
+    expect(deleteDevice).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(wizardRun.answers.stage).toBe('ask'))
+    expect(wizardState.ledgerDevice).toBe('')
+  })
+
+  it('forget says there is nothing to forget when no router record matches the walk’s address (A2-S5)', async () => {
+    landOnUnnamedDoor()
+    wizardState.devices = []
+    render(StepStand)
+    await tick()
+    await fireEvent.click(screen.getByRole('button', { name: 'undo everything on the router first' }))
+    await tick()
+    await fireEvent.click(screen.getByRole('button', { name: /forget 192\.0\.2\.1 on MikroView/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm — the router must enrol again/ }))
+    await waitFor(() => expect(screen.getByText('MikroView holds no router record for 192.0.2.1 — there is nothing to forget.')).toBeTruthy())
+    expect(deleteDevice).not.toHaveBeenCalled()
+    expect(wizardRun.answers.stage).toBe('done')
+  })
+
+  describe('a reopened ledger (A2-F7)', () => {
+    it('reads the tagged rules from the push after begin(), and their Undo clears exactly those', async () => {
+      vi.mocked(fetchRouterRules).mockResolvedValue({
+        available: true,
+        updatedAt: '2026-09-27T14:23:31Z',
+        rules: [
+          rule({ ordinal: 0, chain: 'input', action: 'accept', comment: 'ssh from mgmt', log: true, logPrefix: 'A|in-ssh|' }),
+          rule({ ordinal: 4, chain: 'input', action: 'drop', comment: 'drop from WAN', inInterface: 'ether1', log: true, logPrefix: 'D|drop-from-wan|' }),
+          rule({ ordinal: 5, chain: 'forward', action: 'drop', inInterface: 'ether1' }),
+        ],
+      } as never)
+      wizardState.ledgerDevice = 'rb5009'
+      wizardState.devices = [device()]
+      wizardState.status = status()
+      wizardRun.begin()
+      expect(wizardRun.answers.stage).toBe('done')
+      expect(wizardRun.tuneCopied).toBe(false)
+      expect(wizardRun.tuneChosen).toEqual([])
+
+      const { container } = render(StepStand)
+      await waitFor(() => expect(wizardRun.evidence.taggedRules).toBe(2))
+      await waitFor(() => expect(screen.getByText('2 rules log · pushed 14:23:31')).toBeTruthy())
+      const row = Array.from(container.querySelectorAll('.ledger .row')).find((r) => r.textContent?.includes('Rules tagged'))!
+      expect(row.classList.contains('skip')).toBe(false)
+      expect(row.querySelector('.step-n')?.textContent).toBe('✓')
+      expect(screen.queryByText(/left dark/)).toBeNull()
+
+      const two = '/ip firewall filter set [find comment="ssh from mgmt"] log=no log-prefix=""\n/ip firewall filter set [find comment="drop from WAN"] log=no log-prefix=""'
+      await fireEvent.click(row.querySelector('button')!)
+      await tick()
+      expect(screen.getByText(two, { normalizer: keepLines })).toBeTruthy()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'undo everything on the router first' }))
+      await tick()
+      const whole = Array.from(document.querySelectorAll('pre')).map((p) => p.textContent ?? '').find((t) => t.includes(UNDO.schedule))!
+      expect(whole).toContain(two)
+      expect(whole.indexOf(two)).toBeGreaterThan(whole.indexOf(UNDO.schedule))
+    })
   })
 })
 
@@ -361,5 +441,89 @@ describe('the doors: Entities berth and Re-enrol open the wizard at the right st
     // Consumed -- a later ordinary reopen (Admin ▸ Run setup…) must not
     // keep forcing Mint on this router.
     expect(wizardState.reEnrolling).toBe(false)
+  })
+})
+
+// #1539 C1 (decision 15a) and C2 (18a): forgetting the router is
+// arm-then-confirm like its siblings (round 28): the first click flips the
+// label to `confirm — <consequence>`, a second acts, any other click or
+// Escape disarms. Today the first click deletes.
+describe('StepStand: forget is arm-then-confirm (#1539 C1)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchRouterRules).mockResolvedValue(TABLE)
+    vi.mocked(deleteDevice).mockResolvedValue(null)
+    vi.mocked(fetchSetupStatus).mockResolvedValue({ ...status(), sources: [], devices: [] })
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    vi.mocked(fetchRouterBackups).mockResolvedValue({
+      enabled: true,
+      keyUnreadable: false,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      lock: 'open',
+    } as never)
+    wizardState.reset()
+    wizardRun.reset()
+    wizardState.commands = commands()
+    wizardState.open = true
+  })
+
+  afterEach(() => {
+    wizardState.reset()
+    wizardRun.reset()
+    vi.clearAllMocks()
+  })
+
+  async function reachForget() {
+    landOnStand()
+    render(StepStand)
+    await tick()
+    await fireEvent.click(screen.getByRole('button', { name: 'undo everything on the router first' }))
+    await tick()
+    return screen.getByRole('button', { name: /forget rb5009 on MikroView/ })
+  }
+
+  it('the first click arms it with the consequence in the label and deletes nothing', async () => {
+    const btn = await reachForget()
+    await fireEvent.click(btn)
+    await tick()
+
+    expect(deleteDevice).not.toHaveBeenCalled()
+    expect(btn.textContent?.trim()).toMatch(/^confirm — \S/)
+    expect(btn.textContent).toMatch(/enrol/i)
+  })
+
+  it('the second click forgets the router', async () => {
+    const btn = await reachForget()
+    await fireEvent.click(btn)
+    await tick()
+    expect(deleteDevice).not.toHaveBeenCalled()
+    await fireEvent.click(btn)
+    await waitFor(() => expect(deleteDevice).toHaveBeenCalledWith('rb5009'))
+    expect(deleteDevice).toHaveBeenCalledTimes(1)
+  })
+
+  it('a click elsewhere disarms it', async () => {
+    const btn = await reachForget()
+    await fireEvent.click(btn)
+    await tick()
+    await fireEvent.click(document.body)
+    await tick()
+
+    expect(btn.textContent?.trim()).not.toMatch(/^confirm/)
+    expect(deleteDevice).not.toHaveBeenCalled()
+  })
+
+  it('Escape disarms it (#1539 C2)', async () => {
+    const btn = await reachForget()
+    await fireEvent.click(btn)
+    await tick()
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    await tick()
+
+    expect(btn.textContent?.trim()).not.toMatch(/^confirm/)
+    expect(deleteDevice).not.toHaveBeenCalled()
   })
 })

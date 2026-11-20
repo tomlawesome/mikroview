@@ -185,7 +185,7 @@ describe('SceneBar (#683, ratified round 30)', () => {
     ]
     watchlistState.coverage = { a: 'ok' as never, b: 'ok' as never }
     render(SceneBar, { scene: 'metrics' })
-    expect(screen.getByTitle('2 watchers held')).toBeTruthy()
+    expect(screen.getByTitle('2 watches held')).toBeTruthy()
     expect(screen.queryByText(/○/)).toBeNull()
   })
 
@@ -203,7 +203,7 @@ describe('SceneBar (#683, ratified round 30)', () => {
   it('drops the watch marker for a tier that cannot read the watchlist', () => {
     authState.role = 'viewer'
     render(SceneBar, { scene: 'metrics' })
-    expect(screen.queryByTitle('0 watchers held')).toBeNull()
+    expect(screen.queryByTitle('0 watches held')).toBeNull()
     expect(screen.getByText('⚑ 0')).toBeTruthy()
   })
 

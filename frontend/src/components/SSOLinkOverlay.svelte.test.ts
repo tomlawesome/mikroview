@@ -13,6 +13,7 @@ vi.mock('../lib/api', () => ({
 import { startSSOLink } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import SSOLinkOverlay from './SSOLinkOverlay.svelte'
+import { expectFocusInside, expectTabWraps, focusedTrigger } from './dialogKit'
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -151,5 +152,30 @@ describe('SSOLinkOverlay', () => {
     authState.showSSOLink = false
     const { container } = render(SSOLinkOverlay)
     expect(container.textContent).toBe('')
+  })
+})
+
+// #1539 C3 (decision 19a): an aria-modal dialog owns focus -- it moves in
+// on open, Tab wraps inside it, and closing hands focus back to what
+// opened it.
+describe('SSOLinkOverlay owns focus (#1539 C3)', () => {
+  it('moves focus inside on open and wraps Tab and Shift+Tab at its ends', () => {
+    const trigger = focusedTrigger()
+    render(SSOLinkOverlay)
+    const dialog = screen.getByRole('dialog', { name: 'Connect SSO' })
+    expectFocusInside(dialog)
+    expectTabWraps(dialog)
+    trigger.remove()
+  })
+
+  it('hands focus back to the trigger when it closes', async () => {
+    const trigger = focusedTrigger()
+    render(SSOLinkOverlay)
+    screen.getByRole('button', { name: /^cancel$/i }).focus()
+    expect(document.activeElement).not.toBe(trigger)
+    await fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+    expect(authState.showSSOLink).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
   })
 })

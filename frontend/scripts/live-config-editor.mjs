@@ -137,9 +137,14 @@ const unsaved = page.locator(`${EDITOR} button:text-is("Close without saving")`)
 if (await unsaved.isVisible().catch(() => false)) await unsaved.click()
 await page.waitForSelector(EDITOR, { state: 'detached', timeout: 5000 }).catch(() => {})
 check((await page.locator(EDITOR).count()) === 0, 'Close takes the editor away')
+// The file row's label is exactly "file" (hasText 'file' alone would also
+// match other rows), and its value must be the running config's own path,
+// not merely something other than a stale message (A6-T1).
+const fileRow = page.locator(`${CARD} .orow`).filter({ has: page.locator('span:first-child', { hasText: /^file$/ }) })
+const fileValue = ((await fileRow.locator('.ov').first().textContent().catch(() => '')) ?? '').trim()
 check(
-  !(await page.locator(`${CARD} .orow`).filter({ hasText: 'file' }).first().textContent()).includes('shown once'),
-  'the card now names the running file',
+  fileValue.endsWith('/cfg.yaml') && !fileValue.includes('shown once'),
+  `the card now names the running file (got "${fileValue}")`,
 )
 
 check(await responsive(page), 'main thread responsive')

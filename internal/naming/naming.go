@@ -120,6 +120,31 @@ const (
 	SourceRouterUnknown = "router"
 )
 
+// SourceNote puts a Source* token into words an operator can read: a
+// token is a fine thing for a UI to switch on and a poor thing to show.
+// It returns "" for a token it does not know.
+func SourceNote(source string) string {
+	switch source {
+	case SourceRouterDNSStatic:
+		return "a static DNS entry pushed by the router, which outranks anything named here"
+	case SourceRouterDHCPLease:
+		return "the hostname on the router's own DHCP lease"
+	case SourceRouterWireguardPeer:
+		return "the comment on the router's WireGuard peer"
+	case SourceRouterUnknown:
+		return "a name pushed by the router, which outranks anything named here"
+	case SourceEntity:
+		return "a label you saved in MikroView"
+	case SourceConfig:
+		return "an alias in MikroView's config file"
+	case SourceConfigDevice:
+		return "a device name in MikroView's config file, which outranks anything named here"
+	case SourceNone:
+		return "nothing has named this address"
+	}
+	return ""
+}
+
 // Provenance is where a displayed name came from, for one key.
 //
 // Name is what is displayed (empty when nothing names the key) and

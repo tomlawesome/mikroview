@@ -106,7 +106,7 @@ func checkNoRestoreInProgress(cfg config.Config) error {
 		"at %s is still there, which means only part of the backup reached the disk: some stores "+
 		"may still hold whatever was here before it, or the stores all landed but the router backup "+
 		"vault or the retained event history did not. Finish it by re-running the same `mikroview -restore <file> "+
-		"--force` that was interrupted, or replace this data directory with your own copy of it",
+		"-force` that was interrupted, or replace this data directory with your own copy of it",
 		path)
 }
 

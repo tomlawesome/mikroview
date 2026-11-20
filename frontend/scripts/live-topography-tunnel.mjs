@@ -137,6 +137,24 @@ check(
   'the wireguard-peer table is accepted, with a handshake seconds old',
 )
 
+// The overlay pills and the camera settling do not depend on the tunnel
+// rows, which tunnelsState.refresh() loads after Topography mounts (#1536).
+// Wait for the node itself, and fail naming it if it never comes.
+async function waitForTunnelNode() {
+  await page
+    .waitForFunction(
+      () =>
+        [...document.querySelectorAll('[data-card="topography"] .n-name')].some(
+          (n) => n.textContent?.trim() === 'WireGuard',
+        ),
+      null,
+      { timeout: 10000 },
+    )
+    .catch(() => {
+      throw new Error('the WireGuard tunnel node never appeared on the Topography map within 10s')
+    })
+}
+
 // This session has not yet visited Topography, so its own $effect
 // (zonesState/tunnelsState/etc, gated on appState.devices) fires fresh
 // on this first navigation -- no reload needed to see the tables pushed
@@ -147,6 +165,7 @@ await page.click('.rail-name >> text=Topography')
 // is the same "the map is up" signal the lens row used to give.
 await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
 await waitForSettle('[data-card="topography"] .camera')
+await waitForTunnelNode()
 
 const node = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
@@ -231,6 +250,7 @@ await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] [aria-label="Map overlays"]', { timeout: 10000 })
 await waitForSettle('[data-card="topography"] .camera')
+await waitForTunnelNode()
 
 const down = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')

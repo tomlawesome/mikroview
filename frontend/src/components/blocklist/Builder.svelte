@@ -13,6 +13,7 @@
   // the ledger say comes back in the router's own push.
 
   import { untrack } from 'svelte'
+  import { trapFocus } from '../../lib/focusTrap'
   import { blocklistState } from '../../lib/blocklist.svelte'
   import { FOOT_HINT, FOOT_HINT_BELOW, FOOT_HINT_NO_PUSH, RAIL_NOTE, hmLocal, inkFor, num, partsSummary, railRows } from '../../lib/blocklistBuild'
   import { fallState, laneColors } from '../../lib/fall.svelte'
@@ -83,8 +84,14 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Escape' && blocklistState.open) blocklistState.close()
+  }}
+/>
+
 {#if blocklistState.open}
-  <div class="page wiz live bl-page" role="dialog" aria-modal="true" aria-label="Block known-bad addresses">
+  <div class="page wiz live bl-page" role="dialog" aria-modal="true" aria-label="Block known-bad addresses" tabindex="-1" use:trapFocus>
     <div class="bar">
       <span class="wm">MIKRO<em>VIEW</em></span>
       <div class="chips" aria-label="Proofs so far">

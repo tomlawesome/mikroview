@@ -1,5 +1,6 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
+  import { trapFocus } from '../lib/focusTrap'
   import ActionBadge from './ActionBadge.svelte'
   // Full-detail bottom sheet for one event, opened by tapping a card in
   // EventCardMobile.svelte -- chosen over expanding the card in place
@@ -88,7 +89,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="scrim" onclick={onClose} role="presentation"></div>
-<div class="sheet" role="dialog" aria-modal="true" aria-label="Event detail">
+<div class="sheet" role="dialog" aria-modal="true" aria-label="Event detail" tabindex="-1" use:trapFocus>
   <div class="handle"></div>
 
   <div class="header">

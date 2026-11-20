@@ -87,7 +87,7 @@ func (s *Server) handleRouterBackupSwitchUpdate(w http.ResponseWriter, r *http.R
 
 	var req routerBackupSwitchRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 

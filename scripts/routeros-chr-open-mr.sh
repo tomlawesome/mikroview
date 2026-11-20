@@ -7,7 +7,7 @@
 # the exercise's console log, and opens a merge request on the GitLab
 # instance itself -- gitlab.tomlawson.io, project ai/mikroview -- since
 # that is where this job runs and where dev's review already happens
-# (AGENTS.md, "Where code review happens"). It never touches GitHub.
+# (docs/gitlab-delivery.md). It never touches GitHub.
 #
 # Never auto-merged: this only opens the merge request. A human still
 # reads the release notes and bumps ReviewedVersion

@@ -10,7 +10,7 @@
 //
 // Names, URLs, terms and parse recipes only. The router fetches each
 // list from its source on its own schedule; MikroView never serves,
-// copies or vendors list data (AGENTS.md, "List and lookup data"). A
+// copies or vendors list data (docs/decisions/scope-and-companion-projects.md, "Why list and lookup data..."). A
 // feed's attribution still travels with the data on the router --
 // Spamhaus asks for credit and its © text in each entry, which part 4's
 // loader writes into the address-list comment.

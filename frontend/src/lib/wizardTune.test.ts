@@ -2,7 +2,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { RouterFilterRule } from './api'
-import { matcherFor, prefixFor, proposeRules, quoteScript, slugFor, tagBlock, undoBlock } from './wizardTune'
+import { logPrefixSlug } from './fall.svelte'
+import { matcherFor, prefixFor, proposeRules, quoteScript, slugFor, tagBlock, taggedInPush, undoBlock } from './wizardTune'
 
 // The proposal and the block, as the ratified record has them (#1384):
 // rules that log nothing on a boundary nobody watches, each named by
@@ -69,12 +70,52 @@ describe('the proposal', () => {
   })
 })
 
+describe('the proposal: only prefixes MikroView reads back', () => {
+  it('writes only prefixes MikroView reads back, and leaves out a rule no code names', () => {
+    const table = [
+      rule({ ordinal: 0, chain: 'forward', action: 'jump', comment: 'to wan-in', inInterface: 'ether1', outInterface: 'bridge' }),
+      rule({ ordinal: 1, chain: 'input', action: 'return', comment: 'back', inInterface: 'ether1' }),
+      rule({ ordinal: 2, chain: 'input', action: 'add-src-to-address-list', comment: 'scanners', inInterface: 'ether2' }),
+      rule({ ordinal: 3, chain: 'forward', action: 'tarpit', comment: 'tarpit', inInterface: 'ether3', outInterface: 'bridge' }),
+      rule({ ordinal: 4, chain: 'forward', action: 'drop', comment: 'guest', inInterface: 'bridge-guest', outInterface: 'bridge' }),
+    ]
+    const p = proposeRules(table)
+    expect(p.total).toBe(5)
+    expect(p.rules.map((r) => r.ordinal)).toEqual([0, 1, 2, 4])
+    expect(p.rules.map((r) => r.prefix)).toEqual(['L|to-wan-in|', 'L|back|', 'L|scanners|', 'D|guest|'])
+    for (const r of p.rules) expect(logPrefixSlug(r.prefix)).toBe(r.prefix.slice(2, -1))
+    const block = tagBlock(table, p.rules)
+    expect(block).toContain('/ip firewall filter set [find comment="back"] log=yes log-prefix="L|back|"')
+    expect(block).not.toContain('tarpit')
+  })
+})
+
+describe('taggedInPush (A2-F7)', () => {
+  it('is the enabled rules logging under the convention prefix, and nothing else', () => {
+    const rules = [
+      rule({ ordinal: 0, log: true, logPrefix: 'A|in-ssh|' }),
+      rule({ ordinal: 1, log: true, logPrefix: 'fw-drop' }),
+      rule({ ordinal: 2, log: false, logPrefix: 'D|wan-in|' }),
+      rule({ ordinal: 3, log: true, logPrefix: 'D|wan-in|', disabled: true }),
+      rule({ ordinal: 4, log: true, logPrefix: '' }),
+      rule({ ordinal: 5, log: true, logPrefix: 'D|drop|' }),
+    ]
+    expect(taggedInPush(rules).map((r) => r.ordinal)).toEqual([0, 5])
+  })
+})
+
 describe('the prefix', () => {
   it('is the action initial, the slug, and both bars', () => {
     expect(prefixFor('drop', 'wan-in')).toBe('D|wan-in|')
     expect(prefixFor('accept', 'nat')).toBe('A|nat|')
     expect(prefixFor('reject', 'x')).toBe('R|x|')
     expect(prefixFor('log', 'x')).toBe('L|x|')
+  })
+
+  it('gives a rule that hands the packet on the L code, never a verdict it did not reach', () => {
+    for (const action of ['return', 'add-src-to-address-list', 'add-dst-to-address-list', 'jump', 'passthrough', 'fasttrack-connection']) {
+      expect(prefixFor(action, 'x'), action).toBe('L|x|')
+    }
   })
 
   it('slugs the comment, falls back to the interfaces then the chain, and stays unique', () => {
@@ -132,5 +173,40 @@ describe('the block', () => {
   it('undoes the same rules by switching logging back off', () => {
     const p = proposeRules(TABLE)
     expect(undoBlock(TABLE, [p.rules[1]])).toBe('/ip firewall filter set [find comment="drop from WAN"] log=no log-prefix=""')
+  })
+})
+
+// #1426 (A2-F12) break attempt: the action arrives from the router's own
+// text, so it can be anything. Every action must either get a code that
+// logPrefixSlug reads back to the slug, or be left out -- never a prefix
+// built from an object property name ('constructor', 'toString',
+// '__proto__' all resolve on a plain object lookup), an upper-case
+// spelling, or a stray action nobody mapped; and a rule that already logs
+// under its own prefix is never re-tagged.
+describe('the proposal never writes a prefix it cannot read back (#1426 A2-F12)', () => {
+  it('reads every proposed prefix back, whatever spelling the action has', () => {
+    const odd = [
+      'constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf',
+      'DROP', 'Accept', 'RETURN', 'fasttrack', 'tarpit', 'unknown-action', '', ' drop',
+      'drop ', 'accept\n',
+    ]
+    const table = odd.map((action, i) =>
+      rule({ ordinal: i, chain: 'forward', action, comment: `r${i}`, inInterface: `if${i}`, outInterface: 'bridge' }),
+    )
+    // a rule that already logs under its own convention prefix on a
+    // boundary of its own, and one logging under a foreign prefix
+    table.push(rule({ ordinal: odd.length, chain: 'input', action: 'return', comment: 'mine', inInterface: 'ether9', log: true, logPrefix: 'D|mine|' }))
+    table.push(rule({ ordinal: odd.length + 1, chain: 'input', action: 'passthrough', comment: 'theirs', inInterface: 'ether8', log: true, logPrefix: 'vendor-x' }))
+    const p = proposeRules(table)
+    for (const r of p.rules) {
+      expect(r.prefix, `action ${JSON.stringify(r.action)}`).toMatch(/^[ADRL]\|[a-z0-9-]+\|$/)
+      expect(logPrefixSlug(r.prefix), `action ${JSON.stringify(r.action)}`).toBe(r.prefix.slice(2, -1))
+      expect(r.prefix.length).toBeLessThanOrEqual(15)
+    }
+    // none of the logging rules is proposed again, and no odd action
+    // other than the three verdicts is proposed at all
+    expect(p.rules.map((r) => r.ordinal).filter((o) => o >= odd.length)).toEqual([])
+    for (const r of p.rules) expect(['accept', 'drop', 'reject']).toContain(r.action)
+    expect(tagBlock(table, p.rules)).not.toMatch(/function|native code|Object/)
   })
 })

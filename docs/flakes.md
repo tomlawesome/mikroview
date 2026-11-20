@@ -26,14 +26,6 @@ testing-and-ci skill (owner, 2026-09-08).
 
 - 2026-11-18 · b5ce741c (batch-b audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, shard 2/4 · `FAIL no console errors (WebSocket connection to 'ws://127.0.0.1:18482/api/ws' failed: WebSocket is closed before the connection is established.)`; every other check passed. The two full WebKit runs at 9545c47a the same day passed it. First sighting in this scenario; the same console line is logged above for another scenario.
 
-## live-topography-tunnel: the Topography rail entry is never found (30 s) under WebKit (#1536)
-
-- 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 4/4 · `page.click` timed out waiting for `.rail-name` `text=Topography` (`live-topography-tunnel.mjs:231`), after the tunnel checks had passed, so the scenario exited without a verdict. The second WebKit run passed shard 4/4 27/27.
-- 2026-11-16 · adf60719 (batch-b, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4 --shard 4/4`, first rerun · a different symptom: the tunnel node was never drawn (`the tunnel is drawn as its own node beside Internet`, `the node names its interface and subnet (got null)`, `wg0 appears exactly once on the map, as the node (found 0)`, `the tunnel is joined to the router by its own line`). The full WebKit run before it and the second rerun passed the scenario. Second sighting.
-- 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 4/4 · the tunnel node was never drawn, the same four checks as the second sighting; the later DOWN check passed. Third sighting.
-- 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, second full run, shard 4/4 · the tunnel node was never drawn, the same four checks as the second sighting; the later DOWN check passed. Fourth sighting, two runs in a row: now #1536.
-- 2026-11-18 · b5ce741c (batch-b audit head, before batch-a) · local `scripts/gate-local.sh --browser webkit --shards 4`, full run, shard 4/4 · the tunnel node was never drawn, the same four checks as the second sighting; the later DOWN check passed. Fifth sighting, so the fault is older than batch-a (#1536).
-
 ## live-preferences-roam: a 401 reaches the console under WebKit
 
 - 2026-10-02 · 8759b3ac (dev, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, first full run, shard 3/4 · `FAIL no console errors -- got ["Failed to load resource: the server responded with a status of 401 (Unauthorized)"]`; the rest of the scenario passed. The second WebKit run of the same commit passed it.
@@ -102,7 +94,7 @@ testing-and-ci skill (owner, 2026-09-08).
   time) · `Error: page.reload: WebKit encountered an internal error` waiting
   for `networkidle`, at `live-browser.mjs:1027` from `live-city-reach.mjs:15`,
   before any check ran. Distinct from this scenario's existing
-  "Escape does not restore the exact pan position" heading above (different
+  "Escape does not restore the exact pan position" heading below (different
   symptom: an engine-level reload failure, not a settle-timing assertion).
   Matches the WebKit/`page.reload` internal error `gate-local.sh` already
   notes from a four-parallel-shard run on 2026-09-22 (its `--shard` comment).
@@ -227,11 +219,6 @@ own rather than swelling that entry's count.
 
 - 2026-09-26 · 18eb8dad · fix/1362-enrol-403, local `npx vitest run`, this host under nine parallel agents · the append-cost comparison failed in the full run and passed alone on the same commit. The branch touches api.ts and auth state, not the store the test measures. Like the syslog ratio test, it compares elapsed time, so it reads host load. First sighting.
 
-## frontend LiveTable.svelte.test.ts: "keeps the flat stripes when events arrive during a round trip through group mode" (#1308)
-
-- 2026-09-30 · fe8d1919 + local test edits · feature/1374-wizard, local `npm test -- --coverage`, host shared with other agents' vitest runs · timed out at 30s twice under coverage; passed on the same code without coverage locally and in CI with coverage (pipeline 1838, test:frontend). The branch does not touch LiveTable. First sighting.
-- 2026-10-01 · 09363519 + local edits · review/1386-journey, local `npm test -- --coverage`, host shared with a live-env build and a Playwright capture at the same time · timed out at 30s again under coverage; passed alone on the same code (70/70). The branch does not touch LiveTable. Second sighting.
-
 ## frontend: City.svelte.test.ts and perf-compare.test.mjs time out together under full-suite load
 
 - 2026-10-01 · e46f7cf5 base, local lockfile-only change · chore/deps-2026-10-01, local `npm test -- --coverage`, jsdom bumped to 30.1.1 in frontend/package-lock.json, no source change · three failures in one run: `scripts/perf-compare.test.mjs`'s shared `@testing-library/svelte` `beforeEach` hook hit its 10s timeout, and two `City: brightness by baseline` tests (`throbs the arrived-at building's own outline...`, `writes \`expected\` through the register...`) hit the 20s test timeout. `npx vitest run src/components/City.svelte.test.ts scripts/perf-compare.test.mjs` alone passed all 115 immediately after, and a full second `npm test -- --coverage` run passed all 3558 tests clean. The commit touches only frontend/package-lock.json and THIRD-PARTY-NOTICES.md, neither of which City.svelte, perf-compare.ts or testing-library's setup read. First sighting.
@@ -264,3 +251,7 @@ own rather than swelling that entry's count.
 ## live-group-compression: the Stream filter line never appears (`.filterline .fbox`) under WebKit
 
 - 2026-11-18 · 9545c47a (batch-a, v0.7.0 audit head) · local `scripts/gate-local.sh --browser webkit --shards 4`, from a scratch clone with temporary logging in the Topography tunnel code (#1536 diagnosis, nothing here touched) · `unfoldStreamFilter` timed out waiting for `.filterline .fbox` (`live-browser.mjs:565`). The earlier full WebKit runs at 9545c47a passed it. First sighting.
+
+## Wizard: 'opens the builder in the wizard's frame' times out (frontend/src/components/wizard/Wizard.svelte.test.ts)
+- 2026-11-19 · dad2c583 (fix/1426-g3-wizard) · local full `npx vitest run` · the test hit vitest's 5 s timeout once, then passed on rerun and in three runs of the file alone on the same commit. Host busy with parallel builders.
+- 2026-11-20 · 07ec22b4 (batch-b, !1245) · pipeline 4884, `test:frontend` (job 58680) · the same 5 s timeout; passed on retry (job 58724).

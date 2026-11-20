@@ -27,6 +27,8 @@
   // dossier -- the per-IP investigate popover, the Entities host row,
   // the city building card and the topography host card -- each need one
   // call and no state of their own.
+  import { trapFocus } from '../lib/focusTrap'
+  import FailureLine from './FailureLine.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import { nameEditorState } from '../lib/nameEditor.svelte'
   import { countryFlag, formatRelative, isPublicIp } from '../lib/format'
@@ -102,10 +104,9 @@
   }
 
   // Focus moves into the card on open and back to the trigger on close
-  // (lib/dossier.svelte.ts holds the trigger). Not a trap: like the
-  // app's other overlays this closes on Esc or a backdrop click, and
-  // lib/focusTrap.ts's own comment reserves the real trap for the one
-  // control that has no other route.
+  // (lib/dossier.svelte.ts holds the trigger). The card is aria-modal, so
+  // it also traps Tab (use:trapFocus, #1539 C3); it still closes on Esc
+  // or a backdrop click.
   $effect(() => {
     if (dossierState.isOpen && sheetEl) sheetEl.focus()
   })
@@ -139,6 +140,7 @@
     aria-labelledby={titleId}
     tabindex="-1"
     data-testid="host-dossier"
+    use:trapFocus
   >
     <!-- 1. Head. Present in every state, so a card that is still
          loading or that failed still says which address it is about. -->
@@ -168,8 +170,8 @@
     {#if dossierState.loading}
       <GhostRows label="Assembling the dossier…" rows={7} />
     {:else if dossierState.error}
-      <div class="failed" role="alert">
-        <p>{dossierState.error}</p>
+      <div class="failed">
+        <FailureLine verb="assemble" thing="the dossier" said={dossierState.error} />
         <button type="button" class="retry" onclick={() => dossierState.retry()}>Try again</button>
       </div>
     {:else if d}

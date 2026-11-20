@@ -72,7 +72,7 @@
   }
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onclick={onWindowClick} onkeydown={(e) => e.key === 'Escape' && onWindowClick()} />
 
 <div class="docket">
   <!-- The tabs moved to the scene bar (#700): round 30 rides them where

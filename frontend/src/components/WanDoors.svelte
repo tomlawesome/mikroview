@@ -19,11 +19,13 @@
   // "seen arriving ●" is the event buffer's own answer, kept apart the
   // same way #1018's port doors keep policy and traffic apart. This
   // panel evaluates no precedence and claims no port is safe or unsafe.
+  import { trapFocus } from '../lib/focusTrap'
+  import FailureLine from './FailureLine.svelte'
   import { wanDoorsState, portUnion } from '../lib/wanDoors.svelte'
   import { formatRelative } from '../lib/format'
   import CopyButton from './CopyButton.svelte'
   import GhostRows from './GhostRows.svelte'
-  import type { WanDeviceDoors, WanDoor, WanService } from '../lib/api'
+  import type { WanDeviceDoors, WanDoor, WanService, WanUnjudged } from '../lib/api'
 
   const titleId = 'wan-doors-title'
   let sheetEl: HTMLDivElement | undefined = $state()
@@ -69,6 +71,13 @@
     return parts.join(' · ')
   }
 
+  // Line 2 of an unjudged row: the comment if any, then the condition
+  // verbatim. No marks: it is not "allowed through" and nothing was
+  // asked of the window.
+  function unjudgedLine(u: WanUnjudged): string {
+    return u.comment ? `${u.comment} · ${u.scope}` : u.scope
+  }
+
   function serviceLine(svc: WanService): string {
     return `${svc.name} · ${svc.port}/tcp · ${svc.address ? `from ${svc.address}` : 'any address'}`
   }
@@ -87,8 +96,14 @@
     return d.doors.filter((door) => Boolean(door.to))
   }
 
+  // The server always sends an array; an older one sends none, and
+  // that reads as nothing unjudged rather than a crash.
+  function unjudgedOf(d: WanDeviceDoors): WanUnjudged[] {
+    return d.unjudged ?? []
+  }
+
   function hasAnything(d: WanDeviceDoors): boolean {
-    return d.doors.length > 0 || (d.services !== null && d.services.length > 0)
+    return d.doors.length > 0 || unjudgedOf(d).length > 0 || (d.services !== null && d.services.length > 0)
   }
 </script>
 
@@ -104,6 +119,7 @@
     aria-labelledby={titleId}
     tabindex="-1"
     data-testid="wan-doors"
+    use:trapFocus
   >
     <div class="head">
       <h2 id={titleId}>Doors from the internet</h2>
@@ -114,7 +130,7 @@
       {#if wanDoorsState.loading && wanDoorsState.devices.length === 0}
         <GhostRows label="Reading the pushed tables…" rows={5} />
       {:else if wanDoorsState.error}
-        <p class="failed" role="alert">{wanDoorsState.error}</p>
+        <FailureLine verb="read" thing="the pushed tables" said={wanDoorsState.error} />
       {:else if wanDoorsState.devices.length === 0}
         <p class="from">No device has shown a WAN interface yet.</p>
       {:else}
@@ -160,6 +176,20 @@
                     <li>
                       <span class="peer">{door.label} {portText(door)} → {destinationText(door)}</span>
                       <span class="from">{markLine(door)}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+
+              {#if unjudgedOf(d).length > 0}
+                <p class="sub">not judged</p>
+                <!-- prettier-ignore -->
+                <p class="from" data-testid="wd-unjudged-{d.id}">These rules may be doors; MikroView cannot tell, because it is never sent a list's members or asked who an address is.</p>
+                <ul class="doors">
+                  {#each unjudgedOf(d) as u ((u.to ? 'nat' : 'filter') + u.label)}
+                    <li>
+                      <span class="peer">{u.label} {portText(u)} → {destinationText(u)}</span>
+                      <span class="from">{unjudgedLine(u)}</span>
                     </li>
                   {/each}
                 </ul>
@@ -320,10 +350,5 @@
     padding-top: 10px;
     border-top: 1px solid var(--border);
     color: var(--fg-dim);
-  }
-
-  .failed {
-    padding: 16px 0;
-    color: var(--fg-muted);
   }
 </style>

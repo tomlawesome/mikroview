@@ -3,7 +3,7 @@
 // #1281 (the syslog enrolment gate) and #1284/#1382/#1383 (the
 // full-screen setup wizard's router steps), driven together: since
 // #1281, a router earns a place on the fleet only by presenting a token
-// minted for it, and the wizard's "Mint the token" / "Paste once" steps
+// minted for it, and the wizard's "Mint the ingest token" / "Paste once" steps
 // are the only place that token is ever shown. What needs a real
 // browser and a real listener rather than a unit test:
 //
@@ -24,7 +24,7 @@
 // replacing the retired modal's
 // `.setup-wizard`/`.mint-ask`/`.token-life`/`.observation.shortfall.refused`
 // markup this scenario used to drive. The walk: name and address a
-// router -> Mint the token -> the paste-once block, with Copy -> a
+// router -> Mint the ingest token -> the paste-once block, with Copy -> a
 // sender from the address the operator typed is refused and the
 // refused-sender box names it -> "enrol at <other> instead" (the Mint
 // act again) re-mints for that address -> lines from it arrive for real
@@ -63,7 +63,7 @@
 // whatever else is sending") fixed begin() to consult reEnrolling
 // first, exactly as DESIGN.md's "Adding a router, re-enrolling"
 // promises, and pinned it in Wizard.svelte.test.ts ("lands Re-enrol…
-// on Mint the token even with the router already sending"). Driven for
+// on Mint the ingest token even with the router already sending"). Driven for
 // real below, reusing REENROL_IP as the address it moves the router to,
 // the way the old (pre-port) scenario did.
 //
@@ -179,7 +179,7 @@ check(
 )
 await foot.locator('button.primary:text-is("Next")').click()
 
-// --- c. Mint the token: the password is spent on the one call, and
+// --- c. Mint the ingest token: the password is spent on the one call, and
 
 // that call is what creates the device record (#1382's mint()).
 await body.locator('input[type="password"]').waitFor({ timeout: 10000 })
@@ -190,9 +190,9 @@ check(
 await body.locator('input[type="password"]').fill(adminPassword)
 const [minted] = await Promise.all([
   page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
-  foot.locator('button.primary:text-is("Mint the token")').click(),
+  foot.locator('button.primary:text-is("Mint the ingest token")').click(),
 ])
-check(minted.status() === 201, `Mint the token is POST /api/devices/{id}/enrolment (${minted.status()})`)
+check(minted.status() === 201, `Mint the ingest token is POST /api/devices/{id}/enrolment (${minted.status()})`)
 let { token } = await minted.json()
 check(typeof token === 'string' && token.length > 0, 'the server answers with a fresh token')
 
@@ -253,7 +253,7 @@ check(!!copyStarted, 'Copy starts the router’s turn')
 
 // Standing in for the router's own `/tool fetch` of the first section of
 // the block: this harness drives a real browser and a real listener but
-// not a real RouterOS device (the AGENTS.md invariant -- MikroView never
+// not a real RouterOS device (the invariant in docs/decisions/observe-never-probe.md -- MikroView never
 // connects to a router, and nothing here can make one connect to
 // MikroView either), so the certificate leg is exercised the same way
 // live-journey.mjs already does, a plain GET of the public endpoint the
@@ -421,7 +421,7 @@ check(
 // --- m. Re-enrol: move the router to a new address -----------------------
 
 // Entities' own Re-enrol… (DESIGN.md, "Adding a router, re-enrolling"):
-// the ledger reopens at Mint the token for this router, with a fresh
+// the ledger reopens at Mint the ingest token for this router, with a fresh
 // token -- #1398, fixed by wizardRun.begin() consulting
 // wizardState.reEnrolling before evidence.enrol (see the header
 // comment).
@@ -430,7 +430,7 @@ await wiz.waitFor({ state: 'visible', timeout: 10000 })
 check((await page.locator('#f-name').count()) === 0, 'Re-enrol… skips The router -- there is nothing left to name')
 check(
   (await text(body.locator('h3'))) === `Your password, to mint ${ROUTER_NAME}’s token.`,
-  'and lands straight on Mint the token, not the finished ledger (#1398)',
+  'and lands straight on Mint the ingest token, not the finished ledger (#1398)',
 )
 
 // Back still reaches The router: Mint's own 'ask' stage is not the
@@ -449,9 +449,9 @@ check((await text(body.locator('.hint'))).includes(REENROL_IP), `Mint now names 
 await body.locator('input[type="password"]').fill(adminPassword)
 const [reenrolMinted] = await Promise.all([
   page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
-  foot.locator('button.primary:text-is("Mint the token")').click(),
+  foot.locator('button.primary:text-is("Mint the ingest token")').click(),
 ])
-check(reenrolMinted.status() === 201, `Re-enrol…’s Mint the token is the same call (${reenrolMinted.status()})`)
+check(reenrolMinted.status() === 201, `Re-enrol…’s Mint the ingest token is the same call (${reenrolMinted.status()})`)
 const reenrolMintBody = await reenrolMinted.request().postDataJSON()
 check(reenrolMintBody.expectedAddress === REENROL_IP, `bound to the new address (${reenrolMintBody.expectedAddress})`)
 const { token: reenrolToken } = await reenrolMinted.json()

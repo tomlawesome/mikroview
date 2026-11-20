@@ -24,8 +24,8 @@ const maxNoticeLines = 12
 // lives exactly in these lines, which the parsers below otherwise
 // discard. Retaining it here is what lets the copyright and list date
 // travel with the data in memory rather than being thrown away the
-// instant it arrives. See AGENTS.md's "Never vendor list or lookup
-// data".
+// instant it arrives. See docs/decisions/scope-and-companion-projects.md,
+// "Why list and lookup data is fetched, never vendored".
 func leadingNotice(body []byte, commentPrefix string) string {
 	var lines []string
 	scanner := bufio.NewScanner(bytes.NewReader(body))

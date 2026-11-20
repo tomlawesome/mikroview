@@ -42,7 +42,8 @@ const { page, consoleErrors } = await session({
   mocksApi: true,
   routes: [
     [
-      '**/api/setup/status',
+      // The trailing * also catches ?address=, which the wizard's status read carries once it has an address (#1507).
+      '**/api/setup/status*',
       async (route) => {
         const res = await route.fetch()
         const body = await res.json()
@@ -126,7 +127,7 @@ check(
 check(await page.locator(row(1)).evaluate((el) => el.classList.contains('chosen')), 'in the chosen dress')
 check((await text('.wiz .bar .chips .att.dec')) === ROUTER_NAME, 'the bar wears the router’s name as a chip')
 
-// --- Mint the token ---------------------------------------------------------------
+// --- Mint the ingest token ---------------------------------------------------------------
 await next.click()
 await page.locator(`${row(2)}[aria-current="step"]`).waitFor({ state: 'visible' })
 check((await text('.wiz .body h3')) === `Your password, to mint ${ROUTER_NAME}’s token.`, 'the lead names the router')
@@ -137,8 +138,8 @@ check(
 )
 check((await page.locator(row(1)).isDisabled()) === false, 'The router is a real button again: the run is still yours to change')
 const back = page.locator('.wiz .foot button:text-is("Back")')
-const mint = page.locator('.wiz .foot button.primary:text-is("Mint the token")')
-check((await back.count()) === 1 && (await mint.count()) === 1, 'the footer offers Back and Mint the token')
+const mint = page.locator('.wiz .foot button.primary:text-is("Mint the ingest token")')
+check((await back.count()) === 1 && (await mint.count()) === 1, 'the footer offers Back and Mint the ingest token')
 check(await mint.isDisabled(), 'Mint waits for the password')
 check((await page.locator('.wiz .body pre').count()) === 0, 'nothing of the block is shown before the token exists')
 

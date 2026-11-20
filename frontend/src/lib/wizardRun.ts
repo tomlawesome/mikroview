@@ -10,7 +10,7 @@
 // wizard exists to avoid.
 //
 // Nothing here talks to the server, and nothing here connects to a
-// router (the AGENTS.md invariant). Evidence is read; it is never
+// router (the invariant in docs/decisions/observe-never-probe.md). Evidence is read; it is never
 // fetched from this module.
 
 // 'block' is the first-run tail (#1360): an offer after the five steps,
@@ -20,7 +20,7 @@ export type StepId = 'router' | 'pass' | 'paste' | 'tune' | 'stand' | 'block'
 
 export const STEPS: readonly { id: StepId; title: string }[] = [
   { id: 'router', title: 'The router' },
-  { id: 'pass', title: 'Mint the token' },
+  { id: 'pass', title: 'Mint the ingest token' },
   { id: 'paste', title: 'Paste once' },
   { id: 'tune', title: 'Tag firewall rules' },
   { id: 'stand', title: 'Where setup stands' },
@@ -44,6 +44,10 @@ export interface RunAnswers {
   pass: string
   push: boolean | null
   backup: boolean | null
+  // true once Copy carried a block with no backup part although Back up
+  // nightly was Yes (the drop box was closed, #1361): the run stops
+  // waiting for a backup that is not on the router.
+  backupLeftOut: boolean
   copied: boolean
   tuneCopied: boolean
   tuneSkipped: boolean
@@ -69,6 +73,13 @@ export interface Evidence {
   // Rules: true once lines carrying a new prefix have landed after the
   // tagging block was copied.
   tagged: boolean
+  // Rules in the router's own pushed table that log under the convention
+  // (wizardTune.taggedInPush): the push's witness of tagging, which is what
+  // a reopened ledger has once the run's memory of its Copy went with the
+  // walk it was given in (A2-F7). 0 until the table is read.
+  taggedRules: number
+  // The push that table came from (ISO); '' until read.
+  taggedAt: string
   tokenUntil: string
   // The strip's boundaries once the push names them: lane ink ('' when
   // dark) and whether the boundary is watched.
@@ -105,6 +116,8 @@ export const NO_EVIDENCE: Evidence = {
   version: '',
   ahead: false,
   tagged: false,
+  taggedRules: 0,
+  taggedAt: '',
   tokenUntil: '',
   boundaries: [],
   tail: NO_TAIL,
@@ -119,6 +132,7 @@ export function freshAnswers(): RunAnswers {
     pass: '',
     push: null,
     backup: null,
+    backupLeftOut: false,
     copied: false,
     tuneCopied: false,
     tuneSkipped: false,
@@ -170,7 +184,7 @@ export function routerDone(s: RunAnswers): boolean {
 // Everything chosen has arrived: the certificate, the enrol line, and
 // the push and the backup where they were said yes to.
 export function arrivedAll(s: RunAnswers, ev: Evidence): boolean {
-  return !!ev.cert && !!ev.enrol && (s.push === false || !!ev.push) && (s.backup === false || !!ev.backup)
+  return !!ev.cert && !!ev.enrol && (s.push === false || !!ev.push) && (s.backup === false || s.backupLeftOut || !!ev.backup)
 }
 
 export function stageOf(s: RunAnswers): StepId {
@@ -246,10 +260,12 @@ export function rowState(s: RunAnswers, ev: Evidence, id: StepId): RowState {
       break
     case 'tune':
       if (s.push === false) a.receipt = 'needs the push'
-      else if (ev.tagged) {
+      else if (taggedStands(ev)) {
         a.cls = 'done'
         a.ink = 'rules'
-        a.receipt = `${s.chosenCount} rules tagged · ${s.tunedAt}`
+        a.receipt = ev.tagged
+          ? `${s.chosenCount} rules tagged · ${s.tunedAt}`
+          : `${ev.taggedRules} rules tagged · pushed ${hms(ev.taggedAt)}`
       } else if (s.tuneSkipped) {
         a.cls = 'chosen'
         a.ink = 'off'
@@ -385,7 +401,7 @@ export function footSpec(s: RunAnswers, ev: Evidence, copyLabel = '', canCopy = 
     return {
       left: { label: 'Back', action: 'back-router', primary: false, disabled: false },
       hint: '',
-      right: [{ label: 'Mint the token', action: 'mint', primary: true, disabled: !s.pass }],
+      right: [{ label: 'Mint the ingest token', action: 'mint', primary: true, disabled: !s.pass }],
     }
   }
   if (st === 'paste' && s.stage === 'paste') {
@@ -446,7 +462,7 @@ export function chipsFor(s: RunAnswers, ev: Evidence): Chip[] {
     if (ev.ahead) chips.push({ kind: 'now', text: `RouterOS ${ev.version} — ahead of review` })
   }
   if (ev.backup) chips.push({ kind: 'backup', text: 'backup · 03:00' })
-  if (ev.tagged) chips.push({ kind: 'rules', text: `${s.chosenCount} rules` })
+  if (taggedStands(ev)) chips.push({ kind: 'rules', text: `${ev.tagged ? s.chosenCount : ev.taggedRules} rules` })
   if (ev.tail.state === 'done') chips.push({ kind: 'logs', text: `${ev.tail.lists} ${ev.tail.lists === 1 ? 'list' : 'lists'}` })
   return chips
 }
@@ -538,6 +554,8 @@ export function trackStations(s: RunAnswers, ev: Evidence, copiedAt: string): Tr
   }
   if (s.backup === false) {
     stations.push({ id: 'backup', lab: 'backup', st: 'not now · none kept here', state: 'skip' })
+  } else if (s.backupLeftOut) {
+    stations.push({ id: 'backup', lab: 'backup', st: 'left out · the drop box was closed', state: 'skip' })
   } else {
     stations.push({
       id: 'backup',
@@ -554,8 +572,12 @@ export function trackStations(s: RunAnswers, ev: Evidence, copiedAt: string): Tr
   // stage, since none of tagged/tuneSkipped/stage-tune-or-done can hold
   // yet there.
   if (s.push !== false && (s.stage === 'tune' || s.stage === 'done' || ev.tagged || s.tuneSkipped)) {
-    if (ev.tagged) {
-      stations.push({ id: 'rules', lab: `${s.chosenCount} rules`, st: `lit since ${s.tunedAt}`, state: 'done' })
+    if (taggedStands(ev)) {
+      stations.push(
+        ev.tagged
+          ? { id: 'rules', lab: `${s.chosenCount} rules`, st: `lit since ${s.tunedAt}`, state: 'done' }
+          : { id: 'rules', lab: `${ev.taggedRules} rules`, st: `pushed ${hms(ev.taggedAt)}`, state: 'done' },
+      )
     } else if (s.tuneSkipped) {
       stations.push({ id: 'rules', lab: 'rules', st: 'left dark', state: 'skip' })
     } else {
@@ -602,6 +624,13 @@ export interface LedgerRow {
   offer?: boolean
 }
 
+// taggedStands: the rules row stands on either witness -- this run saw its
+// first new prefix land (ev.tagged), or the router's push carries rules
+// logging under the convention (ev.taggedRules).
+export function taggedStands(ev: Evidence): boolean {
+  return ev.tagged || ev.taggedRules > 0
+}
+
 export function ledgerRows(s: RunAnswers, ev: Evidence): LedgerRow[] {
   const rows: LedgerRow[] = [
     { done: true, t: 'Certificate trusted', r: `fetched by ${ev.from} · ${hms(ev.cert)}`, ink: 'cert', u: 'cert' },
@@ -624,17 +653,25 @@ export function ledgerRows(s: RunAnswers, ev: Evidence): LedgerRow[] {
   } else {
     rows.push({ done: false, t: 'Router state', r: 'not now · the fall stays address-only', ink: '', u: '' })
   }
-  if (s.backup) {
+  if (s.backup && !s.backupLeftOut) {
     rows.push({ done: true, t: 'Nightly backup', r: `03:00 · scheduled ${hms(ev.backup)}`, ink: 'backup', u: 'backup' })
+  } else if (s.backupLeftOut) {
+    rows.push({
+      done: false,
+      t: 'Backup',
+      r: 'left out · the drop box was closed · Settings ▸ router backups',
+      ink: '',
+      u: '',
+    })
   } else {
     rows.push({ done: false, t: 'Backup', r: 'not now · no backups kept here', ink: '', u: '' })
   }
   if (s.push) {
-    if (ev.tagged) {
+    if (taggedStands(ev)) {
       rows.push({
         done: true,
         t: 'Rules tagged',
-        r: `${s.chosenCount} rules log · since ${s.tunedAt}`,
+        r: ev.tagged ? `${s.chosenCount} rules log · since ${s.tunedAt}` : `${ev.taggedRules} rules log · pushed ${hms(ev.taggedAt)}`,
         ink: 'rules',
         u: 'tune',
       })
@@ -700,7 +737,7 @@ export function latestArrivalHeadline(stations: TrackStation[], ev: Evidence, na
 // pick" (internal/routeros/commands.go's SyslogCommands, #1370) -- and
 // the enrol line last, skipping the topics guard in between since that
 // line never needed re-pasting. Built from the server's own rendered
-// syslog block rather than a hand-written RouterOS line (AGENTS.md);
+// syslog block rather than a hand-written RouterOS line (docs/decisions/observe-never-probe.md);
 // falls back to the whole block if it is not the shape this expects
 // (e.g. no token minted yet, so there is no enrol line to keep last).
 export function refusedFixBlock(syslogCommands: string): string {

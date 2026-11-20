@@ -32,6 +32,19 @@ afterEach(reset)
 describe('deck order preference (#633, #1283)', () => {
   it('defaults to the ratified order', () => {
     expect(deckOrderState.order).toEqual(DEFAULT_ORDER)
+    // Pinned literally: DEFAULT_ORDER above is read back off the module,
+    // so on its own it would follow any change to the default.
+    expect(DEFAULT_ORDER).toEqual([
+      'fall',
+      'topography',
+      'metrics',
+      'live',
+      'docket',
+      'entities',
+      'engineroom',
+      'log-every-rule',
+      'fleet',
+    ])
   })
 
   it('moves a card and persists the new order through the shared record', () => {

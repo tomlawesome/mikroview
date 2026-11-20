@@ -79,10 +79,8 @@ func decodeInto(t *testing.T, resp *http.Response, v any) {
 func wantReauth(t *testing.T, resp *http.Response, what string) {
 	t.Helper()
 	defer resp.Body.Close()
-	var body map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if resp.StatusCode != http.StatusUnauthorized || body["reauth"] != true {
-		t.Errorf("%s after the unlock lapsed: %d %v, want 401 {\"reauth\":true}", what, resp.StatusCode, body)
+	if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get(reauthHeader) == "" {
+		t.Errorf("%s after the unlock lapsed: %d, header %q, want 401 with the %s header", what, resp.StatusCode, resp.Header.Get(reauthHeader), reauthHeader)
 	}
 }
 
@@ -369,5 +367,55 @@ func TestConfigEditorSummaryNeedsNoUnlock(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("snapshot list lacks %s: %s", want, body)
 		}
+	}
+}
+
+// A stolen session cookie must not be able to read a secret back out of
+// Carry forward, which needs no password: the server puts a secret back
+// only at its own setting, so a placeholder in a comment or in a
+// non-secret value stays a placeholder in what comes back.
+func TestConfigCarryForwardNeverReturnsASecretValue(t *testing.T) {
+	const secret = "editor-secret-1347"
+	f := newEditorFixture(t)
+	resp := f.open(t, fixtureAdminPassword)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open: %d", resp.StatusCode)
+	}
+	f.s.editor.mu.Lock()
+	for _, st := range f.s.editor.sessions {
+		st.unlockedAt = time.Now().Add(-editorUnlockWindow - time.Minute)
+	}
+	f.s.editor.mu.Unlock()
+
+	ph := config.SecretPlaceholder("reputation.abuseIPDBKey")
+	for name, text := range map[string]string{
+		"comment, text that does not parse": "# " + ph + "\nlisten: [\n",
+		"comment and non-secret value":      "# " + ph + "\nlisten:\n  http: " + ph + "\n",
+	} {
+		resp := postJSON(t, f.admin, f.ts.URL+"/api/config/carry-forward", editorTextRequest{Text: text})
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: carry-forward %d %s", name, resp.StatusCode, body)
+		}
+		if strings.Contains(string(body), secret) {
+			t.Errorf("%s: the response carries the secret:\n%s", name, body)
+		}
+		var out carryForwardResponse
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.Text, secret) || !strings.Contains(out.Text, ph) {
+			t.Errorf("%s: text should keep the placeholder and not the secret:\n%s", name, out.Text)
+		}
+	}
+	for _, sn := range f.s.ConfigEditor.Snapshots.List() {
+		if got, _ := f.s.ConfigEditor.Snapshots.Get(sn.ID); strings.Contains(got.Text, secret) {
+			t.Errorf("a snapshot holds the secret in the clear:\n%s", got.Text)
+		}
+	}
+	if n := f.s.ConfigEditor.Snapshots.Count(); n != 0 {
+		t.Errorf("snapshots after the carry-forwards = %d, want 0", n)
 	}
 }

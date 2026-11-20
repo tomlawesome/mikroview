@@ -522,7 +522,7 @@ describe('keeping a backup', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
     await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
-    expect(screen.getByText('say why you are keeping it')).toBeTruthy()
+    expect(screen.getByText('Say why you are keeping it.')).toBeTruthy()
     expect(keepRouterBackup).not.toHaveBeenCalled()
   })
 

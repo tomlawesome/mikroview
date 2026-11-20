@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import type { ClientEvent, Flag } from '../lib/types'
@@ -26,6 +26,22 @@ import componentSource from './LiveTable.svelte?raw'
 // its own, and its cells share this table's one grid, so the two are
 // read together here (#1150).
 import eventRowSource from './EventRow.svelte?raw'
+
+// The render cap is read through a getter so the two eviction tests below
+// can shrink it (#1543): eviction only needs the cap to be exceeded, and at
+// the real 800 those tests mount, re-band and re-mount 800 jsdom rows several
+// times over (10-20 s alone, past the 30 s limit under load). Every other
+// test sees the real value.
+const renderCap = vi.hoisted(() => ({ override: null as number | null }))
+vi.mock('../lib/constants', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/constants')>()
+  return {
+    ...real,
+    get MAX_RENDERED_ROWS() {
+      return renderCap.override ?? real.MAX_RENDERED_ROWS
+    },
+  }
+})
 
 // jsdom (unlike a real browser) has no window.matchMedia -- LiveTable
 // pulls in lib/viewport.svelte.ts, whose ViewportState singleton calls
@@ -362,8 +378,17 @@ describe('a new row does not restripe the rows below it (#1308)', () => {
     for (let i = 1; i < rows.length; i++) expect(rows[i], `row ${i}`).toBe(!rows[i - 1])
   })
 
+  // A small cap, same code path: eviction is "one more than the cap".
+  const SMALL_CAP = 12
+  beforeEach(() => {
+    renderCap.override = SMALL_CAP
+  })
+  afterEach(() => {
+    renderCap.override = null
+  })
+
   it('keeps every stripe when the oldest row is evicted past MAX_RENDERED_ROWS', () => {
-    appState.events = Array.from({ length: MAX_RENDERED_ROWS }, (_, i) => makeEvent(`evict-${i}`))
+    appState.events = Array.from({ length: SMALL_CAP }, (_, i) => makeEvent(`evict-${i}`))
     const { container } = render(LiveTable)
     flushSync()
     const before = stripes(container)
@@ -374,17 +399,18 @@ describe('a new row does not restripe the rows below it (#1308)', () => {
 
     expect(after.has('evict-0')).toBe(false)
     for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
-  }, 30000)
+  })
 
   it('keeps the flat stripes when events arrive during a round trip through group mode', () => {
     // After an eviction the bottom row carries a stripe a fresh bottom-up
     // pass would not give it, so this is where a lost memory shows.
-    appState.events = Array.from({ length: MAX_RENDERED_ROWS }, (_, i) => makeEvent(`toggle-${i}`))
+    appState.events = Array.from({ length: SMALL_CAP }, (_, i) => makeEvent(`toggle-${i}`))
     const { container } = render(LiveTable)
     flushSync()
     appState.events = [...appState.events, makeEvent('toggle-evictor')]
     flushSync()
     const before = stripes(container)
+    expect(before.has('toggle-0')).toBe(false) // evicted, so the memory matters
     expect(before.get('toggle-1')).toBe(true)
 
     groupModeState.enabled = true
@@ -398,7 +424,8 @@ describe('a new row does not restripe the rows below it (#1308)', () => {
     // back as they were instead of re-alternating from the bottom.
     const after = stripes(container)
     for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
-  }, 30000)
+    expect(after.size).toBe(SMALL_CAP)
+  })
 })
 
 describe('Group mode drawer consistency (issue #381)', () => {

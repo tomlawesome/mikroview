@@ -15,7 +15,7 @@
 // byte would be a second, drifting copy of code this binary already has.
 // scripts/seed-demo.py keeps the job of everything that goes in over the
 // HTTP API (push, entities, accounts) -- this command only builds the file
-// `-restore` reads, per AGENTS.md's "Demos the owner reviews" recipe.
+// `-restore` reads, per the recipe in docs/demos.md.
 //
 // The watchlist entries mirror scripts/seed-demo.py's WATCHLIST_ENTRIES
 // (#738) by name, IP and ports, so the story started here is the one the
@@ -289,11 +289,11 @@ func buildRetainedEvents(now time.Time, days int) ([]byte, int, error) {
 	var records []retainedRecord
 
 	// Background traffic ends yesterday, never today: today belongs to the
-	// live feeder that starts right after -restore (AGENTS.md's demo
-	// recipe). Matching traffic below may fall in the last closed window,
-	// which can end this morning, but never later than now: a retained
-	// event timestamped after "now" would be a corpus claiming to have
-	// seen the future.
+	// live feeder that starts right after -restore (docs/demos.md).
+	// Matching traffic below may fall in the last closed window, which can
+	// end this morning, but never later than now: a retained event
+	// timestamped after "now" would be a corpus claiming to have seen the
+	// future.
 	dayStart := now.Truncate(24*time.Hour).AddDate(0, 0, -days)
 	for day := 0; day < days; day++ {
 		base := dayStart.AddDate(0, 0, day)

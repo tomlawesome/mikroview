@@ -15,8 +15,8 @@ import (
 
 // update regenerates every golden file this test compares against,
 // instead of comparing against it -- the standard shape for this
-// repository's first golden-file test (see this package's own AGENTS.md
-// note that no prior convention existed to follow): run
+// repository's first golden-file test (no prior convention existed
+// to follow): run
 //
 //	go test ./internal/engine/ -run TestDefinitionEnvelopeJSONShape -update
 //

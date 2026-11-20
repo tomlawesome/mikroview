@@ -128,7 +128,7 @@ func (s *Server) handleStoreSettingsUpdate(w http.ResponseWriter, r *http.Reques
 
 	var req storeSettingsRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 

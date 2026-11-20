@@ -28,3 +28,11 @@ Same mechanics as the concept rounds: self-contained HTML, no build
 step, the shared fictional data story, `capture.mjs` screenshots into
 `shots/`, README as the durable round record. Direction letters
 continue across rounds and areas (concepts ended at O).
+
+## Building a ratified design
+
+Port the mockup's markup and CSS; never build from an impression of it.
+Drawn but built differently is a **defect** -- build it as drawn. Something
+the app does that the design draws nowhere is a **gap** -- leave it off,
+keep its code, write it down, never invent a home mid-build. Fidelity work
+goes to a top-tier model.

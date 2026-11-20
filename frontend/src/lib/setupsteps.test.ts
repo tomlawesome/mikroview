@@ -8,15 +8,12 @@ import {
   backupStep,
   buildLedger,
   caStep,
-  certificateCovers,
   finishHeadline,
   firstOpenStep,
   forcedPastRecord,
-  hostname,
   nameReceipt,
   nameStep,
   notObserved,
-  portOf,
   refusedSince,
   refusedWarning,
   registerReceipt,
@@ -56,6 +53,9 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
     instance: {
       tlsEnabled: true,
       hosts: ['192.0.2.10'],
+      effectiveHosts: ['192.0.2.10'],
+      certificateCoversAddress: true,
+      addressHost: '',
       syslogPort: ':6514',
       syslogEnabled: true,
       address: '',
@@ -71,79 +71,12 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
   }
 }
 
-describe('address handling', () => {
-  it('strips ports, including from IPv6 literals', () => {
-    expect(hostname('192.0.2.10:8080')).toBe('192.0.2.10')
-    expect(hostname('192.0.2.10')).toBe('192.0.2.10')
-    expect(hostname('[2001:db8::1]:8080')).toBe('2001:db8::1')
-  })
-
-  it('takes the port off a listen address', () => {
-    expect(portOf(':6514')).toBe('6514')
-    expect(portOf('0.0.0.0:6514')).toBe('6514')
-  })
-})
-
-describe('certificate cover check', () => {
-  it('accepts an address the certificate names', () => {
-    expect(certificateCovers(status(), '192.0.2.10:8080')).toBe(true)
-  })
-
-  // The failure the owner actually hit: reaching MikroView by an address
-  // tls.hosts does not list. It surfaces three steps later as
-  // "name verification failed", pointing at the router.
-  it('rejects an address the certificate does not name', () => {
-    expect(certificateCovers(status(), '192.0.2.99:8080')).toBe(false)
-  })
-
-  it('falls back to localhost/127.0.0.1 when tls.hosts is unset', () => {
-    const s = status({
-      instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [], backupTransport: 'sftp' },
-    })
-    expect(certificateCovers(s, '127.0.0.1:8080')).toBe(true)
-    expect(certificateCovers(s, '192.168.1.5:8080')).toBe(false)
-  })
-
-  it('is not a question when both HTTP TLS and syslog are off', () => {
-    const s = status({
-      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
-    })
-    expect(certificateCovers(s, 'anything:8080')).toBe(true)
-  })
-
-  // #374: tls.enabled=false only turns off HTTPS on the API port. When
-  // syslog TLS is on (main.go loads/generates the certificate whenever
-  // cfg.TLS.Enabled || cfg.Listen.SyslogTLS != ""), the router still
-  // gets a certificate whose SANs come from tls.hosts, and a mismatch
-  // still fails the router's handshake exactly as it would with HTTP
-  // TLS on. The short-circuit must key off syslogEnabled too, not just
-  // tlsEnabled.
-  it('still checks the host when HTTP TLS is off but syslog TLS is on', () => {
-    const s = status({
-      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [], backupTransport: 'sftp' },
-    })
-    expect(certificateCovers(s, '192.0.2.30:18084')).toBe(false)
-  })
-
-  it('accepts a covered host when HTTP TLS is off but syslog TLS is on', () => {
-    const s = status({
-      instance: {
-        tlsEnabled: false,
-        hosts: ['192.0.2.30'],
-        syslogPort: ':6514',
-        syslogEnabled: true,
-        address: '',
-        addressCandidates: [],
-        backupTransport: 'sftp',
-      },
-    })
-    expect(certificateCovers(s, '192.0.2.30:18084')).toBe(true)
-  })
-})
-
 describe('step status', () => {
   it('blocks the CA step when the certificate cannot cover the address', () => {
-    const s = caStep(status(), '192.0.2.99:8080')
+    const s = caStep(
+      status({ instance: { ...status().instance, certificateCoversAddress: false, addressHost: '192.0.2.99' } }),
+      '192.0.2.99:8080',
+    )
     expect(s.state).toBe('blocked')
     expect(s.detail).toContain('tls.hosts')
   })
@@ -152,9 +85,53 @@ describe('step status', () => {
   // tls.hosts is not enough, the blocked step has to hand over the
   // exact line to paste, keeping the address(es) already configured.
   it('gives the blocked CA step a pasteBlock with the whole resulting hosts list', () => {
-    const s = caStep(status({ instance: { ...status().instance, hosts: ['192.0.2.10'] } }), '192.0.2.99:8080')
+    const s = caStep(status({
+        instance: {
+          ...status().instance,
+          hosts: ['192.0.2.10'],
+          effectiveHosts: ['192.0.2.10'],
+          certificateCoversAddress: false,
+          addressHost: '192.0.2.99',
+        },
+      }),
+      '192.0.2.99:8080',
+    )
     expect(s.state).toBe('blocked')
     expect(s.pasteBlock).toBe('hosts: ["192.0.2.10", "192.0.2.99"]')
+  })
+})
+
+// #1507 (decision #1437): Go owns the certificate-coverage answer. The
+// step reads instance.certificateCoversAddress and instance.effectiveHosts
+// as served; it never splits the address or compares names itself. The
+// fixtures below make the served verdict disagree with what a local
+// comparison of hosts would say, so only reading the verdict passes.
+describe('CA step reads the served certificate verdict', () => {
+  function served(over: Record<string, unknown>): SetupStatus {
+    const base = status()
+    return { ...base, instance: { ...base.instance, ...over } } as SetupStatus
+  }
+
+  it('blocks when the server says the certificate does not cover the address', () => {
+    const s = caStep(served({ hosts: ['192.0.2.10'], effectiveHosts: ['192.0.2.10'], certificateCoversAddress: false }), '192.0.2.10:8080')
+    expect(s.state).toBe('blocked')
+  })
+
+  it('does not block when the server says it covers, whatever the local list holds', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['ROUTER.example.net'], certificateCoversAddress: true }), 'router.example.net:8080')
+    expect(s.state).not.toBe('blocked')
+  })
+
+  it('names the whole address, not a port-cut fragment, for a bare IPv6 literal', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: false }), '2001:db8::10')
+    expect(s.state).toBe('blocked')
+    expect(s.detail).toContain('2001:db8::10')
+    expect(s.detail).not.toContain('2001:db8: ')
+  })
+
+  it('builds the paste block from the served effective hosts', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: false }), '2001:db8::10')
+    expect(s.pasteBlock).toBe('hosts: ["localhost", "127.0.0.1", "2001:db8::10"]')
   })
 })
 
@@ -196,7 +173,7 @@ describe('step status', () => {
   it('blocks the syslog step when the listener is switched off', () => {
     const s = syslogStep(
       status({
-        instance: { tlsEnabled: true, hosts: [], syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
+        instance: { tlsEnabled: true, hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: true, addressHost: '', syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
       }),
     )
     expect(s.state).toBe('blocked')
@@ -546,7 +523,11 @@ describe('the claim ledger', () => {
   // not one of the four observation flavours: nothing is being waited
   // for, because nothing router-side can work yet.
   it('never dresses a mikroview-side problem up as patient waiting', () => {
-    const ledger = buildLedger(status(), [], '192.0.2.99:8080')
+    const ledger = buildLedger(
+      status({ instance: { ...status().instance, certificateCoversAddress: false, addressHost: '192.0.2.99' } }),
+      [],
+      '192.0.2.99:8080',
+    )
     expect(ledger[0].status.state).toBe('blocked')
     expect(ledger[0].flavour).toBe('attention')
   })
@@ -826,7 +807,11 @@ describe('the forced-past record', () => {
   })
 
   it('says the check could not run when the problem is on mikroview’s side', () => {
-    const ledger = buildLedger(status(), [], '192.0.2.99:8080')
+    const ledger = buildLedger(
+      status({ instance: { ...status().instance, certificateCoversAddress: false, addressHost: '192.0.2.99' } }),
+      [],
+      '192.0.2.99:8080',
+    )
     expect(notObserved(ledger[0])).toContain('could not run')
   })
 })

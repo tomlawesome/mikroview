@@ -14,14 +14,15 @@
   // push/backup's Undo from POST /api/setup/commands' own Undo builders
   // (wizardRun.undoTextFor, backed by internal/routeros/commands.go's
   // Undo* functions), and the tagged-rules Undo from wizardTune.undoBlock
-  // against the same pushed rule table StepTune reads -- nothing here
-  // hand-writes a RouterOS line (AGENTS.md).
+  // against the same pushed rule table StepTune reads -- for the rules this
+  // run tagged, or, on a reopened ledger, the rules the push shows tagged
+  // (taggedInPush) -- nothing here
+  // hand-writes a RouterOS line (docs/decisions/observe-never-probe.md).
 
   import { fetchRouterRules, type RouterFilterRule, type RouterTable } from '../../lib/api'
-  import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
-  import { undoBlock } from '../../lib/wizardTune'
-  import type { LedgerRowId } from '../../lib/wizardRun'
+  import { taggedInPush, undoBlock } from '../../lib/wizardTune'
+  import { taggedStands, type LedgerRowId } from '../../lib/wizardRun'
   import Track from './Track.svelte'
 
   const ev = $derived(wizardRun.evidence)
@@ -36,10 +37,10 @@
   // by comment where it is unique, by position otherwise) -- the same
   // read StepTune makes, fetched here only once this step is reached and
   // only when there is a tagged row to undo.
-  const device = $derived(wizardState.ledgerDevice || '')
+  const device = $derived(wizardRun.rulesDevice)
   let table = $state<RouterTable<RouterFilterRule> | null>(null)
   $effect(() => {
-    if (!device || !ev.tagged) return
+    if (!device || !taggedStands(ev)) return
     let stale = false
     fetchRouterRules(device)
       .then((t) => {
@@ -50,7 +51,9 @@
       stale = true
     }
   })
-  const tuneUndoText = $derived(table ? undoBlock(table.rules, wizardRun.tuneChosen) : '')
+  const tuneUndoText = $derived(
+    table ? undoBlock(table.rules, wizardRun.tuneChosen.length ? wizardRun.tuneChosen : taggedInPush(table.rules)) : '',
+  )
 
   function undoTextFor(id: LedgerRowId): string {
     return id === 'tune' ? tuneUndoText : wizardRun.undoTextFor(id)
@@ -61,6 +64,20 @@
   let forgetting = $state(false)
   let forgetError = $state<string | null>(null)
 
+  // Round 28's arm-then-confirm gesture (#1539 C1): the first click arms
+  // it, the second forgets; a click elsewhere or Escape disarms.
+  let armed = $state(false)
+
+  function onForgetClick(e: MouseEvent) {
+    e.stopPropagation()
+    if (!armed) {
+      armed = true
+      return
+    }
+    armed = false
+    void forget()
+  }
+
   async function forget() {
     if (forgetting) return
     forgetting = true
@@ -68,6 +85,13 @@
     forgetting = false
   }
 </script>
+
+<svelte:window
+  onclick={() => (armed = false)}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') armed = false
+  }}
+/>
 
 <h3>{wizardRun.name} is sending.</h3>
 <p class="hint">
@@ -112,8 +136,8 @@
   <pre>{undoAllText}</pre>
   <p class="note">
     Then
-    <button type="button" class="linkish" disabled={forgetting} onclick={forget}>
-      forget {wizardRun.name} on MikroView — its token, its enrolment and its record
+    <button type="button" class="linkish" class:armed disabled={forgetting} onclick={onForgetClick}>
+      {#if armed}confirm — the router must enrol again{:else}forget {wizardRun.name} on MikroView — its token, its enrolment and its record{/if}
     </button>
   </p>
   {#if forgetError}
