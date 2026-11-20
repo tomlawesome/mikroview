@@ -402,3 +402,20 @@ describe('what each action does once the password is accepted (#1202 review U8)'
     expect(screen.queryByText('kai')).toBeNull()
   })
 })
+
+// #1540 (C4): a refused People-screen action goes through the shared failure
+// line (it already had role="alert" but no lead-in).
+describe('a refused People action uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not <verb> <thing>: <server words>" as the shared line', async () => {
+    const { mock } = await apiMock('deleteUser')
+    mock.mockResolvedValueOnce('incorrect password')
+    await openPeople()
+
+    await begin('remove')
+    await typeAndConfirm('wrong-one')
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: incorrect password$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+})

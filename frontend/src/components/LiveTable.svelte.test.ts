@@ -735,6 +735,22 @@ describe('LiveTable distinguishes a failed fetch from a confirmed empty result (
   })
 })
 
+// #1540 (C4): the failed-fetch reading is the shared failure line.
+describe('LiveTable failed fetch uses the shared failure line (#1540 C4)', () => {
+  it('announces a failed load as role="alert" "Could not load …" through the shared line', () => {
+    appState.fetchFailed = true
+    appState.events = []
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const line = container.querySelector('[role="alert"]')
+    expect(line).not.toBeNull()
+    expect(line?.classList.contains('failure-line')).toBe(true)
+    expect(line?.textContent).toMatch(/^Could not load /)
+  })
+})
+
 // #549's chrome Loading state ("shell plus ghost rows -- never a spinner
 // page") and its first-run empty state ("point the operator at the account
 // menu's Run setup…"). Both hang off the same empty buffer that #373's tests

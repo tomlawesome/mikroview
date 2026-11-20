@@ -304,3 +304,31 @@ describe('Escape disarms clear all (#1539 C2)', () => {
     expect(bubble.textContent?.trim()).toBe('clear all')
   })
 })
+
+// #1540 (C4): the clear-all failure goes through the shared failure line.
+describe('a failed clear all uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not clear all flags: <server words>" as the shared line', async () => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.username = 'kai'
+    authState.role = 'user'
+    appState.view = 'fall'
+    flagsState.list = [testFlag()]
+    vi.spyOn(flagsState, 'clearAll').mockRejectedValue(new Error('network unreachable'))
+    render(Docket)
+    await Promise.resolve()
+    flushSync()
+
+    const bubble = screen.getByRole('button', { name: 'clear all' })
+    bubble.click()
+    flushSync()
+    bubble.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toBe('Could not clear all flags: network unreachable')
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+})

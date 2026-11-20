@@ -1974,3 +1974,37 @@ describe('dead CSS removed (#1304 P1)', () => {
     expect(flagsSource).not.toMatch(/\.clear-note-input\s*\{/)
   })
 })
+
+// #1540 (C4): a failed verdict goes through the shared failure line, not
+// the page's own `.mutation-error` paragraph.
+describe('a failed verdict uses the shared failure line (#1540 C4)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'alex'
+  })
+
+  it('shows role="alert" "Could not record the verdict: <server words>" as the shared line', async () => {
+    vi.mocked(setFlagVerdict).mockRejectedValue(new Error('network unreachable'))
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toBe('Could not record the verdict: network unreachable')
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+})

@@ -2614,3 +2614,24 @@ describe('the event trace on the city (#1050, rounds 54 & 56)', () => {
     expect(container.querySelector('.plate[data-cid="vlan-iot"]')).not.toBeNull()
   })
 })
+
+// #1540 (C5): until the first load lands, a one-line "<verb>ing…" status
+// stands where the screen has no room for ghost rows; once it has, the
+// status is gone.
+describe('first load shows a one-line status (#1540 C5)', () => {
+  it('says what it is doing while the first load is in flight, and stops once it lands', () => {
+    appState.initialLoadDone = false
+    matchMedia(true)
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+    const first = render(City, { props: { stop: 'city', ground } })
+    flushSync()
+    const lines = [...first.container.querySelectorAll('[role="status"]')].map((n) => n.textContent?.trim() ?? '')
+    expect(lines.join('|')).toMatch(/(^|\|)[A-Z][a-z]+ing[^|]*…($|\|)/)
+    first.unmount()
+
+    appState.initialLoadDone = true
+    const second = render(City, { props: { stop: 'city', ground } })
+    flushSync()
+    expect(second.container.textContent).not.toMatch(/(Loading|Reading|Gathering|Mapping)[^.]*…/)
+  })
+})

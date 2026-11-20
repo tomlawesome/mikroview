@@ -1691,3 +1691,53 @@ describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
     expect(container.querySelector('.berth-trigger')).toBeNull()
   })
 })
+
+// #1540 (C4): a refused rename and a refused router removal go through the
+// shared failure line, with a "Could not <verb> <thing>:" lead-in.
+describe('rename and delete failures use the shared failure line (#1540 C4)', () => {
+  it('a refused rename', async () => {
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '192.0.2.2', label: 'router-a', tags: [] }])
+    vi.mocked(upsertEntity).mockResolvedValue('a name is already taken')
+    const { container, getByText, getByRole } = render(Entities)
+    await settle()
+
+    await fireEvent.click(getByText('router-a'))
+    await settle()
+    const input = container.querySelector('.rename-input') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'router-b' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await settle()
+
+    const line = getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: a name is already taken$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+
+  it('a refused router removal', async () => {
+    deleteDevice.mockResolvedValue('device: this device is declared in config.yaml; remove it there instead')
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        firstSeen: new Date().toISOString(),
+        sourceIp: '192.0.2.1',
+        eventCount: 3,
+      } as Device,
+    ]
+    const { getByLabelText, getByText, getByRole } = render(Entities)
+    await settle()
+    getByLabelText(/Remove rb5009/).click()
+    flushSync()
+    getByText('Remove it').click()
+    await settle()
+
+    const line = getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(
+      /^Could not [a-z]+ .+: device: this device is declared in config.yaml; remove it there instead$/,
+    )
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+})
