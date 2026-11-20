@@ -337,4 +337,9 @@ fidelity:
 release-surfaces:
 	@scripts/check-release-surfaces.sh
 
-.PHONY: release-surfaces
+# release-readiness: the checks the release_readiness CI job runs first on a
+# promotion merge request (#1504). TARGET=preview or main; see docs/releasing.md.
+release-readiness:
+	@python3 scripts/release-readiness.py --target $(TARGET)
+
+.PHONY: release-surfaces release-readiness
