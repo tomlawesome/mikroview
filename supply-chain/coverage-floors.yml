@@ -202,7 +202,7 @@ floors:
   internal/hub: 100
   internal/ipscope: 100     # new with #1481; 100.0% measured 2026-11-18 (#1537)
   internal/logging: 92
-  internal/naming: 89
+  internal/naming: 95         # 95.5% after #1537 covered RuleProvenance and Device
   internal/netclass: 90
   internal/oui: 84
   internal/prefs: 87
