@@ -354,7 +354,7 @@
   {/if}
 
   {#if ed.error}
-    <p class="msg error" role="alert">{ed.error}</p>
+    <div class="msg"><FailureLine text={ed.error} /></div>
   {:else if ed.notice}
     <p class="msg" role="status">{ed.notice}</p>
   {/if}
@@ -618,10 +618,6 @@
     font-size: 12.5px;
     color: var(--fg-muted);
     border-bottom: 1px solid var(--border);
-  }
-
-  .msg.error {
-    color: var(--reject);
   }
 
   .gate {

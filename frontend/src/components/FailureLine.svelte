@@ -7,10 +7,19 @@
   // way everywhere. `said` is the server's own words from lib/api.ts,
   // shown verbatim; when the server said nothing the colon is dropped
   // rather than left dangling.
-  let { verb, thing, said = '' }: { verb: string; thing: string; said?: string | null } = $props()
+  //
+  // A store that already holds the whole "Could not …: …" text (lib/
+  // plainWords.ts's couldNot) hands it over as `text`, shown as it is, so
+  // the lead-in is never written twice.
+  let {
+    verb = '',
+    thing = '',
+    said = '',
+    text = '',
+  }: { verb?: string; thing?: string; said?: string | null; text?: string } = $props()
 </script>
 
-<p class="failure-line" role="alert">Could not {verb} {thing}{said ? `: ${said}` : ''}</p>
+<p class="failure-line" role="alert">{text || `Could not ${verb} ${thing}${said ? `: ${said}` : ''}`}</p>
 
 <style>
   .failure-line {

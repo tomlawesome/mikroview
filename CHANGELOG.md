@@ -309,6 +309,17 @@ rewritten.
 
 ### Changed
 
+- **Failures read the same way on the rest of the screens** (#1540). A
+  failed load or save on the engine room, the events table, router backups,
+  the droplist, the config editor and upgrade check, the flags verdicts,
+  clear all, entity rename and router removal, and the passkeys overlay now
+  shows one line, announced to screen readers: "Could not <verb> <thing>:
+  <what the server said>". When no answer came at all, it reads "can't reach
+  MikroView — check the connection and try again", and a bare "fetchHostDossier:
+  503" reads "the server could not do that (503)". The map, the city and the
+  metrics now say "Mapping the network…" or "Reading the metrics…" until the
+  first load lands.
+
 - **Drafting a rule keeps its line card open** (#1496). On the map and in
   the city, `draft the rule ▸` pins the card it was clicked on, so the
   ports and counts stay beside the draft; unpin or Escape closes it.

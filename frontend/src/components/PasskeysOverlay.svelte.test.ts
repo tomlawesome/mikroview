@@ -231,7 +231,7 @@ describe('adding a passkey', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     expect(registerPasskey).toHaveBeenCalledWith('this laptop', 'wrong')
-    expect(await screen.findByText('incorrect password')).toBeTruthy()
+    expect(await screen.findByText('Could not add this passkey: incorrect password')).toBeTruthy()
     expect(authState.passkeyCount).toBe(0)
     expect(screen.getByLabelText('Name')).toHaveProperty('value', 'this laptop')
   })
@@ -350,7 +350,7 @@ describe('removing a passkey', () => {
     await fireEvent.click(screen.getByRole('button', { name: /remove passkey/i }))
 
     expect(disablePasskey).toHaveBeenCalledWith('cred-1', 'wrong')
-    expect(await screen.findByText('wrong password')).toBeTruthy()
+    expect(await screen.findByText('Could not remove this passkey: wrong password')).toBeTruthy()
     // Still on the removing screen, naming the same row -- nothing was
     // removed.
     expect(screen.getByText(/this removes "this laptop"/i)).toBeTruthy()
@@ -486,5 +486,52 @@ describe('Q5-F2: loading the list reports errors like the other list calls', () 
     render(PasskeysOverlay, { open: true })
 
     expect(await screen.findByText('Could not load the passkeys: the server could not do that (500)')).toBeTruthy()
+  })
+})
+
+// #1540 (C4): the add, rename and remove refusals go through the shared
+// failure line: role="alert", "Could not <verb> <thing>: <server words>".
+describe('refusals use the shared failure line (#1540 C4)', () => {
+  function expectSharedLine(rest: RegExp) {
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(rest)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  }
+
+  it('a refused add', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue('incorrect password')
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText(/add a passkey/i)
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByText(/incorrect password/)
+    expectSharedLine(/^Could not [a-z]+ .+: incorrect password$/)
+  })
+
+  it('a refused rename', async () => {
+    vi.mocked(fetchPasskeys).mockResolvedValue([row()])
+    vi.mocked(renamePasskey).mockResolvedValue('that name is too long')
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText('this laptop')
+    await fireEvent.click(screen.getByRole('button', { name: /rename this laptop/i }))
+    const input = screen.getByLabelText(/rename this laptop/i)
+    await fireEvent.input(input, { target: { value: 'work phone' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await screen.findByText(/that name is too long/)
+    expectSharedLine(/^Could not [a-z]+ .+: that name is too long$/)
+  })
+
+  it('a refused remove', async () => {
+    vi.mocked(fetchPasskeys).mockResolvedValue([row()])
+    vi.mocked(disablePasskey).mockResolvedValue('wrong password')
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText('this laptop')
+    await fireEvent.click(screen.getByRole('button', { name: /remove/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: /remove passkey/i }))
+    await screen.findByText(/wrong password/)
+    expectSharedLine(/^Could not [a-z]+ .+: wrong password$/)
   })
 })

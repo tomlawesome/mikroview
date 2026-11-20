@@ -716,7 +716,7 @@ describe('LiveTable distinguishes a failed fetch from a confirmed empty result (
     const { container } = render(LiveTable, {})
     flushSync()
 
-    const empty = container.querySelector('.empty')
+    const empty = container.querySelector('.failure-line')
     expect(empty).not.toBeNull()
     expect(empty?.textContent).not.toContain('No events match the current filters.')
     expect(empty?.textContent?.toLowerCase()).toMatch(/could not load|failed|error/)
@@ -732,6 +732,22 @@ describe('LiveTable distinguishes a failed fetch from a confirmed empty result (
 
     const empty = container.querySelector('.empty')
     expect(empty?.textContent).toContain('No events match the current filters.')
+  })
+})
+
+// #1540 (C4): the failed-fetch reading is the shared failure line.
+describe('LiveTable failed fetch uses the shared failure line (#1540 C4)', () => {
+  it('announces a failed load as role="alert" "Could not load …" through the shared line', () => {
+    appState.fetchFailed = true
+    appState.events = []
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const line = container.querySelector('[role="alert"]')
+    expect(line).not.toBeNull()
+    expect(line?.classList.contains('failure-line')).toBe(true)
+    expect(line?.textContent).toMatch(/^Could not load /)
   })
 })
 

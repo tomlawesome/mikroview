@@ -328,7 +328,7 @@
   {/if}
 
   {#if auditState.error}
-    <FailureLine verb="load" thing="the audit log" said={auditState.error} />
+    <FailureLine text={auditState.error} />
   {:else if !auditState.loaded}
     <GhostRows label="Reading the audit log…" rows={5} />
   {:else if auditState.loaded && auditState.list.length === 0}

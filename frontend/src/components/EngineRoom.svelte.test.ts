@@ -578,7 +578,7 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'copy for RouterOS' }))
     await settle()
 
-    expect(screen.getByText('setup is locked while a restore is in progress')).toBeTruthy()
+    expect(screen.getByText('Could not copy the router commands: setup is locked while a restore is in progress')).toBeTruthy()
     expect(screen.queryByText('copied for RouterOS')).toBeNull()
   })
 
@@ -1913,5 +1913,28 @@ describe('the country and network owner group (#1352)', () => {
     expect(document.getElementById('engineroom-geo')).toBeNull()
     expect(screen.queryByText('country and network owner')).toBeNull()
     expect(fetchGeoSettings).not.toHaveBeenCalled()
+  })
+})
+
+// #1540 (C4): a refused port-scan window save goes through the shared
+// failure line.
+describe('a refused port-scan window save uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not <verb> <thing>: <server words>" as the shared line', async () => {
+    const { updateDefinition } = await import('../lib/api')
+    vi.mocked(updateDefinition).mockResolvedValueOnce('threshold must be at least 2' as never)
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: '15 ports / 60 s' }))
+    await settle()
+    await fireEvent.input(screen.getByLabelText('distinct ports'), { target: { value: '1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: threshold must be at least 2$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
   })
 })

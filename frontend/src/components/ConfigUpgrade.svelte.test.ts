@@ -109,3 +109,19 @@ describe('ConfigUpgrade (#1218)', () => {
     expect(fetchConfigUpgrade).toHaveBeenCalledTimes(1)
   })
 })
+
+// #1540 (C4): the failed check goes through the shared failure line.
+describe('a failed check uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not check for new settings: <server words>" as the shared line', async () => {
+    vi.resetAllMocks()
+    vi.mocked(fetchConfigUpgrade).mockRejectedValue(new Error('network unreachable'))
+    render(ConfigUpgrade)
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toBe('Could not check for new settings: network unreachable')
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+})

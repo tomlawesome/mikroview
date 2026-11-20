@@ -6531,3 +6531,23 @@ describe("the trace's own list (#1050, round 56, A1/B1)", () => {
     expect(container.querySelector('.picker')).not.toBeNull()
   })
 })
+
+// #1540 (C5): until the first load lands, a one-line "<verb>ing…" status
+// stands where the screen has no room for ghost rows; once it has, the
+// status is gone.
+describe('first load shows a one-line status (#1540 C5)', () => {
+  it('says what it is doing while the first load is in flight, and stops once it lands', () => {
+    appState.initialLoadDone = false
+
+    const first = render(Topography)
+    flushSync()
+    const lines = [...first.container.querySelectorAll('[role="status"]')].map((n) => n.textContent?.trim() ?? '')
+    expect(lines.join('|')).toMatch(/(^|\|)[A-Z][a-z]+ing[^|]*…($|\|)/)
+    first.unmount()
+
+    appState.initialLoadDone = true
+    const second = render(Topography)
+    flushSync()
+    expect(second.container.textContent).not.toMatch(/(Loading|Reading|Gathering|Mapping)[^.]*…/)
+  })
+})

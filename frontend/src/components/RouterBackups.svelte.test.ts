@@ -200,7 +200,7 @@ describe('the drop box switch (#1361)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
     await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
     await fireEvent.click(screen.getByRole('button', { name: 'open' }))
-    await waitFor(() => expect(screen.getByText('incorrect password')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Could not open the drop box: incorrect password')).toBeTruthy())
     expect(screen.getByLabelText('your password')).toBeTruthy()
     expect(onswitchchanged).not.toHaveBeenCalled()
   })
@@ -269,7 +269,7 @@ describe('a router at rest', () => {
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
 
     expect((await screen.findByRole('alert')).textContent).toBe(
-      "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+      "Could not download this file: it was refused, and mikroview couldn't refresh the lock status. Try again.",
     )
   })
 
@@ -282,7 +282,7 @@ describe('a router at rest', () => {
       props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('The download failed. Try again.')
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not download this file: the download failed. Try again.')
   })
 
   it('clears a previous download error once a later download succeeds', async () => {
@@ -907,5 +907,57 @@ describe('the deliver-by row (#1494)', () => {
     })
     expect(screen.getByText(/HTTPS to the ingest channel — the drop box's port is not used/)).toBeTruthy()
     expect(screen.queryByText(/SFTP on port 47022/)).toBeNull()
+  })
+})
+
+// #1540 (C4): the failure paths go through the shared failure line:
+// role="alert", a "Could not <verb> <thing>" lead-in, the server's words kept.
+describe('failures use the shared failure line (#1540 C4)', () => {
+  function expectSharedLine(rest: RegExp) {
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(rest)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  }
+
+  it('a refused drop box open', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue('incorrect password')
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open' }))
+    await waitFor(() => expectSharedLine(/^Could not [a-z]+ .+: incorrect password$/))
+  })
+
+  it('a refused transport switch', async () => {
+    vi.mocked(saveSetupBackupTransport).mockResolvedValue('could not save the setting')
+    render(RouterBackups, { props: { resp: resp({ transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'switch to HTTPS…' }))
+    await waitFor(() => expectSharedLine(/^Could not [a-z]+ .+: could not save the setting$/))
+  })
+
+  it('a refused read of a stored export', async () => {
+    const twoGenerations = {
+      device: 'rb5009',
+      generations: [
+        { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z' },
+        { id: 'g1', backupArrivedAt: '2026-08-25T03:00:00Z', rscArrivedAt: '2026-08-25T03:00:05Z' },
+      ],
+      intervalKnown: false,
+      missed: 0,
+    }
+    vi.mocked(fetchRouterBackupText).mockResolvedValue('the vault is locked -- unlock it with the vault passphrase first')
+    vi.mocked(fetchRouterBackups).mockResolvedValue(resp({ lock: lock({ passphraseSet: true, locked: true }) }))
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'read' }))
+    await screen.findByRole('alert')
+    expectSharedLine(/^Could not [a-z]+ .+: the vault is locked -- unlock it with the vault passphrase first$/)
+  })
+
+  it('a failed download', async () => {
+    vi.mocked(downloadFromUrl).mockResolvedValue('failed')
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
+    await screen.findByRole('alert')
+    expectSharedLine(/^Could not download /)
   })
 })

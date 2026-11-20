@@ -81,6 +81,7 @@
   import { onMount } from 'svelte'
   import GhostRows from './GhostRows.svelte'
   import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -250,7 +251,7 @@
     try {
       const err = await deleteDevice(deviceId)
       if (err) {
-        deleteError = err
+        deleteError = couldNot('remove', 'this router', err)
         return
       }
       deletingId = null
@@ -720,7 +721,7 @@
     renameSaving = false
     if (err && renameSeq === requestSeq) {
       renamingKey = wasRenaming
-      renameError = err
+      renameError = couldNot('rename', 'this name', err)
     }
   }
 
@@ -789,7 +790,7 @@
        the router's own name/address/enrolment) has to be visible at the
        moment of the decision. -->
   <div class="frow dim">{deleteContract(d)}</div>
-  {#if deleteError}<p class="rename-error">{deleteError}</p>{/if}
+  {#if deleteError}<FailureLine text={deleteError} />{/if}
   <button
     type="button"
     class="row-action reject"
@@ -1087,7 +1088,7 @@
               </td>
             </tr>
             {#if isRenaming('host', row.key) && renameError}
-              <tr><td colspan="7" class="rename-error">{renameError}</td></tr>
+              <tr><td colspan="7"><FailureLine text={renameError} /></td></tr>
             {/if}
           {/each}
           {#if rows.length === 0}
@@ -1137,7 +1138,7 @@
               </td>
             </tr>
             {#if isRenaming('rule', row.key) && renameError}
-              <tr><td colspan="4" class="rename-error">{renameError}</td></tr>
+              <tr><td colspan="4"><FailureLine text={renameError} /></td></tr>
             {/if}
           {/each}
           {#if ruleRows.length === 0}
@@ -1181,7 +1182,7 @@
               <td class={row.lastSeen ? '' : 'dim'}>{row.lastSeen ? formatSpacedAge(row.lastSeen, appState.now) : '—'}</td>
             </tr>
             {#if isRenaming('port', row.key) && renameError}
-              <tr><td colspan="3" class="rename-error">{renameError}</td></tr>
+              <tr><td colspan="3"><FailureLine text={renameError} /></td></tr>
             {/if}
           {/each}
           {#if portRows.length === 0}
@@ -1338,7 +1339,7 @@
   }
 
   /* Remove it (#1369): the one destructive control on this card, in the
-     same reject ink .rename-error already carries elsewhere on this
+     same reject ink the shared failure line already carries elsewhere on this
      page -- no new colour, just this button reading as the one that
      actually deletes something. */
   .row-action.reject {
@@ -1542,12 +1543,6 @@
     color: var(--fg);
     width: 100%;
     min-width: 120px;
-  }
-
-  .rename-error {
-    color: var(--reject);
-    font-family: var(--font-sans, inherit);
-    font-size: 12px;
   }
 
   .lz {

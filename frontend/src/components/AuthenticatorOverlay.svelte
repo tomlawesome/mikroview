@@ -19,6 +19,7 @@
   // Structure and styling deliberately mirror ChangePasswordOverlay,
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
+  import { couldNot, NO_ANSWER } from '../lib/plainWords'
   import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
@@ -246,7 +247,7 @@
           authState.handleUnauthorized()
           return
         }
-        error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        error = couldNot('confirm', 'the codes', err instanceof ApiError ? err.message : NO_ANSWER)
         void focusWhenReady(() => saveButton)
         return
       } finally {

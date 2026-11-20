@@ -3603,6 +3603,7 @@
 {/snippet}
 
 <div class="city" data-stop={effectiveStop} bind:this={cityEl}>
+  {#if !appState.initialLoadDone}<p class="first-load" role="status">Mapping the network…</p>{/if}
   <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
        round 56 A1) -- the same component Topography mounts, so the same
        markup and behaviour appear on the city too. -->
@@ -4785,6 +4786,19 @@
 </div>
 
 <style>
+  /* #1540 (C5): the one-line status while the first load is in flight, for
+     a screen with no room for ghost rows. */
+  .first-load {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
   .city {
     position: relative;
     flex: 1;

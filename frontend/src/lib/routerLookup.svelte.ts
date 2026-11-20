@@ -7,6 +7,7 @@ import {
   type RouterNatRule,
   type RouterTable,
 } from './api'
+import { plainWords } from './plainWords'
 import { partitionNatTable, type NatEventFacts, type NatPartition } from './natMatch'
 import { appState } from './state.svelte'
 
@@ -196,7 +197,7 @@ class RouterLookupState {
       },
       (err) => {
         if (id !== this.requestId) return
-        this.error = err instanceof Error ? err.message : String(err)
+        this.error = plainWords(err)
         this.loading = false
       },
     )
