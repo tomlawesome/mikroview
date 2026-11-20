@@ -7,8 +7,8 @@
 # the whole of each file it matches, whatever the value. So each entry lists
 # the exact files that hold such values, anchored, never a folder or a suffix:
 # a new file with an address is caught until it is added here on purpose.
-# scripts/private-details-allow.test.sh checks this file with the hook's own
-# shape check (lint:script-tests).
+# Only description, targetRules and paths are accepted: the commit hook
+# refuses any other key and then blocks every commit (#1550).
 
 [[allowlists]]
 description = "the drop-list's test range: the drop list refuses every reserved and documentation range by design, so its tests need an ordinary public /24 (see internal/droplist/validate_test.go); the test files that use it"
