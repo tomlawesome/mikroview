@@ -876,8 +876,8 @@
                 <button type="button" class="olink" disabled={submitting} onclick={() => (releasing = null)}>
                   cancel
                 </button>
-                {#if formError}<span class="oghint"><FailureLine text={formError} /></span>{/if}
               </p>
+              {#if formError}<div class="oghint"><FailureLine text={formError} /></div>{/if}
             {/if}
           {/each}
         {/if}
