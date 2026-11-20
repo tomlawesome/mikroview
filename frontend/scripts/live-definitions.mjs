@@ -248,7 +248,7 @@ check(
 for (const id of [createdID, cloned.body?.id, inverted.body?.id]) {
   if (!id) continue
   const removed = await api('DELETE', `/api/definitions/${encodeURIComponent(id)}`)
-  check(removed.status === 200, `the custom definition ${id} is deleted (${removed.status})`)
+  check(removed.status === 204, `the custom definition ${id} is deleted (${removed.status})`)
 }
 
 const finalList = await api('GET', '/api/definitions')
