@@ -592,5 +592,93 @@ chk "cannot run: the nine other checks still ran and passed" eq "$(okcount)" 9
 chk "cannot run: three failed" has "$OUT" "release-readiness: 3 of 12 checks failed:"
 API_URL=""
 
+# ------------------------------------------------- CI wiring (spec, last section)
+# Needs PyYAML (py3-yaml in the lint:script-tests image). Reads the real
+# .gitlab-ci.yml. Heuristic for "a rule can match a promotion merge request":
+# no rules, or a rule that is not `when: never` and has no `if`, or whose `if`
+# names merge_request_event and does not restrict the target to another branch.
+cat >"$TMP/wiring.py" <<'PY'
+import sys, yaml
+class L(yaml.SafeLoader): pass
+L.add_constructor("!reference", lambda ld, n: {"!reference": ld.construct_sequence(n)})
+doc = yaml.load(open(sys.argv[1]), Loader=L)
+errs = []
+stages = doc.get("stages", [])
+job = doc.get("release_readiness")
+def ref(v):
+    while isinstance(v, dict) and "!reference" in v:
+        a, b = v["!reference"]; v = (doc.get(a) or {}).get(b)
+    return v
+def rules_of(j):
+    out = []
+    for r in j.get("rules") or []:
+        r = ref(r)
+        if isinstance(r, list): out += [ref(x) for x in r]
+        elif r is not None: out.append(r)
+    return out
+def can_match(j):
+    rs = rules_of(j)
+    if "rules" not in j: return True
+    for r in rs:
+        if not isinstance(r, dict) or r.get("when") == "never": continue
+        c = r.get("if")
+        if c is None: return True
+        if "merge_request_event" in c and ("TARGET_BRANCH_NAME" not in c or "preview" in c or "main" in c): return True
+        if "merge_request_event" not in c and "CI_PIPELINE_SOURCE" not in c and "CI_COMMIT_BRANCH" not in c and "CI_COMMIT_TAG" not in c: return True
+    return False
+if not isinstance(job, dict):
+    errs.append("job release_readiness does not exist")
+else:
+    if not stages or stages[0] != "readiness": errs.append("stage readiness is not first in stages")
+    if job.get("stage") != "readiness": errs.append("release_readiness is not in stage readiness")
+    others = [n for n, j in doc.items() if isinstance(j, dict) and j.get("stage") == "readiness" and n != "release_readiness"]
+    if others: errs.append("stage readiness holds other jobs: %s" % others)
+    if job.get("tags") != ["light"]: errs.append("release_readiness tags are not [light]")
+    if job.get("image") != "alpine:3.24": errs.append("release_readiness image is not alpine:3.24")
+    if job.get("needs") != []: errs.append("release_readiness needs is not []")
+    if job.get("interruptible") is not False: errs.append("release_readiness is interruptible")
+    if str(job.get("timeout")) != "10m": errs.append("release_readiness timeout is not 10m")
+    if str((job.get("variables") or {}).get("GIT_DEPTH")) != "0": errs.append("release_readiness GIT_DEPTH is not 0")
+    txt = yaml.dump(job)
+    for need in ("apk add --no-cache git python3", "release-readiness.py --target", "--remote origin", "safe.directory", "CI_COMMIT_SHA"):
+        if need not in txt: errs.append("release_readiness script lacks %r" % need)
+    rs = " ".join(str(r) for r in rules_of(job))
+    if "preview" not in rs or "main" not in rs: errs.append("release_readiness rules do not name preview and main")
+
+def waits(name, seen=()):
+    j = doc.get(name)
+    if not isinstance(j, dict): return True  # unknown (template or external): not judged
+    if name == "release_readiness": return True
+    needs = j.get("needs")
+    if needs is None:
+        st = j.get("stage", "test")
+        return st in stages and stages.index(st) > 0
+    names = []
+    for n in needs:
+        names.append(n.get("job") if isinstance(n, dict) else n)
+        if isinstance(n, dict) and n.get("job") == "release_readiness": return True
+    if "release_readiness" in names: return True
+    if not names or name in seen: return False
+    return all(waits(n, seen + (name,)) for n in names)
+if isinstance(job, dict):
+    for name, j in doc.items():
+        if name.startswith(".") or name in ("stages", "default", "variables", "workflow", "include") or not isinstance(j, dict): continue
+        if name == "release_readiness" or not can_match(j): continue
+        if not waits(name): errs.append("job %s can run in a promotion pipeline but does not wait for release_readiness" % name)
+for e in errs: print(e)
+sys.exit(1 if errs else 0)
+PY
+wiring="$(python3 "$TMP/wiring.py" "$HERE/../.gitlab-ci.yml" 2>&1)"; wrc=$?
+chk "CI wiring: release_readiness exists and every promotion-pipeline job waits for it" eq "$wrc" 0
+[ "$wrc" != 0 ] && printf '  wiring: %s\n' "$wiring"
+# the check itself must catch an unwired new job
+cat >"$TMP/w-bad.yml" <<'Y'
+stages: [readiness, lint]
+release_readiness: {stage: readiness, tags: [light], image: "alpine:3.24", needs: [], interruptible: false, timeout: 10m, variables: {GIT_DEPTH: 0}, rules: [{if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'}], script: ["apk add --no-cache git python3", "git config --global --add safe.directory x", "git checkout $CI_COMMIT_SHA", "python3 scripts/release-readiness.py --target x --remote origin"]}
+newjob: {stage: lint, needs: [], script: [true], rules: [{if: '$CI_PIPELINE_SOURCE == "merge_request_event"'}]}
+Y
+bad="$(python3 "$TMP/wiring.py" "$TMP/w-bad.yml" 2>&1)"
+chk "CI wiring: a needs: [] job without the readiness need is named" glob "$bad" "*job newjob can run in a promotion pipeline*"
+
 echo "# $COUNT checks"
 exit "$fail"
