@@ -67,7 +67,7 @@ COUNT=0
 chk() { local n="$1"; shift; COUNT=$((COUNT + 1))
   if "$@"; then echo "ok - $n"; else echo "FAIL - $n"; fail=1; fi; }
 eq() { [ "$1" = "$2" ]; }
-glob() { [[ "$1" == $2 ]]; }       # glob <value> <pattern>
+glob() { local p="${2//\[/\\[}"; p="${p//\]/\\]}"; [[ "$1" == $p ]]; }  # glob <value> <pattern>; [ ] are literal, * ? wild
 has() { grep -qF -- "$2" <<<"$1"; }
 hasnt() { ! grep -qF -- "$2" <<<"$1"; }
 
@@ -99,6 +99,7 @@ python3 "$TMP/stub.py" "$STUB" &
 STUB_PID=$!
 for _ in $(seq 1 50); do [ -s "$STUB/port" ] && break; sleep 0.1; done
 PORT="$(cat "$STUB/port")"
+apilog() { grep "/api/v4/" "$STUB/log"; true; }   # GitLab requests only (go.dev is sent without a token)
 API="http://127.0.0.1:$PORT/api/v4"
 
 PID=42
@@ -161,6 +162,7 @@ good_record() {  # good_record [steps]
   done
   printf '\nSigned-off-by: Release Agent\n'
 }
+HARMLESS='s/^(step 1: .*)$/\1 (rechecked)/'   # a real change to the record, so a commit exists
 RC_TRAILER="Release Agent"; RC_AUTHOR=""
 rec_commit() {  # rec_commit <sed script> [steps]: rewrite and commit the record
   local f="docs/releases/v$V.md"
@@ -216,6 +218,7 @@ new() {  # new <preview|main> ; knobs: VER, TAGS, REMOTE_NAME
 run_rr() {  # run_rr [args...]; default args come from the leg
   local args=("$@")
   [ $# -eq 0 ] && args=(--target "$T" --remote "$REMOTE")
+  [ "${1-}" = "--none" ] && args=()   # really no arguments
   write_routes
   OUT="$(cd "$WORK" && env -u CI_REUSE_TOKEN -u GITLAB_TOKEN -u CI_PROJECT_ID \
     ${TOKEN_ENV[@]+"${TOKEN_ENV[@]}"} ${PROJ_ENV[@]+"${PROJ_ENV[@]}"} \
@@ -254,7 +257,7 @@ done
 # ---------------------------------------------------------------- usage errors
 new preview
 run_rr; : # default args fine; now the usage cases
-for args in "" "--target bogus" "--target" "--remote origin"; do
+for args in "--none" "--target bogus" "--target" "--remote origin"; do
   run_rr $args
   chk "usage '$args': exit 2" eq "$RC" 2
   chk "usage '$args': stderr says release-readiness:" glob "$ERR" "release-readiness: *"
@@ -409,14 +412,14 @@ new preview; TOKEN_ENV=(); run_rr
 chk "token: missing token exits 1" eq "$RC" 1
 for id in review-issue milestone source-pipeline; do chk "token: missing token fails $id as could not run" glob "$(failline $id)" "FAIL: $id: could not run:*"; done
 chk "token: only the three API checks fail" has "$OUT" "release-readiness: 3 of 12 checks failed:"
-chk "token: no API request is sent without a token" eq "$(wc -l <"$STUB/log" | tr -d ' ')" 0
+chk "token: no API request is sent without a token" eq "$(apilog | wc -l | tr -d ' ')" 0
 new preview; TOKEN_ENV=(GITLAB_TOKEN=tok-gl-AAAA CI_REUSE_TOKEN=tok-reuse-BBBB); run_rr
-chk "token: CI_REUSE_TOKEN wins over GITLAB_TOKEN" eq "$(cut -f2 "$STUB/log" | sort -u | tr '\n' ' ')" "tok-reuse-BBBB "
+chk "token: CI_REUSE_TOKEN wins over GITLAB_TOKEN" eq "$(apilog | cut -f2 | sort -u | tr '\n' ' ')" "tok-reuse-BBBB "
 chk "token: passes with it" eq "$RC" 0
 new preview; TOKEN_ENV=(CI_REUSE_TOKEN=tok-reuse-CCCC); run_rr
 chk "token: CI_REUSE_TOKEN alone works" eq "$RC" 0
 new preview; TOKEN_ENV=(GITLAB_TOKEN=tok-gl-DDDD); run_rr
-chk "token: GITLAB_TOKEN alone is sent as the PRIVATE-TOKEN header" eq "$(cut -f2 "$STUB/log" | sort -u | tr '\n' ' ')" "tok-gl-DDDD "
+chk "token: GITLAB_TOKEN alone is sent as the PRIVATE-TOKEN header" eq "$(apilog | cut -f2 | sort -u | tr '\n' ' ')" "tok-gl-DDDD "
 new preview; TOKEN_ENV=(GITLAB_TOKEN=tok-gl-LEAKTEST); ISSUE_BODY='{"iid":1426,"state":"opened"}'; PIPE_BODY='[{"id":9,"status":"failed","web_url":"http://gl.example.org/p/9"}]'; ISSUE_STATUS=200; run_rr
 chk "token: never printed on failure (stdout)" hasnt "$OUT" "tok-gl-LEAKTEST"
 chk "token: never printed on failure (stderr)" hasnt "$ERR" "tok-gl-LEAKTEST"
@@ -540,7 +543,7 @@ new preview; guide_n 6; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "guid
 chk "12 release-record: N comes from the guide (6 steps, 6 lines) passes" has_ok release-record
 new preview; guide_n 6; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "guide six"; rec_commit '' 4; run_rr
 chk "12 release-record: 6-step guide, 4-step record fails" rr12 "$FIX12_OTHER"
-new preview; RC_TRAILER=""; rec_commit ''; run_rr
+new preview; RC_TRAILER=""; rec_commit "$HARMLESS"; run_rr
 chk "12 release-record: record line present but commit has no trailer" rr12 "$FIX12_SIGN"
 chk "12 release-record: unsigned, only that fails" only_fail release-record
 new preview; rec_commit '/^Signed-off-by:/d'; run_rr
@@ -551,9 +554,9 @@ new preview; rec_commit 's/^Signed-off-by: .*/Signed-off-by: <your name, as git 
 chk "12 release-record: placeholder name" has_fail release-record
 new preview; RC_TRAILER="Someone Else"; rec_commit 's/^Signed-off-by: .*/Signed-off-by: Someone Else/'; run_rr
 chk "12 release-record: signed name differs from the author name" rr12 "$FIX12_SIGN"
-new preview; RC_TRAILER="Other Person"; rec_commit ''; run_rr
+new preview; RC_TRAILER="Other Person"; rec_commit "$HARMLESS"; run_rr
 chk "12 release-record: record's name is not one of the commit's trailers" rr12 "$FIX12_SIGN"
-new preview; RC_AUTHOR="Other Author"; RC_TRAILER="Release Agent"; rec_commit ''; run_rr
+new preview; RC_AUTHOR="Other Author"; RC_TRAILER="Release Agent"; rec_commit "$HARMLESS"; run_rr
 chk "12 release-record: author name differs from the signed name" rr12 "$FIX12_SIGN"
 new preview; RC_AUTHOR="Other Author"; RC_TRAILER="Other Author"; rec_commit 's/^Signed-off-by: .*/Signed-off-by: Other Author/'; run_rr
 chk "12 release-record: a different author who signs as themselves passes" has_ok release-record
