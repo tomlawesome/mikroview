@@ -482,3 +482,50 @@ func TestEverySourceConstantHasAnOperatorNote(t *testing.T) {
 		}
 	}
 }
+
+// RuleProvenance: an entity label beats the config.yaml name and is
+// reported as the entity source; a rule nothing names is SourceNone.
+// Neither case may gate an edit on a router.
+func TestRuleProvenanceEntityWinsAndMissIsNone(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypeRule, Key: "r13", Label: "UI label"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Entities: es, Rules: map[string]string{"r13": "YAML label"}}
+
+	p := r.RuleProvenance("r13")
+	if p.Name != "UI label" || p.Label != "UI label" || p.Source != SourceEntity || p.RouterWins() {
+		t.Errorf("RuleProvenance(r13) = %+v, want the entity label as %q", p, SourceEntity)
+	}
+	p = r.RuleProvenance("unknown")
+	if p.Name != "" || p.Source != SourceNone || p.RouterWins() {
+		t.Errorf("RuleProvenance(unknown) = %+v, want unnamed", p)
+	}
+	if p := (Resolver{}).RuleProvenance("r13"); p.Source != SourceNone {
+		t.Errorf("zero Resolver RuleProvenance = %+v, want none", p)
+	}
+}
+
+// Device: "" for an empty id even when a config entry exists for "",
+// the entity layer names what config does not, and a miss -- with or
+// without an entity store -- is "" so the caller shows the raw id.
+func TestDeviceLookupFallbacks(t *testing.T) {
+	store, _ := entities.Open("")
+	if _, err := store.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "192.0.2.9", Label: "lab crs"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Devices: map[string]string{"": "bogus", "border": "Border Router"}, Entities: store}
+
+	if got := r.Device(""); got != "" {
+		t.Errorf("Device(\"\") = %q, want empty", got)
+	}
+	if got := r.Device("192.0.2.9"); got != "lab crs" {
+		t.Errorf("Device(192.0.2.9) = %q, want the entity label", got)
+	}
+	if got := r.Device("nope"); got != "" {
+		t.Errorf("Device(nope) = %q, want empty", got)
+	}
+	if got := (Resolver{Devices: map[string]string{"border": "B"}}).Device("other"); got != "" {
+		t.Errorf("Device without entities = %q, want empty", got)
+	}
+}
