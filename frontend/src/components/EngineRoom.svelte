@@ -1383,7 +1383,7 @@
                 ·
                 {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
                 <!-- #1202: gauntlet gives a read-only key a one-year life;
-                     an ingest key never expires, so it carries no date.
+                     an ingest token never expires, so it carries no date.
                      A date already past reads "expired": the key no longer
                      works, and revoke tidies it away. -->
                 {#if tok.expiresAt}
