@@ -109,6 +109,8 @@ requires and why.
   pipeline runs and what each one checks
 - [docs/routeros-chr-exercise.md](routeros-chr-exercise.md) — the
   RouterOS CHR exercise the pipeline runs
+- [docs/releasing.md](releasing.md) — how a release goes from `dev`
+  to `preview` to `main`, the readiness check and the signed release record
 - [docs/release-signing.md](release-signing.md) — how a release's two
   independent signatures are produced, and the owner-only setup on the
   signing runner behind them
