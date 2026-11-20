@@ -225,7 +225,10 @@ check(
 
 await row.locator('.row-knob').click()
 await row.locator('.panel').waitFor({ state: 'visible' })
+// Reset to stock is arm-then-confirm (#1539): the first click arms it,
+// the second resets.
 await row.locator('.panel button:has-text("Reset to stock")').click()
+await row.locator('.panel button.armed:has-text("confirm — its edits are lost")').click()
 await page.waitForFunction(
   () => {
     const li = [...document.querySelectorAll('.bench li.row')].find(

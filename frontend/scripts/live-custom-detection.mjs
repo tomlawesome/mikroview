@@ -208,7 +208,7 @@ check(
 
 for (const id of created) {
   const removed = await api('DELETE', `/api/definitions/${encodeURIComponent(id)}`)
-  check(removed.status === 200, `the custom detection ${id} is deleted (${removed.status})`)
+  check(removed.status === 204, `the custom detection ${id} is deleted (${removed.status})`)
 }
 
 const finalList = await api('GET', '/api/definitions')
