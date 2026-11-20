@@ -95,14 +95,26 @@ def api(path):
     base = os.environ.get("CI_API_V4_URL", "https://gitlab.tomlawson.io/api/v4").rstrip("/")
     pid = os.environ.get("CI_PROJECT_ID", "ai%2Fmikroview")
     url = f"{base}/projects/{pid}/{path}"
-    req = urllib.request.Request(url, headers={"PRIVATE-TOKEN": tok})
+    req = urllib.request.Request(url)
+    # Unredirected: urllib would otherwise copy the token to a redirect target.
+    req.add_unredirected_header("PRIVATE-TOKEN", tok)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.load(resp)
+            return read_json(resp)
     except urllib.error.HTTPError as e:
         raise CouldNot("GitLab API {} answered HTTP {}".format(path.split("?")[0], e.code))
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise CouldNot("GitLab API {} unreachable or unreadable ({})".format(path.split("?")[0], type(e).__name__))
+
+
+MAX_BODY = 8 * 1024 * 1024
+
+
+def read_json(resp):
+    body = resp.read(MAX_BODY + 1)
+    if len(body) > MAX_BODY:
+        raise ValueError("answer larger than 8 MiB")
+    return json.loads(body)
 
 
 class Fail(Exception):
@@ -315,7 +327,7 @@ def check_go_toolchain(c):
     url = os.environ.get("RELEASE_READINESS_GO_DL_URL", "https://go.dev/dl/?mode=json")
     try:
         with urllib.request.urlopen(url, timeout=30) as resp:
-            rel = json.load(resp)
+            rel = read_json(resp)
     except urllib.error.HTTPError as e:
         raise CouldNot(f"go.dev release list answered HTTP {e.code}")
     except (urllib.error.URLError, OSError, ValueError) as e:
