@@ -717,6 +717,7 @@ lint:script-tests:
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
     - bash scripts/release-readiness.test.sh
+    - bash scripts/ci-batch-intake.test.sh
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
     - bash scripts/routeros-chr-open-mr.test.sh
@@ -724,6 +725,9 @@ lint:script-tests:
 
 lint:go:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
@@ -755,6 +759,9 @@ lint:go:
 # are meant to be testing. Move all of them together, or the split reopens.
 lint:frontend:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
   image: node:26-alpine
@@ -900,6 +907,9 @@ lint:jscpd:
 
 lint:supply-chain-pins:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): reads files and a policy; installs only bash and git.
   tags: [light]
   image: node:26-alpine
@@ -1018,15 +1028,18 @@ test:frontend:
 # packaged Go is too old to read this module.
 test:build-checks:
   stage: test
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
   # the markdown link and anchor check, and generate-notices --check reads
   # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
-  # so it keeps .dev_or_mr's plain rules rather than the ladder.
+  # so it keeps .dev_or_mr's plain rules rather than the ladder. It also runs
+  # on an MR into batch-a/batch-b (#1537): cheap, on the light lane.
   rules:
     - !reference [.dev-landing, job_rule]
-    - !reference [.batch-intake, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
@@ -2084,6 +2097,9 @@ perf:promotion:
 
 security:semgrep:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: semgrep/semgrep:1.184.0
   <<: *dev_or_mr_code
@@ -2154,6 +2170,9 @@ security:semgrep:
 
 security:gosec:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Stays on big: gosec loads the whole module graph and peaks at ~6.7 GB,
   # over the light lane's 6 GB cap.
   # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
@@ -2223,6 +2242,9 @@ security:gosec:
 
 security:govulncheck:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
@@ -2308,6 +2330,9 @@ security:zizmor:
 
 security:npm-audit:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
@@ -2380,6 +2405,9 @@ security:npm-audit:
 # Debian's packaged Go is too old to read this module.
 security:licence-policy:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   <<: [*dev_or_mr_code, *git_safe]
@@ -2411,6 +2439,9 @@ security:licence-policy:
 
 security:gitleaks:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
@@ -2494,6 +2525,9 @@ security:gitleaks:
 
 security:trivy-fs:
   extends: .trivy
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     # Full-severity report kept as the SARIF artifact for visibility only --
@@ -2529,6 +2563,9 @@ security:trivy-fs:
 # waived for a workstation fixture still runs on the shipped Dockerfile.
 security:trivy-config:
   extends: .trivy
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     - trivy config --ignorefile .trivyignore.yaml --exit-code 1 --severity HIGH,CRITICAL .
