@@ -96,7 +96,8 @@ describe("#1472 job 1: build:image builds once into image.tar", () => {
     const b = job("build:image");
     assert.match(b, /extends:\s*\.dind/);
     assert.match(b, /stage:\s*test/);
-    assert.match(b, /needs:\s*\[\s*\]/);
+    // No needs, or only the promotion readiness check (#1504), absent elsewhere.
+    assert.match(b, /needs:(?:\s*\[\s*\]|\n {4}- \{job: release_readiness, optional: true\}\n(?! {4}-))/);
   });
   it("builds with --load, no provenance or SBOM attestations, VERSION and OCI labels", () => {
     const b = job("build:image");

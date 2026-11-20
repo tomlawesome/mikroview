@@ -16,6 +16,8 @@ extend-select = ["S"]
 "tools/screenshots/*" = ["S311"] # fake traffic for screenshots, not security use
 # fixed `git` calls with list arguments, no shell, inputs are CI SHAs
 "scripts/ci-changed-paths-guard.py" = ["S603", "S607"]
+# fixed `git` calls with list arguments, no shell; the URLs are the GitLab API base from CI and go.dev (or a test stub)
+"scripts/release-readiness.py" = ["S603", "S607", "S310", "S105"]
 # URL is the script's own https://127.0.0.1 base; the password is an obvious placeholder
 "scripts/upgrade-fixture-session.py" = ["S310", "S105"]
 "**/test_*.py" = ["S101"] # test asserts are the assertions
