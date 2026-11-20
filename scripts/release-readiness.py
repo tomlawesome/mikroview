@@ -95,10 +95,11 @@ def api(path):
     base = os.environ.get("CI_API_V4_URL", "https://gitlab.tomlawson.io/api/v4").rstrip("/")
     pid = os.environ.get("CI_PROJECT_ID", "ai%2Fmikroview")
     url = f"{base}/projects/{pid}/{path}"
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(web_url(url))
     # Unredirected: urllib would otherwise copy the token to a redirect target.
     req.add_unredirected_header("PRIVATE-TOKEN", tok)
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- the URL comes from CI_API_V4_URL, set by GitLab, and web_url refuses any scheme but http(s)
         with urllib.request.urlopen(req, timeout=30) as resp:
             return read_json(resp)
     except urllib.error.HTTPError as e:
@@ -108,6 +109,13 @@ def api(path):
 
 
 MAX_BODY = 8 * 1024 * 1024
+
+
+def web_url(url):
+    # urllib also opens file:// and ftp:// URLs; only web URLs are read here.
+    if urllib.parse.urlsplit(url).scheme not in ("https", "http"):
+        raise CouldNot(f"refusing a non-web URL ({urllib.parse.urlsplit(url).scheme or 'no scheme'})")
+    return url
 
 
 def read_json(resp):
@@ -326,7 +334,8 @@ def check_go_toolchain(c):
     major, minor, patch = m.group(1), m.group(2), int(m.group(3))
     url = os.environ.get("RELEASE_READINESS_GO_DL_URL", "https://go.dev/dl/?mode=json")
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- go.dev, or a test stub's address; web_url refuses any scheme but http(s)
+        with urllib.request.urlopen(web_url(url), timeout=30) as resp:
             rel = read_json(resp)
     except urllib.error.HTTPError as e:
         raise CouldNot(f"go.dev release list answered HTTP {e.code}")
