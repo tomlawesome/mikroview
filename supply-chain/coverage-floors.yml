@@ -196,7 +196,7 @@ floors:
   internal/engine: 85
   internal/entities: 94
   internal/flags: 94
-  internal/geoip: 87         # 87.2% on batch-b for v0.7.0 (#1537); was 82
+  internal/geoip: 86         # 86.8-87.2% on batch-b for v0.7.0 (#1537; the figure varies run to run); was 82
                              # at 83.4% after #1352 added the three runtime sources
   internal/hosts: 94
   internal/hub: 100
