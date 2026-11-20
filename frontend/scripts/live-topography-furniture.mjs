@@ -206,7 +206,7 @@ const bars = await page.locator('[data-card="topography"] .zone .hbar-g').count(
 check(bars >= 2, `the LAN island draws both halves of the aggregate bar (${bars} found)`)
 check((await page.locator('[data-card="topography"] .zone .hb-div').count()) >= 1, 'a centre divider is drawn between them')
 
-await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="watcher"]')
+await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="open the watchlist"]')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=watchlist', { timeout: 5000 })
 // safe: waitForSelector above throws on timeout
 check(true, 'the purple half opens the watchlist')

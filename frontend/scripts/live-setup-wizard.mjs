@@ -40,7 +40,7 @@
 // reached is locked, dashed and untitled with the reason, and nothing
 // short of it can be forced open (DESIGN.md, "The model": "Gated").
 //
-// The wizard's own router-mint scenario drives The router and Mint the token
+// The wizard's own router-mint scenario drives The router and Mint the ingest token
 // for real, end to end, against the server's own answers. Paste once,
 // Tag firewall rules and Where setup stands (StepPaste.svelte,
 // StepTune.svelte, StepStand.svelte) are still under active build
@@ -100,7 +100,7 @@ check(
 check(!(await page.locator('main .setup').count()), 'no wizard page route remains — the view was removed wholesale')
 
 // --- The rail is the record's five steps, in order ----------------------
-const LEDGER_TITLES = ['The router', 'Mint the token', 'Paste once', 'Tag firewall rules', 'Where setup stands']
+const LEDGER_TITLES = ['The router', 'Mint the ingest token', 'Paste once', 'Tag firewall rules', 'Where setup stands']
 const stepTitles = await page.locator('.wiz .rail .step-title').allTextContents()
 check(
   JSON.stringify(stepTitles) === JSON.stringify(LEDGER_TITLES),
