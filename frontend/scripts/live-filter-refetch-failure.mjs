@@ -34,6 +34,10 @@ await waitForStreamRows(page, 30)
 // endpoint fails while the transport that would otherwise announce
 // trouble stays up), not a full outage that ConnectionBanner would
 // already catch.
+// #1540: a failed load renders as FailureLine (p.failure-line), a confirmed
+// empty result as div.empty; either is "the empty-state message" here.
+const EMPTY = '.body .empty, .body .failure-line'
+
 await page.route('**/api/events*', (route) => route.fulfill({ status: 503, body: 'simulated outage' }))
 
 // A filter value that matches nothing already in the client buffer, so
@@ -46,12 +50,12 @@ await page.fill('input.rule', 'no-such-rule-in-the-local-buffer')
 // failure to see it is itself the interesting case, caught by the checks
 // below rather than an uncaught timeout with no RESULT line.
 await page
-  .waitForFunction(() => /could not load|failed|error/i.test(document.querySelector('.body .empty')?.textContent ?? ''), null, {
+  .waitForFunction((sel) => /could not load|failed|error/i.test(document.querySelector(sel)?.textContent ?? ''), EMPTY, {
     timeout: 5000,
   })
   .catch(() => {})
 
-const emptyText = await page.textContent('.body .empty')
+const emptyText = await page.textContent(EMPTY)
 check(!!emptyText, 'the empty-state message is shown once the filter narrows to nothing')
 check(
   !/No events match the current filters\./.test(emptyText ?? ''),
@@ -78,16 +82,16 @@ await page.fill('input.rule', MATCHED_RULE)
 // this time for the honest failure message to actually clear.
 await page
   .waitForFunction(
-    () => {
-      const el = document.querySelector('.body .empty')
+    (sel) => {
+      const el = document.querySelector(sel)
       return !el || !/could not load/i.test(el.textContent ?? '')
     },
-    null,
+    EMPTY,
     { timeout: 5000 },
   )
   .catch(() => {})
 
-const recoveredText = await page.textContent('.body .empty').catch(() => null)
+const recoveredText = await page.textContent(EMPTY).catch(() => null)
 check(
   recoveredText === null || !/could not load/i.test(recoveredText),
   `the failure message clears once a refetch actually succeeds (saw: "${recoveredText}")`,

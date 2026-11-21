@@ -255,3 +255,7 @@ own rather than swelling that entry's count.
 ## Wizard: 'opens the builder in the wizard's frame' times out (frontend/src/components/wizard/Wizard.svelte.test.ts)
 - 2026-11-19 · dad2c583 (fix/1426-g3-wizard) · local full `npx vitest run` · the test hit vitest's 5 s timeout once, then passed on rerun and in three runs of the file alone on the same commit. Host busy with parallel builders.
 - 2026-11-20 · 07ec22b4 (batch-b, !1245) · pipeline 4884, `test:frontend` (job 58680) · the same 5 s timeout; passed on retry (job 58724).
+
+## test:go: internal/authe2e requests get EOF from the test server (TestRecoveryCommandsWorkOverTheSealedStores, TestRequiredAdminPasskeyHoldsAnAdminWithoutOneAndNeverAUser)
+
+- 2026-11-20 · 2f69ce30 (batch-a, !1259) · pipeline 5009 / test:go, job 60044 · `harness_test.go:711: POST /api/auth/login/factor: ... EOF` and `POST /api/auth/totp/confirm: ... EOF`, the package taking 526 s on a busy runner. Both pass locally on the same code, and the next pipeline (5019 job 60235, only a VERSION-header and docs fix added) passed `test:go`. First sighting.
