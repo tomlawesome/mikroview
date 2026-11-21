@@ -9,37 +9,16 @@ import (
 	"time"
 )
 
-// slowAuthPaths are the gauntlet v0.4.3 routes that mint or check
-// recovery codes with Argon2id (64 MiB, t=3, p=4 each, at most four at
-// once), so on a loaded host they can outlast the server-wide 15 s
-// WriteTimeout and the client gets EOF with no reply (issue #1552).
-// A segment written {name} matches any one path segment.
-//
-//	/api/auth/totp/confirm             HoldFirstTOTP mints ten codes
-//	/api/auth/passkeys/register/finish HoldFirstPasskey mints ten codes
-//	/api/auth/recovery-codes           RegenerateRecoveryCodes mints ten
-//	/api/auth/login/factor             BurnRecoveryCode checks up to ten
-//
-// The admin step-up routes (recheckStepUp -> recheckSecondFactor) check
-// the caller's password and then, when the code is not a current TOTP
-// code, BurnRecoveryCode against every unused recovery code:
-//
-//	/api/auth/users                    handleCreateUser (creating an admin)
-//	/api/auth/users/{id}/role          handleSetRole (granting admin)
-//	/api/auth/users/{id}/unlock        handleUnlockUser (own account)
-//	/api/auth/users/{id}/allow-sign-in handleAllowSignIn
-var slowAuthPaths = []string{
-	"/api/auth/totp/confirm",
-	"/api/auth/passkeys/register/finish",
-	"/api/auth/recovery-codes",
-	"/api/auth/login/factor",
-	"/api/auth/users",
-	"/api/auth/users/{id}/role",
-	"/api/auth/users/{id}/unlock",
-	"/api/auth/users/{id}/allow-sign-in",
-}
+// slowAuthPrefix covers every gauntlet route. Many of them run Argon2id
+// (64 MiB, t=3, p=4, at most four at once): sign-in and password checks,
+// the admin step-up recheck (password, then every unused recovery code),
+// and minting or burning recovery codes. On a loaded host those outlast
+// the server-wide 15 s WriteTimeout and the client gets EOF with no reply
+// (#1552 listed the recovery-code routes; #1554 found password reset
+// missing from that list, so the whole prefix is covered instead).
+const slowAuthPrefix = "/api/auth/"
 
-// slowAuthWriteDeadline gives requests to slowAuthPaths d to write their
+// slowAuthWriteDeadline gives requests under slowAuthPrefix d to write their
 // reply, set before next runs; every other request keeps the server's
 // WriteTimeout. Method-agnostic: a method the route does not serve is
 // answered at once by the mux, so the longer deadline costs nothing.
@@ -57,34 +36,5 @@ func slowAuthWriteDeadline(next http.Handler, d time.Duration) http.Handler {
 }
 
 func isSlowAuthPath(path string) bool {
-	for _, p := range slowAuthPaths {
-		if pathMatches(p, path) {
-			return true
-		}
-	}
-	return false
-}
-
-// pathMatches reports whether path matches pattern segment for segment,
-// a {name} segment in pattern matching any one non-empty segment.
-func pathMatches(pattern, path string) bool {
-	if !strings.Contains(pattern, "{") {
-		return pattern == path
-	}
-	ps, xs := strings.Split(pattern, "/"), strings.Split(path, "/")
-	if len(ps) != len(xs) {
-		return false
-	}
-	for i, s := range ps {
-		if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
-			if xs[i] == "" {
-				return false
-			}
-			continue
-		}
-		if s != xs[i] {
-			return false
-		}
-	}
-	return true
+	return strings.HasPrefix(path, slowAuthPrefix)
 }

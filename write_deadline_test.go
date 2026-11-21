@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
-	"slices"
 	"testing"
 	"time"
 )
@@ -42,7 +41,7 @@ func noKeepAliveClient() *http.Client {
 func TestWriteDeadline_ListedPathGetsFullReply(t *testing.T) {
 	t.Parallel()
 	ts := slowDeadlineServer(t)
-	for _, p := range []string{"/api/auth/totp/confirm", "/api/auth/login/factor"} {
+	for _, p := range []string{"/api/auth/totp/confirm", "/api/auth/login/factor", "/api/auth/users/abc/reset-password"} {
 		resp, err := noKeepAliveClient().Post(ts.URL+p, "application/json", nil)
 		if err != nil {
 			t.Fatalf("POST %s: want a reply, got %v", p, err)
@@ -65,23 +64,24 @@ func TestWriteDeadline_UnlistedPathKeepsServerDeadline(t *testing.T) {
 	}
 }
 
-// Routes in gauntlet v0.4.3 (gate/routes.go) that mint recovery codes
-// (mintRecoveryCodes via enrolhold.go) or check them (BurnRecoveryCode):
-//
-//	POST /api/auth/totp/confirm            mints on first factor
-//	POST /api/auth/passkeys/register/finish mints on first factor
-//	POST /api/auth/recovery-codes          regenerates
-//	POST /api/auth/login/factor            burns/checks codes
-func TestWriteDeadline_SlowAuthPathsCoverRecoveryCodeRoutes(t *testing.T) {
+// Every route under /api/auth/ gets the long deadline (#1554: password
+// reset ran Argon2id and was missing from the old per-route list).
+func TestWriteDeadline_SlowAuthPathsCoverEveryAuthRoute(t *testing.T) {
 	t.Parallel()
-	for _, p := range []string{
-		"/api/auth/totp/confirm",
-		"/api/auth/login/factor",
-		"/api/auth/recovery-codes",
-		"/api/auth/passkeys/register/finish",
+	for _, c := range []struct {
+		path string
+		want bool
+	}{
+		{"/api/auth/users/abc/reset-password", true},
+		{"/api/auth/users/abc", true},
+		{"/api/auth/totp/confirm", true},
+		{"/api/auth/login/factor", true},
+		{"/api/events", false},
+		{"/api/authx", false},
+		{"/", false},
 	} {
-		if !slices.Contains(slowAuthPaths, p) {
-			t.Errorf("slowAuthPaths is missing %s", p)
+		if got := isSlowAuthPath(c.path); got != c.want {
+			t.Errorf("isSlowAuthPath(%q) = %v, want %v", c.path, got, c.want)
 		}
 	}
 }
