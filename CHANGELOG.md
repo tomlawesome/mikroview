@@ -16,6 +16,8 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-21
+
 ### Breaking changes
 
 - **An upgraded keyed install with an existing match log will not start
@@ -501,6 +503,11 @@ rewritten.
   `[data-colorway]` switch.
 
 ### Fixed
+
+- **Confirming a second factor on a slow or busy host shows the recovery
+  codes instead of dropping the connection** (#1552). Making and checking
+  recovery codes can take longer than the server's 15-second reply limit;
+  those sign-in requests now get 60 seconds.
 
 - **The "Doors from the internet" panel now lists rules it could not
   judge instead of dropping them** (#1426). A rule scoped to an interface
