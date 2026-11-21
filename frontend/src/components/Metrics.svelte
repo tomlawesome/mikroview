@@ -153,6 +153,7 @@
 </script>
 
 <div class="metrics scrollbar" onkeydown={onkeydown} role="presentation">
+  {#if !appState.initialLoadDone}<p class="first-load" role="status">Reading the metrics…</p>{/if}
   <!-- No page heading (#697/#700), and the view switcher rides the
        scene bar where it used to sit -- round 30 puts it beside the
        wordmark, and #488's "three views of one data set" is satisfied
@@ -248,6 +249,15 @@
 </div>
 
 <style>
+  /* #1540 (C5): the one-line status while the first load is in flight, for
+     a screen with no room for ghost rows. */
+  .first-load {
+    margin: 0;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
   .metrics {
     flex: 1;
     min-height: 0;

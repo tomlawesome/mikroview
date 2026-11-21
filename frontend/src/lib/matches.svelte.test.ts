@@ -83,7 +83,7 @@ describe('matchesState.load', () => {
     await matchesState.load()
 
     expect(matchesState.records.map((m) => m.id)).toEqual(['m1'])
-    expect(matchesState.error).toBe('fetchRecentMatches: 503')
+    expect(matchesState.error).toBe('Could not load the matches: the server could not do that (503)')
     expect(matchesState.loaded).toBe(true)
   })
 })
@@ -149,7 +149,7 @@ describe('matchesState.loadOlder', () => {
     await matchesState.loadOlder()
 
     expect(matchesState.records.length).toBe(MATCHES_PAGE_SIZE)
-    expect(matchesState.error).toBe('network error')
+    expect(matchesState.error).toBe('Could not load older matches: network error')
     expect(matchesState.exhausted).toBe(false)
   })
 })

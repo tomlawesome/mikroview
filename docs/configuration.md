@@ -903,7 +903,7 @@ does `deploy/config.example.yaml`:
 ```
 # MikroView configuration -- keep these four lines; MikroView reads them.
 # schema: 8            (which settings this file should have; goes up when keys change)
-# written-by: mikroview v0.6.1
+# written-by: mikroview v0.7.0
 # layout: 1            (the order and banners below)
 ```
 

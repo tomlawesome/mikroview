@@ -382,7 +382,7 @@ describe('removing an account whose tokens could not be revoked (#1202 review U1
     await typeAndConfirm('hunter2')
 
     expect(screen.getByText('kai')).toBeTruthy()
-    expect(screen.getByText('the account could not be deleted')).toBeTruthy()
+    expect(screen.getByText('Could not remove this person: the account could not be deleted')).toBeTruthy()
     expect(screen.queryAllByText(/revoke.*tokens|tokens.*revoke/i)).toHaveLength(0)
   })
 
@@ -423,5 +423,22 @@ describe('the People-screen password prompt takes the cursor (#1202 review U15)'
     await settle()
 
     expect(document.activeElement).toBe(field())
+  })
+})
+
+// #1540 (C4): a refused sign-out-everywhere goes through the shared failure
+// line (the prompt's own live region may stay; the alert is the line).
+describe('a refused sign out everywhere uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not <verb> <thing>: <server words>" as the shared line', async () => {
+    const mock = await signOutMock()
+    mock.mockResolvedValueOnce('incorrect password')
+    await openEngineRoom()
+
+    await clickButton('sign out everywhere')
+    await typeAndConfirm('wrong-one')
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: incorrect password$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
   })
 })

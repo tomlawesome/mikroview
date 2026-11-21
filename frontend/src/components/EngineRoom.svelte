@@ -36,6 +36,8 @@
   // on the closer, backend-consistent reading (both groups admin-only,
   // like people already is) and flagged in the PR rather than guessed
   // past.
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
   import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -458,7 +460,7 @@
     }
     soSaving = false
     if (err) {
-      soError = err
+      soError = couldNot('sign out', 'everywhere', err)
       if (soAsking) {
         // The field was disabled while the call ran, which drops focus;
         // put the person back in it once it is enabled again.
@@ -572,7 +574,7 @@
       window: `${psWindowSeconds}s`,
     })
     psSaving = false
-    psError = err
+    psError = err ? couldNot('save', 'the port-scan window', err) : null
     if (!err) psEditing = false
   }
 
@@ -766,7 +768,7 @@
     minting = false
     if (err) {
       newKeyPassword = ''
-      keyError = err
+      keyError = couldNot('mint', 'this key', err)
       return
     }
     cancelMintKey()
@@ -802,7 +804,7 @@
       // button lives in that panel, and a refused fetch here used to
       // leave the operator clicking "copy for RouterOS" with nothing on
       // screen saying why nothing was copied.
-      keyError = result
+      keyError = couldNot('copy', 'the router commands', result)
       return
     }
     try {
@@ -829,7 +831,7 @@
 
   async function revokeKey(id: string) {
     const err = await tokensState.revoke(id)
-    if (err) keyError = err
+    if (err) keyError = couldNot('revoke', 'this key', err)
   }
 
   // --- people (#767, round 32) -------------------------------------------
@@ -855,6 +857,12 @@
   let adminPassword = $state('')
   let adminError = $state<string | null>(null)
   let adminBusy = $state(false)
+  const adminVerb: Record<AdminAction['kind'], [string, string]> = {
+    remove: ['remove', 'this person'],
+    reset: ['reset', 'their password'],
+    factor: ['clear', 'their authenticator app'],
+    passkeys: ['clear', 'their passkeys'],
+  }
   let adminField = $state<HTMLInputElement | undefined>(undefined)
   // The issued code, held only for as long as the dialog showing it is
   // open. Cleared on close: this is the one place it exists in clear,
@@ -889,7 +897,7 @@
     const err = await usersState.create(newPersonName.trim(), newPersonPass, newPersonRole)
     addingPerson = false
     if (err) {
-      personError = err
+      personError = couldNot('add', 'this person', err)
       return
     }
     cancelAddPerson()
@@ -983,7 +991,7 @@
         closeAdminPrompt()
         return
       }
-      adminError = refusal
+      adminError = couldNot(adminVerb[action.kind][0], adminVerb[action.kind][1], refusal)
       adminField?.focus()
       return
     }
@@ -1375,7 +1383,7 @@
                 ·
                 {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
                 <!-- #1202: gauntlet gives a read-only key a one-year life;
-                     an ingest key never expires, so it carries no date.
+                     an ingest token never expires, so it carries no date.
                      A date already past reads "expired": the key no longer
                      works, and revoke tidies it away. -->
                 {#if tok.expiresAt}
@@ -1396,7 +1404,7 @@
             </div>
           {/each}
 
-          {#if keyError}<p class="oghint err">{keyError}</p>{/if}
+          {#if keyError}<FailureLine text={keyError} />{/if}
 
           {#if showMintKey}
             <div class="pform wf">
@@ -1521,7 +1529,7 @@
               </span>
             </div>
             {#if psError}
-              <p class="oghint err">{psError}</p>
+              <FailureLine text={psError} />
             {/if}
           {/if}
         </div>
@@ -1826,10 +1834,10 @@
                 {soSaving ? 'working…' : 'confirm — ends every other session'}
               </button>
             </span>
-            <p class="oghint err" role="status" aria-live="polite">{soError ?? ''}</p>
+            {#if soError}<FailureLine text={soError} />{/if}
           </div>
         {:else if soError}
-          <p class="oghint err">{soError}</p>
+          <FailureLine text={soError} />
         {/if}
         {#if soDone}
           <p class="oghint">done — every other session has been ended</p>
@@ -1978,12 +1986,12 @@
                     {/if}
                   </button>
                 </span>
-                <p class="oghint err pwerr" role="alert">{adminError ?? ''}</p>
+                <div class="pwerr">{#if adminError}<FailureLine text={adminError} />{/if}</div>
               </div>
             {/if}
           {/each}
 
-          {#if personError}<p class="oghint err">{personError}</p>{/if}
+          {#if personError}<FailureLine text={personError} />{/if}
 
           {#if showAddPerson}
             <div class="pform wf">
@@ -2419,11 +2427,6 @@
     padding: 3px 5px;
     font-size: 12px;
     font-family: var(--font-mono);
-  }
-
-  .oghint.err {
-    color: var(--reject);
-    font-style: normal;
   }
 
   /* --- memory -------------------------------------------------------------- */

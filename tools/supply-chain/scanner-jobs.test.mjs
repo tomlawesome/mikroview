@@ -59,7 +59,9 @@ describe("#1462 steps 4-7: each scanner job exists in its stage", () => {
       assert.match(t, new RegExp(`^ {2}stage: ${j.stage}\\s*$`, "m"), `${j.name} is not in stage ${j.stage}`);
       assert.match(t, /^ {2}<<:.*\*dev_or_mr/m, `${j.name} does not use a .dev_or_mr* rules anchor`);
       assert.match(t, /^ {2}tags:/m, `${j.name} has no runner tags`);
-      assert.match(t, /^ {2}needs: \[\]\s*$/m, `${j.name} lacks needs: []`);
+      // Starts at once: no needs, or only the promotion readiness check (#1504),
+      // which is absent on every other pipeline.
+      assert.match(t, /^ {2}needs:(?: \[\]\s*$|\n {4}- \{job: release_readiness, optional: true\}\n(?! {4}-))/m, `${j.name} must start at once`);
       assert.doesNotMatch(t, /^ {2}interruptible: false/m, `${j.name} is not interruptible`);
     });
   }

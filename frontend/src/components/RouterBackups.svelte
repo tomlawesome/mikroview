@@ -66,6 +66,8 @@
   import { listenPort } from '../lib/format'
   import { saveSetupBackupTransport } from '../lib/api'
   import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
   import type {
     RouterBackupDiffLine,
     RouterBackupGeneration,
@@ -267,7 +269,7 @@
     const result = await setRouterBackupSwitch(false)
     switchSubmitting = false
     if (typeof result === 'string') {
-      switchError = result
+      switchError = couldNot('close', 'the drop box', result)
       return
     }
     onswitchchanged?.(result)
@@ -289,7 +291,7 @@
     const err = await saveSetupBackupTransport(next)
     transportSubmitting = false
     if (err) {
-      transportError = err
+      transportError = couldNot('switch', 'the backup transport', err)
       return
     }
     ontransportchanged?.(next)
@@ -348,7 +350,7 @@
     const result = await setRouterBackupPassphrase(newPassphrase)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('set', 'the vault passphrase', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -378,7 +380,7 @@
     const result = await changeRouterBackupPassphrase(currentPassphrase, newPassphrase)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('change', 'the vault passphrase', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -392,7 +394,7 @@
     const result = await removeRouterBackupPassphrase(removePassphraseText)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('remove', 'the vault passphrase', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -406,7 +408,7 @@
     const result = await unlockRouterBackupVault(unlockPassphraseText)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('unlock', 'the vault', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -442,7 +444,7 @@
         : await keepRouterBackup(keepTarget.device, keepTarget.generation, comment)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('keep', 'this backup', result)
       return
     }
     applyRow(result)
@@ -455,7 +457,7 @@
     const result = await releaseRouterBackup(device, generation)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('release', 'this backup', result)
       return
     }
     applyRow(result)
@@ -468,7 +470,7 @@
     const result = await lockRouterBackupVault()
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('lock', 'the vault', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -508,14 +510,14 @@
       await refreshLock(() => {
         downloadError = {
           device,
-          message: "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+          message: "Could not download this file: it was refused, and mikroview couldn't refresh the lock status. Try again.",
         }
       })
     } else if (outcome === 'failed') {
       // The button used to do nothing and say nothing on anything but a
       // 403 -- a dropped connection or a 5xx looked identical to a
       // click that never happened.
-      downloadError = { device, message: 'The download failed. Try again.' }
+      downloadError = { device, message: 'Could not download this file: the download failed. Try again.' }
     }
   }
 
@@ -584,7 +586,7 @@
     const result = await fetchRouterBackupText(device, g.id)
     if (!stillOpen(seq) || !viewer) return
     if (typeof result === 'string') {
-      viewer = { ...viewer, loading: false, error: result }
+      viewer = { ...viewer, loading: false, error: couldNot('read', 'this export', result) }
       await refreshLock()
       return
     }
@@ -596,7 +598,7 @@
     const result = await fetchRouterBackupDiff(device, prev.id, g.id)
     if (!stillOpen(seq) || !viewer) return
     if (typeof result === 'string') {
-      viewer = { ...viewer, loading: false, error: result }
+      viewer = { ...viewer, loading: false, error: couldNot('compare', 'these exports', result) }
       await refreshLock()
       return
     }
@@ -632,7 +634,7 @@
   <!-- Only a *close* failure shows here -- an open failure shows inside
        the dialog below instead, which stays open on a refusal so it is
        never shown in both places at once. -->
-  {#if switchError && !switchAsking}<p class="oghint err" role="alert">{switchError}</p>{/if}
+  {#if switchError && !switchAsking}<div class="oghint"><FailureLine text={switchError} /></div>{/if}
 {/snippet}
 
 {#snippet deliverByRow()}
@@ -648,7 +650,7 @@
       {/if}
     </span>
   </div>
-  {#if transportError}<p class="oghint err" role="alert">{transportError}</p>{/if}
+  {#if transportError}<div class="oghint"><FailureLine text={transportError} /></div>{/if}
   <p class="oghint">
     Changes what the wizard prints from now on; a router already set up keeps its script. Pick HTTPS only when the
     SFTP port cannot be opened — it sends the backup in many pieces.
@@ -737,7 +739,7 @@
           <span class:brwarn={receipt.amber}>{receipt.text}</span>
         </div>
         {#if downloadError && downloadError.device === router.device}
-          <p class="oghint err" role="alert">{downloadError.message}</p>
+          <div class="oghint"><FailureLine text={downloadError.message} /></div>
         {/if}
         <svg
           class="brstrip"
@@ -874,8 +876,8 @@
                 <button type="button" class="olink" disabled={submitting} onclick={() => (releasing = null)}>
                   cancel
                 </button>
-                {#if formError}<span class="oghint err" role="alert">{formError}</span>{/if}
               </p>
+              {#if formError}<div class="oghint"><FailureLine text={formError} /></div>{/if}
             {/if}
           {/each}
         {/if}
@@ -887,7 +889,7 @@
               <button type="button" class="olink" onclick={closeViewer}>close</button>
             </p>
             {#if viewer.error}
-              <p class="oghint err" role="alert">{viewer.error}</p>
+              <div class="oghint"><FailureLine text={viewer.error} /></div>
             {:else if viewer.loading}
               <p class="oghint">opening the vault…</p>
             {:else if viewer.mode === 'text'}
@@ -1013,7 +1015,7 @@
         />
       </label>
     {/if}
-    {#if formError}<p class="oghint err" role="alert">{formError}</p>{/if}
+    {#if formError}<div class="oghint"><FailureLine text={formError} /></div>{/if}
     <span class="acts">
       <button type="button" class="olink" disabled={submitting} onclick={closeForm}>cancel</button>
       {#if openKind === 'set'}
@@ -1211,11 +1213,6 @@
     font-size: 11.5px;
     font-style: italic;
     color: var(--fg-dim);
-  }
-
-  .oghint.err {
-    color: var(--reject);
-    font-style: normal;
   }
 
   .orow {

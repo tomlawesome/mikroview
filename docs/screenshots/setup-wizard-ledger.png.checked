@@ -1,0 +1,4 @@
+Recaptured at e3db7b12 (2026-11-20) from a seeded demo (scripts/demo-up.sh) and the output was byte-identical to the committed image
+(wizard.svelte.ts changed in f2dd94c6, but the "The router" step it shows is unchanged).
+Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
+cannot move.

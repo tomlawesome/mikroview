@@ -264,3 +264,21 @@ describe('minting a key asks for the admin password and sends it (#1202 spec 33)
     expect(createToken).not.toHaveBeenCalled()
   })
 })
+
+// #1540 (C4): a refused key mint goes through the shared failure line.
+describe('a refused key mint uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not <verb> <thing>: <server words>" as the shared line', async () => {
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce('incorrect password' as never)
+    await openMintForm()
+
+    await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
+    await fireEvent.input(screen.getByLabelText(/password/i), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: incorrect password$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+})

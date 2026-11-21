@@ -23,6 +23,7 @@
   // the overlays themselves are untouched and keep serving the account
   // menu (#1332 is that menu's own open defect; nothing here reaches
   // into it).
+  import { couldNot, NO_ANSWER } from '../lib/plainWords'
   import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { ApiError, STEP_EXPIRED, enrolTOTP, confirmTOTP, confirmRecoveryCodes } from '../lib/api'
@@ -359,7 +360,7 @@
           authState.handleUnauthorized()
           return
         }
-        error = err instanceof ApiError ? err.message : "Couldn't reach MikroView to confirm. Check the connection and try again."
+        error = couldNot('confirm', 'the codes', err instanceof ApiError ? err.message : NO_ANSWER)
         void focusWhenReady(() => saveButton)
         return
       } finally {

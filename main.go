@@ -2188,7 +2188,9 @@ func main() {
 		// because a refusal is a plain 403 rather than a login page, and
 		// /ca.crt -- one of the paths it exempts -- is registered on this
 		// mux below. With ui.allow unset it passes everything through.
-		Handler: securityHeaders(srv.RestrictToAllowList(rootMux), cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
+		// Recovery-code routes hash with Argon2id and can outlast the 15 s
+		// WriteTimeout below on a busy host: they get 60 s (#1552).
+		Handler: slowAuthWriteDeadline(securityHeaders(srv.RestrictToAllowList(rootMux), cfg.TLS.Enabled && cfg.TLS.CertFile != ""), 60*time.Second),
 		// Bounds a slow client trickling headers/body in to tie up a
 		// connection indefinitely (the WS listener, syslog listeners, and
 		// hub already have their own backpressure/deadline handling --

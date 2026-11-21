@@ -337,7 +337,7 @@ describe('StepRouter: the drop box, when closed (#1361)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Open it now' }))
     await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
     await fireEvent.click(screen.getByRole('button', { name: 'open' }))
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('incorrect password'))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Could not open the drop box: incorrect password'))
     expect(caution()).toBeTruthy()
     expect(screen.getByLabelText('your password')).toBeTruthy()
     expect(wizardState.backups?.port).toBeUndefined()

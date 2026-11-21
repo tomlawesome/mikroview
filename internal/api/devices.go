@@ -219,7 +219,7 @@ func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Requ
 	// plainly rather than quietly let through, with the 409 gauntlet's
 	// own password change gives the same situation.
 	if !user.LocalPassword() {
-		http.Error(w, "this account signs in through your identity provider, and minting an enrolment token needs a password re-check that does not exist for it yet; declare this router in config.yaml instead", http.StatusConflict)
+		http.Error(w, "this account signs in through your identity provider, and minting an ingest token needs a password re-check that does not exist for it yet; declare this router in config.yaml instead", http.StatusConflict)
 		return
 	}
 	// Counted in gauntlet's per-account password re-check budget (see

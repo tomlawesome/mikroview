@@ -31,3 +31,6 @@
 # already published, and the scan is deliberately over full history.
 8ed34f053330f54f0259459eb71b800c00ad855f:recovery_prompt_test.go:generic-api-key:69
 8ed34f053330f54f0259459eb71b800c00ad855f:recovery_prompt_test.go:generic-api-key:150
+
+# The old allow file's own address patterns (its value limits), before #1550 moved it to exact paths.
+c9b26a655218ae8905b9cf289c582b4f32f78164:.private-details-allow.toml:ip-address:42

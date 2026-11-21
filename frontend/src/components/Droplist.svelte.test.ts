@@ -260,7 +260,7 @@ describe('the pull key', () => {
     render(Droplist, { props: { resp: resp(), onrefresh } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
     await typePasswordAndSubmit('wrong')
-    await waitFor(() => expect(screen.getByText('password is incorrect')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Could not mint the key: password is incorrect')).toBeTruthy())
     expect(screen.queryByText(/shown once/)).toBeNull()
     expect(onrefresh).not.toHaveBeenCalled()
   })
@@ -358,7 +358,7 @@ describe('the add form', () => {
     await fireEvent.input(screen.getByLabelText('reason'), { target: { value: 'why' } })
     await fireEvent.click(screen.getByRole('button', { name: 'add' }))
 
-    expect(screen.getByText('the address is not valid')).toBeTruthy()
+    expect(screen.getByText('Could not add this address: the address is not valid')).toBeTruthy()
     expect((screen.getByLabelText('address') as HTMLInputElement).value).toBe('not-an-address')
   })
 
@@ -445,5 +445,40 @@ describe('Escape disarms every armed control (#1539 C2)', () => {
 
     expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
     expect(screen.getByRole('button', { name: 'replace key' })).toBeTruthy()
+  })
+})
+
+// #1540 (C4): the three failure paths go through the shared failure line:
+// role="alert", a "Could not <verb> <thing>:" lead-in, the server's words kept.
+describe('failures use the shared failure line (#1540 C4)', () => {
+  function expectSharedLine(words: string) {
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(new RegExp(`^Could not [a-z]+ .+: ${words}$`))
+    expect(line.classList.contains('failure-line')).toBe(true)
+  }
+
+  it('a refused add', async () => {
+    vi.mocked(createDroplistEntry).mockResolvedValue('the address is not valid')
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn() } })
+    await fireEvent.input(screen.getByLabelText('address'), { target: { value: 'not-an-address' } })
+    await fireEvent.input(screen.getByLabelText('reason'), { target: { value: 'why' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'add' }))
+    expectSharedLine('the address is not valid')
+  })
+
+  it('a refused remove', async () => {
+    vi.mocked(deleteDroplistEntry).mockResolvedValue('the router said no')
+    render(Droplist, { props: { resp: resp({ entries: [entry] }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await fireEvent.click(screen.getByRole('button', { name: /confirm/ }))
+    await waitFor(() => expectSharedLine('the router said no'))
+  })
+
+  it('a refused key mint', async () => {
+    vi.mocked(mintDroplistKey).mockResolvedValue('password is incorrect')
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    await typePasswordAndSubmit('wrong')
+    await waitFor(() => expectSharedLine('password is incorrect'))
   })
 })

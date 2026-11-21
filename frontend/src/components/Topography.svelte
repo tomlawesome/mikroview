@@ -4713,6 +4713,7 @@
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="topo" bind:this={topoEl}>
+  {#if !appState.initialLoadDone}<p class="first-load" role="status">Mapping the network…</p>{/if}
   <!-- The aggregate bar (#648, round 23): absent, purple-only, red-only,
        or split with a centre divider -- reused under every zone island
        and every reach counterpart cluster below. -->
@@ -7563,6 +7564,19 @@
 </div>
 
 <style>
+  /* #1540 (C5): the one-line status while the first load is in flight, for
+     a screen with no room for ghost rows. */
+  .first-load {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
   .topo {
     flex: 1;
     min-height: 0;

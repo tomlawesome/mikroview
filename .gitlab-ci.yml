@@ -43,6 +43,7 @@ include:
     file: scripts/private-details/ci-template.yml
 
 stages:
+  - readiness
   - lint
   - test
   - security
@@ -500,6 +501,37 @@ workflow:
   python3 scripts/merge-coverprofiles.py coverage.out coverage-unit.out coverage-program.out
 
 # ---------------------------------------------------------------------------
+# RELEASE READINESS (#1504). Runs first on a promotion merge request, dev ->
+# preview and preview -> main, and every other job in that pipeline waits
+# for it: by stage order where a job has no needs:, by an optional need where
+# it has `needs: []` (optional, so pipelines without this job still start
+# those jobs at once). Spec: docs/releases/readiness-checks.md. The checks
+# read the source commit; GIT_DEPTH 0 gives them the history. CI_COMMIT_SHA
+# is the source tip while merged-results pipelines are off; if they are ever
+# turned on, check out $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA instead.
+# ---------------------------------------------------------------------------
+release_readiness:
+  stage: readiness
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  interruptible: false
+  timeout: 10m
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && (($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "dev" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview") || ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "preview" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"))'
+  before_script:
+    - apk add --no-cache git python3 >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - git fetch --quiet --tags origin "+refs/heads/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "+refs/heads/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - git checkout --quiet --detach "$CI_COMMIT_SHA"
+    - python3 scripts/release-readiness.py --target "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --remote origin
+
+# ---------------------------------------------------------------------------
 # POLICY — the three-lane promotion order, dev -> preview -> main, with no
 # shortcuts. Replaces .github/workflows/branch-policy.yml, which cannot see
 # a merge that happens here. Only bites if the project requires a passing
@@ -512,7 +544,8 @@ policy:promotion-hop:
   # Light lane (#949): a shell script, no build.
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: a gate for the dev -> preview -> main hop; a cancelled-mid-run
   # result must never be read as a pass.
   interruptible: false
@@ -550,7 +583,8 @@ policy:release-surfaces:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   interruptible: false
   rules:
     - !reference [.dev-landing, job_rule]
@@ -591,7 +625,8 @@ lint:changed-paths-guard:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr
   variables:
     GIT_DEPTH: 0
@@ -613,7 +648,8 @@ lint:flake-check:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr
   script:
     - sh scripts/ci/flake-check.sh --quarantined scripts/quarantine.txt docs/flakes.md
@@ -638,7 +674,8 @@ lint:flake-check:
 private-details:
   stage: lint
   tags: [light]
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr
   image:
     name: ${CI_IMAGE_CACHE_GHCR}/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
@@ -669,7 +706,8 @@ lint:script-tests:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     - apk add --no-cache bash git python3 py3-yaml nodejs coreutils >/dev/null
@@ -678,13 +716,21 @@ lint:script-tests:
     - bash scripts/ci-reuse-gate.test.sh
     - bash scripts/gate-remote.test.sh
     - bash scripts/coverage-floor.test.sh
+    - bash scripts/release-readiness.test.sh
+    - bash scripts/ci-batch-intake.test.sh
     - bash scripts/merge-coverprofiles.test.sh
     - bash scripts/ci/gitlab-await-tested-image.test.sh
     - bash scripts/routeros-chr-open-mr.test.sh
+    # #1550: the allow file in the shape the private-details hook accepts,
+    # checked by the hook's own allow-shape.awk (fetched from ai/agent-config
+    # at a pinned commit) against the mounted rules' ids.
     - node --test scripts/jscpd-baseline.test.mjs
 
 lint:go:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
@@ -716,6 +762,9 @@ lint:go:
 # are meant to be testing. Move all of them together, or the split reopens.
 lint:frontend:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
   image: node:26-alpine
@@ -745,7 +794,8 @@ lint:shellcheck:
   stage: lint
   tags: [light]
   image: ${CI_IMAGE_CACHE_DOCKERHUB}/koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   interruptible: true
   # blocking since its findings reached zero (#1462)
@@ -767,7 +817,8 @@ lint:golangci:
   stage: lint
   tags: [light]
   image: ${CI_IMAGE_CACHE_DOCKERHUB}/golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: [*dev_or_mr_code, *git_safe]
   interruptible: true
   # blocking since its findings reached zero (#1462)
@@ -789,7 +840,8 @@ lint:ruff:
   stage: lint
   tags: [light]
   image: ${CI_IMAGE_CACHE_GHCR}/astral-sh/ruff:0.17.4-alpine@sha256:7a717be3a7cfbef698a9b99e1555add93ec6b195242fe273997683e49b051f51
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   interruptible: true
   # blocking since its findings reached zero (#1462)
@@ -810,7 +862,8 @@ lint:knip:
   stage: lint
   tags: [light]
   image: node:26-alpine
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   interruptible: true
   # blocking since its findings reached zero (#1463)
@@ -838,7 +891,8 @@ lint:jscpd:
   stage: lint
   tags: [light]
   image: node:26-alpine
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: [*dev_or_mr_code_frontend, *npm_cache]
   interruptible: true
   script:
@@ -856,6 +910,9 @@ lint:jscpd:
 
 lint:supply-chain-pins:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): reads files and a policy; installs only bash and git.
   tags: [light]
   image: node:26-alpine
@@ -974,15 +1031,18 @@ test:frontend:
 # packaged Go is too old to read this module.
 test:build-checks:
   stage: test
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
   # the markdown link and anchor check, and generate-notices --check reads
   # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
-  # so it keeps .dev_or_mr's plain rules rather than the ladder.
+  # so it keeps .dev_or_mr's plain rules rather than the ladder. It also runs
+  # on an MR into batch-a/batch-b (#1537): cheap, on the light lane.
   rules:
     - !reference [.dev-landing, job_rule]
-    - !reference [.batch-intake, job_rule]
     - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
@@ -1219,7 +1279,8 @@ test:postgres:
 build:image:
   extends: .dind
   stage: test
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   rules:
     - !reference [.publish_ref, rules]
     - !reference [.dev-landing, job_rule]
@@ -1554,7 +1615,8 @@ gate:image:
   # publishes. Skipping it to save nothing would risk a promotion finding
   # no tag to pull.
   <<: *dev_or_mr_heavy
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: pushes to the registry -- never cut mid-write.
   interruptible: false
   timeout: 45m
@@ -2038,6 +2100,9 @@ perf:promotion:
 
 security:semgrep:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: semgrep/semgrep:1.184.0
   <<: *dev_or_mr_code
@@ -2108,6 +2173,9 @@ security:semgrep:
 
 security:gosec:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Stays on big: gosec loads the whole module graph and peaks at ~6.7 GB,
   # over the light lane's 6 GB cap.
   # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
@@ -2177,6 +2245,9 @@ security:gosec:
 
 security:govulncheck:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
@@ -2238,7 +2309,8 @@ security:zizmor:
   stage: security
   tags: [light]
   image: node:26-bookworm
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr
   interruptible: true
   # blocking since its findings reached zero (#1462)
@@ -2261,6 +2333,9 @@ security:zizmor:
 
 security:npm-audit:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
@@ -2333,6 +2408,9 @@ security:npm-audit:
 # Debian's packaged Go is too old to read this module.
 security:licence-policy:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   <<: [*dev_or_mr_code, *git_safe]
@@ -2364,6 +2442,9 @@ security:licence-policy:
 
 security:gitleaks:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
@@ -2447,6 +2528,9 @@ security:gitleaks:
 
 security:trivy-fs:
   extends: .trivy
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     # Full-severity report kept as the SARIF artifact for visibility only --
@@ -2482,6 +2566,9 @@ security:trivy-fs:
 # waived for a workstation fixture still runs on the shipped Dockerfile.
 security:trivy-config:
   extends: .trivy
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
     - trivy config --ignorefile .trivyignore.yaml --exit-code 1 --severity HIGH,CRITICAL .
@@ -2552,7 +2639,8 @@ sync:mirror-to-github:
   # `needs: []`: the mirror reflects the branch, not the pipeline. The merge
   # request already ran lint, test and security before it merged; a flaky
   # test on the post-merge run must not leave GitHub behind, silently.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: pushes to GitHub -- never cut mid-write.
   interruptible: false
   # Not gated by #1038: the mirror reflects the branch, not the diff. A
@@ -2974,7 +3062,8 @@ check:upgrade-fixture-recorded:
   stage: sync
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # A fast history check (ai/agent-infra#113): runs on the push to dev with
   # the 5 minute timeout.
   extends: .dev-landing-check
@@ -3033,7 +3122,8 @@ chr-exercise:run:
   # it had never run once, in any pipeline, because something earlier
   # always failed first (#908, #923). A skipped job reports nothing while
   # looking like it was considered.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # The weekly schedule, plus an on-demand path from the web UI or the
   # API. Without one, a change to this job can only be tested by waiting
   # for the next Monday, which in practice means it never gets tested --
@@ -3138,7 +3228,8 @@ chr-watch:run:
   # to the GitLab API -- nothing earlier in the pipeline can invalidate
   # that, and it must still run (and still be able to report a stale report)
   # even if something earlier in the same pipeline failed.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   rules:
     - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "web"'
@@ -3169,7 +3260,8 @@ renovate:run:
   # it. Renovate's gitlabci manager keeps both current, after the same
   # 7-day wait as every other update.
   image: renovate/renovate:44.222.2@sha256:227e723ed8c57f1b8b629066c7e0ad8d8f933d905f4a2f6fb4d597a74118637c
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: opens and updates merge requests via the GitLab API -- never cut
   # mid-write.
   interruptible: false
