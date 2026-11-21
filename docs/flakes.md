@@ -255,3 +255,7 @@ own rather than swelling that entry's count.
 ## Wizard: 'opens the builder in the wizard's frame' times out (frontend/src/components/wizard/Wizard.svelte.test.ts)
 - 2026-11-19 · dad2c583 (fix/1426-g3-wizard) · local full `npx vitest run` · the test hit vitest's 5 s timeout once, then passed on rerun and in three runs of the file alone on the same commit. Host busy with parallel builders.
 - 2026-11-20 · 07ec22b4 (batch-b, !1245) · pipeline 4884, `test:frontend` (job 58680) · the same 5 s timeout; passed on retry (job 58724).
+
+## live-door-engines: the rain is frozen under WebKit ("0 strokes moved")
+
+- 2026-11-21 · 30cf435d (!1259) · CI pipeline 5064, `gate:scenarios 1/4` (job 60679) · `FAIL [webkit] the rain is falling, not frozen -- 0 strokes moved over 700ms`; every other check passed. The retry on the same commit (job 60743) passed. First sighting.

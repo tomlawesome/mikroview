@@ -89,7 +89,7 @@ ssl_ctx.verify_mode = ssl.CERT_NONE
 class API:
     def __init__(self, base):
         self.base = base
-        self.cookie = None
+        self.cookies = {}
 
     def _req(self, method, path, body=None):
         url = self.base + path
@@ -97,17 +97,24 @@ class API:
         headers = {"Content-Type": "application/json"}
         if method != "GET":
             headers[CSRF_HEADER] = CSRF_VALUE
-        if self.cookie:
-            headers["Cookie"] = self.cookie
+        if self.cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- base_url is the recording script's own https://127.0.0.1:<port>, not input from anyone else
             resp = urllib.request.urlopen(req, context=ssl_ctx, timeout=15)
         except urllib.error.HTTPError as e:
             return e.code, e.read(), e.headers
-        set_cookie = resp.headers.get("Set-Cookie")
-        if set_cookie:
-            self.cookie = set_cookie.split(";")[0]
+        # Every Set-Cookie, not just the first: gauntlet (#1202) answers a
+        # sign-in with its known-browser cookie *before* the session
+        # cookie, so keeping only the first one dropped the session. An
+        # empty value is the server clearing that cookie.
+        for set_cookie in resp.headers.get_all("Set-Cookie") or []:
+            name, _, value = set_cookie.split(";")[0].partition("=")
+            if value:
+                self.cookies[name] = value
+            else:
+                self.cookies.pop(name, None)
         return resp.getcode(), resp.read(), resp.headers
 
     def post(self, path, body, ok=(200, 201)):
