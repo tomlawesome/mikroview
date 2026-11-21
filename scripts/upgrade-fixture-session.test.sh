@@ -118,8 +118,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _reply(self, status, body=None, cookie=None):
         self.send_response(status)
-        if cookie:
-            self.send_header("Set-Cookie", cookie)
+        for c in ([cookie] if isinstance(cookie, str) else cookie or []):
+            self.send_header("Set-Cookie", c)
         payload = json.dumps(body).encode() if body is not None else b""
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Content-Type", "application/json")
@@ -139,7 +139,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log("REGISTER setupCode " + ("present" if "setupCode" in body else "absent"))
             if mode == "new" and body.get("setupCode") != SETUP_CODE:
                 return self._reply(401, None)
-            return self._reply(201, {"username": "upgrade-fixture-admin", "role": "admin"}, cookie="sid=1")
+            return self._reply(201, {"username": "upgrade-fixture-admin", "role": "admin"}, cookie=[
+                # #1553: the real server sets a non-session cookie FIRST,
+                # then the session cookie; later calls need the latter.
+                "gate_known_browser=1; Path=/",
+                "__Host-mikroview_session=s1; Path=/; Secure; HttpOnly",
+            ])
+
+        # Every route past register is authenticated.
+        if "__Host-mikroview_session=" not in (self.headers.get("Cookie") or ""):
+            log(f"NOSESSION {method} {path}")
+            return self._reply(401, None)
 
         if path == "/api/auth/totp/enrol":
             if mode == "old":
