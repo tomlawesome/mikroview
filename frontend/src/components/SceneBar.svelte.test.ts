@@ -33,24 +33,6 @@ import { metricsPref } from '../lib/metrics.svelte'
 import { preferencesState } from '../lib/preferences.svelte'
 import { emptyFilters } from '../lib/types'
 
-// jsdom has no window.matchMedia -- AccountMenu (mounted by SceneBar)
-// pulls in ThemeMenu -> lib/viewport.svelte.ts, whose ViewportState
-// singleton calls matchMedia at module-load time (same fix
-// AccountMenu.svelte.test.ts and Flags.svelte.test.ts already needed).
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList
-}
-
 const { default: SceneBar } = await import('./SceneBar.svelte')
 
 beforeEach(() => {
@@ -203,7 +185,7 @@ describe('SceneBar (#683, ratified round 30)', () => {
     ]
     watchlistState.coverage = { a: 'ok' as never, b: 'ok' as never }
     render(SceneBar, { scene: 'metrics' })
-    expect(screen.getByTitle('2 watchers held')).toBeTruthy()
+    expect(screen.getByTitle('2 watches held')).toBeTruthy()
     expect(screen.queryByText(/○/)).toBeNull()
   })
 
@@ -221,7 +203,7 @@ describe('SceneBar (#683, ratified round 30)', () => {
   it('drops the watch marker for a tier that cannot read the watchlist', () => {
     authState.role = 'viewer'
     render(SceneBar, { scene: 'metrics' })
-    expect(screen.queryByTitle('0 watchers held')).toBeNull()
+    expect(screen.queryByTitle('0 watches held')).toBeNull()
     expect(screen.getByText('⚑ 0')).toBeTruthy()
   })
 

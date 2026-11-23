@@ -20,7 +20,7 @@
   // own row grammar -- the two doors EngineRoomDoors.svelte used to draw
   // below the shelf behind USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED
   // (round 30/#700/#691 had unmounted both). That component and its
-  // flags are retired outright (no shim -- see AGENTS.md's "removals
+  // flags are retired outright (no shim -- see docs/development.md's "removals
   // are wholesale"); usersState/tokensState and their create/remove/
   // revoke calls are the same ones it used.
   //
@@ -36,7 +36,9 @@
   // on the closer, backend-consistent reading (both groups admin-only,
   // like people already is) and flagged in the PR rather than guessed
   // past.
-  import { onMount } from 'svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
+  import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
@@ -47,6 +49,7 @@
   import { versionState } from '../lib/version.svelte'
   import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
+  import { configProblemsState } from '../lib/configProblems.svelte'
   import { familyOf } from '../lib/flagPalette'
   import {
     fetchSetupStatus,
@@ -55,23 +58,37 @@
     fetchHistorySettings,
     fetchRouterBackups,
     fetchDroplist,
+    fetchGeoSettings,
   } from '../lib/api'
   import { duplicateDrift, duplicateDriftMessage, duplicateCleanupCommand } from '../lib/ingestDuplicates'
   import ConfigUpgrade from './ConfigUpgrade.svelte'
+  import ConfigCard from './ConfigCard.svelte'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
   import DiskControl from './DiskControl.svelte'
   import RouterBackups from './RouterBackups.svelte'
   import Droplist from './Droplist.svelte'
+  import GeoSources from './GeoSources.svelte'
   import { usersState } from '../lib/users.svelte'
   import ResetCodeOverlay from './ResetCodeOverlay.svelte'
   import { tokensState } from '../lib/tokens.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
-  import { portOf } from '../lib/setupsteps'
+  import { listenPort } from '../lib/format'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
-  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse, DroplistResponse, PasswordResetCode } from '../lib/types'
+  import type {
+    SetupStatus,
+    FlagType,
+    Device,
+    HistorySettings,
+    RouterBackupsResponse,
+    RouterBackupSwitchState,
+    BackupTransport,
+    DroplistResponse,
+    PasswordResetCode,
+    GeoSettings,
+  } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -131,6 +148,15 @@
       refreshDroplist()
       droplistTimer = setInterval(refreshDroplist, 60_000)
     }
+    // The country and network owner group (#1352) is admin-only end to
+    // end too -- GET /api/settings/geo 403s anyone else. Polled so a
+    // download that finishes while the page is open shows its new
+    // "last fetched" without a reload.
+    let geoTimer: ReturnType<typeof setInterval> | undefined
+    if (isAdmin) {
+      refreshGeo()
+      geoTimer = setInterval(refreshGeo, 60_000)
+    }
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule the former tokens door applied -- an
@@ -152,6 +178,7 @@
       if (historyRetry) clearTimeout(historyRetry)
       if (routerBackupsTimer) clearInterval(routerBackupsTimer)
       if (droplistTimer) clearInterval(droplistTimer)
+      if (geoTimer) clearInterval(geoTimer)
     }
   })
 
@@ -257,6 +284,43 @@
       })
   }
 
+  // --- country and network owner (#1352) ----------------------------------
+  let geoSettings = $state<GeoSettings | null>(null)
+  // The drop list's own `dfail` idiom: the GET did not answer for a
+  // reason other than role, and there is nothing yet to draw from.
+  let geoUnanswered = $state(false)
+  // Same stamp, same reason as droplistFetchedAt above (#1275): a key
+  // the operator just set is written straight into geoSettings by
+  // geoChanged, so an overtaking poll would take it back off screen.
+  let geoFetchedAt = 0
+
+  function refreshGeo() {
+    const startedAt = Date.now()
+    fetchGeoSettings()
+      .then((g) => {
+        if (overtaken(startedAt, geoFetchedAt)) return
+        geoSettings = g
+        geoFetchedAt = startedAt
+        geoUnanswered = false
+        geoipState.setSource(g.source)
+      })
+      .catch((err: unknown) => {
+        if ((err as { status?: number } | null)?.status === 403) return
+        if (overtaken(startedAt, geoFetchedAt)) return
+        geoUnanswered = true
+      })
+  }
+
+  // A key set or removed answers with the whole new state, the source in
+  // use included -- handed on to geoipState so the fall's DB-IP credit
+  // follows at once rather than at the next page load.
+  function geoChanged(next: GeoSettings) {
+    geoSettings = next
+    geoFetchedAt = Date.now()
+    geoUnanswered = false
+    geoipState.setSource(next.source)
+  }
+
   // Same stamp again (#1275). The disk group is raced by its own tick,
   // its `ask again`, and historyChanged's 6s follow-up -- and the
   // switch the operator just flipped is written straight into `history`
@@ -294,6 +358,33 @@
     historyFetchedAt = Date.now()
     if (historyRetry) clearTimeout(historyRetry)
     historyRetry = setTimeout(refreshHistory, 6_000)
+    // Turning history off or on, or deleting its files, adds or clears
+    // the banner's "files still on disk" entry (#1354): ask again now
+    // rather than leaving it until a reload.
+    configProblemsState.refresh()
+  }
+
+  // routerBackupSwitchChanged folds the drop box's own switch (#1361)
+  // straight into this tab's copy of the group -- the same "show the
+  // write's own answer, don't wait for the next poll" rule
+  // historyChanged keeps above -- and asks for the admin banner again,
+  // since opening or closing adds or clears the live
+  // router-backup-switch-changed entry the same way history's own
+  // change does.
+  function routerBackupSwitchChanged(next: RouterBackupSwitchState) {
+    if (!routerBackups) return
+    routerBackups = { ...routerBackups, port: next.open ? next.port : undefined }
+    routerBackupsFetchedAt = Date.now()
+    configProblemsState.refresh()
+  }
+
+  // routerBackupTransportChanged folds the "deliver by" save (#1494) in
+  // and stamps it like routerBackupSwitchChanged, so a poll issued before
+  // the save and answered after it is overtaken, not re-applied.
+  function routerBackupTransportChanged(transport: BackupTransport) {
+    if (!routerBackups) return
+    routerBackups = { ...routerBackups, transport }
+    routerBackupsFetchedAt = Date.now()
   }
 
   // The `state` row (round 43): the state store, beside the key.
@@ -311,14 +402,75 @@
   let soError = $state<string | null>(null)
   let soDone = $state(false)
 
-  async function doSignOutEverywhere() {
-    soSaving = true
+  // #1202 U9: gauntlet re-checks the caller's own password (a rate
+  // limited re-check) when the account has a local one. The row opens a
+  // prompt for it, the same shape as the People ones below; an SSO-only
+  // account has none to give and is not asked. The password is held only
+  // while the prompt is open: emptied the moment it is read for the call,
+  // and on every close.
+  let soAsking = $state(false)
+  let soPassword = $state('')
+  let soField = $state<HTMLInputElement | undefined>(undefined)
+
+  function openSignOutPrompt() {
+    if (soSaving) return
+    if (!authState.hasLocalPassword) {
+      void doSignOutEverywhere()
+      return
+    }
+    // One password prompt at a time: this replaces a People one.
+    closeAdminPrompt()
+    soAsking = true
+    soPassword = ''
     soError = null
     soDone = false
-    const err = await authState.signOutEverywhere()
+  }
+
+  function closeSignOutPrompt() {
+    soAsking = false
+    soPassword = ''
+    soError = null
+  }
+
+  async function doSignOutEverywhere() {
+    soError = null
+    soDone = false
+    let password: string | undefined
+    if (authState.hasLocalPassword) {
+      if (!soPassword) {
+        soError = 'Enter your password to go on.'
+        soField?.focus()
+        return
+      }
+      // Read once and emptied at once: nothing below keeps it.
+      password = soPassword
+      soPassword = ''
+    }
+    soSaving = true
+    let err: string | null
+    try {
+      err = await authState.signOutEverywhere(password)
+    } catch (e) {
+      // A thrown 401 is the session being gone (read as a shape, not
+      // instanceof: ApiError is api.ts's, and the screen's tests stub that
+      // module without it); anything else is a failure to show.
+      const thrown = e as { status?: unknown; message?: unknown }
+      err = typeof thrown?.message === 'string' && thrown.message ? thrown.message : 'could not sign out everywhere'
+      if (thrown?.status === 401) authState.handleUnauthorized()
+    }
     soSaving = false
-    if (err) soError = err
-    else soDone = true
+    if (err) {
+      soError = couldNot('sign out', 'everywhere', err)
+      if (soAsking) {
+        // The field was disabled while the call ran, which drops focus;
+        // put the person back in it once it is enabled again.
+        await tick()
+        soField?.focus()
+      }
+      return
+    }
+    soAsking = false
+    soDone = true
   }
 
   // --- your deck -----------------------------------------------------------
@@ -422,7 +574,7 @@
       window: `${psWindowSeconds}s`,
     })
     psSaving = false
-    psError = err
+    psError = err ? couldNot('save', 'the port-scan window', err) : null
     if (!err) psEditing = false
   }
 
@@ -566,6 +718,9 @@
   let newKeyName = $state('')
   let newKeyKind = $state<'api' | 'ingest'>('api')
   let newKeyDevice = $state('')
+  // #1202: a token outlives the session that minted it, so every mint
+  // re-asks for the admin's own password.
+  let newKeyPassword = $state('')
   let keyError = $state<string | null>(null)
   let minting = $state(false)
   let keyCopied = $state(false)
@@ -587,13 +742,18 @@
     newKeyName = ''
     newKeyKind = 'api'
     newKeyDevice = ''
+    newKeyPassword = ''
     keyError = null
   }
 
   async function submitMintKey() {
     keyError = null
     if (newKeyKind === 'ingest' && !newKeyDevice) {
-      keyError = 'An ingest key needs a device -- pick the router it speaks for.'
+      keyError = 'An ingest token needs a device — pick the router it speaks for.'
+      return
+    }
+    if (!newKeyPassword) {
+      keyError = 'Enter your password to mint a key.'
       return
     }
     minting = true
@@ -603,10 +763,12 @@
       newKeyName.trim(),
       newKeyKind,
       newKeyKind === 'ingest' ? newKeyDevice : undefined,
+      newKeyPassword,
     )
     minting = false
     if (err) {
-      keyError = err
+      newKeyPassword = ''
+      keyError = couldNot('mint', 'this key', err)
       return
     }
     cancelMintKey()
@@ -642,7 +804,7 @@
       // button lives in that panel, and a refused fetch here used to
       // leave the operator clicking "copy for RouterOS" with nothing on
       // screen saying why nothing was copied.
-      keyError = result
+      keyError = couldNot('copy', 'the router commands', result)
       return
     }
     try {
@@ -663,12 +825,13 @@
     // One armed verb at a time, as in the mockup: arming this disarms
     // whatever else was armed, key or person.
     disarmAll()
+    closeAdminPrompt()
     armedRevoke = id
   }
 
   async function revokeKey(id: string) {
     const err = await tokensState.revoke(id)
-    if (err) keyError = err
+    if (err) keyError = couldNot('revoke', 'this key', err)
   }
 
   // --- people (#767, round 32) -------------------------------------------
@@ -682,26 +845,29 @@
   let newPersonRole = $state<'user' | 'viewer'>('user')
   let personError = $state<string | null>(null)
   let addingPerson = $state(false)
-  let armedRemove = $state<string | null>(null)
-  // #1251's reset. Armed the same way remove and revoke are -- one
-  // click arms, the next confirms, a click anywhere else disarms -- and
-  // for the same reason: it kills the person's password outright, so it
-  // must not be reachable by a stray click on a row.
-  let armedReset = $state<string | null>(null)
-  let resetting = $state<string | null>(null)
+  // #1202 U8: gauntlet re-checks the calling admin's own password (a rate
+  // limited re-check) on the four actions on another account -- remove,
+  // reset password, clear authenticator app, clear passkeys. Each opens
+  // one prompt under the person's row (one at a time) asking for it, the
+  // same shape as the mint-a-key form. The password is held only while the
+  // prompt is open: emptied the moment it is read for the call, and on
+  // every close.
+  type AdminAction = { kind: 'remove' | 'reset' | 'factor' | 'passkeys'; id: string }
+  let adminAction = $state<AdminAction | null>(null)
+  let adminPassword = $state('')
+  let adminError = $state<string | null>(null)
+  let adminBusy = $state(false)
+  const adminVerb: Record<AdminAction['kind'], [string, string]> = {
+    remove: ['remove', 'this person'],
+    reset: ['reset', 'their password'],
+    factor: ['clear', 'their authenticator app'],
+    passkeys: ['clear', 'their passkeys'],
+  }
+  let adminField = $state<HTMLInputElement | undefined>(undefined)
   // The issued code, held only for as long as the dialog showing it is
   // open. Cleared on close: this is the one place it exists in clear,
   // and it has no second use.
   let issuedReset = $state<PasswordResetCode | null>(null)
-  // #1249's lost-phone path: the admin's own clear button, armed the
-  // same way reset/remove/revoke are. No password is asked here -- the
-  // admin is standing in for one the account owner no longer has -- so
-  // the arm-then-confirm click is the only guard against a stray one.
-  let armedClearFactor = $state<string | null>(null)
-  let clearingFactor = $state<string | null>(null)
-  // #1250's mirror of the pair above, for the passkeys clear button.
-  let armedClearPasskeys = $state<string | null>(null)
-  let clearingPasskeys = $state<string | null>(null)
 
   // Your own row leads the list, then everyone else's, matching the
   // drawing's "your account, then everyone else's" -- the server has no
@@ -731,117 +897,114 @@
     const err = await usersState.create(newPersonName.trim(), newPersonPass, newPersonRole)
     addingPerson = false
     if (err) {
-      personError = err
+      personError = couldNot('add', 'this person', err)
       return
     }
     cancelAddPerson()
   }
 
-  function onRemoveClick(e: MouseEvent, id: string) {
+  function openAdminPrompt(e: MouseEvent, kind: AdminAction['kind'], id: string) {
     e.stopPropagation()
-    if (armedRemove === id) {
-      armedRemove = null
-      removePerson(id)
+    if (adminBusy) return
+    // One verb at a time, as in the mockup: this disarms an armed revoke
+    // and replaces any other prompt, which forgets its password.
+    disarmAll()
+    closeSignOutPrompt()
+    adminAction = { kind, id }
+    adminPassword = ''
+    adminError = null
+  }
+
+  // #1202 U15: opening the prompt puts the cursor in its field. An effect,
+  // not code after the click, because the field exists only once the
+  // prompt has rendered; it runs again only when the prompt moves to
+  // another row (a new field).
+  $effect(() => {
+    if (adminAction && adminField) adminField.focus()
+  })
+
+  function closeAdminPrompt() {
+    adminAction = null
+    adminPassword = ''
+    adminError = null
+  }
+
+  async function submitAdminAction() {
+    const action = adminAction
+    if (!action || adminBusy) return
+    adminError = null
+    if (!adminPassword) {
+      adminError = 'Enter your password to go on.'
+      adminField?.focus()
       return
     }
-    disarmAll()
-    armedRemove = id
-  }
-
-  async function removePerson(id: string) {
-    const err = await usersState.remove(id)
-    if (err) personError = err
-  }
-
-  function onResetClick(e: MouseEvent, id: string) {
-    e.stopPropagation()
-    if (armedReset === id) {
-      armedReset = null
-      resetPersonPassword(id)
-      return
-    }
-    disarmAll()
-    armedReset = id
-  }
-
-  async function resetPersonPassword(id: string) {
+    // Read once and emptied at once: nothing below keeps it.
+    const password = adminPassword
+    adminPassword = ''
     personError = null
-    resetting = id
-    const result = await usersState.resetPassword(id)
-    resetting = null
-    if (typeof result === 'string') {
-      personError = result
-      return
-    }
-    issuedReset = result
-  }
-
-  function onClearFactorClick(e: MouseEvent, id: string) {
-    e.stopPropagation()
-    if (armedClearFactor === id) {
-      armedClearFactor = null
-      clearPersonFactor(id)
-      return
-    }
-    disarmAll()
-    armedClearFactor = id
-  }
-
-  async function clearPersonFactor(id: string) {
-    personError = null
-    clearingFactor = id
-    // finally, not a plain assignment after the await: usersState.clearFactor
-    // refreshes the list on success, and that fetchUsers() call can itself
-    // throw (a dropped connection, say) -- without finally the button would
-    // be stuck reading "clearing…" for the rest of the session. The catch
-    // is what stops that throw becoming an unhandled rejection: the clear
-    // itself still went through server-side, only the list refresh failed.
+    adminBusy = true
+    // The state methods that refresh the list on success can themselves
+    // throw (a dropped connection, say) after the server has already done
+    // the work -- hence the catch, and the finally that keeps the prompt
+    // from being stuck busy. A thrown 401 is the session being gone.
+    let refusal: string | null = null
     try {
-      const err = await usersState.clearFactor(id)
-      if (err) personError = err
-    } catch {
-      personError = 'Turned it off, but could not refresh the list. Reload to see the change.'
+      if (action.kind === 'remove') {
+        refusal = await usersState.remove(action.id, password)
+      } else if (action.kind === 'reset') {
+        const result = await usersState.resetPassword(action.id, password)
+        if (typeof result === 'string') refusal = result
+        else issuedReset = result
+      } else if (action.kind === 'factor') {
+        refusal = await usersState.clearFactor(action.id, password)
+      } else {
+        refusal = await usersState.clearPasskeys(action.id, password)
+      }
+    } catch (err) {
+      // (Read as a shape, not instanceof: ApiError is api.ts's, and the
+      // screen's tests stub that module without it.)
+      const thrown = err as { status?: unknown; message?: unknown }
+      if (thrown?.status === 401) {
+        refusal = typeof thrown.message === 'string' && thrown.message ? thrown.message : 'your session has expired — sign in again'
+        authState.handleUnauthorized()
+      } else {
+        // Done server-side; only the list refresh failed.
+        personError =
+          action.kind === 'reset'
+            ? 'Reset it, but could not refresh the list. Reload, then reset again for a new code.'
+            : action.kind === 'factor'
+              ? 'Turned it off, but could not refresh the list. Reload to see the change.'
+              : 'Removed them, but could not refresh the list. Reload to see the change.'
+        closeAdminPrompt()
+        return
+      }
     } finally {
-      clearingFactor = null
+      adminBusy = false
     }
-  }
-
-  function onClearPasskeysClick(e: MouseEvent, id: string) {
-    e.stopPropagation()
-    if (armedClearPasskeys === id) {
-      armedClearPasskeys = null
-      clearPersonPasskeys(id)
+    if (refusal) {
+      // #1202 U12: a delete the server did carry out (usersState.remove
+      // refreshed the list, so the row is gone) but whose tokens could not
+      // be revoked. The prompt lived under that row, so the words go where
+      // the page says what happened to people, and the prompt closes.
+      if (action.kind === 'remove' && !usersState.list.some((u) => u.id === action.id)) {
+        personError = refusal
+        closeAdminPrompt()
+        return
+      }
+      adminError = couldNot(adminVerb[action.kind][0], adminVerb[action.kind][1], refusal)
+      adminField?.focus()
       return
     }
-    disarmAll()
-    armedClearPasskeys = id
-  }
-
-  async function clearPersonPasskeys(id: string) {
-    personError = null
-    clearingPasskeys = id
-    // Same reasoning as clearPersonFactor above: the refresh inside
-    // usersState.clearPasskeys can itself throw.
-    try {
-      const err = await usersState.clearPasskeys(id)
-      if (err) personError = err
-    } catch {
-      personError = 'Removed them, but could not refresh the list. Reload to see the change.'
-    } finally {
-      clearingPasskeys = null
-    }
+    closeAdminPrompt()
   }
 
   // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all
   // bubble is the other example): a click anywhere that isn't the armed
-  // button itself disarms it, so an armed revoke/remove can't be
-  // triggered by a stray click elsewhere on the page.
+  // button itself disarms it, so an armed revoke can't be triggered by a
+  // stray click elsewhere on the page. (The people verbs no longer arm:
+  // they open the password prompt above, which a stray click leaves be.)
   function disarmAll() {
     armedRevoke = null
-    armedRemove = null
-    armedReset = null
-    armedClearFactor = null
-    armedClearPasskeys = null
   }
 </script>
 
@@ -1019,7 +1182,7 @@
             <circle cx="372" cy="45" r="4" fill="var(--accept)" />
             {#if status}
               <text x="396" y="41" class="sp-k">
-                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
+                {listenPort(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
               </text>
             {/if}
             {#if epsText}
@@ -1033,14 +1196,14 @@
             <div class="orow">
               <span>syslog listener</span>
               <span class="ov">
-                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
+                {listenPort(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
                 <span class="yaml">set in config.yaml; the page shows what is, the file decides</span>
               </span>
             </div>
           {/if}
           <div class="orow">
             <span>who may speak</span>
-            <span class="ov">holders of an ingest key — the keys group below</span>
+            <span class="ov">holders of an ingest token — the keys group below</span>
           </div>
           {#if geoipState.enabled === false}
             <!-- #1198: matches the country filter's own disabled row --
@@ -1155,11 +1318,21 @@
         </div>
       {/if}
 
+      <!-- #1347: the running config file and the door into the config
+           editor, beside the settings it names. Admin-only, like the
+           group above: every route behind it is. -->
+      {#if isAdmin}
+        <div class="stsection wide" id="engineroom-config">
+          <h3>config</h3>
+          <ConfigCard />
+        </div>
+      {/if}
+
       {#if isAdmin}
         <div class="stsection" id="keys">
           <h3>keys</h3>
           <p class="oghint">
-            which machines may speak — an ingest key lets one router push its state; a read-only key lets a reader
+            which machines may speak — an ingest token lets one router push its state; a read-only key lets a reader
             ask
           </p>
 
@@ -1209,6 +1382,16 @@
                 >
                 ·
                 {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
+                <!-- #1202: gauntlet gives a read-only key a one-year life;
+                     an ingest token never expires, so it carries no date.
+                     A date already past reads "expired": the key no longer
+                     works, and revoke tidies it away. -->
+                {#if tok.expiresAt}
+                  ·
+                  <span title={new Date(tok.expiresAt).toLocaleString()}
+                    >{new Date(tok.expiresAt).getTime() <= appState.now ? 'expired' : 'expires'} {new Date(tok.expiresAt).toLocaleDateString()}</span
+                  >
+                {/if}
               </span>
               <button
                 type="button"
@@ -1221,7 +1404,7 @@
             </div>
           {/each}
 
-          {#if keyError}<p class="oghint err">{keyError}</p>{/if}
+          {#if keyError}<FailureLine text={keyError} />{/if}
 
           {#if showMintKey}
             <div class="pform wf">
@@ -1258,6 +1441,13 @@
                   <span class="lab">no devices known yet — one appears here once it sends syslog</span>
                 {/if}
               {/if}
+              <input
+                type="password"
+                placeholder="your password"
+                aria-label="your password"
+                autocomplete="current-password"
+                bind:value={newKeyPassword}
+              />
               <span class="acts dwr-acts">
                 <button type="button" class="quiet" onclick={cancelMintKey}>cancel</button>
                 <button type="button" disabled={minting} onclick={submitMintKey}>
@@ -1339,7 +1529,7 @@
               </span>
             </div>
             {#if psError}
-              <p class="oghint err">{psError}</p>
+              <FailureLine text={psError} />
             {/if}
           {/if}
         </div>
@@ -1465,7 +1655,6 @@
           class:dshrink={diskPhase === 'dshrink'}
           class:dgrow={diskPhase === 'dgrow'}
           class:dcap={diskPhase === 'dcap'}
-          class:doff={diskPhase === 'doff'}
           class:dcapped={diskPhase === 'dcapped'}
           class:dstopped={diskPhase === 'dstopped'}
           class:dnokey={diskPhase === 'dnokey'}
@@ -1494,9 +1683,37 @@
         </div>
       {/if}
 
-      <!-- Round 44's "router backups" group (#394), straight after disk:
-           memory, disk, router backups -- the three things mikroview
-           holds, in the order they outlive a restart. Admin-only, like
+      <!-- #1352's "country and network owner" group, beside the disk
+           group (the Fable call on #1352): which source the flags come
+           from, and the keys that switch it. Admin-only -- never fetched
+           below admin (see onMount). It has no diagram, so it stacks
+           like router backups before its first pair (`dnodiagram`). -->
+      {#if isAdmin}
+        {#if geoSettings}
+          <div id="engineroom-geo" class="stsection wide dnodiagram">
+            <h3>country and network owner</h3>
+            <GeoSources settings={geoSettings} onchanged={geoChanged} />
+          </div>
+        {:else if geoUnanswered}
+          <div id="engineroom-geo" class="stsection wide dfail">
+            <h3>country and network owner</h3>
+            <div class="wrows">
+              <div class="orow">
+                <span>source</span>
+                <span class="ov">
+                  unknown — the server did not answer ·
+                  <button class="olink" onclick={refreshGeo}>ask again</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      {/if}
+
+      <!-- Round 44's "router backups" group (#394), after disk (with
+           #1352's country group beside disk in between): memory, disk,
+           router backups -- the three things mikroview holds, in the
+           order they outlive a restart. Admin-only, like
            `key`/`state` above -- never fetched below admin (see
            onMount), so absent rather than shown a 403 it cannot act on. -->
       {#if isAdmin}
@@ -1514,7 +1731,13 @@
             class:dnodiagram={!routerBackups.enabled || routerBackups.routers.length === 0}
           >
             <h3>router backups</h3>
-            <RouterBackups resp={routerBackups} fetchedAt={routerBackupsFetchedAt} onopenlost={openLostRouter} />
+            <RouterBackups
+              resp={routerBackups}
+              fetchedAt={routerBackupsFetchedAt}
+              onopenlost={openLostRouter}
+              onswitchchanged={routerBackupSwitchChanged}
+              ontransportchanged={routerBackupTransportChanged}
+            />
           </div>
         {:else if routerBackupsUnanswered}
           <!-- The disk group's own `dfail` idiom: one row, no control,
@@ -1579,13 +1802,42 @@
           <span>sessions</span>
           <span class="ov">
             this device{authState.signedInSince ? `, signed in ${formatDaysSince(authState.signedInSince)}` : ''} ·
-            <button class="olink" disabled={soSaving} onclick={doSignOutEverywhere}>
+            <button class="olink" disabled={soSaving} onclick={openSignOutPrompt}>
               {soSaving ? 'signing out…' : 'sign out everywhere'}
             </button>
           </span>
         </div>
-        {#if soError}
-          <p class="oghint err">{soError}</p>
+        <!-- #1202 U9: the caller's own password, asked for under the row.
+             The error slot is always present while the prompt is, so a
+             screen reader hears it when text arrives; focus goes back to
+             the field after a refusal. -->
+        {#if soAsking}
+          <div class="pform wf">
+            <input
+              type="password"
+              placeholder="your password"
+              aria-label="your password"
+              autocomplete="current-password"
+              bind:this={soField}
+              bind:value={soPassword}
+              disabled={soSaving}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  doSignOutEverywhere()
+                }
+              }}
+            />
+            <span class="acts dwr-acts">
+              <button type="button" class="quiet" disabled={soSaving} onclick={closeSignOutPrompt}>cancel</button>
+              <button type="button" disabled={soSaving} onclick={doSignOutEverywhere}>
+                {soSaving ? 'working…' : 'confirm — ends every other session'}
+              </button>
+            </span>
+            {#if soError}<FailureLine text={soError} />{/if}
+          </div>
+        {:else if soError}
+          <FailureLine text={soError} />
         {/if}
         {#if soDone}
           <p class="oghint">done — every other session has been ended</p>
@@ -1620,6 +1872,9 @@
                    only when nonzero, and never for an SSO account (the
                    server never lets one register a passkey either). -->
               {#if user.passkeyCount}<span class="pr">passkeys · {user.passkeyCount}</span>{/if}
+              <!-- #1202: an admin held at the passkey door (the admin
+                   passkey rule), same shown-only-when-true convention. -->
+              {#if user.heldForPasskey}<span class="pr">needs a passkey</span>{/if}
               <span class="pf">
                 {user.username === authState.username ? 'this is you · ' : ''}{user.lastLogin
                   ? `signed in ${formatRelative(user.lastLogin, appState.now)}`
@@ -1638,42 +1893,28 @@
                   <button
                     type="button"
                     class="olink quiet"
-                    class:armed={armedReset === user.id}
-                    disabled={resetting === user.id}
-                    onclick={(e) => onResetClick(e, user.id)}
+                    class:armed={adminAction?.kind === 'reset' && adminAction.id === user.id}
+                    disabled={adminBusy}
+                    onclick={(e) => openAdminPrompt(e, 'reset', user.id)}
                   >
-                    {#if resetting === user.id}
-                      resetting…
-                    {:else if armedReset === user.id}
-                      confirm — their password stops working now
-                    {:else}
-                      reset password
-                    {/if}
+                    reset password
                   </button>
                 {/if}
                 <!-- #1249: the admin's own end of a lost-phone report --
                      only offered when there is a factor to clear, and
                      never on this account's own row (see the
                      role === 'admin' branch above, which this account's
-                     row always takes). No password prompt: the admin is
-                     standing in for a password the account owner no
-                     longer has access to prove, the same reasoning reset
-                     password above already applies. -->
+                     row always takes). Like every verb on this row it
+                     asks for the admin's own password first (#1202 U8). -->
                 {#if user.hasTOTP}
                   <button
                     type="button"
                     class="olink quiet"
-                    class:armed={armedClearFactor === user.id}
-                    disabled={clearingFactor === user.id}
-                    onclick={(e) => onClearFactorClick(e, user.id)}
+                    class:armed={adminAction?.kind === 'factor' && adminAction.id === user.id}
+                    disabled={adminBusy}
+                    onclick={(e) => openAdminPrompt(e, 'factor', user.id)}
                   >
-                    {#if clearingFactor === user.id}
-                      clearing…
-                    {:else if armedClearFactor === user.id}
-                      confirm — turns their authenticator app off
-                    {:else}
-                      clear authenticator app
-                    {/if}
+                    clear authenticator app
                   </button>
                 {/if}
                 <!-- #1250's own lost-device path, mirroring the
@@ -1684,32 +1925,73 @@
                   <button
                     type="button"
                     class="olink quiet"
-                    class:armed={armedClearPasskeys === user.id}
-                    disabled={clearingPasskeys === user.id}
-                    onclick={(e) => onClearPasskeysClick(e, user.id)}
+                    class:armed={adminAction?.kind === 'passkeys' && adminAction.id === user.id}
+                    disabled={adminBusy}
+                    onclick={(e) => openAdminPrompt(e, 'passkeys', user.id)}
                   >
-                    {#if clearingPasskeys === user.id}
-                      clearing…
-                    {:else if armedClearPasskeys === user.id}
-                      confirm — removes their passkeys
-                    {:else}
-                      clear passkeys
-                    {/if}
+                    clear passkeys
                   </button>
                 {/if}
                 <button
                   type="button"
                   class="olink quiet remove"
-                  class:armed={armedRemove === user.id}
-                  onclick={(e) => onRemoveClick(e, user.id)}
+                  class:armed={adminAction?.kind === 'remove' && adminAction.id === user.id}
+                  disabled={adminBusy}
+                  onclick={(e) => openAdminPrompt(e, 'remove', user.id)}
                 >
-                  {armedRemove === user.id ? 'confirm — signs them out, revokes their keys' : 'remove'}
+                  remove
                 </button>
               {/if}
             </div>
+            <!-- #1202 U8: the calling admin's own password, asked for under
+                 the row the verb was chosen on. The error slot is always
+                 present while the prompt is, so a screen reader hears it
+                 when text arrives; focus goes back to the field after a
+                 refusal so the next try is a keystroke away. -->
+            {#if adminAction?.id === user.id}
+              <div class="pform wf">
+                <input
+                  type="password"
+                  placeholder="your password"
+                  aria-label="your password"
+                  autocomplete="current-password"
+                  bind:this={adminField}
+                  bind:value={adminPassword}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      submitAdminAction()
+                    }
+                  }}
+                />
+                <span class="acts dwr-acts">
+                  <button type="button" class="quiet" disabled={adminBusy} onclick={closeAdminPrompt}>cancel</button>
+                  <button type="button" disabled={adminBusy} onclick={submitAdminAction}>
+                    {#if adminBusy}
+                      working…
+                    {:else if adminAction.kind === 'remove'}
+                      confirm — signs them out, revokes their keys
+                    {:else if adminAction.kind === 'reset'}
+                      confirm — their password stops working now
+                    {:else if adminAction.kind === 'factor'}
+                      {#if user.passkeyCount}
+                        confirm — turns their authenticator app off
+                      {:else}
+                        confirm — turns their authenticator app off; their recovery codes go too
+                      {/if}
+                    {:else if user.hasTOTP}
+                      confirm — removes their passkeys
+                    {:else}
+                      confirm — removes their passkeys; their recovery codes go too
+                    {/if}
+                  </button>
+                </span>
+                <div class="pwerr">{#if adminError}<FailureLine text={adminError} />{/if}</div>
+              </div>
+            {/if}
           {/each}
 
-          {#if personError}<p class="oghint err">{personError}</p>{/if}
+          {#if personError}<FailureLine text={personError} />{/if}
 
           {#if showAddPerson}
             <div class="pform wf">
@@ -2147,11 +2429,6 @@
     font-family: var(--font-mono);
   }
 
-  .oghint.err {
-    color: var(--reject);
-    font-style: normal;
-  }
-
   /* --- memory -------------------------------------------------------------- */
   .stmem {
     width: 100%;
@@ -2268,6 +2545,18 @@
     flex: 1 1 220px;
     min-width: 220px;
     max-width: 420px;
+  }
+
+  /* The prompt's error line takes the whole row under the field. While
+     empty it leaves the layout but not the accessibility tree (no
+     display: none), so the live region exists before the error does. */
+  .pform .pwerr {
+    flex: 1 0 100%;
+    margin: 0;
+  }
+
+  .pform .pwerr:empty {
+    position: absolute;
   }
 
   .pform .acts {

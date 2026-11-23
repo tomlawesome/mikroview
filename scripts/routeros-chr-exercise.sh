@@ -9,8 +9,8 @@
 # every command parsed; red names the first one RouterOS refused.
 #
 # This is its own container, not `make live-check`: it never runs the
-# live gate and never touches ~/gate-lock (AGENTS.md, "The second host
-# live-check runs on"). It boots and talks to the router through
+# live gate and never touches ~/gate-lock (docs/runner-host.md, "The account"
+# section). It boots and talks to the router through
 # scripts/routeros-chr-boot.sh -- QEMU run directly, no Docker -- rather
 # than scripts/live-routeros.sh, whose Docker path exists only to spare
 # a local developer a root install and would need Docker-in-Docker

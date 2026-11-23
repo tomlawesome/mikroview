@@ -140,6 +140,9 @@ type Payload struct {
 	IPAddresses         []IPAddressEntry
 	PPPActive           []PPPActiveSession
 	Logging             []LoggingEntry
+	IPServices          []IPServiceEntry
+	RawRules            []RawRule
+	AddressListCounts   []AddressListCount
 }
 
 // RecordCount returns how many records are in whichever slice matches
@@ -170,13 +173,19 @@ func (p Payload) RecordCount() int {
 		return len(p.PPPActive)
 	case KindLogging:
 		return len(p.Logging)
+	case KindIPService:
+		return len(p.IPServices)
+	case KindRawRule:
+		return len(p.RawRules)
+	case KindAddressListCount:
+		return len(p.AddressListCounts)
 	default:
 		return 0
 	}
 }
 
 // DecodePayload strictly decodes and validates a RouterOS ingest payload
-// from r. Strict in the sense AGENTS.md asks of anything parsing
+// from r. Strict in the sense the project's security standards ask of anything parsing
 // attacker-shaped input: unknown fields are refused rather than silently
 // ignored, every bound in this file is enforced before a Payload is ever
 // returned, and a payload that fails any check is refused whole rather
@@ -251,6 +260,12 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		out.PPPActive, err = decodeRecords[PPPActiveSession](wire.Records)
 	case KindLogging:
 		out.Logging, err = decodeRecords[LoggingEntry](wire.Records)
+	case KindIPService:
+		out.IPServices, err = decodeRecords[IPServiceEntry](wire.Records)
+	case KindRawRule:
+		out.RawRules, err = decodeRecords[RawRule](wire.Records)
+	case KindAddressListCount:
+		out.AddressListCounts, err = decodeRecords[AddressListCount](wire.Records)
 	default:
 		return Payload{}, ErrUnknownKind
 	}
@@ -298,7 +313,7 @@ func decodeRecords[T recordValidator](raw json.RawMessage) ([]T, error) {
 // internal/entities.validateEntityText applies to admin-typed text, to
 // text a router pushed instead: valid UTF-8, no control or Unicode
 // format characters (the bidi-override class used in real-world spoofing
-// attacks -- see internal/auth.ValidateUsername for the CVE references
+// attacks -- see gauntlet.ValidateUsername for the CVE references
 // entities.validateEntityText carries), and a bounded length. This data
 // ends up in the same places admin-typed labels do -- the UI, the audit
 // trail, exported CSVs -- so it is held to the same rule.
@@ -382,6 +397,9 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("inInterface", r.InInterface); err != nil {
 		return err
 	}
+	if err := validateFieldText("inInterfaceList", r.InInterfaceList); err != nil {
+		return err
+	}
 	return validateFieldText("outInterface", r.OutInterface)
 }
 
@@ -408,6 +426,9 @@ func (r NATRule) validate() error {
 		return err
 	}
 	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterfaceList", r.InInterfaceList); err != nil {
 		return err
 	}
 	if err := validateFieldText("outInterface", r.OutInterface); err != nil {
@@ -526,6 +547,9 @@ func (e LoggingEntry) validate() error {
 	if err := validateFieldText("remoteLogFormat", e.RemoteLogFormat); err != nil {
 		return err
 	}
+	if err := validateFieldText("srcAddress", e.SrcAddress); err != nil {
+		return err
+	}
 	if err := validateFieldText("checkCertificate", string(e.CheckCertificate)); err != nil {
 		return err
 	}
@@ -536,4 +560,56 @@ func (e LoggingEntry) validate() error {
 		return err
 	}
 	return validateFieldText("disabled", string(e.Disabled))
+}
+
+func (e IPServiceEntry) validate() error {
+	if err := validateFieldText("name", e.Name); err != nil {
+		return err
+	}
+	if err := validateFieldList("address", e.Address); err != nil {
+		return err
+	}
+	return validateFieldText("certificate", e.Certificate)
+}
+
+// validateFamily refuses any family but the two menu roots the push
+// script reads. The value is the script's own literal, never router
+// data, so anything else is a script MikroView did not write.
+func validateFamily(f string) error {
+	if f != FamilyIP && f != FamilyIPv6 {
+		return fmt.Errorf("ingest: family %q is neither %q nor %q", f, FamilyIP, FamilyIPv6)
+	}
+	return nil
+}
+
+func (r RawRule) validate() error {
+	if err := validateFamily(r.Family); err != nil {
+		return err
+	}
+	for _, f := range []struct{ name, v string }{
+		{"comment", r.Comment},
+		{"chain", r.Chain},
+		{"action", r.Action},
+		{"srcAddressList", r.SrcAddressList},
+		{"dstAddressList", r.DstAddressList},
+		{"logPrefix", r.LogPrefix},
+	} {
+		if err := validateFieldText(f.name, f.v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c AddressListCount) validate() error {
+	if err := validateFamily(c.Family); err != nil {
+		return err
+	}
+	if c.Count < 0 {
+		return fmt.Errorf("ingest: count %d is negative", c.Count)
+	}
+	if err := validateFieldText("list", c.List); err != nil {
+		return err
+	}
+	return validateFieldText("loadedAt", c.LoadedAt)
 }

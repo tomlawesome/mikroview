@@ -2,33 +2,46 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  fetchTuneLoggingRender,
   beginPasskeyLogin,
   beginPasskeyRegistration,
   buildQuery,
+  clearGeoLookupCache,
   clearAllFlags,
   clearUserPasskeys,
   clearUserTOTP,
   confirmTOTP,
+  fetchSetupStatus,
+  deleteDevice,
   deleteDroplistEntry,
   disablePasskey,
   disableTOTP,
   enrolTOTP,
   fetchAuditLog,
+  fetchDevices,
   fetchEventsWindow,
   fetchPasskeys,
   fetchSetupCommands,
   finishPasskeyRegistration,
+  geoLookup,
+  INCORRECT_PASSWORD,
   login,
   mintDroplistKey,
+  onForcedAuthGate,
+  regenerateRecoveryCodes,
+  register,
   renamePasskey,
   replayDefinition,
   revokeDroplistKey,
   saveSetupBackupTransport,
   setFlagVerdict,
+  setGeoIpinfoToken,
+  setGeoMaxmindKey,
   setRouterBackupComment,
   submitLoginFactor,
   submitPasskeyLoginAssertion,
 } from './api'
+import { NO_ANSWER } from './plainWords'
 import { emptyFilters } from './types'
 
 // buildQuery's `ip` forwarding is refetchWithFilters()'s only path back to
@@ -288,7 +301,7 @@ describe('fetchSetupCommands (#436)', () => {
   }
 
   const RESPONSE = {
-    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [], upgrades: [] },
     picked: null,
     routers: [],
     steps: {
@@ -423,6 +436,40 @@ describe('deleteDroplistEntry (#1225)', () => {
   })
 })
 
+// The server registers DELETE /api/devices/{id} (internal/api/devices.go,
+// #1369). Same null-on-success, message-on-failure shape as burnEnrolment.
+describe('deleteDevice (#1369)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('DELETEs the device by id and resolves null on success', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 204, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteDevice('rb5009')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/devices/rb5009')
+    expect(init?.method).toBe('DELETE')
+    expect(result).toBeNull()
+  })
+
+  it('resolves the server’s message on failure, e.g. a config.yaml-declared device', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => 'device: this device is declared in config.yaml; remove it there instead',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteDevice('rb5009')
+
+    expect(result).toBe('device: this device is declared in config.yaml; remove it there instead')
+  })
+})
+
 // A dropped connection used to escape every mutating call as a thrown
 // TypeError, past the caller's busy flag: "minting…" stuck until a
 // reload, with no error shown. The four mutating helpers now answer it
@@ -445,31 +492,46 @@ describe('a dropped connection is a refusal, not a throw', () => {
 
   it('POST: mintDroplistKey returns the reason as a string', async () => {
     stubDroppedConnection()
-    const result = await mintDroplistKey('203.0.113.9')
+    const result = await mintDroplistKey('203.0.113.9', 'correct horse')
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
-    expect(result).toContain('Failed to fetch')
+    expect(result).toBe(NO_ANSWER)
+  })
+
+  // #1447: the mint re-checks the admin's password, so the body carries it.
+  it('POST: mintDroplistKey sends the password with the address (#1447)', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 201,
+      json: async () => ({ key: 'k', createdAt: '2026-09-14T00:00:00Z', scheduler: 's' }),
+      text: async () => '',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await mintDroplistKey('203.0.113.9', 'correct horse')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/droplist/key')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ address: '203.0.113.9', password: 'correct horse' })
   })
 
   it('DELETE: revokeDroplistKey returns the reason as a string', async () => {
     stubDroppedConnection()
     const result = await revokeDroplistKey()
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
+    expect(result).toBe(NO_ANSWER)
   })
 
   it('PUT: saveSetupBackupTransport returns the reason as a string', async () => {
     stubDroppedConnection()
     const result = await saveSetupBackupTransport('sftp')
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
+    expect(result).toBe(NO_ANSWER)
   })
 
   it('PATCH: setRouterBackupComment returns the reason as a string', async () => {
     stubDroppedConnection()
     const result = await setRouterBackupComment('core', 'g1', 'note')
     expect(typeof result).toBe('string')
-    expect(result).toContain('connection dropped')
+    expect(result).toBe(NO_ANSWER)
   })
 })
 
@@ -540,10 +602,44 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('enrolTOTP returns the otpauth URI on success', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ uri: 'otpauth://totp/MikroView:alex?secret=ABC&issuer=MikroView' }) })))
-    const result = await enrolTOTP()
+  // #1418/#1422: enrolment is gated by the caller's current password.
+  it('enrolTOTP sends the password and returns the otpauth URI on success', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ uri: 'otpauth://totp/MikroView:alex?secret=ABC&issuer=MikroView' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await enrolTOTP('hunter2')
     expect(result).toEqual({ uri: 'otpauth://totp/MikroView:alex?secret=ABC&issuer=MikroView' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/totp/enrol')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  // A wrong password (or a spent re-check budget) answers 401 with a
+  // #invalid-credentials problem -- returned as text, shown in the form, rather than
+  // thrown as the "session is gone" case below.
+  it('enrolTOTP returns the incorrect-password refusal as text, not thrown', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ type: 'https://example.invalid/errors.md#invalid-credentials', title: 'invalid-credentials', status: 401, detail: 'incorrect password' }), { status: 401, headers: { 'Content-Type': 'application/problem+json' } })))
+    const result = await enrolTOTP('wrong')
+    expect(result).toBe(INCORRECT_PASSWORD)
+  })
+
+  // Plain text is no longer matched: the words alone do not make a wrong
+  // password, so an untyped 401 is the session being gone.
+  it('enrolTOTP throws an untyped 401 whose body reads "incorrect password"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    await expect(enrolTOTP('wrong')).rejects.toMatchObject({ status: 401 })
+  })
+
+  it('enrolTOTP returns the too-many-attempts refusal as text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 429, text: async () => 'too many attempts, try again later' })),
+    )
+    const result = await enrolTOTP('hunter2')
+    expect(result).toBe('too many attempts, try again later')
   })
 
   it('confirmTOTP returns the ten recovery codes on success', async () => {
@@ -585,9 +681,9 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     await expect(confirmTOTP('123456')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
-  it('enrolTOTP throws on a 401, rather than returning it as text', async () => {
+  it('enrolTOTP throws on any other 401, rather than returning it as text', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
-    await expect(enrolTOTP()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+    await expect(enrolTOTP('hunter2')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
   it('disableTOTP posts the password and reads signedOut off the body on success', async () => {
@@ -627,6 +723,75 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
   })
 })
 
+// #1331: regenerating recovery codes without touching either factor.
+describe('regenerateRecoveryCodes (#1331)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the password and returns the fresh ten on success', async () => {
+    const codes = Array.from({ length: 10 }, (_, i) => `code-${i}`)
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ recoveryCodes: codes }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await regenerateRecoveryCodes('hunter2')
+
+    expect(result).toEqual(codes)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/recovery-codes')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  it('returns the server refusal as a string on a wrong password', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    const result = await regenerateRecoveryCodes('wrong')
+    expect(result).toBe('incorrect password')
+  })
+
+  it('refuses with the account has no second factor message when none exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 409, text: async () => 'this account has no second factor yet' })),
+    )
+    const result = await regenerateRecoveryCodes('hunter2')
+    expect(result).toBe('this account has no second factor yet')
+  })
+})
+
+// #1415: the first admin is created with the setup code from the
+// server's log. register() carries it as setupCode and shows the
+// server's refusal text unchanged, the same as login().
+describe('register: the first admin with a setup code (#1415)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the setup code alongside the account and password', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 201, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await register('alex', 'hunter2222', 'abcd-efgh-jkmn-pqrs')
+    expect(result).toBeNull()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/register')
+    expect(JSON.parse(init?.body as string)).toEqual({
+      username: 'alex',
+      password: 'hunter2222',
+      setupCode: 'abcd-efgh-jkmn-pqrs',
+    })
+  })
+
+  it('returns the server text unchanged on a wrong code', async () => {
+    const body = "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one"
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => body })))
+    expect(await register('alex', 'hunter2222', 'wrong')).toBe(body)
+  })
+})
+
 describe('submitLoginFactor and clearUserTOTP (#1249)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -650,15 +815,15 @@ describe('submitLoginFactor and clearUserTOTP (#1249)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ code: 'a1b2-c3d4-e5f6-g7h8' })
   })
 
-  it('clearUserTOTP sends no body, identifying the target by URL', async () => {
+  it('clearUserTOTP identifies the target by URL and sends the admin password in the body (#1202 U8)', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await clearUserTOTP('u-42')
+    const result = await clearUserTOTP('u-42', 'hunter2')
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/totp')
     expect(init?.method).toBe('DELETE')
-    expect(init?.body).toBeUndefined()
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
   })
 })
 
@@ -674,14 +839,56 @@ describe('the passkey calls (#1250)', () => {
     expect(result).toEqual(rows)
   })
 
-  it('beginPasskeyRegistration posts an empty body and returns the library\'s own creation options', async () => {
+  // Q5-F2: fetchPasskeys used to return failure as text, unlike every
+  // other list call in this file (fetchDevices, fetchUsers, ...), which
+  // throw ApiError -- PasskeysOverlay's loadList() now relies on that to
+  // route a 401 the same way its other calls already do.
+  it('fetchPasskeys throws ApiError on failure, like the other list calls', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(fetchPasskeys()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+  })
+
+  // #1418: starting registration is gated by the caller's current password.
+  it('beginPasskeyRegistration posts the password and returns the library\'s own creation options', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ publicKey: { challenge: 'c' } }) }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await beginPasskeyRegistration()
+    const result = await beginPasskeyRegistration('hunter2')
     expect(result).toEqual({ publicKey: { challenge: 'c' } })
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/passkeys/register/begin')
     expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  // A wrong password (or a spent re-check budget) answers 401 with a
+  // #invalid-credentials problem -- returned as text, not thrown, the one exception
+  // to the 401-means-session-gone rule below.
+  it('beginPasskeyRegistration returns the incorrect-password refusal as text, not thrown', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ type: 'https://example.invalid/errors.md#invalid-credentials', title: 'invalid-credentials', status: 401, detail: 'incorrect password' }), { status: 401, headers: { 'Content-Type': 'application/problem+json' } })))
+    const result = await beginPasskeyRegistration('wrong')
+    expect(result).toBe(INCORRECT_PASSWORD)
+  })
+
+  // Plain text is no longer matched: the words alone do not make a wrong
+  // password, so an untyped 401 is the session being gone.
+  it('beginPasskeyRegistration throws an untyped 401 whose body reads "incorrect password"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    await expect(beginPasskeyRegistration('wrong')).rejects.toMatchObject({ status: 401 })
+  })
+
+  // An SSO-only account has no password to check -- refused with 409,
+  // same as totp/enrol's own rule.
+  it('beginPasskeyRegistration returns the SSO-only refusal as text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 409,
+        text: async () => 'this account signs in through your identity provider -- a passkey is not offered',
+      })),
+    )
+    const result = await beginPasskeyRegistration('hunter2')
+    expect(result).toBe('this account signs in through your identity provider -- a passkey is not offered')
   })
 
   it('finishPasskeyRegistration posts the credential JSON and the name together', async () => {
@@ -700,9 +907,9 @@ describe('the passkey calls (#1250)', () => {
 
   // Same reasoning as confirmTOTP/enrolTOTP above -- these are two of
   // the same four forced-enrolment routes.
-  it('beginPasskeyRegistration throws on a 401, rather than returning it as text', async () => {
+  it('beginPasskeyRegistration throws on any other 401, rather than returning it as text', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
-    await expect(beginPasskeyRegistration()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+    await expect(beginPasskeyRegistration('hunter2')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
   it('finishPasskeyRegistration throws on a 401, rather than returning it as text', async () => {
@@ -765,14 +972,233 @@ describe('the passkey calls (#1250)', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ assertion: { id: 'c1' } })
   })
 
-  it('clearUserPasskeys sends no body, identifying the target by URL', async () => {
+  it('clearUserPasskeys identifies the target by URL and sends the admin password in the body (#1202 U8)', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await clearUserPasskeys('u-42')
+    const result = await clearUserPasskeys('u-42', 'hunter2')
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/passkeys')
     expect(init?.method).toBe('DELETE')
-    expect(init?.body).toBeUndefined()
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+})
+
+// #1362: an open tab across an upgrade (or a warm-started session) can
+// hold a real session that internal/api/auth.go's requireAuth now
+// refuses on every route but a few, because the account has no second
+// factor or owes a forced password change. Before this fix, that 403 was
+// indistinguishable from any other and every view just showed it as an
+// error -- these pin the shared fetch path in api.ts that fixes it,
+// without any view needing its own handling.
+describe('the forced-auth-gate 403 (#1362)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubWithGateHeader(gate: string | null) {
+    return vi.fn(async (url: string) => {
+      if (url === '/api/auth/session') {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({ authenticated: true, mustEnrolSecondFactor: gate === 'must-enrol-factor', mustChangePassword: gate === 'must-change-password', ssoAvailable: false }),
+        }
+      }
+      return {
+        ok: false,
+        status: 403,
+        headers: { get: (name: string) => (name === 'X-Auth-Gate' ? gate : null) },
+        text: async () => 'this account has no second factor -- enrol one before going any further',
+      }
+    })
+  }
+
+  it('still throws for the caller -- the view is expected to unmount once the state flips, not to swallow this', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-enrol-factor'))
+    await expect(fetchDevices()).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('calls the registered handler with a fresh session when the header says must-enrol-factor', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-enrol-factor'))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      // The recheck is fired off from inside the failed call, not
+      // awaited by it -- give the microtask queue a turn.
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).toHaveBeenCalledWith('must-enrol-factor', expect.objectContaining({ mustEnrolSecondFactor: true }))
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('calls the registered handler with must-change-password the same way', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-change-password'))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).toHaveBeenCalledWith('must-change-password', expect.objectContaining({ mustChangePassword: true }))
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('does not call the handler for an ordinary 403 with no gate header', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader(null))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('de-dupes a burst of 403s into a single session recheck', async () => {
+    const fetchMock = stubWithGateHeader('must-enrol-factor')
+    vi.stubGlobal('fetch', fetchMock)
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await Promise.allSettled([fetchDevices(), fetchDevices(), fetchDevices()])
+      await new Promise((r) => setTimeout(r, 0))
+      const sessionCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/auth/session')
+      expect(sessionCalls).toHaveLength(1)
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+})
+
+// #1352: the geo key writes and the on-demand owner lookup.
+describe('the country source calls (#1352)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    clearGeoLookupCache()
+  })
+
+  it('sends the IPinfo token as JSON, and the MaxMind pair likewise', async () => {
+    const answer = { source: 'ipinfo', sources: {} }
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => answer }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await setGeoIpinfoToken('fake-token')).toEqual(answer)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/settings/geo/ipinfo')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('PUT')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ token: 'fake-token' })
+
+    await setGeoMaxmindKey('123456', 'fake-licence')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/settings/geo/maxmind')
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ accountId: '123456', licenseKey: 'fake-licence' })
+  })
+
+  it("a 400 answers the server's {error} words, and a plain body as itself", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 400, text: async () => '{"error":"token must not be empty"}' })),
+    )
+    expect(await setGeoIpinfoToken('')).toBe('token must not be empty')
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 400, text: async () => 'bad request' })))
+    expect(await setGeoIpinfoToken('')).toBe('bad request')
+  })
+
+  it('geoLookup asks once per address and keeps the answer', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const a = await geoLookup('192.0.2.2')
+    const b = await geoLookup('192.0.2.2')
+    expect(a).toEqual({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' })
+    expect(b).toBe(a)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/geo/lookup?ip=192.0.2.2')
+  })
+
+  it('geoLookup keeps no failure, so the next ask tries again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => '' })))
+    expect(await geoLookup('192.0.2.2')).toBeNull()
+
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ country: null, asn: null, asName: null }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await geoLookup('192.0.2.2')).toEqual({ country: null, asn: null, asName: null })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('geoLookup keeps at most 500 answers, letting the oldest go first', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ country: null, asn: null, asName: null }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    for (let i = 0; i < 501; i++) await geoLookup(`203.0.${Math.floor(i / 256)}.${i % 256}`)
+    expect(fetchMock).toHaveBeenCalledTimes(501)
+    await geoLookup('203.0.1.244') // the newest: still kept
+    expect(fetchMock).toHaveBeenCalledTimes(501)
+    await geoLookup('203.0.0.0') // the oldest: let go, so asked again
+    expect(fetchMock).toHaveBeenCalledTimes(502)
+  })
+})
+
+
+// #1507: the typed address rides the status request as ?address=, so Go
+// judges the certificate for it.
+describe('fetchSetupStatus carries the typed address (#1507)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stub() {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('puts a typed address in the address query parameter', async () => {
+    const fetchMock = stub()
+    await (fetchSetupStatus as (a?: string) => Promise<unknown>)('[2001:db8::10]:8443')
+    const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://x.example')
+    expect(url.pathname).toBe('/api/setup/status')
+    expect(url.searchParams.get('address')).toBe('[2001:db8::10]:8443')
+  })
+
+  it('sends no address parameter when none is typed', async () => {
+    const fetchMock = stub()
+    await (fetchSetupStatus as (a?: string) => Promise<unknown>)('')
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/setup/status')
+  })
+})
+
+describe('fetchTuneLoggingRender errors (#1546)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function failWith(status: number, text: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: false, status, text: async () => text })),
+    )
+    return fetchTuneLoggingRender({ device: 'core', export: 'x', selected: [0] })
+  }
+
+  it('shows the reason of a 400 rejected body', async () => {
+    expect(await failWith(400, JSON.stringify({ rejected: { reason: 'r' } }))).toBe('r')
+  })
+
+  it('shows a plain-text 500 as it is', async () => {
+    expect(await failWith(500, 'logging-only check failed')).toBe('logging-only check failed')
+  })
+
+  it('falls back to the named error when the body is empty', async () => {
+    expect(await failWith(502, '')).toBe('fetchTuneLoggingRender: 502')
   })
 })

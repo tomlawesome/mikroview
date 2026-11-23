@@ -22,7 +22,7 @@
 // and a standalone run -- the third suite run failed exactly here, on
 // an inherited table that drew no coverage edges at all.
 
-import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog as syslog, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -41,7 +41,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-coverage', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-coverage', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 
@@ -217,6 +217,7 @@ await page.click(`${CARD} .form .go`)
 // The edge repaints quiet -- white, not grey dashed -- without a
 // reload: the acknowledgement is immediate.
 await page.waitForSelector('[data-card="topography"] .cedge.quiet', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'declaring the gap repaints the boundary, without a reload')
 
 // White solid, not grey dashed: the two gaps are different facts and

@@ -826,18 +826,18 @@
     <table>
       <thead><tr><th>flag</th><th>where</th><th>evidence</th><th>count</th><th>age</th><th class="vc">call it</th></tr></thead>
       <tbody>
-        <tr class="frow camp ft-unplanned" data-c="c1" aria-label="Campaign: three flags from cam-porch inside one 30-minute window"><td class="fmark"><i class="cm">⁂</i> CAMPAIGN<span class="cn">3 flags</span></td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.14</td><td class="ev"><span class="tchip ft-unplanned">unplanned</span><span class="tchip ft-outbound">outbound</span><span class="tchip ft-repeat">repeated drops</span><span class="cspan">13:28 → still arriving</span></td><td class="num">26×</td><td class="t">24 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow camp ft-unplanned" data-c="c1" aria-label="Campaign: three flags from cam-porch inside one 30-minute window"><td class="fmark"><i class="cm">⁂</i> CAMPAIGN<span class="cn">3 flags</span></td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.78</td><td class="ev"><span class="tchip ft-unplanned">unplanned</span><span class="tchip ft-outbound">outbound</span><span class="tchip ft-repeat">repeated drops</span><span class="cspan">13:28 → still arriving</span></td><td class="num">26×</td><td class="t">24 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="crule in-c1 ft-unplanned" hidden><td colspan="6">one source, three flags, each inside 30 minutes of the last — <b>one campaign</b>. cam-porch's ACTIVITY SPIKE at 11:10 is two hours from these, so it keeps its own row.</td></tr>
         <tr class="frow mem in-c1 ft-unplanned" data-d="d1" hidden><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#s3" onclick="descend()">iot</a> → <a class="wl" href="#s3" onclick="descend()">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer inc in-c1 ft-unplanned" id="d1"><td colspan="6"><div class="dwr"><div class="dwr-in">
-          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#s3" onclick="descend()">cam-porch</a> (198.51.100.14) toward <b>nas</b> (198.51.100.2). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
+          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#s3" onclick="descend()">cam-porch</a> (198.51.100.78) toward <b>nas</b> (198.51.100.34). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Fourteen events between 13:46 and 13:52, bunched toward the end">
               <line x1="8" y1="6" x2="8" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="6" x2="26" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="31" y1="6" x2="31" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="58" y1="6" x2="58" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="92" y1="6" x2="92" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="118" y1="6" x2="118" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="121" y1="6" x2="121" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="6" x2="158" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="170" y1="6" x2="170" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="196" y1="6" x2="196" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="208" y1="6" x2="208" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="224" y1="6" x2="224" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="236" y1="6" x2="236" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="248" y1="6" x2="248" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
             <span class="span">first 13:46 · last 13:52 · still arriving</span></div>
-          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49812->198.51.100.2:445, len 60
-13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49688->198.51.100.2:445, len 60</div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49812->198.51.100.34:445, len 60
+13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49688->198.51.100.34:445, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
@@ -847,7 +847,7 @@
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="30" y1="8" x2="30" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="228" y1="8" x2="228" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">13:34 · 13:36 · 13:39 · quiet since</span></div>
-          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 198.51.100.14:51230->198.51.100.9:25, len 60</div>
+          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 198.51.100.78:51230->203.0.113.9:25, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
@@ -857,20 +857,20 @@
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="16" y1="8" x2="16" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="44" y1="8" x2="44" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="72" y1="8" x2="72" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="100" y1="8" x2="100" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="156" y1="8" x2="156" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="184" y1="8" x2="184" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="212" y1="8" x2="212" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="240" y1="8" x2="240" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">every ~2 m since 13:28</span></div>
-          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49812->198.51.100.2:445, len 60</div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49812->198.51.100.34:445, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 198.51.100.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 203.0.113.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-portscan" id="d2"><td colspan="6"><div class="dwr"><div class="dwr-in">
-          <div class="story"><b>One source, twenty doors.</b> 198.51.100.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
+          <div class="story"><b>One source, twenty doors.</b> 203.0.113.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Twenty events, evenly walked over forty seconds">
               <line x1="12" y1="8" x2="12" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="24.6" y1="8" x2="24.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="37.2" y1="8" x2="37.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="49.8" y1="8" x2="49.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="62.4" y1="8" x2="62.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="75" y1="8" x2="75" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="87.6" y1="8" x2="87.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="100.2" y1="8" x2="100.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="112.8" y1="8" x2="112.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="125.39999999999999" y1="8" x2="125.39999999999999" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="138" y1="8" x2="138" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="150.6" y1="8" x2="150.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="163.2" y1="8" x2="163.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="175.79999999999998" y1="8" x2="175.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="188.4" y1="8" x2="188.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="201" y1="8" x2="201" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="213.6" y1="8" x2="213.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="226.2" y1="8" x2="226.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="238.79999999999998" y1="8" x2="238.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="251.4" y1="8" x2="251.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
             <span class="span">13:41:02 → 13:41:42 · stopped</span></div>
-          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40019->203.0.113.7:1019, len 60
-13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40018->203.0.113.7:1018, len 60</div>
+          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 203.0.113.77:40019->192.0.2.7:1019, len 60
+13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 203.0.113.77:40018->192.0.2.7:1018, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this source</button><button class="quiet">clear with a note</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
@@ -891,11 +891,11 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
           <div class="side"><span class="lab">first minutes</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><polyline points="0,28 40,26 80,18 120,14 160,15 200,13 240,14 260,13" fill="none" stroke="#b8c56a" stroke-width="1.6"/></svg>
             <span class="span">since 12:57 · all accepted</span></div>
-          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 203.0.113.31:52114->203.0.113.88:443, len 60</div>
+          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 198.51.100.3:52114->203.0.113.88:443, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button class="quiet">clear</button><button class="quiet never">never again</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-surge" data-d="d7"><td class="fmark">▲ ACTIVITY SPIKE</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.14</td><td>4.2× its usual hour, 11:10 → 11:50</td><td class="num">—</td><td class="t">2 h 40 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-surge" data-d="d7"><td class="fmark">▲ ACTIVITY SPIKE</td><td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.78</td><td>4.2× its usual hour, 11:10 → 11:50</td><td class="num">—</td><td class="t">2 h 40 m</td><td class="vc"><span class="vrow"><button class="v expected" data-v="expected"><i>✓</i>expected</button><button class="v noise" data-v="noise"><i>~</i>noise</button><button class="v real" data-v="real"><i>✱</i>real</button></span><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-surge" id="d7"><td colspan="6"><div class="dwr"><div class="dwr-in">
           <div class="story"><b>cam-porch was 4.2× busier than its usual late morning.</b> Between 11:10 and 11:50 the camera sent four times what it sends in that hour on an ordinary day, all of it accepted, most of it to its own cloud. It settled by noon; the campaign above began at 13:28, two hours later.</div>
           <div class="side"><span class="lab">the hour against its baseline</span>
@@ -996,15 +996,15 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
           <div class="story"><b>Learning, not fencing yet.</b> Since Sunday <a class="wl" href="#s3" onclick="descend()">tv-lounge</a> has reached four places. Nothing fires while it learns. Permit the ones you recognise; when you say <b>fence now</b>, anything it reaches that is not on the list becomes a flag.</div>
           <div class="side"><span class="lab">where it has reached · since Sunday</span>
             <ul class="seen">
-              <li><span class="k">time.cloudflare.com</span><span class="t">udp/123 · 412×</span><span class="ok">✓ permitted</span></li>
-              <li><span class="k">cdn.samsungcloudsolution.com</span><span class="t">tcp/443 · 96×</span><span class="ok">✓ permitted</span></li>
+              <li><span class="k">ntp.example.net</span><span class="t">udp/123 · 412×</span><span class="ok">✓ permitted</span></li>
+              <li><span class="k">cdn.example.com</span><span class="t">tcp/443 · 96×</span><span class="ok">✓ permitted</span></li>
               <li><span class="k">nas</span><span class="t">tcp/8096 · 31×</span><button class="permit">permit</button></li>
-              <li><span class="k">198.51.100.4</span><span class="t">tcp/443 · 2× · unnamed</span><button class="permit">permit</button></li>
+              <li><span class="k">203.0.113.104</span><span class="t">tcp/443 · 2× · unnamed</span><button class="permit">permit</button></li>
             </ul></div>
           <div class="matches"><span class="lab">what it matched · last 3 of 541</span>
             <ul class="mlist">
-              <li><span class="w">13:50</span><span class="k">tv-lounge → time.cloudflare.com<i>:123</i></span><span class="t">412× since Sun · A|iot-out|</span></li>
-              <li><span class="w">13:44</span><span class="k">tv-lounge → cdn.samsungcloudsolution.com<i>:443</i></span><span class="t">96× since Sun · A|iot-out|</span></li>
+              <li><span class="w">13:50</span><span class="k">tv-lounge → ntp.example.net<i>:123</i></span><span class="t">412× since Sun · A|iot-out|</span></li>
+              <li><span class="w">13:44</span><span class="k">tv-lounge → cdn.example.com<i>:443</i></span><span class="t">96× since Sun · A|iot-out|</span></li>
               <li><span class="w">12:31</span><span class="k">tv-lounge → nas<i>:8096</i></span><span class="t">31× since Mon · A|iot-lan|</span></li></ul><a class="slink older">older ▸</a></div>
           <div class="dwr-acts"><button id="permitall">permit all four</button><button id="fencenow">fence now · 2 permitted</button><button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>
         </div></div></td></tr>
@@ -1017,9 +1017,9 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
             <span class="span">seven kept nights</span></div>
           <div class="matches"><span class="lab">what it matched · last 3 of 214</span>
             <ul class="mlist">
-              <li><span class="w">02:14</span><span class="k">nas → 198.51.100.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li>
-              <li><span class="w">Sat 02:13</span><span class="k">nas → 198.51.100.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li>
-              <li><span class="w">Fri 02:14</span><span class="k">nas → 198.51.100.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li></ul><a class="slink older">older ▸</a></div>
+              <li><span class="w">02:14</span><span class="k">nas → 203.0.113.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li>
+              <li><span class="w">Sat 02:13</span><span class="k">nas → 203.0.113.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li>
+              <li><span class="w">Fri 02:14</span><span class="k">nas → 203.0.113.40<i>:443</i></span><span class="t">1× · A|srv-backup|</span></li></ul><a class="slink older">older ▸</a></div>
           <div class="dwr-acts"><button>pause watch</button><button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>
         </div></div></td></tr>
         <tr class="frow wt-ok"><td class="k">pihole upstream only</td><td><a class="wl" href="#s3" onclick="descend()">servers</a> → wan · :53</td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:51</td><td><span class="openc">▸</span></td></tr>
@@ -1036,9 +1036,9 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
             <span class="span">four kept days · three not watched</span></div>
           <div class="matches"><span class="lab">what it matched · last 3 of 88</span>
             <ul class="mlist">
-              <li><span class="w">Sat 19:02</span><span class="k">192.0.2.7 → tv-lounge<i>:8009</i></span><span class="t">3× · A|guest-cast|</span></li>
-              <li><span class="w">Sat 18:40</span><span class="k">192.0.2.7 → tv-lounge<i>:8009</i></span><span class="t">1× · A|guest-cast|</span></li>
-              <li><span class="w">Fri 21:12</span><span class="k">192.0.2.12 → tv-lounge<i>:8009</i></span><span class="t">7× · A|guest-cast|</span></li></ul><a class="slink older">older ▸</a></div>
+              <li><span class="w">Sat 19:02</span><span class="k">198.51.100.103 → tv-lounge<i>:8009</i></span><span class="t">3× · A|guest-cast|</span></li>
+              <li><span class="w">Sat 18:40</span><span class="k">198.51.100.103 → tv-lounge<i>:8009</i></span><span class="t">1× · A|guest-cast|</span></li>
+              <li><span class="w">Fri 21:12</span><span class="k">198.51.100.108 → tv-lounge<i>:8009</i></span><span class="t">7× · A|guest-cast|</span></li></ul><a class="slink older">older ▸</a></div>
           <div class="dwr-acts"><button>resume watch</button><button class="quiet">open in stream ▸</button><button class="quiet edit">edit</button><button class="quiet remove">remove</button></div>
         </div></div></td></tr>
         <tr class="frow wt-ok"><td class="k">wan dark-boundary sentinel</td><td><a class="wl" href="#s3" onclick="descend()">internet</a></td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:49</td><td><span class="openc">▸</span></td></tr>
@@ -1059,7 +1059,7 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
             <ul class="seen facts">
               <li><span class="t">host</span><span class="k">doorbell</span></li>
               <li><span class="t">mac</span><span class="k">B8:27:EB:4F:12:9C</span></li>
-              <li><span class="t">address</span><span class="k">198.51.100.44 · iot</span></li>
+              <li><span class="t">address</span><span class="k">198.51.100.75 · iot</span></li>
               <li><span class="t">first seen</span><span class="k">Sun 18:12 · rb5009</span></li>
             </ul></div>
           <div class="dwr-acts"><button class="accept">watch it — it learns first</button><button class="quiet aside">not this</button></div>
@@ -1098,7 +1098,7 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
           <div class="side"><span class="lab">the lease, as pushed</span>
             <ul class="seen facts">
               <li><span class="t">mac</span><span class="k">00:17:88:6A:C2:1E</span></li>
-              <li><span class="t">address</span><span class="k">198.51.100.9 · iot</span></li>
+              <li><span class="t">address</span><span class="k">198.51.100.68 · iot</span></li>
             </ul></div>
           <div class="dwr-acts"><button class="quiet back">bring it back</button></div>
         </div></div></td></tr>
@@ -1108,7 +1108,7 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
           <div class="side"><span class="lab">the lease, as pushed</span>
             <ul class="seen facts">
               <li><span class="t">mac</span><span class="k">70:4F:57:11:0B:C3</span></li>
-              <li><span class="t">address</span><span class="k">198.51.100.27 · iot</span></li>
+              <li><span class="t">address</span><span class="k">198.51.100.81 · iot</span></li>
             </ul></div>
           <div class="dwr-acts"><button class="quiet back">bring it back</button></div>
         </div></div></td></tr>
@@ -1122,7 +1122,7 @@ Worth a look at the upstream list again before I call it expected.</textarea><sp
       <tbody>
         <tr><td class="t">13:47</td><td>alex</td><td>opened flag <span class="k">UNPLANNED · iot → lan</span></td></tr>
         <tr><td class="t">13:31</td><td>alex</td><td>added watch <span class="k">laptop-anna school hours</span></td></tr>
-        <tr><td class="t">13:12</td><td>alex</td><td>permitted <span class="k">cdn.samsungcloudsolution.com</span> for <span class="k">tv-lounge fenced</span></td></tr>
+        <tr><td class="t">13:12</td><td>alex</td><td>permitted <span class="k">cdn.example.com</span> for <span class="k">tv-lounge fenced</span></td></tr>
         <tr><td class="t">12:58</td><td class="t">router</td><td>pushed <span class="k">/ip address</span> table · 5 zones unchanged</td></tr>
         <tr><td class="t">11:02</td><td>alex</td><td>changed theme to <span class="k">dark</span></td></tr>
         <tr><td class="t">09:14</td><td>alex</td><td>signed in from <span class="k">alex-desktop</span></td></tr>

@@ -149,7 +149,7 @@ export function acceptsTypedValue(field: TokenField): boolean {
 // What committing a value writes. A side commits one sub-field at a
 // time into the same three fields the strip's own Source/Destination
 // group writes, so the box goes on drawing ONE composite chip
-// (`source:198.51.100.34 · external · DE`) however many parts have been
+// (`source:192.0.2.34 · external · DE`) however many parts have been
 // picked -- sideValue() in filterChips.ts does the joining.
 export function tokenPatch(field: TokenField, value: string): Partial<Filters> {
   switch (field) {

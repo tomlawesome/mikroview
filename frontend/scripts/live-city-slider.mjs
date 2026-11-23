@@ -17,7 +17,7 @@
 // (walls, gates, the river) is live-city-stops.mjs's and live-city-
 // walls.mjs's job, not this one's.
 
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
@@ -32,7 +32,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-slider', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-slider', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 
@@ -136,10 +136,12 @@ for (let i = 0; i < STOP_LABELS.length; i++) {
   check(m.value === String(i), `stop ${i} (${label}): the slider reports it (value ${m.value})`)
   // #981 left no lens toggle here and none has come back. #1018 put one
   // control in the row -- the port filter -- and #1055 carried it across
-  // the centre: the same pill, idle, at every stop, and nothing else.
+  // the centre: the same pill, idle, at every stop. #1320 added a second,
+  // sibling lens pill (⌕ serving) beside it -- one lens active at a time,
+  // but both drawn at every stop, idle here since neither is touched.
   check(
-    m.overlayControls.join(' ') === '⌕ port',
-    `${label}: the overlay row carries the port pill and nothing else, either side of centre (${JSON.stringify(m.overlayControls)})`,
+    m.overlayControls.join(' ') === '⌕ port ⌕ serving',
+    `${label}: the overlay row carries the port pill and the serving pill, idle, either side of centre (${JSON.stringify(m.overlayControls)})`,
   )
 
   if (i < 3) {
@@ -167,7 +169,7 @@ for (let i = STOP_LABELS.length - 1; i >= 0; i--) {
   const m = await measure()
   check(m.value === String(i), `walking back, stop ${i} (${STOP_LABELS[i]}): the slider reports it (value ${m.value})`)
   check(
-    m.overlayControls.join(' ') === '⌕ port',
+    m.overlayControls.join(' ') === '⌕ port ⌕ serving',
     `${STOP_LABELS[i]}: the overlay row still reads the same after the round trip (${JSON.stringify(m.overlayControls)})`,
   )
   if (i > 0) {

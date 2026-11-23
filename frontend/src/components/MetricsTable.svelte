@@ -16,7 +16,7 @@
   import MetricsTotals from './MetricsTotals.svelte'
   import CustomTopTalkers from './CustomTopTalkers.svelte'
   import { copyToClipboard } from '../lib/clipboard'
-  import { toastState } from '../lib/toast.svelte'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { nextSort, ariaSort as sortAriaSort } from '../lib/tableSort'
 
   // liveSince is when this process started counting (GET /api/stats);
@@ -124,8 +124,10 @@
     ].join('\n'),
   )
 
+  const flash = new CopyFlash()
+
   async function copyFigures() {
-    toastState.show((await copyToClipboard(copyText)) ? 'Copied' : 'Copy failed')
+    await flash.run('hour', () => copyToClipboard(copyText))
   }
 </script>
 
@@ -142,7 +144,7 @@
   <section class="figures">
     <div class="figures-head">
       <h3>Every minute <span>· click a minute to put the cursor on it</span></h3>
-      <button class="copy" onclick={copyFigures}>Copy the hour</button>
+      <button class="copy" onclick={copyFigures}>{flash.label('hour', 'Copy the hour')}</button>
     </div>
 
     {#if hour.axis.length === 0}

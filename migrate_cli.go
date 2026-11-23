@@ -16,6 +16,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // -migrate-data moves a deployment's data directory from wherever it is
@@ -113,7 +114,6 @@ func migratedStores(cfg config.Config) []migratedStore {
 		// A directory, not a document -- see migratedStore.Dir.
 		migratedStore{Name: "tls", Path: cfg.TLS.StorePath, Dir: true},
 		migratedStore{Name: "recovery_pepper", Path: cfg.Auth.RecoveryPepperPath},
-		migratedStore{Name: "geoip_db", Path: cfg.GeoIP.DBPath},
 		// The retained event history (#856), a directory like tls above.
 		// Carried, unlike the snapshot directory: a snapshot is
 		// disposable state whose loss costs one cold start, while this
@@ -167,6 +167,9 @@ var excludedFromMigration = map[string]string{
 		"does, so nothing an operator believes they moved is lost by leaving four megabytes of " +
 		"somebody else's registry behind. It is also data MikroView has no permission to redistribute " +
 		"(see internal/oui.SourceURL), which is a second reason not to copy it around.",
+	"GeoIP.CachePath": "a cache of the country databases MikroView downloads (#1352), not state the " +
+		"operator owns: the refresh loop fetches them again shortly after the move, and flags are blank " +
+		"only until it does. Copying somebody else's databases around is also not MikroView's to do.",
 	"Postgres.DSNFile": "a mounted secret carrying a database password. It is deliberately not in the " +
 		"data directory (storage.go's readDSNFile explains why it is a file at all), and copying a " +
 		"credential into a freshly created volume during a migration would spread it, not move it.",
@@ -192,7 +195,7 @@ func runMigrateData(args []string) int {
 	logger := logging.New("migrate-data")
 	dest, ok := firstNonFlag(args)
 	if !ok {
-		logger.Error("usage: mikroview -migrate-data <destination-directory> [--force]")
+		logger.Error("usage: mikroview -migrate-data <destination-directory> [-force]")
 		logger.Error(fmt.Sprintf("in a container, mount the new location at %s and pass that -- "+
 			"a fresh named volume mounted anywhere else arrives owned by root and cannot be written to. "+
 			"See docs/configuration.md, \"Moving the data directory\"", migrationMountPoint))
@@ -205,7 +208,7 @@ func runMigrateData(args []string) int {
 		return 1
 	}
 
-	plan, err := planMigration(cfg, dest, hasFlag(args, "--force"))
+	plan, err := planMigration(cfg, dest, forceFlag(args))
 	if err != nil {
 		logger.Error(err.Error())
 		var unusable *storeUnusable
@@ -369,7 +372,7 @@ func prepareDest(dest string, force bool) error {
 	if len(entries) > 0 && !force {
 		return fmt.Errorf("%s is not empty (%d entr(y/ies)) -- refusing to merge two deployments' data "+
 			"into one directory, where a leftover users.json would silently outlive the move. "+
-			"Empty it, choose another destination, or pass --force if you are certain it is a "+
+			"Empty it, choose another destination, or pass -force if you are certain it is a "+
 			"partial copy of this same deployment", dest, len(entries))
 	}
 	return nil
@@ -390,7 +393,7 @@ func scanTree(root string) (int, int64, error) {
 		if err != nil {
 			return fmt.Errorf("reading %s: %v", path, unwrapPathErr(err))
 		}
-		if d.IsDir() {
+		if d.IsDir() || isStoreLockFile(path, d) {
 			return nil
 		}
 		if !d.Type().IsRegular() {
@@ -410,6 +413,19 @@ func scanTree(root string) (int, int64, error) {
 		return 0, 0, err
 	}
 	return files, bytes, nil
+}
+
+// isStoreLockFile reports a file store's sidecar lock file (#1468). It
+// holds no data and the server recreates it, so a move neither counts,
+// copies nor verifies it. Only a *.lock beside the store it locks counts:
+// any other file of that name is the operator's and is moved like the rest.
+func isStoreLockFile(path string, d fs.DirEntry) bool {
+	if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), persist.LockFileSuffix) {
+		return false
+	}
+	// #nosec G703 -- path comes from WalkDir over the data directory being moved.
+	info, err := os.Lstat(strings.TrimSuffix(path, persist.LockFileSuffix))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // copyTree copies every file under src into dst, returning the SHA-256
@@ -443,6 +459,9 @@ func copyTree(src, dst string) (map[string]string, error) {
 			}
 			return nil
 		}
+		if isStoreLockFile(path, d) {
+			return nil
+		}
 		sum, err := copyFile(path, target)
 		if err != nil {
 			return err
@@ -459,14 +478,14 @@ func copyTree(src, dst string) (map[string]string, error) {
 // copyFile writes one file and returns the SHA-256 of what it wrote.
 //
 // O_EXCL, so a destination that turned out to hold this file already --
-// a --force run over a partial copy -- fails loudly instead of leaving
+// a -force run over a partial copy -- fails loudly instead of leaving
 // half of one version and half of another.
 func copyFile(src, dst string) (string, error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %v", src, unwrapPathErr(err))
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -477,7 +496,7 @@ func copyFile(src, dst string) (string, error) {
 		}
 		return "", fmt.Errorf("creating %s: %v", dst, unwrapPathErr(err))
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(out, h), in); err != nil {
@@ -500,7 +519,7 @@ func copyFile(src, dst string) (string, error) {
 //  1. Is every file there, byte for byte? Re-read and re-hashed off the
 //     destination, so a short write or a filesystem that accepted bytes
 //     it did not keep is caught here.
-//  2. Is there anything extra? A --force run over an older copy can
+//  2. Is there anything extra? A -force run over an older copy can
 //     leave a stale file the move never wrote, and on the accounts store
 //     that is an account list coming back from the dead.
 //  3. Can mikroview actually use it? Ownership is right by construction
@@ -512,7 +531,7 @@ func verifyMigration(plan *migrationPlan, digests map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))
 		}
-		if d.IsDir() {
+		if d.IsDir() || isStoreLockFile(path, d) {
 			return nil
 		}
 		rel, err := filepath.Rel(plan.Dest, path)
@@ -579,7 +598,7 @@ func checkDirUsable(dir string) error {
 		return &storeUnusable{Store: "destination", Path: dir, Dir: dir, Err: unwrapPathErr(err)}
 	}
 	name := probe.Name()
-	probe.Close()
+	_ = probe.Close()
 	// #nosec G703 -- removes the probe file this function just created under the operator's own destination.
 	return os.Remove(name)
 }
@@ -589,7 +608,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("re-reading %s: %v", path, unwrapPathErr(err))

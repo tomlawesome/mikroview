@@ -22,7 +22,7 @@
   // than restyled, since the ratified drum has none.
   //
   // Hand-rolled SVG, like every other chart this project has ever
-  // shipped -- AGENTS.md's dependency rules make a charting library a
+  // shipped -- the dependency rules (docs/decisions/scope-and-companion-projects.md) make a charting library a
   // licence question before it is a size one, and nothing here needs
   // one. The SVG is sized in real CSS pixels from the measured box (see
   // lib/pixelGrid.svelte.ts) rather than stretched from a viewBox, which

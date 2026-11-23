@@ -7,8 +7,9 @@
 // is a fact that matters individually, so it is kept at full fidelity
 // and survives a restart, which neither of those two stores does.
 //
-// Two backends: FileStore (file.go), capacity-bounded, refusing new
-// records once full; and PostgresStore (postgres.go), a dedicated
+// Two backends: FileStore (file.go), a sealed append-only file under the
+// retention key (#1470), capacity-bounded, refusing new records once
+// full; and PostgresStore (postgres.go), a dedicated
 // indexed table rather than a row in the shared blob table, bounded by
 // age (retention) rather than count instead -- see
 // docs/decisions/postgres-backend.md §1a for why a genuinely indexed
@@ -335,7 +336,7 @@ type Store interface {
 }
 
 // newID returns a random 32-character hex string. Unlike
-// internal/auth's newID, this only needs to be unique within one store,
+// gauntlet's newID, this only needs to be unique within one store,
 // not unguessable -- nothing here is a bearer credential -- but the same
 // crypto/rand source is reused rather than inventing a second generator
 // for no reason.

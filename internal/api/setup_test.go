@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,10 +31,10 @@ func TestSetupStatusOpenToViewer(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/setup/status below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/setup/status")
@@ -112,8 +113,8 @@ func TestSetupMarkRecordsLedgerAndAudit(t *testing.T) {
 	}
 }
 
-// TestSetupMarkRejectsNonsense keeps the ledger to the seven steps the
-// wizard has (#1291 added the seventh) and the two outcomes it
+// TestSetupMarkRejectsNonsense keeps the ledger to the records the
+// wizard has (#1291 added the seventh, #1360 the eighth) and the two outcomes it
 // defines. A mark outside that is a client bug or a probe; either way
 // it has nothing to describe, and must not reach the audit log as
 // though it did.
@@ -130,10 +131,11 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 		req  setupMarkRequest
 	}{
 		{"step zero", setupMarkRequest{Step: 0, Outcome: "skipped"}},
-		// Eight, not seven: #1291's register step records as seven
-		// (setupsteps.ts's RECORD_NUMBERS), and this row pinned the old
-		// ceiling rather than "past the last".
-		{"step past the last", setupMarkRequest{Step: 8, Outcome: "skipped"}},
+		// Past the last record, whatever that is: #1291's register step
+		// records as seven and #1360's first-run tail as eight
+		// (setupsteps.ts's RECORD_NUMBERS), and a literal here pinned
+		// the old ceiling rather than "past the last".
+		{"step past the last", setupMarkRequest{Step: setup.MaxStep + 1, Outcome: "skipped"}},
 		{"unknown outcome", setupMarkRequest{Step: 1, Outcome: "finished"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,6 +163,24 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 	}
 	if markEntries != 0 {
 		t.Errorf("%d setup-mark audit entries written for refused requests, want 0", markEntries)
+	}
+}
+
+// TestSetupMarkAcceptsTheEighthStep: #1360's first-run tail records as
+// eight (setupsteps.ts RECORD_NUMBERS). The "past the last" row moves with
+// setup.MaxStep, so nothing else fails if MaxStep is lowered below 8 and
+// the tail's mark gets a 400 while the wizard advances anyway (#1267, #1257).
+func TestSetupMarkAcceptsTheEighthStep(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, s, ts)
+	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: 8, Outcome: "skipped"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/mark for step 8 = %d, want 200", resp.StatusCode)
 	}
 }
 
@@ -382,14 +402,14 @@ func TestSetupAddressAdminOnly(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	// Enrolled so the 403 below actually proves the admin-only gate,
 	// rather than being masked by #1253's door refusing a still-factor-
 	// less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts)
+	totpEnrolAndConfirm(t, viewerClient, ts, fixtureUserPassword)
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
 	defer resp.Body.Close()
@@ -507,14 +527,14 @@ func TestSetupBackupTransportAdminOnly(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	// Enrolled so the 403 below actually proves the admin-only gate,
 	// rather than being masked by #1253's door refusing a still-factor-
 	// less viewer for an unrelated reason.
-	totpEnrolAndConfirm(t, viewerClient, ts)
+	totpEnrolAndConfirm(t, viewerClient, ts, fixtureUserPassword)
 
 	resp := putJSON(t, viewerClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
 	defer resp.Body.Close()
@@ -632,4 +652,196 @@ func getSetupStatus(t *testing.T, client *http.Client, baseURL string) setupStat
 		t.Fatal(err)
 	}
 	return got
+}
+
+// getSetupStatusInstance reads GET /api/setup/status as a generic map so
+// the #1507 tests below fail on the missing wire fields themselves
+// rather than on a compile error.
+func getSetupStatusInstance(t *testing.T, client *http.Client, baseURL string) map[string]any {
+	t.Helper()
+	resp, err := client.Get(baseURL + "/api/setup/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/setup/status = %d, want 200", resp.StatusCode)
+	}
+	var raw struct {
+		Instance map[string]any `json:"instance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw.Instance
+}
+
+// TestSetupStatusServesTheCertificateCoverageVerdict is #1507 (decision
+// #1437): Go owns the answer to "does the certificate cover the wizard's
+// address", served as instance.certificateCoversAddress beside
+// instance.effectiveHosts. Names compare case-insensitively, and a bare
+// IPv6 literal is not cut at its last colon.
+func TestSetupStatusServesTheCertificateCoverageVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hosts     []string
+		address   string
+		want      bool
+		wantHosts []string
+	}{
+		{"uncovered name", []string{"router.example.net"}, "other.example.net:8443", false, []string{"router.example.net"}},
+		{"covered name in a different case", []string{"router.example.net"}, "ROUTER.Example.NET:8443", true, []string{"router.example.net"}},
+		{"covered name, configured in upper case", []string{"Router.EXAMPLE.net"}, "router.example.net", true, []string{"Router.EXAMPLE.net"}},
+		{"covered bare IPv6 literal", []string{"2001:db8::10"}, "2001:db8::10", true, []string{"2001:db8::10"}},
+		{"covered bracketed IPv6 with port", []string{"2001:db8::10"}, "[2001:db8::10]:8443", true, []string{"2001:db8::10"}},
+		{"uncovered bare IPv6 literal", []string{"192.0.2.10"}, "2001:db8::10", false, []string{"192.0.2.10"}},
+		{"unset hosts fall back to the generated defaults", nil, "127.0.0.1:8443", true, []string{"localhost", "127.0.0.1"}},
+		{"unset hosts do not cover another address", nil, "192.0.2.99:8443", false, []string{"localhost", "127.0.0.1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			s.Setup = setup.New()
+			s.SetupInstance = SetupInstance{TLSEnabled: true, Hosts: tc.hosts, SyslogPort: "6514"}
+			if _, err := s.Setup.SetAddress(tc.address); err != nil {
+				t.Fatalf("SetAddress: %v", err)
+			}
+			ts := httptest.NewServer(s.Routes())
+			defer ts.Close()
+			adminClient := setUpAdmin(t, s, ts)
+
+			inst := getSetupStatusInstance(t, adminClient, ts.URL)
+			got, ok := inst["certificateCoversAddress"].(bool)
+			if !ok {
+				t.Fatalf("instance.certificateCoversAddress missing or not a bool: %v", inst["certificateCoversAddress"])
+			}
+			if got != tc.want {
+				t.Errorf("certificateCoversAddress = %v, want %v", got, tc.want)
+			}
+			eff, _ := inst["effectiveHosts"].([]any)
+			var gotHosts []string
+			for _, h := range eff {
+				gotHosts = append(gotHosts, fmt.Sprint(h))
+			}
+			if strings.Join(gotHosts, ",") != strings.Join(tc.wantHosts, ",") {
+				t.Errorf("effectiveHosts = %v, want %v", gotHosts, tc.wantHosts)
+			}
+		})
+	}
+}
+
+// TestSetupStatusCoverageVerdictIsTrueWhenNoCertificateIsInPlay keeps
+// the front end's old short-circuit (#374): with neither HTTP TLS nor
+// syslog TLS on there is nothing to cover.
+func TestSetupStatusCoverageVerdictIsTrueWhenNoCertificateIsInPlay(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	s.SetupInstance = SetupInstance{TLSEnabled: false, Hosts: []string{"192.0.2.10"}, SyslogPort: ""}
+	if _, err := s.Setup.SetAddress("192.0.2.99:8443"); err != nil {
+		t.Fatalf("SetAddress: %v", err)
+	}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	adminClient := setUpAdmin(t, s, ts)
+
+	inst := getSetupStatusInstance(t, adminClient, ts.URL)
+	if got, ok := inst["certificateCoversAddress"].(bool); !ok || !got {
+		t.Errorf("certificateCoversAddress = %v, want true when no certificate is in play", inst["certificateCoversAddress"])
+	}
+}
+
+// getSetupStatusInstanceFor is getSetupStatusInstance with the typed
+// address passed as the status's optional address query parameter.
+func getSetupStatusInstanceFor(t *testing.T, client *http.Client, baseURL, typed string) map[string]any {
+	t.Helper()
+	resp, err := client.Get(baseURL + "/api/setup/status?address=" + url.QueryEscape(typed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/setup/status?address=%s = %d, want 200", typed, resp.StatusCode)
+	}
+	var raw struct {
+		Instance map[string]any `json:"instance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw.Instance
+}
+
+// TestSetupStatusJudgesTheTypedAddress is #1507's review decision: the
+// status takes an optional address query parameter, and addressHost,
+// effectiveHosts and certificateCoversAddress are then computed for it
+// rather than for the stored address. An invalid typed address is
+// treated like none; with no parameter the stored address is used.
+func TestSetupStatusJudgesTheTypedAddress(t *testing.T) {
+	const stored = "router.example.net:8443" // covered by tls.hosts below
+	for _, tc := range []struct {
+		name         string
+		query        bool
+		typed        string
+		wantCovers   bool
+		wantHost     string
+		wantHostsAre []string
+	}{
+		{"no parameter uses the stored address", false, "", true, "router.example.net", []string{"router.example.net"}},
+		{"uncovered typed name overrides a covered stored one", true, "other.example.net:8443", false, "other.example.net", []string{"router.example.net"}},
+		{"covered typed name in another case", true, "ROUTER.example.net", true, "ROUTER.example.net", []string{"router.example.net"}},
+		{"bare IPv6 typed address gives the whole literal", true, "2001:db8::10", false, "2001:db8::10", []string{"router.example.net"}},
+		{"bracketed IPv6 typed address with port", true, "[2001:db8::10]:8443", false, "2001:db8::10", []string{"router.example.net"}},
+		{"invalid typed address is treated like none", true, "not a valid host\naddress", true, "router.example.net", []string{"router.example.net"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			s.Setup = setup.New()
+			s.SetupInstance = SetupInstance{TLSEnabled: true, Hosts: []string{"router.example.net"}, SyslogPort: "6514"}
+			if _, err := s.Setup.SetAddress(stored); err != nil {
+				t.Fatalf("SetAddress: %v", err)
+			}
+			ts := httptest.NewServer(s.Routes())
+			defer ts.Close()
+			adminClient := setUpAdmin(t, s, ts)
+
+			var inst map[string]any
+			if tc.query {
+				inst = getSetupStatusInstanceFor(t, adminClient, ts.URL, tc.typed)
+			} else {
+				inst = getSetupStatusInstance(t, adminClient, ts.URL)
+			}
+			if got, _ := inst["certificateCoversAddress"].(bool); got != tc.wantCovers {
+				t.Errorf("certificateCoversAddress = %v, want %v", inst["certificateCoversAddress"], tc.wantCovers)
+			}
+			if got, _ := inst["addressHost"].(string); got != tc.wantHost {
+				t.Errorf("addressHost = %q, want %q", got, tc.wantHost)
+			}
+			eff, _ := inst["effectiveHosts"].([]any)
+			var gotHosts []string
+			for _, h := range eff {
+				gotHosts = append(gotHosts, fmt.Sprint(h))
+			}
+			if strings.Join(gotHosts, ",") != strings.Join(tc.wantHostsAre, ",") {
+				t.Errorf("effectiveHosts = %v, want %v", gotHosts, tc.wantHostsAre)
+			}
+		})
+	}
+}
+
+// With nothing stored, a typed uncovered address is still judged: the
+// browser's check used to block before the address was ever saved.
+func TestSetupStatusJudgesATypedAddressWithNothingStored(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	s.SetupInstance = SetupInstance{TLSEnabled: true, Hosts: []string{"router.example.net"}, SyslogPort: "6514"}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	adminClient := setUpAdmin(t, s, ts)
+
+	inst := getSetupStatusInstanceFor(t, adminClient, ts.URL, "192.0.2.99:8443")
+	if got, _ := inst["certificateCoversAddress"].(bool); got {
+		t.Error("certificateCoversAddress = true, want false for an uncovered typed address")
+	}
+	if got, _ := inst["addressHost"].(string); got != "192.0.2.99" {
+		t.Errorf("addressHost = %q, want 192.0.2.99", got)
+	}
 }

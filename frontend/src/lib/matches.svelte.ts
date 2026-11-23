@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { fetchRecentMatches } from './api'
+import { couldNot } from './plainWords'
 import type { WatchlistMatch } from './types'
 
 // One page of the merged list. 100 is matchlog's own DefaultLimit
@@ -59,7 +60,7 @@ class MatchesState {
       // should not be offered.
       this.exhausted = page.length < MATCHES_PAGE_SIZE
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err)
+      this.error = couldNot('load', 'the matches', err)
       // The buffer is left exactly as it was rather than emptied: a
       // failed refresh must not present itself as "nothing has broken",
       // which is the one sentence this surface must never say wrongly.
@@ -105,7 +106,7 @@ class MatchesState {
       this.records = [...this.records, ...fresh]
       this.exhausted = fresh.length === 0 || page.length < MATCHES_PAGE_SIZE
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err)
+      this.error = couldNot('load', 'older matches', err)
     } finally {
       this.loadingOlder = false
     }

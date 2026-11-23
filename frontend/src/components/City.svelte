@@ -13,7 +13,9 @@
   // the river and bridges are #866's; standing on a building (#868) is
   // this file's own "the reach" section below. #986 dropped height and
   // the plinth (#867): devices sit flat on their district plate.
+  import FailureLine from './FailureLine.svelte'
   import { tick, untrack } from 'svelte'
+  import { restoreFocus } from '../lib/focusTrap'
   import { appState } from '../lib/state.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import { zonesState } from '../lib/zones.svelte'
@@ -83,6 +85,11 @@
   import { mapTraceState } from '../lib/mapTrace.svelte'
   import { doorAccepts, doorHalf, emptyNote, litRibs, plaqueTally } from '../lib/portFilter'
   import type { PortDoor } from '../lib/api'
+  // The "seen serving" lens (#1320): the same dimming rule the port
+  // filter draws above, over the same ground -- no door vocabulary and
+  // no plaque tally of its own; #1320 is explicit that City gets no
+  // treatment beyond the same dimming.
+  import { servingState } from '../lib/serving.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
@@ -771,6 +778,12 @@
     // map (#1018's own rule, kept here by #1055). Two answers layered on
     // one city would stack their dimming on each other and leave nobody
     // able to say which of them a grey road was grey because of.
+    //
+    // #1320's serving lens deliberately does not clear here (#1396, the
+    // same fix Topography's clearMapFilters got): it lights no road and
+    // dims no district whole, so there is no crumb of its own to clash
+    // with standing on something -- and it still clears, and still
+    // clears the other two, wherever it is the one being turned on.
     portFilterState.clear()
     // Each reach starts from the drawing: the last building's draft does
     // not follow you to the next one.
@@ -825,6 +838,12 @@
     // city stop so one press can never take two. The trace (#1050) is
     // the same rung as the port filter -- the two are mutually exclusive
     // already, so at most one of them is ever open to clear.
+    //
+    // #1320's serving lens is deliberately absent from this rung (#1396):
+    // it lights no road and dims no district whole, so there is nothing
+    // here for it to clash with, and clearing it on Escape would undo the
+    // same survival open() now gives it for no reason Escape has of its
+    // own. Its own ✕ and pill still turn it off.
     if (portFilterState.active || portFilterState.open || mapTraceState.active) {
       e.preventDefault()
       portFilterState.clear()
@@ -1569,9 +1588,10 @@
   /* ---------------- the event trace (#1050, rounds 54 & 56) ---------------- */
 
   // Round 53's other tool (#1018) on this surface, drawn as rounds 54
-  // and 56 draw it. Mutually exclusive with the port filter by
-  // construction -- Topography's openTrace/openPortPicker each clear
-  // the other -- so at most one of portOverlay/traceOverlay is ever
+  // and 56 draw it. Mutually exclusive with the port filter and #1320's
+  // serving lens by construction -- Topography's
+  // openTrace/openPortPicker/toggleServing each clear the other two --
+  // so at most one of portOverlay/traceOverlay/servingOverlay is ever
   // non-null.
   const traceOn = $derived(mapTraceState.active)
 
@@ -1633,6 +1653,40 @@
       }
     }
     return { litRoadIds, litBuildingIds, tallies }
+  })
+
+  /* ---------------- the "seen serving" lens (#1320) ---------------- */
+
+  // Sibling to the port filter above, drawn the same way: nothing new on
+  // the ground, the map dims to the answer. Mutually exclusive with both
+  // the port filter and the trace by construction (Topography's
+  // toggleServing/openPortPicker/openTrace each clear the other two).
+  const servingOn = $derived(servingState.open && servingState.settled)
+
+  interface ServingOverlay {
+    litBuildingIds: Set<string>
+  }
+
+  /**
+   * What the serving lens dims the city to: buildings only.
+   *
+   * The answer is host-level, not per-crossing (#1320's backend has no
+   * ribs to ask, unlike the port filter's), so there is no honest way to
+   * say which road a served host was reached over -- lighting one from
+   * district membership alone would be a claim about that boundary's
+   * traffic the lens cannot actually back. Roads keep their ordinary,
+   * unfiltered look while this lens is on; only a building itself dims
+   * or not, the same fact a dot states on the flat map. No door
+   * vocabulary either: the lens makes no claim about policy, only about
+   * traffic seen.
+   */
+  const servingOverlay = $derived.by((): ServingOverlay | null => {
+    if (!servingOn) return null
+    const litBuildingIds = new Set<string>()
+    for (const b of allBuildings) {
+      if (b.ip && servingState.hosts.has(b.ip)) litBuildingIds.add(b.id)
+    }
+    return { litBuildingIds }
   })
 
   interface TraceMark {
@@ -1931,7 +1985,7 @@
         // #1165: "1 hosts" on a district holding one.
         (d.buildings.length + d.more === 1 ? ' host' : ' hosts') +
         (!d.rulesPushed
-          ? ', no rule table has been pushed yet -- walls show no gates'
+          ? ', no rule table has been pushed yet — walls show no gates'
           : d.dark
             ? ', nothing logs here'
             : ''),
@@ -2161,6 +2215,13 @@
       // the rest recede. Nothing is taken off the map -- the answer is
       // read against the whole city. The two are mutually exclusive
       // (opening one clears the other), so at most one is ever active.
+      //
+      // The serving lens (#1320) is deliberately absent from this
+      // question: its answer has no road for a rule to ask about, so a
+      // road lit from district membership alone would claim traffic on
+      // that boundary the lens cannot back. Roads keep their ordinary
+      // look while it is on -- only a building itself dims or not,
+      // exactly as its dot does on the flat map.
       const onPort = !portOverlay || portOverlay.litRoadIds.has(r.id)
       const onTrace = traceOverlay !== null && traceOverlay.litRoadIds.has(r.id)
       const onFilter = portOverlay ? onPort : traceOverlay ? onTrace : true
@@ -2315,7 +2376,8 @@
         (d?.dark ?? false) ||
         (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false) ||
         (portOverlay && b.host ? !portOverlay.litBuildingIds.has(b.id) : false) ||
-        (traceOverlay && b.host ? !traceOverlay.litBuildingIds.has(b.id) : false)
+        (traceOverlay && b.host ? !traceOverlay.litBuildingIds.has(b.id) : false) ||
+        (servingOverlay && b.host ? !servingOverlay.litBuildingIds.has(b.id) : false)
       // Presence is the building's own ink (round 49, #1016): a host not
       // heard for the quiet window goes grey with a dashed footprint, one
       // marked quiet on purpose goes white and translucent. Both stay on
@@ -3541,6 +3603,7 @@
 {/snippet}
 
 <div class="city" data-stop={effectiveStop} bind:this={cityEl}>
+  {#if !appState.initialLoadDone}<p class="first-load" role="status">Mapping the network…</p>{/if}
   <!-- The traced line's own crumb, plus its list (#1018 round 53, #1050
        round 56 A1) -- the same component Topography mounts, so the same
        markup and behaviour appear on the city too. -->
@@ -4109,7 +4172,7 @@
       {#if standComposeCommand}
         <pre class="cm-code">{standComposeCommand}</pre>
       {:else}
-        <p class="cm-b">nothing to draft from yet -- no destination port observed on this strand.</p>
+        <p class="cm-b">nothing to draft from yet — no destination port observed on this strand.</p>
       {/if}
       <div class="cm-f"><span>drafted · never run</span></div>
     </div>
@@ -4189,6 +4252,7 @@
       style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
       bind:this={bcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{c.d.name} to {c.gate.toward}: this boundary, {COVERAGE_WORD[c.gate.coverage]}"
       onpointerenter={cardGrace.hold}
@@ -4249,7 +4313,7 @@
             both directions
           </label>
           {#if coverageState.error}
-            <p class="d-error">{coverageState.error}</p>
+            <FailureLine verb="load" thing="the coverage" said={coverageState.error} />
           {/if}
           <div class="btns">
             <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
@@ -4291,6 +4355,7 @@
       style={hostPlace ? `left:${R2(hostPlace.left)}px;top:${R2(hostPlace.top)}px` : undefined}
       bind:this={hcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{c.b.name}: {hostWord(c.h)}"
       onpointerenter={hostGrace.hold}
@@ -4375,7 +4440,7 @@
           </div>
         </div>
       {/if}
-      {#if hostsState.error}<div class="s alarm">{hostsState.error}</div>{/if}
+      {#if hostsState.error}<FailureLine verb="load" thing="the hosts" said={hostsState.error} />{/if}
 
       <div class="acts">
         {#if standBuilding?.id === c.b.id && standReach?.topBlocked}
@@ -4426,7 +4491,7 @@
           <button type="button" class="no" onclick={() => (expectedScope = null)}>cancel</button>
           <span class="who">{expectedWho(authState.username, scope, expectedLines.length)}</span>
         </div>
-        {#if baselineState.error}<div class="s alarm">{baselineState.error}</div>{/if}
+        {#if baselineState.error}<FailureLine verb="load" thing="the baseline" said={baselineState.error} />{/if}
       </div>
     {/if}
   {/snippet}
@@ -4452,6 +4517,7 @@
       style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
       bind:this={rcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={roadAria(rc.road.id)}
       onpointerenter={roadGrace.hold}
@@ -4557,6 +4623,7 @@
       style={roadPlace ? `left:${R2(roadPlace.left)}px;top:${R2(roadPlace.top)}px` : undefined}
       bind:this={rcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={roadAria(lc.id)}
       onpointerenter={roadGrace.hold}
@@ -4620,7 +4687,18 @@
           <!-- The composer, on the card that names the refusal (round
                49). Drafted, never run -- the same invariant as the 2D
                composer, and the same printed line. -->
-          <button type="button" class="linkact" data-draft-rule onclick={() => (composerOpen = true)}>draft the rule ▸</button>
+          <button
+            type="button"
+            class="linkact"
+            data-draft-rule
+            onclick={() => {
+              // Pins the card first (#1496), as openExpectedForm does.
+              roadGrace.hold()
+              pinnedRoad = lc.id
+              hoverRoad = lc.id
+              composerOpen = true
+            }}>draft the rule ▸</button
+          >
         </div>
       {/if}
     </div>
@@ -4646,6 +4724,7 @@
       style={dropPlace ? `left:${R2(dropPlace.left)}px;top:${R2(dropPlace.top)}px` : undefined}
       bind:this={dcardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label={dropTitle}
       onpointerenter={dropGrace.hold}
@@ -4707,6 +4786,19 @@
 </div>
 
 <style>
+  /* #1540 (C5): the one-line status while the first load is in flight, for
+     a screen with no room for ghost rows. */
+  .first-load {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
   .city {
     position: relative;
     flex: 1;
@@ -5282,11 +5374,6 @@
     color: var(--fg-dim);
   }
 
-  .bcard .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
-  }
 
   /* The plaque's dim second line. The coverage words that used to sit
      here went with round 49 (#1016): the wall is the statement. */

@@ -40,7 +40,7 @@ step would be securing a login your identity provider already owns.
 Open the account menu (click your username, bottom of the rail) and
 choose **Authenticator app**.
 
-![The account menu open, with "Authenticator app" showing among the other rows -- no "· on" tag yet, since nothing is set up](screenshots/authenticator-menu-dark.png)
+![The account menu open, with "Authenticator app" showing among the other rows -- no "· on" tag, since the authenticator is not set up](screenshots/authenticator-menu-dark.png)
 
 Press **Set up authenticator app**. MikroView shows a QR code and, next
 to it, the same secret written out as text.
@@ -172,6 +172,14 @@ goes back to having no second factor at all (see "If you lose access"
 below). Removing your very last factor signs you out at once, and the
 next time you sign in you're back at the forced setup screen above,
 picking a factor and drawing a genuinely fresh set of ten from scratch.
+
+**Mislaid your saved copy without losing a factor? Draw a fresh ten
+without removing anything.** Open the account menu and choose **New
+recovery codes…**, confirm your password, and the old ten stop working
+the moment the new ten are shown. This needs at least one authenticator
+app or passkey already active, and — unlike setting one up — doesn't
+sign you out anywhere else: only a change to which factors protect your
+account does that.
 
 ## Signing in afterwards
 

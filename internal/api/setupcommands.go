@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/setup"
 )
@@ -53,6 +54,10 @@ type routerosTable struct {
 	Minimum string         `json:"minimum"`
 	Newest  string         `json:"newest"`
 	Rows    []routeros.Row `json:"rows"`
+	// Upgrades is the whole catalogue of "from version X onward, this
+	// affects Y" warnings (#1344), next to Rows: the text lives once
+	// here, and routers/picked below point at it by ID.
+	Upgrades []routeros.Upgrade `json:"upgrades"`
 }
 
 // pickedVersion is what the operator's Version selection (or its
@@ -62,17 +67,20 @@ type pickedVersion struct {
 	Version  string `json:"version"`
 	Standing string `json:"standing"`
 	Dialect  string `json:"dialect"`
+	// Upgrades is the IDs from routeros.UpgradesFor(req.Version) that
+	// apply to the picked version (#1344), always non-nil.
+	Upgrades []string `json:"upgrades"`
 }
 
 // setupCommandsRouter is one router whose version mikroview actually
 // knows -- from a push, or #436 step 3's /ca.crt?ros= hint -- with where
-// it stands and any per-row note that concerns it.
+// it stands and which upgrade warnings (#1344) apply to it.
 type setupCommandsRouter struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	RouterOSVersion string `json:"routerosVersion"`
-	Standing        string `json:"standing"`
-	Note            string `json:"note"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	RouterOSVersion string   `json:"routerosVersion"`
+	Standing        string   `json:"standing"`
+	Upgrades        []string `json:"upgrades"`
 }
 
 // commandStep is one rendered block: the commands themselves, and any
@@ -113,6 +121,22 @@ type setupCommandsSteps struct {
 	// with no token or kinds.
 	Backup         commandStep `json:"backup"`
 	BackupSchedule commandStep `json:"backupSchedule"`
+	// Undo is the setup wizard ledger's own Undo per row (#1385): unlike
+	// every block above, none of these embed the address or a token --
+	// they only remove a fixed resource name -- so they render
+	// unconditionally rather than going blank on a precondition.
+	Undo setupCommandsUndo `json:"undo"`
+}
+
+// setupCommandsUndo is the RouterOS lines the ledger's Undo reveals per
+// row (DESIGN.md, "✓ · Where setup stands"): the same builders the
+// forward blocks above use, read backwards. Backup alone depends on the
+// stored transport -- see where this is populated below.
+type setupCommandsUndo struct {
+	CaTrust  string `json:"caTrust"`
+	Syslog   string `json:"syslog"`
+	Schedule string `json:"schedule"`
+	Backup   string `json:"backup"`
 }
 
 type setupCommandsResponse struct {
@@ -171,6 +195,7 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			Version:  req.Version,
 			Standing: routeros.VersionStanding(req.Version).String(),
 			Dialect:  d,
+			Upgrades: upgradeIDs(routeros.UpgradesFor(req.Version)),
 		}
 		dialect = d
 	}
@@ -182,16 +207,13 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			note := ""
-			if row, ok := routeros.RowFor(version); ok {
-				note = row.Note
-			}
+			upgrades := upgradeIDs(routeros.UpgradesFor(version))
 			routers = append(routers, setupCommandsRouter{
 				ID:              info.ID,
 				Name:            info.Name,
 				RouterOSVersion: version,
 				Standing:        routeros.VersionStanding(version).String(),
-				Note:            note,
+				Upgrades:        upgrades,
 			})
 		}
 	}
@@ -268,11 +290,12 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// The backup script only means something with a device to name, a
 	// token to authenticate it, and somewhere for it to land: a
 	// retention key configured (s.Vault.Enabled()) and the drop box
-	// actually turned on (SetupInstance.BackupPort set at startup from
-	// cfg.Backup.Enabled -- see main.go). Any missing piece leaves both
-	// blocks blank, same "blank rather than half-formed" contract Push
-	// already has above; the wizard reads a blank Backup block as its
-	// wnokey state (round 45).
+	// actually open right now (SetupInstance.BackupPortNow() -- a live read
+	// of main's backupRuntime, #1361, not a value fixed at startup: the
+	// switch can move at any moment from Settings). Any missing piece
+	// leaves both blocks blank, same "blank rather than half-formed"
+	// contract Push already has above; the wizard reads a blank Backup
+	// block as its wnokey state (round 45).
 	//
 	// backupBlockedKeys names every missing piece, all that apply rather
 	// than just the first (#1217, the owner's "cover all possibilities"
@@ -301,7 +324,7 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// waits on beyond the address is the token -- the same precondition
 	// step 4 has.
 	if !httpsTransport {
-		if s.SetupInstance.BackupPort == "" {
+		if s.SetupInstance.BackupPortNow() == "" {
 			backupBlockedKeys = append(backupBlockedKeys, "backups-off")
 		}
 		// #1264 finding 5: Vault.Enabled() alone cannot tell "no key
@@ -340,16 +363,25 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			// req.Address carries -- same reasoning SyslogCommands' Hostname
 			// call gives for stripping the web port off before pairing it
 			// with the syslog port.
-			backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
+			backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPortNow(), req.Device, req.Token, dialect)
 			backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
 		}
 	}
 
+	// The ledger's Backup Undo follows the same transport switch as the
+	// forward pair above: whichever script is actually on the router is
+	// the one whose scheduler entry and script name Undo must remove.
+	backupUndo := routeros.UndoBackupScheduleCommands(dialect)
+	if httpsTransport {
+		backupUndo = routeros.UndoBackupPushScheduleCommands(dialect)
+	}
+
 	writeJSON(w, http.StatusOK, setupCommandsResponse{
 		RouterOS: routerosTable{
-			Minimum: routeros.MinimumVersion,
-			Newest:  routeros.NewestVersion(),
-			Rows:    append([]routeros.Row(nil), routeros.Rows...),
+			Minimum:  routeros.MinimumVersion,
+			Newest:   routeros.NewestVersion(),
+			Rows:     append([]routeros.Row(nil), routeros.Rows...),
+			Upgrades: append([]routeros.Upgrade(nil), routeros.Upgrades...),
 		},
 		Picked:  picked,
 		Routers: routers,
@@ -363,6 +395,12 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			Schedule:       commandStep{Commands: scheduleCommands, Blocked: addressBlocked},
 			Backup:         commandStep{Commands: backupCommands, Blocked: backupBlockedKeys},
 			BackupSchedule: commandStep{Commands: backupScheduleCommands, Blocked: backupBlockedKeys},
+			Undo: setupCommandsUndo{
+				CaTrust:  routeros.UndoCaTrustCommands(dialect),
+				Syslog:   routeros.UndoSyslogCommands(dialect),
+				Schedule: routeros.UndoScheduleCommands(dialect),
+				Backup:   backupUndo,
+			},
 		},
 	})
 }
@@ -413,14 +451,14 @@ func validEnrolToken(token string) bool {
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
 			return false
 		}
 	}
 	return true
 }
 
-// validSetupDevice restricts Device to the charset internal/auth/token.go's
+// validSetupDevice restricts Device to the charset gauntlet's token.go's
 // validDeviceID already accepts in practice for a real device -- letters,
 // digits, dot, underscore, hyphen -- narrower than validDeviceID itself,
 // which exists to police the token store rather than a value that is
@@ -428,7 +466,7 @@ func validEnrolToken(token string) bool {
 // placements (#1095). Empty is fine: Device is optional, and
 // handleSetupCommands already treats "" as "render no backup script."
 //
-// The length bound is auth.MaxDeviceIDLen itself (#1304, Q9), not a
+// The length bound is gauntlet.MaxDeviceIDLen itself (#1304, Q9), not a
 // second constant here kept equal to it only by a comment: nothing
 // legitimate needs a longer device name than an ingest token's own
 // device scope already allows.
@@ -436,7 +474,7 @@ func validSetupDevice(device string) bool {
 	if device == "" {
 		return true
 	}
-	if len(device) > auth.MaxDeviceIDLen {
+	if len(device) > gauntlet.MaxDeviceIDLen {
 		return false
 	}
 	// An auto-discovered device's id is its source address
@@ -458,13 +496,13 @@ func validSetupDevice(device string) bool {
 	return true
 }
 
-// maxSetupTokenLen caps Token well above anything internal/auth ever
+// maxSetupTokenLen caps Token well above anything gauntlet ever
 // issues, while still keeping an absurd value out of the rendered
 // commands (#1095).
 const maxSetupTokenLen = 256
 
 // validSetupToken restricts Token to [A-Za-z0-9_-] -- the alphabet
-// internal/auth actually mints tokens in, so nothing legitimate is
+// gauntlet actually mints tokens in, so nothing legitimate is
 // refused. Narrower than "printable ASCII, no quote/backslash/dollar/
 // whitespace" on purpose: Token also lands bare inside PushBlock and
 // loggingPushBlock's http-header-field=("Content-Type: ...,
@@ -585,6 +623,17 @@ func validSetupAddress(s string) bool {
 		return true
 	}
 	return validSetupHostname(host)
+}
+
+// upgradeIDs turns a slice of routeros.Upgrade into the IDs the wire
+// contract carries (#1344), always non-nil so JSON says "[]" rather than
+// "null" -- the same contract routers[] itself already keeps.
+func upgradeIDs(upgrades []routeros.Upgrade) []string {
+	ids := make([]string, 0, len(upgrades))
+	for _, u := range upgrades {
+		ids = append(ids, u.ID)
+	}
+	return ids
 }
 
 // defaultDialect is the dialect used when nothing else picks one -- see

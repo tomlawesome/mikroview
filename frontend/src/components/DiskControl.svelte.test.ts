@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // Round 42's disk group at the component (#910): dragging only proposes
-// and the link names the deletion, turning on is immediate because it
-// deletes nothing, a viewer reads the same statements without a lock
-// icon, and without a key there is no control at all.
+// and the link names the deletion, turning on and off are immediate
+// because neither deletes anything (#1354), the files an off history
+// keeps are deleted only by two clicks and a password, a viewer reads
+// the same statements without a lock icon, and without a key there is
+// no control at all.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 
 const setHistorySettings = vi.fn()
+const deleteHistoryFiles = vi.fn()
 vi.mock('../lib/api', () => ({
   setHistorySettings: (body: unknown) => setHistorySettings(body),
+  deleteHistoryFiles: (password: string) => deleteHistoryFiles(password),
 }))
 
 import DiskControl from './DiskControl.svelte'
@@ -38,9 +42,12 @@ const stats = {
 
 beforeEach(() => {
   setHistorySettings.mockReset()
+  // Off keeps the files (#1354), so the held window comes back either way.
   setHistorySettings.mockImplementation(async (body: { enabled: boolean; days: number; maxBytes: number }) =>
-    story({ ...body, held: body.enabled ? story().held : null }),
+    story({ ...body }),
   )
+  deleteHistoryFiles.mockReset()
+  deleteHistoryFiles.mockImplementation(async () => story({ enabled: false, held: null }))
 })
 
 describe('an admin', () => {
@@ -116,17 +123,15 @@ describe('an admin', () => {
     expect(setHistorySettings.mock.calls[0][0]).toEqual({ enabled: true, days: 30, maxBytes: 512 * MIB })
   })
 
-  it('turning off is a proposal that names every day on disk, and shows off in the row', async () => {
-    render(DiskControl, { props: { settings: story(), stats, canEdit: true } })
+  it('turning off is immediate: it keeps the files, so no proposal', async () => {
+    const onchanged = vi.fn()
+    render(DiskControl, { props: { settings: story(), stats, canEdit: true, onchanged } })
     await fireEvent.click(screen.getByRole('button', { name: 'turn off' }))
-    expect(setHistorySettings).not.toHaveBeenCalled()
-    expect(screen.getByText(/off deletes all 27 days on disk/)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'delete 27 days' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'keep them' })).toBeTruthy()
-    expect(screen.getByText('off')).toBeTruthy()
-
-    await fireEvent.click(screen.getByRole('button', { name: 'delete 27 days' }))
+    expect(setHistorySettings).toHaveBeenCalledTimes(1)
     expect(setHistorySettings.mock.calls[0][0]).toEqual({ enabled: false, days: 30, maxBytes: GIB })
+    expect(screen.queryByRole('button', { name: /^delete/ })).toBeNull()
+    await vi.waitFor(() => expect(onchanged).toHaveBeenCalledTimes(1))
+    expect(onchanged.mock.calls[0][0].held.days).toBe(27)
   })
 
   it('turning on is immediate: nothing to delete, so no proposal', async () => {
@@ -151,6 +156,86 @@ describe('an admin', () => {
   })
 })
 
+describe('an admin, with history off and files kept (#1354)', () => {
+  const off = () => story({ enabled: false })
+
+  it('reads the kept window and is offered the delete', () => {
+    render(DiskControl, { props: { settings: off(), stats, canEdit: true } })
+    expect(
+      screen.getByText(/^27 days · .* – .* · 812 MiB — kept on disk; turn history on with the same key to use them$/),
+    ).toBeTruthy()
+    expect(screen.getByText(/^nothing new is kept on disk — events live in memory only/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Delete history files' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'turn on' })).toBeTruthy()
+  })
+
+  it('arms on the first click, asks for the password on the second, and deletes on submit', async () => {
+    const onchanged = vi.fn()
+    render(DiskControl, { props: { settings: off(), stats, canEdit: true, onchanged } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete history files' }))
+    const armed = screen.getByRole('button', { name: 'confirm — delete 27 days' })
+    expect(armed.classList.contains('armed')).toBe(true)
+    expect(screen.queryByLabelText(/Your password/)).toBeNull()
+    expect(deleteHistoryFiles).not.toHaveBeenCalled()
+
+    await fireEvent.click(armed)
+    const field = screen.getByLabelText('Your password, to delete 27 days of history') as HTMLInputElement
+    expect(field.type).toBe('password')
+    const submit = screen.getByRole('button', { name: 'submit' }) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    expect(deleteHistoryFiles).not.toHaveBeenCalled()
+
+    await fireEvent.input(field, { target: { value: 'hunter2-placeholder' } })
+    await fireEvent.click(submit)
+    expect(deleteHistoryFiles).toHaveBeenCalledWith('hunter2-placeholder')
+    await vi.waitFor(() => expect(onchanged).toHaveBeenCalledTimes(1))
+    expect(onchanged.mock.calls[0][0].held).toBeNull()
+    expect(screen.queryByLabelText(/Your password/)).toBeNull()
+  })
+
+  it('disarms on a click anywhere else', async () => {
+    render(DiskControl, { props: { settings: off(), stats, canEdit: true } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete history files' }))
+    expect(screen.getByRole('button', { name: 'confirm — delete 27 days' })).toBeTruthy()
+
+    await fireEvent.click(document.body)
+    expect(screen.queryByRole('button', { name: 'confirm — delete 27 days' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete history files' })).toBeTruthy()
+    expect(screen.queryByLabelText(/Your password/)).toBeNull()
+  })
+
+  it('shows a wrong password in the server’s words and keeps the field open', async () => {
+    deleteHistoryFiles.mockResolvedValue('incorrect password')
+    const onchanged = vi.fn()
+    render(DiskControl, { props: { settings: off(), stats, canEdit: true, onchanged } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete history files' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — delete 27 days' }))
+    const field = screen.getByLabelText(/Your password/)
+    await fireEvent.input(field, { target: { value: 'wrong-placeholder' } })
+    await fireEvent.keyDown(field, { key: 'Enter' })
+
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'incorrect password')
+    expect(screen.getByLabelText(/Your password/)).toBeTruthy()
+    expect(onchanged).not.toHaveBeenCalled()
+  })
+
+  it('keep them closes the field without asking the server', async () => {
+    render(DiskControl, { props: { settings: off(), stats, canEdit: true } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete history files' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — delete 27 days' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'keep them' }))
+    expect(screen.queryByLabelText(/Your password/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete history files' })).toBeTruthy()
+    expect(deleteHistoryFiles).not.toHaveBeenCalled()
+  })
+
+  it('is not offered with nothing on disk', () => {
+    render(DiskControl, { props: { settings: story({ enabled: false, held: null }), stats, canEdit: true } })
+    expect(screen.queryByRole('button', { name: 'Delete history files' })).toBeNull()
+  })
+})
+
 describe('a viewer', () => {
   it('reads the same statements without a drag, a lock, or a link', () => {
     const { container } = render(DiskControl, { props: { settings: story(), stats, canEdit: false } })
@@ -160,6 +245,12 @@ describe('a viewer', () => {
     expect(screen.queryByRole('button')).toBeNull()
     expect(container.querySelector('[disabled]')).toBeNull()
     expect(container.textContent).toContain('30 days · at most 1 GiB')
+  })
+
+  it('reads a kept window but is offered no delete', () => {
+    render(DiskControl, { props: { settings: story({ enabled: false }), stats, canEdit: false } })
+    expect(screen.getByText(/kept on disk; turn history on with the same key to use them$/)).toBeTruthy()
+    expect(screen.queryByRole('button')).toBeNull()
   })
 
   it('sees full when the cap decides', () => {

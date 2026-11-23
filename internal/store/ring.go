@@ -12,9 +12,11 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/evict"
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 )
 
 // topRulesLimit caps how many entries Stats.TopRules returns -- a
@@ -72,6 +74,11 @@ func actionSlot(a Action) int {
 // (fed by a buffered channel from the syslog listeners) and many readers
 // calling Query/Stats concurrently from HTTP handlers.
 type Store struct {
+	// home is the networks.home scope (#1481) the internal/external
+	// filters classify by; nil is the address-only default. Atomic so
+	// setting it needs no ordering against mu.
+	home atomic.Pointer[ipscope.Scope]
+
 	mu       sync.RWMutex
 	buf      []Event
 	capacity int
@@ -612,3 +619,8 @@ func topOf(counts map[string]uint64) string {
 	}
 	return best
 }
+
+// SetHomeScope sets the networks.home scope the internal/external query
+// filters and the WAN-door scan classify by (#1481). nil restores the
+// address-only default.
+func (s *Store) SetHomeScope(sc *ipscope.Scope) { s.home.Store(sc) }

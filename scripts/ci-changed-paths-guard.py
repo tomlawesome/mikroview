@@ -61,8 +61,15 @@ def load_lists(ci_file):
     except ImportError:
         print("guard: PyYAML is not installed -- the job image must provide py3-yaml", file=sys.stderr)
         sys.exit(2)
+    class Loader(yaml.SafeLoader):
+        """SafeLoader plus GitLab's `!reference [job, key]` tag, kept as a
+        one-key mapping. It is not a string, so a `!reference` inside either
+        path list fails the list check below (exit 2) instead of passing."""
+
+    Loader.add_constructor(
+        "!reference", lambda ld, node: {"!reference": ld.construct_sequence(node)})
     with open(ci_file, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh)
+        doc = yaml.load(fh, Loader=Loader)  # noqa: S506 -- Loader is a SafeLoader subclass
     lists = []
     for key in (DOCS_KEY, CODE_KEY):
         pats = doc.get(key) if isinstance(doc, dict) else None
@@ -90,7 +97,7 @@ def changed_from_git():
               "runs every job and there is nothing to guard. PASS.")
         return None
     probe = subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
-                           capture_output=True)
+                           capture_output=True, check=False)
     if probe.returncode != 0:
         print(f"guard: {what}={base} is not in this clone -- GitLab's changes: "
               "runs every job when it cannot diff either. PASS.")

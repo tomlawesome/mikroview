@@ -34,11 +34,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// output, not for a client that wants to keep counting locally.
 		"uptimeSeconds": int64(time.Since(s.StartTime).Seconds()),
 		"version":       s.Version,
-		// geoip (#1198): whether a country database is open, so the
-		// country filter select and the Settings > ingest card can tell
-		// "no database configured" apart from "no public traffic yet"
+		// geoip (#1198): whether country flags are available at all, so
+		// the country filter select and the Settings > ingest card can
+		// tell "no country data" apart from "no public traffic yet"
 		// instead of both just showing no flags.
-		"geoip": s.GeoIP,
+		"geoip": s.geoAvailable(),
+		// geoSource (#1352): which source is live -- "dbip", "ipinfo",
+		// "maxmind" or null. Public like the rest of healthz because
+		// every signed-in user's stream needs it: DB-IP's credit link
+		// shows only while DB-IP is the source in use.
+		"geoSource": s.geoSource(),
 	})
 }
 
@@ -121,6 +126,14 @@ type deviceView struct {
 	// reported" is itself an answer, never an absence, so a client must
 	// not read a missing field as one.
 	Setup *setup.RouterSetup `json:"setup,omitempty"`
+	// LoggingLeftovers is #1373's list of what else is still sending
+	// logs to this instance from an earlier setup -- another action, or
+	// a built-in RouterOS action repointed here -- each with the exact
+	// commands to remove or reset it. Omitted when there is nothing to
+	// report, the same reason Setup is a pointer: nil means "no setup
+	// store", not "nothing found", so this is only ever non-nil beside a
+	// non-nil Setup.
+	LoggingLeftovers []setup.LoggingLeftover `json:"loggingLeftovers,omitempty"`
 	// Enrolment is issue #1281's pending-token state for this device --
 	// AcceptedIP/EnrolledAt above (on the embedded Info) are the
 	// finished state; this is what is in flight. Always present, never
@@ -247,6 +260,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if s.Setup != nil {
 			reported := s.Setup.RouterSetup(info.ID, wantLogging)
 			v.Setup = &reported
+			v.LoggingLeftovers = s.Setup.LoggingLeftovers(info.ID, wantLogging)
 		}
 		if version, ok := s.effectiveRouterOSVersion(info); ok {
 			v.RouterOSVersion = version
@@ -341,6 +355,16 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 		"rules":          s.Rules.List(),
 		"recordingSince": oldestHeldJSON(s.Rules.RecordingSince()),
 	})
+}
+
+// handleNetworks serves networks.home (#1481). An unset list is [] not
+// null: the frontend iterates it.
+func (s *Server) handleNetworks(w http.ResponseWriter, _ *http.Request) {
+	home := s.HomeNetworks
+	if home == nil {
+		home = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"home": home})
 }
 
 // deviceStatus computes info's fleet-health status as of now -- see
@@ -639,13 +663,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // body size with no credentials required, a straightforward DoS.
 const maxJSONBodyBytes = 64 * 1024
 
-// decodeJSONBody is json.NewDecoder(r.Body).Decode(v), wrapped with
+// strictDecode decodes one JSON value into v and refuses any field v does
+// not declare (#1500), as gauntlet's routes do: a misspelt field fails with
+// the caller's usual 400 instead of being silently dropped. Fields inside
+// a map or json.RawMessage stay free-form.
+func strictDecode(body io.Reader, v any) error {
+	dec := json.NewDecoder(body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}
+
+// decodeJSONBody is strictDecode (unknown fields refused), wrapped with
 // http.MaxBytesReader -- see maxJSONBodyBytes. Every handler that
 // accepts a JSON body should read it through this, not r.Body
 // directly.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
-	return json.NewDecoder(r.Body).Decode(v)
+	return strictDecode(r.Body, v)
 }
 
 // handleThirdPartyNotices serves THIRD-PARTY-NOTICES.md verbatim, as
@@ -676,5 +710,5 @@ func (s *Server) handleThirdPartyNotices(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	io.WriteString(w, s.ThirdPartyNotices)
+	_, _ = io.WriteString(w, s.ThirdPartyNotices)
 }

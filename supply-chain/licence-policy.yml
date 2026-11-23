@@ -24,6 +24,12 @@
 # is the inventory), not a general list of acceptable ones: a dependency
 # arriving under a licence not yet here fails the job, and adding the entry
 # is a reviewed change rather than a silent pass (owner decision, #948).
+#
+# github.com/tomlawesome/gauntlet v0.4.3 (authentication, #1202; v0.4.2 before #1506) is
+# Apache-2.0 -- checked against the LICENSE file at that tag -- which is
+# already allowed below for go-oidc, so it needed no new entry. Apache-2.0
+# is one-way compatible with this project's AGPL-3.0-only; its licence text
+# is in THIRD-PARTY-NOTICES.md.
 allow-licenses:
   - Apache-2.0
   - BSD-2-Clause
@@ -39,3 +45,37 @@ allow-licenses:
 # supply-chain/licence-policy.yml records its sharp/libvips and font
 # exceptions.
 allow-dependencies-licenses: []
+
+# Reviewed bundled content inside what ships (#1432), read by
+# checkBundledContent() in tools/licenses/licence-policy.mjs. A package's
+# declared licence covers its own code, not everything it carries: images,
+# stylesheets, web pages, fonts and media a shipped npm package carries,
+# files a Go module embeds with //go:embed, vendored Go code with no licence
+# file of its own, and shipped npm source carrying another copyright
+# holder's licence banner all have no licence field to check. Each must sit
+# under one of these entries, recorded only after reading the files, with
+# the evidence in a comment beneath it.
+#
+# Format: "<purl> <path-prefix> <licence or finding>", the PURL an exact
+# pkg:npm/<name>@<version> or pkg:golang/<module>@<version> and the prefix
+# relative to that package's or module's root. Keyed by exact version, the
+# way birdcage's python-bundled-assets list is: a version bump stops an
+# entry matching, so the new version's files are read again rather than
+# inheriting this review. An entry matching no shipped file fails the job
+# as stale -- delete it.
+bundled-assets:
+  - pkg:npm/qrcode@1.5.4 lib/core/qrcode.js MIT
+  # Inlined from Kazuhiko Arase's "QRCode for JavaScript" (d-project.com),
+  # modified by Ryan Day, qrcode's own author. The file's header comment
+  # (lib/core/qrcode.js, lines 15-39) states it for both: "Copyright (c)
+  # 2009 Kazuhiko Arase ... Licensed under the MIT license". The same
+  # comment notes "QR Code" is a registered trademark of DENSO WAVE -- a
+  # trademark notice, not a licence term.
+  # gauntlet's common-password list (its ADR 0007): SHA-1 hashes of the
+  # 10,000 most common passwords, built by gauntlet's own monthly pipeline
+  # from the Have I Been Pwned Pwned Passwords range API, which places no
+  # licence terms on its data (attribution voluntary; the file's header
+  # gives it). The compiled file ships under gauntlet's own Apache-2.0
+  # LICENSE. The .sig and the public key that checks it are gauntlet's own.
+  - pkg:golang/github.com/tomlawesome/gauntlet@v0.4.3 blocklist/embedded/top10k.txt Apache-2.0
+  - pkg:golang/github.com/tomlawesome/gauntlet@v0.4.3 blocklist/keys/pwlist-2026.pub Apache-2.0

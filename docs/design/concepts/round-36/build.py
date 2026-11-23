@@ -75,14 +75,14 @@ sub1('          <rect class="isl" x="-128" y="-34" width="256" height="68" rx="1
      '          <text x="-110" y="12" class="n-sub">RouterOS 7.20.1 · the waist · 41 rules</text>\n'
      '          <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>\n'
      '          <text x="-110" y="50" class="deg-t"><a href="#set"><tspan class="deg-go">Run setup… ▸</tspan></a> adds it</text>\n')
-for cidr in ('203.0.113.0/24', '198.51.100.0/24', '198.51.100.0/24', '192.0.2.0/24'):
+for cidr in ('198.51.100.0/27', '198.51.100.32/27', '198.51.100.64/27', '198.51.100.96/27'):
     sub1('<text x="22" y="26" class="n-cidr">%s</text>' % cidr,
          '<text x="22" y="26" class="n-cidr"><tspan class="cidr-v">%s</tspan><tspan class="cidr-deg">from boundaries</tspan></text>' % cidr)
 # the WAN and WireGuard addresses come from the same table, so they are unknown too
-sub1('<text x="-82" y="14" class="n-cidr">ether1 · 203.0.113.7</text>',
-     '<text x="-82" y="14" class="n-cidr">ether1<tspan class="cidr-v"> · 203.0.113.7</tspan><tspan class="cidr-deg"> · no address pushed</tspan></text>')
-sub1('<text x="-66" y="14" class="n-cidr">wg0 · 203.0.113.0/24</text>',
-     '<text x="-66" y="14" class="n-cidr">wg0<tspan class="cidr-v"> · 203.0.113.0/24</tspan><tspan class="cidr-deg"> · no address pushed</tspan></text>')
+sub1('<text x="-82" y="14" class="n-cidr">ether1 · 192.0.2.7</text>',
+     '<text x="-82" y="14" class="n-cidr">ether1<tspan class="cidr-v"> · 192.0.2.7</tspan><tspan class="cidr-deg"> · no address pushed</tspan></text>')
+sub1('<text x="-66" y="14" class="n-cidr">wg0 · 198.51.100.128/27</text>',
+     '<text x="-66" y="14" class="n-cidr">wg0<tspan class="cidr-v"> · 198.51.100.128/27</tspan><tspan class="cidr-deg"> · no address pushed</tspan></text>')
 sub1('  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }\n',
      '  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }\n'
      '  /* round 36: the degraded map. One statement on the router card; each zone\'s address slot\n'

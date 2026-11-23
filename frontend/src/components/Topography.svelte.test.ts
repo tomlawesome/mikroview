@@ -3,16 +3,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-// Only fetchTrace is stubbed (B1's own test needs to control when its
-// promise resolves); every other export of the module -- fetchPorts and
-// the rest -- stays real, the same way the file's own top-of-file note
-// says the component's other network calls never fire because
-// appState.devices stays empty throughout this file.
+// fetchTrace is stubbed because B1's own test needs to control when its
+// promise resolves. fetchWanDoors is stubbed too (#1319): wanDoorsState
+// reaches the network from its own open()/refresh(), which the doors-
+// panel entry-point tests below call directly, independent of
+// appState.devices -- unlike zonesState.refresh() and friends, which
+// this file's own top-of-file note already explains never fire.
+// Every other export of the module -- fetchPorts and the rest -- stays
+// real.
 vi.mock('../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api')>()),
   fetchTrace: vi.fn(),
+  fetchWanDoors: vi.fn(async () => ({ devices: [] })),
 }))
-import { fetchTrace, type TraceResponse } from '../lib/api'
+import { fetchTrace, fetchWanDoors, type TraceResponse } from '../lib/api'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { zonesState } from '../lib/zones.svelte'
@@ -27,12 +31,15 @@ import { altitudeStopState } from '../lib/altitudeStop.svelte'
 import { hostsState } from '../lib/hosts.svelte'
 import { baselineState } from '../lib/baseline.svelte'
 import { portFilterState } from '../lib/portFilter.svelte'
+import { servingState } from '../lib/serving.svelte'
+import { wanDoorsState } from '../lib/wanDoors.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { Host } from '../lib/api'
 import type { RouterFilterRule, RouterIPAddress } from '../lib/api'
 import { emptyFilters, type ClientEvent, type Device, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography, { tunnelEventCounts } from './Topography.svelte'
+import { CARD_GRACE_MS } from '../lib/cardAnchor'
 // Vite's own `?raw` import (typed by vite/client, already in this
 // project's tsconfig) -- not a Node fs read -- so the handful of
 // assertions below that care about a raw CSS value or a stylesheet's own
@@ -216,6 +223,8 @@ beforeEach(() => {
   portFilterState.clear()
   portFilterState.proto = 'tcp'
   mapTraceState.clear()
+  // #1320's serving lens is a module-level singleton for the same reason.
+  servingState.clear()
   vi.mocked(fetchTrace).mockReset()
   wizardState.open = false
   // Every test starts on a fresh slider: altitudeStopState is a
@@ -593,7 +602,7 @@ describe('the aggregate bar (#648)', () => {
     const { container } = render(Topography)
     flushSync()
 
-    const watchHalf = container.querySelector<SVGGElement>('.hbar-g[aria-label*="watcher"]')
+    const watchHalf = container.querySelector<SVGGElement>('.hbar-g[aria-label*="watch"]')
     expect(watchHalf).not.toBeNull()
     watchHalf!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
@@ -684,11 +693,13 @@ describe('crossing the altitude centre (#869)', () => {
   it('draws the port pill on both sides of the centre, and carries the selection across', () => {
     const { container } = render(Topography)
     flushSync()
-    expect(container.querySelectorAll('.pills .pill').length).toBe(1) // ◆ city, the default
+    // Two idle pills now (#1320 adds ⌕ serving beside ⌕ port), both drawn
+    // at every altitude -- ◆ city is the default.
+    expect(container.querySelectorAll('.pills .pill').length).toBe(2)
     expect(container.querySelector('.pills .pill')?.textContent?.trim()).toBe('⌕ port')
 
     crossTo(container, '2') // to zones: the 2D side
-    expect(container.querySelectorAll('.pills .pill').length).toBe(1)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(2)
 
     portFilterState.ports = [445]
     portFilterState.proto = 'tcp'
@@ -791,7 +802,7 @@ describe('coverage is the material, not a caption (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
     appState.events = [
       event({ inInterface: 'bridge1', srcIp: '192.168.1.50' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }), // resolves wan1 as the WAN boundary
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }), // resolves wan1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -804,7 +815,7 @@ describe('coverage is the material, not a caption (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'Guest' }]
     appState.events = [
       event({ inInterface: 'bridge2', srcIp: '10.0.30.9' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }),
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -884,7 +895,7 @@ describe('a rib is two halves (round 49, #1016)', () => {
   const oneEachWay = (): void => {
     zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'IoT' }]
     appState.events = [
-      event({ inInterface: 'wan1', outInterface: 'bridge2', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', outInterface: 'bridge2', srcIp: '192.0.2.8' }),
       event({ inInterface: 'bridge2', outInterface: 'wan1', srcIp: '10.0.30.9' }),
     ]
     policyState.anyPushed = true
@@ -935,7 +946,7 @@ describe('a rib is two halves (round 49, #1016)', () => {
     policyState.edges = [] // nothing in the table names this pair: unplanned
     appState.events = [
       event({ inInterface: 'bridge2', outInterface: 'wan1', srcIp: '10.0.30.9' }),
-      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+      event({ inInterface: 'wan1', srcIp: '192.0.2.8' }),
     ]
     const { container } = render(Topography)
     flushSync()
@@ -1154,7 +1165,7 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
 })
 
 describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018 put a filter there)', () => {
-  it('renders no lens tabs and no overlay pills -- only the port filter', () => {
+  it('renders no lens tabs and no overlay pills -- only the two filters', () => {
     const { container } = render(Topography)
     flushSync()
     showTheMap(container)
@@ -1165,13 +1176,14 @@ describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018
 
     // Owner, 2026-09-08 (#981): there is no toggle -- "something that's
     // always there is easy to ignore; if it's not always there you know
-    // it's there for a reason." The one pill in this row is #1018's port
-    // filter, which is not a lens: it does not switch a layer on and off,
-    // it redraws the map to an answer, and it goes away with the ✕.
+    // it's there for a reason." The two pills in this row are #1018's
+    // port filter and #1320's serving lens, neither of which is a lens
+    // in the old sense: each redraws the map to an answer rather than
+    // switching a layer on and off, and each goes away with its own ✕.
     const pills = [...container.querySelectorAll('.pills .pill')]
-    expect(pills.length).toBe(1)
-    expect(pills[0].textContent?.trim()).toBe('⌕ port')
-    expect(pills[0].getAttribute('aria-pressed')).toBe('false')
+    expect(pills.length).toBe(2)
+    expect(pills.map((p) => p.textContent?.trim())).toEqual(['⌕ port', '⌕ serving'])
+    expect(pills.every((p) => p.getAttribute('aria-pressed') === 'false')).toBe(true)
   })
 
   it('shows the collapsed answer, with no picker bar, the moment a port is selected (#1178)', () => {
@@ -1820,6 +1832,189 @@ describe('#723: a lane\'s port list gets a visible tie to its own card ("ports f
   })
 })
 
+// #1430: the v0.7.0 release capture put a "never exercised" plate over
+// the Servers lane's own port list (":445 :53 :5001"), and the internet
+// card's red flag count over its "Doors from the internet · 8" row.
+describe('labels on the map keep off each other (#1430)', () => {
+  // The lane card's top edge is y=490 and the services row sits just
+  // above it (text baseline 472, #723). Box metrics follow the
+  // component's own: a plate hangs from its anchor (y-10, 14 tall); the
+  // 10.5px mono services text runs about 6.3 units a character.
+  function svcBoxes(container: HTMLElement) {
+    return [...container.querySelectorAll('.svc .svc-t')].map((t) => {
+      const text = t.textContent ?? ''
+      const w = text.length * 6.3
+      const x = Number(t.getAttribute('x'))
+      const y = Number(t.getAttribute('y'))
+      return { text, x: x - w / 2, y: y - 9, w, h: 12 }
+    })
+  }
+  function plateBoxes(container: HTMLElement) {
+    return [...container.querySelectorAll('.edge-plate')].map((p) => ({
+      text: p.parentElement?.textContent?.trim() ?? '',
+      x: Number(p.getAttribute('x')),
+      y: Number(p.getAttribute('y')),
+      w: Number(p.getAttribute('width')),
+      h: Number(p.getAttribute('height')),
+    }))
+  }
+
+  it("never lets an edge plate cover a lane's services row -- it lifts instead, since below it is the card", () => {
+    // Five lanes with the release capture's shape: one busy lane
+    // (bridge2, the Servers lane) fed from the others, and policy
+    // edges into it and its neighbour that nothing ever exercised.
+    // The crowding around bridge2's lane is what pushed a plate down
+    // onto its port list.
+    zonesState.pushed = Array.from({ length: 5 }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      ...Array.from({ length: 56 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 75 }, () => event({ inInterface: 'bridge3', outInterface: 'bridge2', srcIp: '10.0.3.20', dstPort: 53, action: 'accept' })),
+      ...Array.from({ length: 25 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.21', dstPort: 445, action: 'accept' })),
+      ...Array.from({ length: 4 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.22', dstPort: 5001, action: 'accept' })),
+      ...Array.from({ length: 42 }, () => event({ inInterface: 'bridge3', outInterface: 'ether1', srcIp: '10.0.3.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 57 }, () => event({ inInterface: 'bridge4', outInterface: 'ether1', srcIp: '10.0.4.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 7 }, () => event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })),
+    ]
+    policyState.anyPushed = true
+    const intent = (from: string, to: string) => ({
+      key: `${from}|${to}`,
+      from,
+      to,
+      accepted: true,
+      refused: false,
+      acceptPorts: [],
+      refusePorts: [],
+      comment: '',
+      ruleCount: 1,
+      logged: true,
+    })
+    policyState.edges = [
+      intent('bridge1', 'bridge2'),
+      intent('bridge3', 'bridge2'),
+      intent('bridge4', 'bridge2'),
+      intent('bridge5', 'bridge2'),
+      intent('bridge2', 'bridge1'),
+      intent('ether1', 'bridge2'),
+      intent('ether1', 'bridge1'),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const svc = svcBoxes(container)
+    const plates = plateBoxes(container)
+    expect(svc.length).toBeGreaterThan(0)
+    expect(plates.some((p) => p.text === 'never exercised')).toBe(true)
+    for (const p of plates) {
+      for (const s of svc) {
+        const overlaps = p.x < s.x + s.w && s.x < p.x + p.w && p.y < s.y + s.h && s.y < p.y + p.h
+        expect(overlaps, `"${p.text}" plate (${p.x},${p.y}) covers the "${s.text}" services row (${s.x},${s.y})`).toBe(false)
+      }
+    }
+    // And lifting a plate off the row never puts it on another plate.
+    for (let a = 0; a < plates.length; a++) {
+      for (let b = a + 1; b < plates.length; b++) {
+        const p1 = plates[a]
+        const p2 = plates[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps, `"${p1.text}" and "${p2.text}" plates overlap`).toBe(false)
+      }
+    }
+  })
+
+  it('drops the "Doors from the internet" row beneath the flag bar when the internet card draws one', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' })]
+    flagsState.list = [flag('port_scan', '203.0.113.9')]
+    const { container } = render(Topography)
+    flushSync()
+
+    // The bar is rendered 16 tall at y=34 under the internet card (the
+    // aggregateBar call on the card), so it ends at y=50 in the card's
+    // own frame. A 9.5px row hanging from its baseline needs that
+    // baseline below 50 + its own ascent.
+    const bar = container.querySelector('.isl-card .hb.hb-f')
+    expect(bar, 'the internet card should draw its flag bar').toBeTruthy()
+    const barY = Number(/translate\(0 ([\d.]+)\)/.exec(bar!.getAttribute('transform') ?? '')?.[1])
+    const doors = container.querySelector('.isl-card .doors-anchor-t')
+    expect(doors).toBeTruthy()
+    const baseline = Number(doors!.getAttribute('y'))
+    expect(baseline - 8).toBeGreaterThanOrEqual(barY + 16)
+  })
+
+  it('keeps the "Doors from the internet" row in its own place when there is no bar to clear', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.isl-card .hb')).toBeNull()
+    expect(container.querySelector('.isl-card .doors-anchor-t')?.getAttribute('y')).toBe('52')
+  })
+})
+
+// #1430, part 2: on the same capture the green edge curves ran straight
+// through the lanes' port lists (":5001 :80 :53" above LAN) and the red
+// internet edges through "Doors from the internet · 8". Neither label is
+// *about* a line, so #699's plate is not theirs; they take the map's
+// own halo instead -- the mockup's `.flat text` device, a stroke of the
+// page colour painted under the glyphs, so a line passes visibly behind
+// the text rather than through it.
+describe('edge lines pass behind the bare labels they cross (#1430)', () => {
+  /** Every selector of every style rule that paints the page-colour halo. */
+  function haloedSelectors(): string[] {
+    const out: string[] = []
+    const rule = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = rule.exec(componentSource))) {
+      if (/paint-order:\s*stroke/.test(m[2]) && /stroke:\s*var\(--bg\)/.test(m[2])) {
+        out.push(...m[1].split(',').map((s) => s.trim()))
+      }
+    }
+    return out
+  }
+
+  it("haloes a lane's port list and the internet card's doors row with the page colour", () => {
+    const haloed = haloedSelectors()
+    expect(haloed.length, 'the component should already carry the halo rule for its other bare labels').toBeGreaterThan(0)
+    expect(haloed.some((s) => /(^|\s)\.svc-t$/.test(s)), 'the services row (.svc-t) should be haloed').toBe(true)
+    expect(haloed.some((s) => /(^|\s)\.doors-anchor-t$/.test(s)), 'the doors row (.doors-anchor-t) should be haloed').toBe(true)
+  })
+
+  it('paints both labels after every edge line, so the halo has a line beneath it to knock out', () => {
+    // A halo only hides what is painted *under* the text. This held
+    // already (#723 ordered lines before labels); it is asserted here
+    // so a future reordering cannot quietly undo the fix above.
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstPort: 80, action: 'accept' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const lines = [...container.querySelectorAll('.redge, .gedge')]
+    const labels = [...container.querySelectorAll('.svc .svc-t, .isl-card .doors-anchor-t')]
+    expect(lines.length).toBeGreaterThan(0)
+    expect(container.querySelector('.svc .svc-t'), 'a lane should draw its port list').not.toBeNull()
+    expect(container.querySelector('.isl-card .doors-anchor-t'), 'the internet card should draw its doors row').not.toBeNull()
+    for (const line of lines) {
+      for (const label of labels) {
+        // DOCUMENT_POSITION_FOLLOWING (4): the label comes after the line.
+        expect(line.compareDocumentPosition(label) & 4, `"${label.textContent}" should be painted after the line`).toBeTruthy()
+      }
+    }
+  })
+})
+
 describe('#723: the dials sit just under the top bar rather than well below it', () => {
   it('keeps the dials\' own offset small enough to read as "just under", not a floating pair', () => {
     const m = componentSource.match(/\.dials\s*{[^}]*top:\s*([\d.]+)px/)
@@ -1939,7 +2134,7 @@ describe('#723: lines are painted before labels in every lens, so a line can nev
     appState.events = [
       event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
       event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -2010,7 +2205,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
   const seenOnBothLanes = () => [
     event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
     event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
-    event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+    event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
   ]
 
   // Dark, so that every one of these boundary-directions draws its own
@@ -2087,7 +2282,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
       }))
       appState.events = [
         ...Array.from({ length: 3 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
-        event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+        event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
       ]
       policyState.anyPushed = true
       policyState.edges = [
@@ -2118,7 +2313,7 @@ describe('#726: distinct edges are not drawn along each other', () => {
     }))
     appState.events = [
       ...Array.from({ length: 5 }, (_, i) => event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20` })),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -2641,13 +2836,13 @@ describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () =
 describe('#715 item 3, as #981 left it: the marks are the data, not an overlay', () => {
   const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
 
-  it('leaves nothing in the overlay row but the off-baseline tally and the port pill', () => {
+  it('leaves nothing in the overlay row but the off-baseline tally and the two filter pills', () => {
     const { container } = render(Topography)
     flushSync()
     showTheMap(container)
 
     const buttons = [...container.querySelectorAll('[aria-label="Map overlays"] button')]
-    expect(buttons.map((b) => b.textContent?.trim())).toEqual(['⌕ port'])
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(['⌕ port', '⌕ serving'])
     expect(container.querySelector('[role="tablist"]')).toBeNull()
   })
 
@@ -2821,6 +3016,29 @@ describe('the tunnel node (#877)', () => {
     // single-lane answer, not a hard-coded 610 from the mockup's
     // four-lane scene.
     expect(ghost?.getAttribute('d')).toBe('M 1100 186 C 945 300, 795 385, 700 476')
+  })
+
+  // #1433: the ghost line drew as a solid black band. The path had no
+  // style rule of its own, so the SVG defaults applied -- black fill, no
+  // stroke -- and the S-curve filled as black wedges. The mockup
+  // (round-30/the-whole.html:122) draws it as a faint dashed hairline.
+  it('draws the ghost line as the mockup does: a faint dashed stroke with no fill', () => {
+    const rules: string[] = []
+    const rule = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = rule.exec(componentSource))) {
+      // The selector capture carries any comment written above the
+      // rule; drop it so the rule's own selector is what is compared.
+      const selectors = m[1].replace(/\/\*[\s\S]*?\*\//g, '').split(',')
+      if (selectors.some((s) => s.trim() === '.rib-ghost')) rules.push(m[2])
+    }
+    expect(rules.length, 'the component should carry a style rule of its own for .rib-ghost').toBeGreaterThan(0)
+    const body = rules.join('\n')
+    expect(body).toMatch(/fill:\s*none/)
+    expect(body).toMatch(/stroke:\s*var\(--fg-dim\)/)
+    expect(body).toMatch(/stroke-width:\s*1\.2\b/)
+    expect(body).toMatch(/stroke-dasharray:\s*3 6/)
+    expect(body).toMatch(/opacity:\s*0\.45/)
   })
 
   it('gives the node a watch bar only when a pushed range can correlate one', () => {
@@ -3081,7 +3299,7 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     zonesState.pushed = [{ address: '10.0.40.1/24', network: '10.0.40.0', interface: 'bridge4', comment: 'Guest' }]
     appState.events = [
       event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }),
-      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+      event({ inInterface: 'ether1', srcIp: '192.0.2.8' }), // resolves ether1 as the WAN boundary
     ]
     policyState.anyPushed = true
     policyState.edges = [
@@ -3128,6 +3346,171 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    wanDoorsState.close()
+    wanDoorsState.devices = []
+    wanDoorsState.loading = false
+    wanDoorsState.error = null
+  })
+
+  // #1319: the boundary card gains one last row exactly when its own
+  // "from" side is the internet. guestDark() draws both directions of
+  // the bridge4<->ether1 pair as material (neither is logged), and
+  // openCard() opens whichever is first in the DOM -- Guest -> the
+  // internet, per the test above/below asserting its *back* line reads
+  // "the internet → Guest". This helper instead opens the direction
+  // whose own primary label starts with "the internet →", i.e. the one
+  // this row is about.
+  function openInternetCard(container: HTMLElement): HTMLElement {
+    const groups = [...container.querySelectorAll<SVGGElement>('.cov-g')]
+    const g = groups.find((el) => el.querySelector('title')?.textContent?.startsWith('the internet →'))
+    expect(g, 'no boundary in this fixture has the internet on its "from" side').toBeTruthy()
+    g!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    return container.querySelector<HTMLElement>('.card')!
+  }
+
+  it('opens the doors panel from the boundary card\'s own row when the card is the internet edge', () => {
+    guestDark()
+    wanDoorsState.devices = [
+      { id: 'router1', name: 'router1', wan: 'ether1', doors: [{ label: '#5', ordinal: 5, dstPort: '22' }], services: null },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = openInternetCard(container)
+    const row = [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+    expect(row, 'the card should gain a Doors from the internet row').toBeTruthy()
+    expect(row!.textContent?.trim()).toBe('Doors from the internet · 1')
+
+    expect(wanDoorsState.isOpen).toBe(false)
+    ;(row as HTMLButtonElement).click()
+    flushSync()
+    expect(wanDoorsState.isOpen).toBe(true)
+  })
+
+  it('shows "· none" on the boundary card\'s row when nothing is a door', () => {
+    guestDark()
+    wanDoorsState.devices = [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [], services: null }]
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = openInternetCard(container)
+    const row = [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+    expect(row!.textContent?.trim()).toBe('Doors from the internet · none')
+  })
+
+  // A5-F1: the map must not say "none" about a security posture it has
+  // not read yet, or could not read.
+  const doorsRow = (card: HTMLElement) =>
+    [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+  const anchorText = (container: HTMLElement) => container.querySelector('.isl-card .doors-anchor-t')!.textContent
+  const restoreWanDoors = () => vi.mocked(fetchWanDoors).mockImplementation(async () => ({ devices: [] }))
+
+  it('says the doors are still being read, not "none", while the first read is in flight (A5-F1)', async () => {
+    let land!: (r: { devices: import('../lib/api').WanDeviceDoors[] }) => void
+    vi.mocked(fetchWanDoors).mockReturnValue(new Promise((res) => { land = res }))
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    void wanDoorsState.refresh()
+    flushSync()
+
+    expect(anchorText(container)).toBe('Doors from the internet · reading…')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · reading…')
+
+    land({ devices: [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [{ label: '#5', ordinal: 5, dstPort: '22' }], services: null }] })
+    await vi.waitFor(() => expect(wanDoorsState.loading).toBe(false))
+    flushSync()
+    expect(anchorText(container)).toBe('Doors from the internet · 1')
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · 1')
+    restoreWanDoors()
+  })
+
+  it('says the doors could not be read, not "none", after the read fails (A5-F1)', async () => {
+    vi.mocked(fetchWanDoors).mockRejectedValue(new Error('fetchWanDoors: 500'))
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    await wanDoorsState.refresh()
+    flushSync()
+
+    expect(wanDoorsState.error).toBe('Could not read the pushed tables')
+    expect(wanDoorsState.loading).toBe(false)
+    expect(anchorText(container)).toBe('Doors from the internet · could not read')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · could not read')
+    restoreWanDoors()
+  })
+
+  it('still says "· none" once a read has landed and counted nothing (A5-F1 guard)', async () => {
+    vi.mocked(fetchWanDoors).mockResolvedValue({ devices: [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [], services: null }] })
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+    await wanDoorsState.refresh()
+    flushSync()
+
+    expect(wanDoorsState.error).toBeNull()
+    expect(wanDoorsState.loading).toBe(false)
+    expect(anchorText(container)).toBe('Doors from the internet · none')
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe('Doors from the internet · none')
+    restoreWanDoors()
+  })
+
+  // A4-C1: rules the endpoint could not judge are counted apart, so "none"
+  // is only ever a true all-clear.
+  it.each([
+    [3, 0, 'Doors from the internet · 3'],
+    [3, 2, 'Doors from the internet · 3 · 2 not judged'],
+    [0, 2, 'Doors from the internet · none known · 2 not judged'],
+    [0, 0, 'Doors from the internet · none'],
+  ])('doorsTail with %i doors and %i unjudged reads "%s" (A4-C1)', (doors, unjudged, text) => {
+    guestDark()
+    const door = (n: number) => ({ label: `#${n}`, ordinal: n, dstPort: '22' })
+    const rule = (n: number) => ({ label: `#${n + 50}`, ordinal: n + 50, dstPort: '8291', scope: 'in-interface-list=WAN' })
+    wanDoorsState.devices = [
+      {
+        id: 'router1', name: 'router1', wan: 'ether1',
+        doors: Array.from({ length: doors }, (_, i) => door(i + 1)),
+        services: null,
+        unjudged: Array.from({ length: unjudged }, (_, i) => rule(i + 1)),
+      },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(anchorText(container)).toBe(text)
+    const card = openInternetCard(container)
+    expect(doorsRow(card)!.textContent!.trim()).toBe(text)
+  })
+
+  it('sums unjudged across devices for the map (A4-C1)', () => {
+    wanDoorsState.devices = [
+      { id: 'a', name: 'a', wan: 'ether1', doors: [], services: null, unjudged: [{ label: '#1', ordinal: 1, dstPort: '', scope: 'src-address=203.0.113.0/24' }] },
+      { id: 'b', name: 'b', wan: 'ether1', doors: [], services: null, unjudged: [{ label: '#2', ordinal: 2, dstPort: '', scope: 'src-address-list=LAN' }, { label: '#3', ordinal: 3, dstPort: '', scope: 'src-address-list=LAN' }] },
+    ]
+    expect((wanDoorsState as unknown as { totalUnjudged: number }).totalUnjudged).toBe(3)
+  })
+
+  it('opens the doors panel from the internet anchor itself', () => {
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+
+    const anchor = container.querySelector<SVGGElement>('.doors-anchor-btn')
+    expect(anchor, 'the internet anchor should carry its own doors button').toBeTruthy()
+    expect(anchor!.getAttribute('aria-label')).toBe('Doors from the internet')
+
+    expect(wanDoorsState.isOpen).toBe(false)
+    anchor!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(wanDoorsState.isOpen).toBe(true)
   })
 
   it('opens a card on a dark boundary saying what the rule does and what both directions are', () => {
@@ -3736,10 +4119,10 @@ describe('living hosts on the 2D map (#1016)', () => {
       flushSync()
       showTheMap(container)
 
-      // The one pill in the row is #1018's port filter, and it switches
-      // neither of these marks: take the flag and the watcher away and
-      // both go, whatever the filter is doing.
-      expect([...container.querySelectorAll('.pills .pill')].map((p) => p.textContent?.trim())).toEqual(['⌕ port'])
+      // The two pills in the row are #1018's port filter and #1320's
+      // serving lens, and neither switches these marks: take the flag
+      // and the watcher away and both go, whatever either filter is doing.
+      expect([...container.querySelectorAll('.pills .pill')].map((p) => p.textContent?.trim())).toEqual(['⌕ port', '⌕ serving'])
       expect(container.querySelector('.zone .hostrow .h-halo')).not.toBeNull()
       expect(container.querySelector('.zone .hostrow .h-watch')).not.toBeNull()
     })
@@ -3937,9 +4320,9 @@ describe('living hosts on the 2D map (#1016)', () => {
       flushSync()
 
       act(openCard(container)!, 'dismiss ▸')!.click()
-      await vi.waitFor(() => expect(container.querySelector('.card .d-error')).not.toBeNull())
+      await vi.waitFor(() => expect(container.querySelector('.card [role="alert"]')).not.toBeNull())
 
-      expect(container.querySelector('.card .d-error')?.textContent).toContain('403')
+      expect(container.querySelector('.card [role="alert"]')?.textContent).toContain('403')
       // Still on the map: nothing was written, so nothing is taken away.
       expect(dots(container).length).toBe(1)
     })
@@ -4871,6 +5254,136 @@ describe('the reach, drawn to round 49 (#1016)', () => {
     })
   })
 
+  // #1496: drafting from a hover card is interacting with it, so the card
+  // is pinned first, as the host and off-baseline cards' form doors do.
+  describe('drafting a rule pins its line card (#1496)', () => {
+    const refusedEvent = () =>
+      event({
+        inInterface: 'bridge1',
+        outInterface: 'bridge2',
+        srcIp: '10.0.10.21',
+        dstIp: '10.0.20.10',
+        dstPort: 22,
+        protocol: 'tcp',
+        action: 'drop',
+        ruleLabel: '#17 default drop',
+      })
+
+    const strands = (c: HTMLElement) => [...c.querySelectorAll('.membrane-layer .strand-g')]
+    const refusedAt = (c: HTMLElement) => strands(c).findIndex((g) => g.querySelector('.strand-x') !== null)
+
+    /** Hover the refused strand and click its draft door. */
+    function draft(container: HTMLElement) {
+      const at = refusedAt(container)
+      expect(at).toBeGreaterThanOrEqual(0)
+      const card = hoverStrand(container, at)!
+      expect(card.classList.contains('pinned'), 'the hover card opens unpinned').toBe(false)
+      card.querySelector<HTMLButtonElement>('[data-draft-rule]')!.click()
+      flushSync()
+      return { at, card }
+    }
+
+    /** The pointer leaves strand and card; the grace timer runs out. */
+    function leave(container: HTMLElement, at: number, card: HTMLElement) {
+      strands(container)[at].dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      card.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+      vi.advanceTimersByTime(CARD_GRACE_MS + 100)
+      flushSync()
+    }
+
+    const esc = () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      flushSync()
+    }
+
+    /** standOnDesktop seeds two zones; this scene needs a third (and a
+     * second strand to it), so it takes the same steps with its own. */
+    function setup() {
+      zonesState.pushed = [
+        { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+        { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'bridge2', comment: 'Servers' },
+        { address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge3', comment: 'DMZ' },
+      ]
+      appState.events = [
+        event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.10.21', srcHostName: 'alex-desktop', dstIp: '10.0.20.10', dstHostName: 'nas', dstPort: 445, protocol: 'tcp', action: 'accept' }),
+        refusedEvent(),
+        event({ inInterface: 'bridge1', outInterface: 'bridge3', srcIp: '10.0.10.21', dstIp: '10.0.30.5', dstHostName: 'web', dstPort: 443, protocol: 'tcp', action: 'accept' }),
+      ]
+      const { container } = render(Topography)
+      flushSync()
+      container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      flushSync()
+      return container
+    }
+
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('pins the card when the door is clicked, so it outlives the pointer', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+
+      expect(container.querySelector('.composer[role=dialog]')).not.toBeNull()
+      expect(container.querySelector('.line-card')!.classList.contains('pinned')).toBe(true)
+      expect(container.querySelector('.line-card .pin')!.getAttribute('aria-pressed')).toBe('true')
+
+      leave(container, at, card)
+      expect(container.querySelector('.line-card'), 'the card closed under the composer').not.toBeNull()
+    })
+
+    it('walks out one rung per Escape: the card, then the composer, then the reach', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+      leave(container, at, card)
+
+      esc()
+      expect(container.querySelector('.line-card')).toBeNull()
+      expect(container.querySelector('.composer')).not.toBeNull()
+
+      esc()
+      expect(container.querySelector('.composer')).toBeNull()
+      expect(container.querySelector('.membrane-layer')).not.toBeNull()
+
+      esc()
+      expect(container.querySelector('.membrane-layer')).toBeNull()
+    })
+
+    it('unpinning closes the card and leaves the half-written draft alone', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+      leave(container, at, card)
+
+      const free = container.querySelector<HTMLInputElement>('.composer .pfree')!
+      free.value = '2222'
+      free.dispatchEvent(new Event('input', { bubbles: true }))
+      flushSync()
+
+      container.querySelector<HTMLButtonElement>('.line-card .pin')!.click()
+      flushSync()
+
+      expect(container.querySelector('.line-card'), 'unpin should close a pinned card').toBeNull()
+      expect(container.querySelector('.composer')).not.toBeNull()
+      expect(container.querySelector<HTMLInputElement>('.composer .pfree')!.value).toBe('2222')
+    })
+
+    it('does not swap a drafted card when another strand is hovered', () => {
+      const container = setup()
+      const { at, card } = draft(container)
+      leave(container, at, card)
+      const titleBefore = container.querySelector('.line-card .n')!.textContent
+      expect(titleBefore).toContain('Servers')
+
+      // A strand to a different counterpart: one to the drafted card's own
+      // counterpart returns before the pin guard is reached.
+      const other = strands(container).findIndex((g) => g.getAttribute('aria-label')?.includes('DMZ'))
+      expect(other, 'a strand to the DMZ is drawn').toBeGreaterThanOrEqual(0)
+      strands(container)[other].dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+      flushSync()
+
+      expect(container.querySelector('.line-card .n')!.textContent).toBe(titleBefore)
+    })
+  })
+
   describe('every card pins', () => {
     it('keeps the card up when the pointer leaves, once pinned', async () => {
       const container = standOnDesktop()
@@ -5435,6 +5948,187 @@ describe('the port filter (#1018, round 53)', () => {
   })
 })
 
+describe('the "seen serving" lens (#1320)', () => {
+  const lanes: RouterIPAddress[] = [
+    { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+    { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'ether3', comment: 'Servers' },
+  ]
+
+  // Two LAN hosts reaching a server, so the map draws two dots to
+  // dim/light between -- the same shape the port filter's own fixture
+  // takes, and for the same reason: z.hosts only ever comes from an
+  // event's own srcIp (zones.svelte.ts), so the destination draws none.
+  function seedMap() {
+    zonesState.pushed = lanes
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.21', srcHostName: 'alex-desktop', dstIp: '10.0.20.5', dstPort: 445, protocol: 'tcp' }),
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.34', srcHostName: 'laptop-anna', dstIp: '10.0.20.5', dstPort: 22, protocol: 'tcp' }),
+    ]
+  }
+
+  /** Drives the store the way a landed fetch would, matching the port
+   * filter's own filterTo helper above. */
+  function serveHosts(hosts: (typeof servingState)['answer']['hosts']) {
+    servingState.open = true
+    servingState.answer = { generatedAt: 1, windowSeconds: 3600, hosts }
+    servingState.settled = true
+  }
+
+  it('lights only the hosts seen answering, dimming the rest without removing them', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'alex-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const dimmed = [...container.querySelectorAll('.zone .hostrow .dot-off')]
+    expect(dimmed.length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.zone .hostrow .h-dot').length).toBeGreaterThan(dimmed.length)
+  })
+
+  // The answer is host-level, not per-crossing: there is no honest way
+  // to say which rib a served host was reached over, so lighting one
+  // from zone membership alone would claim traffic on a boundary the
+  // lens cannot actually back -- exactly the "open port" style
+  // overclaim #1320 exists to refuse. Ribs and roads stay exactly as
+  // they are with no lens on at all; only a host's own dot and the
+  // lane's own tally line move.
+  it('leaves ribs and lanes at their ordinary look -- only hosts and the lane tally change', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'alex-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    // The ribs between LAN and Servers are drawn (the fixture's own two
+    // accepted events), and none of them takes the filtered/muted
+    // treatment the port filter and trace apply to an off-answer rib.
+    expect(container.querySelectorAll('.redge, .cedge').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.redge.port-off, .cedge.port-off').length).toBe(0)
+    // No fabricated highlight layer either -- the serving lens lights no
+    // rib at all, unlike the port filter's own answer.
+    expect(container.querySelectorAll('.lit-half').length).toBe(0)
+    // The lane holding the lit host is not faded whole -- only its own
+    // off-answer dot recedes.
+    expect(container.querySelectorAll('.zone.lane-off').length).toBe(0)
+  })
+
+  it('reads the collapsed pill as "N of M hosts answer in the window"', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'alex-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '⌕ serving · 1 of 2 hosts answer in the window',
+    )
+  })
+
+  it('reads the idle pill and the empty answer in their own words', () => {
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    const servingIdle = [...container.querySelectorAll('.pills .pill')].find((b) => b.textContent?.trim() === '⌕ serving')
+    expect(servingIdle).toBeTruthy()
+
+    seedMap()
+    serveHosts([])
+    flushSync()
+    expect(container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '⌕ serving · nothing answered in the window',
+    )
+  })
+
+  it('turning the lens on clears the port filter, and opening the port picker clears the lens', () => {
+    // A URL-aware stub: mounting the map fires its own baseline refresh
+    // regardless of this test's clicks, and the two clicks under test
+    // reach fetchServing and fetchPorts -- each needs an answer shaped
+    // like its own, or a later read of the wrong one crashes.
+    const fetchMock = vi.fn(async (url: unknown) => {
+      if (typeof url === 'string' && url.startsWith('/api/baseline/off')) {
+        return { ok: true, json: async () => EMPTY_OFF_BASELINE }
+      }
+      return {
+        ok: true,
+        json: async () => ({ generatedAt: 1, windowSeconds: 3600, hosts: [], candidates: [], ribs: [], doors: [] }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    seedMap()
+    portFilterState.ports = [445]
+    portFilterState.proto = 'tcp'
+    portFilterState.answeredKey = portFilterState.key
+    expect(portFilterState.active).toBe(true)
+
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    // Clicking the idle "⌕ serving" pill turns the lens on -- and clears
+    // the port filter, exactly as opening the port picker clears the
+    // lens: one lens at a time, because two would dim a host for two
+    // different reasons at once.
+    const servingIdle = [...container.querySelectorAll('.pills .pill')].find((b) => b.textContent?.trim() === '⌕ serving')
+    expect(servingIdle).toBeTruthy()
+    ;(servingIdle as HTMLButtonElement).click()
+    flushSync()
+    expect(portFilterState.active).toBe(false)
+    expect(servingState.open).toBe(true)
+
+    const portIdle = [...container.querySelectorAll('.pills .pill')].find((b) => b.textContent?.trim() === '⌕ port')
+    expect(portIdle).toBeTruthy()
+    ;(portIdle as HTMLButtonElement).click()
+    flushSync()
+    expect(servingState.open).toBe(false)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('clears on Esc', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'alex-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.pill.p.on')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    flushSync()
+    expect(servingState.open).toBe(false)
+  })
+
+  // #1396: descendFromHost -> clearMapFilters used to clear the serving
+  // lens along with the port filter and the trace, so the very reach the
+  // lens exists to drill into could never show its own answer. The lens
+  // lights no rib and dims no lane whole, so unlike the other two it has
+  // no crumb left on the map to clash with the reach -- it survives.
+  it('survives a descend into a lit host, so the reach shows its served-port chips', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'alex-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const pillText = () => container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()
+    expect(pillText()).toBe('⌕ serving · 1 of 2 hosts answer in the window')
+
+    // alex-desktop's dot sorts first (laneHostRow's own key order,
+    // "bridge1|10.0.10.21" before "...10.0.10.34") -- the same lit host
+    // the tally above counts.
+    container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    expect(servingState.open).toBe(true)
+    const chips = [...container.querySelectorAll('.serve-chip')]
+    expect(chips.length).toBeGreaterThan(0)
+    expect(chips.some((c) => c.textContent?.includes('445/tcp'))).toBe(true)
+    // The pill reads exactly as it did before the descend -- the lens's
+    // own answer never moved, only the map's focus did.
+    expect(pillText()).toBe('⌕ serving · 1 of 2 hosts answer in the window')
+  })
+})
+
 describe('the event trace (#1018, round 53)', () => {
   const lanes: RouterIPAddress[] = [
     { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
@@ -5835,5 +6529,25 @@ describe("the trace's own list (#1050, round 56, A1/B1)", () => {
 
     expect(mapTraceState.listOpen).toBe(true)
     expect(container.querySelector('.picker')).not.toBeNull()
+  })
+})
+
+// #1540 (C5): until the first load lands, a one-line "<verb>ing…" status
+// stands where the screen has no room for ghost rows; once it has, the
+// status is gone.
+describe('first load shows a one-line status (#1540 C5)', () => {
+  it('says what it is doing while the first load is in flight, and stops once it lands', () => {
+    appState.initialLoadDone = false
+
+    const first = render(Topography)
+    flushSync()
+    const lines = [...first.container.querySelectorAll('[role="status"]')].map((n) => n.textContent?.trim() ?? '')
+    expect(lines.join('|')).toMatch(/(^|\|)[A-Z][a-z]+ing[^|]*…($|\|)/)
+    first.unmount()
+
+    appState.initialLoadDone = true
+    const second = render(Topography)
+    flushSync()
+    expect(second.container.textContent).not.toMatch(/(Loading|Reading|Gathering|Mapping)[^.]*…/)
   })
 })

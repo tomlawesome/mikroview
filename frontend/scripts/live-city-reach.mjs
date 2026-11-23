@@ -8,7 +8,7 @@
 // printed line, and Escape landing back on the exact camera standing
 // started from.
 
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -24,7 +24,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-reach', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-reach', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

@@ -1,0 +1,18 @@
+# Trivy ignore file for security:trivy-config (#1462), read with
+# --ignorefile. YAML rather than a plain .trivyignore because an entry here
+# can be scoped to named files: the waiver below must not reach the shipped
+# Dockerfile, where the same check still runs. Every entry carries a
+# reason (statement) and an expiry (expired_at, YYYY-MM-DD); on expiry the
+# finding returns and fails the job until someone looks again.
+misconfigurations:
+  # DS-0002, no non-root USER. Both files are workstation-only live-check
+  # fixtures, never shipped: sshd must start as root to bind port 22 and
+  # drop to mvingest per connection, and qemu's uid has to follow the
+  # calling user for /dev/kvm passthrough. Same reasoning as their
+  # nosemgrep lines. Expires 2027-05-15.
+  - id: DS-0002
+    paths:
+      - scripts/live-routeros.dockerfile
+      - scripts/live-routeros-sftp.dockerfile
+    expired_at: 2027-05-15
+    statement: "Workstation-only fixtures that must start as root (sshd binds port 22; qemu follows the caller's uid for /dev/kvm); never shipped."

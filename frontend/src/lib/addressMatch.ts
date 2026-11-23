@@ -68,7 +68,7 @@ function parseIPv6(s: string): bigint | null {
   return value
 }
 
-export type AddressFamily = 4 | 6
+type AddressFamily = 4 | 6
 
 export interface ParsedAddress {
   family: AddressFamily

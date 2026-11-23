@@ -1,0 +1,68 @@
+# #1411: the ip-service push block's address restriction, before
+# (d3e61fe3, address only) and after (address and available-from, both
+# off print as-value), on a real CHR 7.24.4, 2026-10-01.
+# Fixture: ssh restricted to two prefixes, winbox to one, the rest left
+# open. Then what get does for each name on this release. Each block once
+# at the console with its /tool fetch swapped for :put, then the new
+# block saved as a script under the push policy (read,test) and run.
+# No token: "tok".
+
+== :put [/system resource get version]
+:put [/system resource get version]
+7.24.4 (stable)
+[admin@CHR] >
+== /ip service set ssh address=192.168.88.0/24,10.0.0.1
+/ip service set ssh address=192.168.88.0/24,10.0.0.1
+[admin@CHR] >
+== /ip service set winbox address=192.168.88.0/24
+/ip service set winbox address=192.168.88.0/24
+[admin@CHR] >
+== /ip service print detail where name=ssh or name=winbox or name=telnet
+/ip service print detail where name=ssh or name=winbox or name=telnet
+0  name="ssh" port=22 proto=tcp available-from=192.168.88.0/24,10.0.0.1/32 vrf=main max-sessions=20
+ 
+1  name="telnet" port=23 proto=tcp available-from="" vrf=main max-sessions=20
+ 
+2  name="winbox" port=8291 proto=tcp available-from=192.168.88.0/24 vrf=main max-sessions=20
+[admin@CHR] >
+== :put [/ip service print as-value where name=ssh or name=winbox or name=telnet]
+:put [/ip service print as-value where name=ssh or name=winbox or name=telnet]
+.id=*4;available-from=192.168.88.0/24;10.0.0.1/32;disabled=false;dynamic=false;invalid=false;max-sessions=20;name=ssh;port=22;proto=tcp;vrf=main;.id=*0;available-from=;disabled=false;dynamic=false;invalid=false;max-sessions=20;name=telnet;port=23;proto=tcp;vrf=main;.id=*8;available-from=192.168.88.0/24;disabled=false;dynamic=false;invalid=false;max-sessions=20;name=winbox;port=8291;proto=tcp;vrf=main
+[admin@CHR] >
+== :do { :put ("get address: " . [:typeof [/ip service get [find name=ssh] address]] . " " . [:tostr [/ip service get [find name=ssh] address]]) } on-error={ :put "get address: error" }
+:do { :put ("get address: " . [:typeof [/ip service get [find name=ssh] address]] . " " . [:tostr [/ip service get [find name=ssh] address]]) } on-error={ :put "get address: error" }
+get address: nil 
+[admin@CHR] >
+== :do { :put ("get available-from: " . [:typeof [/ip service get [find name=ssh] available-from]] . " " . [:tostr [/ip service get [find name=ssh] available-from]]) } on-error={ :put "get available-from: error" }
+:do { :put ("get available-from: " . [:typeof [/ip service get [find name=ssh] available-from]] . " " . [:tostr [/ip service get [find name=ssh] available-from]]) } on-error={ :put "get 
+available-from: error" }
+get available-from: array 192.168.88.0/24;10.0.0.1/32
+[admin@CHR] >
+
+# BEFORE (d3e61fe3): ip-service block
+== :local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+:local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "
+address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page"=1; 
+"pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+{"kind":"ip-service","page":1,"pages":1,"records":[{"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},{"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},{"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},{"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},{"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},{"address":null,"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},{"address":null,"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},{"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},{"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},{"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},{"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},{"address":null,"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# AFTER (#1411): ip-service block
+== :local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "availableFrom"=($v->"available-from"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+:local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "
+address"=($v->"address"); "availableFrom"=($v->"available-from"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=jso
+n value={"kind"="ip-service"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+{"kind":"ip-service","page":1,"pages":1,"records":[{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},{"address":null,"availableFrom":["192.168.88.0/24","10.0.0.1/32"],"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},{"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},{"address":null,"availableFrom":[],"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},{"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},{"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},{"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},{"address":null,"availableFrom":["192.168.88.0/24"],"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},{"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >
+
+# AFTER, saved as a script under the push policy and run
+== /system script add name=mv-push-1411 policy=read,test source=":local svcRecs [:toarray \"\"]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {\"name\"=(\$v->\"name\"); \"disabled\"=[/ip/service get (\$v->\".id\") disabled]; \"port\"=(\$v->\"port\"); \"address\"=(\$v->\"address\"); \"availableFrom\"=(\$v->\"available-from\"); \"certificate\"=(\$v->\"certificate\"); \"dynamic\"=(\$v->\"dynamic\")}; :set svcRecs (\$svcRecs, {\$rec}) }; :local svcPayload [:serialize to=json value={\"kind\"=\"ip-service\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$svcRecs}]; :put \$svcPayload"
+/system script add name=mv-push-1411 policy=read,test source=":local svcRecs [:toarray \"\"]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {\"name\"=(\$v->\"name\"); \"di
+sabled\"=[/ip/service get (\$v->\".id\") disabled]; \"port\"=(\$v->\"port\"); \"address\"=(\$v->\"address\"); \"availableFrom\"=(\$v->\"available-from\"); \"certificate\"=(\$v->\"certificate\"); \"dyn
+amic\"=(\$v->\"dynamic\")}; :set svcRecs (\$svcRecs, {\$rec}) }; :local svcPayload [:serialize to=json value={\"kind\"=\"ip-service\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource ge
+t version]; \"wizardVersion\"=6; \"records\"=\$svcRecs}]; :put \$svcPayload"
+[admin@CHR] >
+== /system script run mv-push-1411
+/system script run mv-push-1411
+{"kind":"ip-service","page":1,"pages":1,"records":[{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},{"address":null,"availableFrom":["192.168.88.0/24","10.0.0.1/32"],"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},{"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},{"address":null,"availableFrom":[],"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},{"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},{"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},{"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},{"address":null,"availableFrom":["192.168.88.0/24"],"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},{"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},{"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}
+[admin@CHR] >

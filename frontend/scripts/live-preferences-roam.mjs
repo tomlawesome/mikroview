@@ -10,12 +10,10 @@
 // proves the round trip both ways: user A's preset is invisible to user
 // B, and still there when A signs back in.
 //
-// NOT RUN as part of writing this: the backend half of #1283
-// (GET/PUT /api/me/preferences) does not exist in this worktree, so
-// nothing here has executed against a real server. node --check only.
-// The integrator should run this once the backend lands.
+// The backend half of #1283 is GET/PATCH /api/me/preferences
+// (internal/api/preferences.go).
 
-import { session, check, done, goTo, openAccountMenu, completeSecondFactor, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, completeSecondFactor, enrolFactorAndSignIn, removePerson } from './live-browser.mjs'
 
 const ADMIN_USER = process.env.MV_USER
 const ADMIN_PASS = process.env.MV_PASS
@@ -41,6 +39,7 @@ await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, PEER_USER)
 await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, PEER_PASS)
 await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${PEER_USER}")`)
+// safe: waitForSelector above throws on timeout
 check(true, `a second account "${PEER_USER}" is created from the people door`)
 
 // --- User A (the admin session() signed in as) saves a preset ----------
@@ -57,6 +56,7 @@ await page.click(`${BOX} .fsaved`)
 await page.waitForSelector(`${BOX} .fpmenu .fpsave`, { timeout: 5000 })
 await page.click(`${BOX} .fpmenu .fpsave`)
 await page.waitForSelector(`${BOX} .fpmenu`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, `user A saves a preset named "${PRESET_NAME}"`)
 
 async function signOut(p) {
@@ -83,7 +83,7 @@ async function signInHere(p, username, password, { enrol = false } = {}) {
   await p.fill('input[autocomplete="current-password"]', password)
   await p.click('button[type="submit"]')
   if (enrol) {
-    await enrolFactorAndSignIn(p)
+    await enrolFactorAndSignIn(p, password)
   } else {
     await completeSecondFactor(p)
     await p.waitForSelector('#main-content', { timeout: 15000 })
@@ -103,9 +103,11 @@ async function savedPresetNames(p) {
 // --- Sign out, sign in as user B on the same tab: no preset -----------
 
 await signOut(page)
+// safe: signOut throws on failure
 check(true, 'user A signs out')
 
 await signInHere(page, PEER_USER, PEER_PASS, { enrol: true })
+// safe: signInHere throws on failure
 check(true, 'user B signs in, on the same tab user A just used')
 
 const peerPresets = await savedPresetNames(page)
@@ -117,9 +119,11 @@ check(
 // --- Sign back in as user A: the preset followed the account ----------
 
 await signOut(page)
+// safe: signOut throws on failure
 check(true, 'user B signs out')
 
 await signInHere(page, ADMIN_USER, ADMIN_PASS)
+// safe: signInHere throws on failure
 check(true, 'user A signs back in, on the same tab')
 
 const aPresetsAgain = await savedPresetNames(page)
@@ -132,14 +136,14 @@ check(
 
 await page.click(`${BOX} .fsaved`)
 await page.waitForSelector(`${BOX} .fpmenu`, { state: 'visible', timeout: 5000 })
+// The × is arm-then-confirm (#1539): arm, then confirm.
 await page.click(`${BOX} .fpmenu .fprow:has-text("${PRESET_NAME}") .fpx`)
+await page.click(`${BOX} .fpmenu .fprow:has-text("${PRESET_NAME}") .fpx.armed`)
 await page.keyboard.press('Escape')
 
 await goTo(page, 'Settings')
-const remove = page.locator(`${PEOPLE} .prow:has-text("${PEER_USER}") .remove`)
-await remove.click()
-await remove.click()
-await page.waitForSelector(`${PEOPLE} .prow:has-text("${PEER_USER}")`, { state: 'detached' })
+await removePerson(page, PEER_USER)
+// safe: waitForSelector above throws on timeout
 check(true, `the peer account "${PEER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

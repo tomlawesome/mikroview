@@ -111,6 +111,11 @@ type deviceState struct {
 	// ip-address cycle has arrived. See departures.go, which is entirely
 	// about why that word "complete" carries the design.
 	departures *departureState
+	// rawSamples is #1360's per-raw-rule-comment counter history: one
+	// (at, packets) sample per raw-rule push, kept rawSampleWindow deep,
+	// so the blocklist ledger can say how often a rule fired today. See
+	// noteRawSamplesLocked.
+	rawSamples map[string][]RawRuleSample
 }
 
 // hostName is one resolved router-supplied name plus which pushed table
@@ -238,8 +243,98 @@ func (s *Store) Apply(device string, p ingest.Payload, now time.Time) error {
 		// departures.go -- so this is a no-op for every page but the one
 		// that finishes a table.
 		ds.noteAddressCycleLocked(device, p, now)
+	case ingest.KindRawRule:
+		ds.noteRawSamplesLocked(ks, now)
 	}
 	return nil
+}
+
+// rawSampleWindow is how far back the raw-rule counter samples reach:
+// "fired N today" needs everything since local midnight, which is at
+// most a day ago in any timezone, plus the margin a late push and a
+// timezone at the far edge of UTC can ask for (BUILD.md part 2: 36 h).
+const rawSampleWindow = 36 * time.Hour
+
+// maxRawSamplesPerComment bounds one comment's ring. A push every five
+// minutes -- four times the wizard's default rate -- fills 36 h with 432
+// samples; past this the oldest are dropped first, so a router pushing
+// faster than that keeps a shorter window rather than unbounded memory.
+var maxRawSamplesPerComment = 512
+
+// maxRawSampleComments bounds how many distinct comments one device's
+// samples are kept for. The blocklist builder writes at most fifteen
+// raw rules; an operator's own commented raw rules share the budget, and
+// a comment beyond it is simply not sampled.
+var maxRawSampleComments = 64
+
+// RawRuleSample is one push's reading of a raw rule's packet counter.
+type RawRuleSample struct {
+	At      time.Time
+	Packets int64
+}
+
+// noteRawSamplesLocked records one sample per commented raw rule from
+// the raw-rule pages now held, and forgets what has aged out.
+//
+// Keyed by comment, the one name a rule keeps across a re-paste (its
+// ordinal shifts whenever rules are added above it). Rules sharing a
+// comment -- an IPv4 rule and its IPv6 twin, say -- are summed: the
+// ledger asks how often the rule its comment names fired, not which
+// family carried it. A rule with no comment is not sampled; nothing
+// could ask for it by name.
+func (ds *deviceState) noteRawSamplesLocked(ks *kindState, now time.Time) {
+	sums := make(map[string]int64)
+	for _, p := range ks.pages {
+		for _, r := range p.RawRules {
+			if r.Comment == "" {
+				continue
+			}
+			sums[r.Comment] += int64(r.Packets)
+		}
+	}
+	if ds.rawSamples == nil {
+		ds.rawSamples = make(map[string][]RawRuleSample)
+	}
+	cutoff := now.Add(-rawSampleWindow)
+	for comment, ring := range ds.rawSamples {
+		ring = trimSamples(ring, cutoff)
+		if len(ring) == 0 {
+			delete(ds.rawSamples, comment)
+			continue
+		}
+		ds.rawSamples[comment] = ring
+	}
+	// Sorted so which comments miss out at the cap does not depend on
+	// map order.
+	comments := make([]string, 0, len(sums))
+	for c := range sums {
+		comments = append(comments, c)
+	}
+	sort.Strings(comments)
+	for _, c := range comments {
+		ring, held := ds.rawSamples[c]
+		if !held && len(ds.rawSamples) >= maxRawSampleComments {
+			continue
+		}
+		ring = append(ring, RawRuleSample{At: now, Packets: sums[c]})
+		if over := len(ring) - maxRawSamplesPerComment; over > 0 {
+			ring = append([]RawRuleSample(nil), ring[over:]...)
+		}
+		ds.rawSamples[c] = ring
+	}
+}
+
+// trimSamples drops the samples taken before cutoff. Samples are
+// appended in arrival order, so they are already oldest first.
+func trimSamples(ring []RawRuleSample, cutoff time.Time) []RawRuleSample {
+	i := 0
+	for i < len(ring) && ring[i].At.Before(cutoff) {
+		i++
+	}
+	if i == 0 {
+		return ring
+	}
+	return append([]RawRuleSample(nil), ring[i:]...)
 }
 
 // rebuildIdentityLocked rebuilds this device's host-identity index from
@@ -327,7 +422,7 @@ func (ds *deviceState) rebuildIdentityLocked() {
 //
 // device scopes the answer, and that scoping is the point. This used to
 // iterate every device that had ever pushed and return the first match,
-// which broke the guarantee internal/auth/token.go states in its own
+// which broke the guarantee gauntlet's token.go states in its own
 // words -- that an ingest token is scoped to one router precisely
 // because "one compromised router could report state for every other
 // device in the deployment" -- and that internal/api/ingest.go repeats:
@@ -648,6 +743,104 @@ func (s *Store) PPPActive(device string) (sessions []ingest.PPPActiveSession, up
 	return sessions, ks.updatedAt, true
 }
 
+// IPServices returns device's pushed /ip/service table (issue #1329):
+// the router's own management services -- telnet, ftp, www, www-ssl,
+// ssh, api, api-ssl, winbox -- observed from what it pushed rather than
+// inferred from traffic. Sorted by name, since RouterOS gives this table
+// no ordinal of its own. ok is false when nothing has been pushed for
+// that device+kind yet, the same "no data yet" convention every other
+// accessor here uses.
+//
+// RouterOS's own dynamic /ip/service rows (dhcpclient, btest, discover,
+// reverse-proxy) are left out here rather than stored filtered, so both
+// callers of this accessor -- the /services endpoint and the WAN-edge
+// panel -- get the same, already-correct list without each repeating the
+// check (#1405). IsDynamic covers a router that hasn't re-pasted the
+// current push script too.
+func (s *Store) IPServices(device string) (services []ingest.IPServiceEntry, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindIPService)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		for _, svc := range p.IPServices {
+			if svc.IsDynamic() {
+				continue
+			}
+			services = append(services, svc)
+		}
+	}
+	sort.SliceStable(services, func(i, j int) bool { return services[i].Name < services[j].Name })
+	return services, ks.updatedAt, true
+}
+
+// RawRules returns device's pushed raw tables (#1360), IPv4 then IPv6,
+// each in RouterOS's own display order -- the order an operator sees in
+// `/ip/firewall/raw print` and `/ipv6/firewall/raw print`. ok is false
+// when nothing has been pushed for that device+kind.
+func (s *Store) RawRules(device string) (rules []ingest.RawRule, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindRawRule)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		rules = append(rules, p.RawRules...)
+	}
+	sort.SliceStable(rules, func(i, j int) bool {
+		if rules[i].Family != rules[j].Family {
+			// "ip" sorts before "ipv6", which is the order wanted.
+			return rules[i].Family < rules[j].Family
+		}
+		return rules[i].Ordinal < rules[j].Ordinal
+	})
+	return rules, ks.updatedAt, true
+}
+
+// RawRuleSamples returns the packet-counter samples kept for the raw
+// rule(s) carrying comment on device, oldest first, reaching back at
+// most rawSampleWindow. Nil when none are held. A copy: the caller may
+// keep it.
+func (s *Store) RawRuleSamples(device, comment string) []RawRuleSample {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ds, ok := s.devices[device]
+	if !ok || len(ds.rawSamples[comment]) == 0 {
+		return nil
+	}
+	return append([]RawRuleSample(nil), ds.rawSamples[comment]...)
+}
+
+// AddressListCounts returns device's pushed blocklist counts (#1360),
+// sorted by list then family. ok is false when nothing has been pushed
+// for that device+kind -- which is not the same as every count being 0,
+// the answer a router running the current push script with no
+// blocklists loaded gives.
+func (s *Store) AddressListCounts(device string) (counts []ingest.AddressListCount, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindAddressListCount)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		counts = append(counts, p.AddressListCounts...)
+	}
+	sort.SliceStable(counts, func(i, j int) bool {
+		if counts[i].List != counts[j].List {
+			return counts[i].List < counts[j].List
+		}
+		return counts[i].Family < counts[j].Family
+	})
+	return counts, ks.updatedAt, true
+}
+
 // Devices returns every device with at least one pushed page, sorted by
 // name -- the enumeration FilterRules/DHCPLeases/etc need a caller to
 // already have a device name, this is how a caller (e.g. the suggestions
@@ -665,7 +858,7 @@ func (s *Store) Devices() []string {
 // caller must not read it as old, unsupported, or anything else.
 //
 // The version is the router's own claim about itself, unverified by
-// construction: mikroview never connects to a router (AGENTS.md,
+// construction: mikroview never connects to a router (docs/decisions/observe-never-probe.md,
 // "mikroview observes; it never scans or connects"), so there is nothing
 // to check it against. Scoped to the pushing device for the same reason
 // every other read here is -- see HostName.

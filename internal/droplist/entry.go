@@ -203,9 +203,9 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 
 // Persisted reports whether this store has a real backend behind it --
 // true once OpenWithBackend was given a non-nil persist.Backend, false
-// for the memory-only mode Open("") (or #853's "no key, no storage"
-// before the v0.6.0 audit's droplist exception -- see storage.go's
-// plaintextWithoutKeyStores) still allows. The one caller that needs
+// for the memory-only mode Open("") still allows -- droplist.storePath
+// set to "" (#1202 ended the keyless installs that were the other way
+// to get here). The one caller that needs
 // this is the API's pull-feed handler: every fetch of the .rsc feed is
 // a full sync of the router's live list (see Script's own doc comment),
 // so serving zero entries from a store with no durability guarantee
@@ -409,17 +409,4 @@ func (s *Store) tryPersistLocked() error {
 	}
 	s.version = version
 	return nil
-}
-
-// persistLocked writes the current state to disk if persistence is
-// configured. Write failures are swallowed rather than surfaced to the
-// caller: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than losing the mutation that
-// triggered this call -- same contract as every other store's
-// persistLocked in this codebase.
-func (s *Store) persistLocked() {
-	if err := s.tryPersistLocked(); err != nil {
-		entryPersistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
-	}
 }

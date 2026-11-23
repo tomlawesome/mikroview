@@ -1,0 +1,29 @@
+# golangci-lint v2, CI-only (lint:golangci, blocking since its findings
+# reached zero, #1462). The standard set is errcheck, govet, ineffassign,
+# staticcheck and unused; dupl is added on top. gosec stays off: the
+# security:gosec job already runs it.
+version: "2"
+linters:
+  default: standard
+  enable:
+    - dupl
+  settings:
+    dupl:
+      threshold: 150
+  exclusions:
+    rules:
+      # Tests drop Close/Write errors on throwaway fixtures; a failure there
+      # shows up as a failed assertion. Production code is still checked.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # Table-style tests repeat their shape on purpose; dupl 150 is just over.
+      - path: _test\.go
+        linters:
+          - dupl
+      # The bidi and zero-width characters are the test input (log-injection
+      # handling), so they must stay literal.
+      - path: _test\.go
+        text: ST1018
+        linters:
+          - staticcheck

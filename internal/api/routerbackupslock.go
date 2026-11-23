@@ -153,16 +153,6 @@ func (u *vaultUnlockState) holding() (sessionID, userID string) {
 	return u.sessionID, u.userID
 }
 
-// requestSessionID is the caller's session cookie value, or "" if there
-// is none. Only ever compared against a session this server issued.
-func requestSessionID(r *http.Request) string {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return ""
-	}
-	return cookie.Value
-}
-
 // vaultUnlockedFor reports whether r may read vault contents right now,
 // and locks the vault when it may not.
 //
@@ -175,7 +165,7 @@ func (s *Server) vaultUnlockedFor(r *http.Request, now time.Time) bool {
 	if !s.Vault.PassphraseSet() {
 		return true
 	}
-	sessionID := requestSessionID(r)
+	sessionID := s.requestSessionID(r)
 	if sessionID == "" || !s.vaultUnlock.heldBy(sessionID, now) {
 		// Another session's unlock may still be live and legitimate --
 		// only clear the key if the holder itself is gone or stale.
@@ -396,15 +386,15 @@ func vaultUnlockLimiterKey(r *http.Request) string {
 // handleRouterBackupUnlock opens the vault for the calling session.
 func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	sessionID := requestSessionID(r)
+	sessionID := s.requestSessionID(r)
 	if sessionID == "" {
 		writeUnauthorized(w, "sign in first")
 		return
@@ -443,7 +433,7 @@ func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request
 // opened it.
 func (s *Server) handleRouterBackupLock(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	if !s.Vault.PassphraseSet() {
@@ -464,15 +454,15 @@ func (s *Server) handleRouterBackupLock(w http.ResponseWriter, r *http.Request) 
 // handleRouterBackupSetPassphrase turns the lock on.
 func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	sessionID := requestSessionID(r)
+	sessionID := s.requestSessionID(r)
 	if sessionID == "" {
 		writeUnauthorized(w, "sign in first")
 		return
@@ -508,12 +498,12 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 // passphrase currently on it.
 func (s *Server) handleRouterBackupRemovePassphrase(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
@@ -561,12 +551,12 @@ type vaultPassphraseChangeRequest struct {
 // unlocked stays unlocked, and one who was not stays that way too.
 func (s *Server) handleRouterBackupChangePassphrase(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	var req vaultPassphraseChangeRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
@@ -610,7 +600,7 @@ func (s *Server) vaultLockStatus(r *http.Request, now time.Time) vaultLockStatus
 	return vaultLockStatusResponse{
 		PassphraseSet:       set,
 		Locked:              s.Vault.Locked(),
-		UnlockedForYou:      set && s.vaultUnlock.isLive(requestSessionID(r), now),
+		UnlockedForYou:      set && s.vaultUnlock.isLive(s.requestSessionID(r), now),
 		MinPassphraseLength: backupvault.MinPassphraseRunes,
 		IdleTimeoutSeconds:  int(vaultUnlockIdle.Seconds()),
 	}

@@ -38,7 +38,7 @@ and a home for the six surfaces on #691 item 6 that had none. Built by
 - **The device status strip is the router cards**, which round 30
   already drew. Its one fact with no home — a router pushing that is
   not registered — is a state of the dashed third slot (`#ent.unreg`):
-  `192.0.2.1 · ● PUSHING · UNREGISTERED`, in the now ink (attention,
+  `192.0.2.17 · ● PUSHING · UNREGISTERED`, in the now ink (attention,
   not alarm), *its lines are kept; it has no name and no zones until it
   is registered · register it ▸*.
 

@@ -29,7 +29,7 @@
 // shadow this scenario's own labels exactly as it once shadowed
 // live-token-copy.mjs's (see that file's HOST_IP comment).
 
-import { session, feedRaw, feedSyslog as syslog, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog as syslog, check, done, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-inline-editing'
@@ -49,7 +49,8 @@ async function api(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // A 204 (every DELETE since #1538) carries no body to parse.
+  return { status: res.status(), body: res.status() < 400 && res.status() !== 204 ? await res.json() : null }
 }
 
 // --- A router that actually names one of the two addresses ---------------
@@ -67,7 +68,7 @@ for (let i = 0; i < 40 && !DEVICE; i++) {
 }
 check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: RULE, kind: 'ingest', device: DEVICE })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: RULE, kind: 'ingest', device: DEVICE }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 
 async function pushLeases(records) {
@@ -106,6 +107,7 @@ while (Date.now() < deadline) {
 }
 check(!!arrived, `the test event reached the server (rule=${RULE})`)
 if (!arrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the editor cannot be exercised on a row that never arrived')
   done()
 }
@@ -132,6 +134,7 @@ try {
 }
 check(rowFound, `a row showing "${LEASE_NAME}" rendered`)
 if (!rowFound) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the editor cannot be exercised on a row that never rendered')
   done()
 }
@@ -206,6 +209,7 @@ check(
 
 await page.keyboard.press('Escape')
 await editor.waitFor({ state: 'detached', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Escape closes the editor')
 
 // --- The gate opens as readily as it shuts -------------------------------
@@ -215,6 +219,7 @@ await editor.waitFor({ timeout: 5000 })
 
 const input = editor.locator('input')
 await input.waitFor({ timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, `a token the router does not name offers a field (${FREE_IP})`)
 check(
   ((await editor.textContent()) ?? '').includes('Display only'),

@@ -14,6 +14,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 func TestHostname(t *testing.T) {
@@ -25,6 +28,28 @@ func TestHostname(t *testing.T) {
 		if got := Hostname(tc.in); got != tc.want {
 			t.Errorf("Hostname(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestHostnameSplitsEveryFormValidSetupAddressAccepts is #1507: the four
+// address forms internal/api's validSetupAddress comment lists (bare host,
+// host:port, [ipv6]:port, bare IPv6 literal with no port) must each split
+// to the host alone. A bare IPv6 literal used to be cut at its last colon.
+func TestHostnameSplitsEveryFormValidSetupAddressAccepts(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"bare hostname", "router.example.net", "router.example.net"},
+		{"hostname with port", "router.example.net:6514", "router.example.net"},
+		{"bare IPv4", "192.0.2.10", "192.0.2.10"},
+		{"IPv4 with port", "192.0.2.10:6514", "192.0.2.10"},
+		{"bracketed IPv6 with port", "[2001:db8::10]:6514", "2001:db8::10"},
+		{"bare IPv6 literal", "2001:db8::10", "2001:db8::10"},
+		{"bare IPv6 literal, full form", "2001:db8:0:0:0:0:0:10", "2001:db8:0:0:0:0:0:10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Hostname(tc.in); got != tc.want {
+				t.Errorf("Hostname(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -61,6 +86,51 @@ func TestCaTrustCommands(t *testing.T) {
 	}
 }
 
+// TestUndoBuildersMatchTheirForwardResourceNames (#1385) pins the setup
+// wizard ledger's Undo per row to the exact resource names their forward
+// counterparts create, so a name changed on one side without the other
+// would be caught here rather than by a router that pastes an undo
+// matching nothing.
+func TestUndoBuildersMatchTheirForwardResourceNames(t *testing.T) {
+	wantCa := "/certificate remove [find where name~\"^mikroview-ca.crt\"]\n/file remove [find name=mikroview-ca.crt]"
+	if got := UndoCaTrustCommands("a"); got != wantCa {
+		t.Errorf("UndoCaTrustCommands = %q", got)
+	}
+	if placeholders.MatchString(UndoCaTrustCommands("a")) {
+		t.Errorf("UndoCaTrustCommands leaked a placeholder")
+	}
+
+	wantSyslog := "/system logging remove [find action=mikroview]\n/system logging action remove [find name=mikroview]"
+	if got := UndoSyslogCommands("a"); got != wantSyslog {
+		t.Errorf("UndoSyslogCommands =\n%s\nwant\n%s", got, wantSyslog)
+	}
+
+	wantSchedule := "/system scheduler remove [find name=mv-push]\n/system script remove [find name=mv-push]"
+	if got := UndoScheduleCommands("a"); got != wantSchedule {
+		t.Errorf("UndoScheduleCommands =\n%s\nwant\n%s", got, wantSchedule)
+	}
+	if !strings.Contains(ScheduleCommands("body", "a"), "mv-push") || !strings.Contains(UndoScheduleCommands("a"), "mv-push") {
+		t.Error("ScheduleCommands and UndoScheduleCommands disagree about the script's name")
+	}
+
+	wantBackup := "/system scheduler remove [find name=mv-backup]\n/system script remove [find name=mv-backup]"
+	if got := UndoBackupScheduleCommands("a"); got != wantBackup {
+		t.Errorf("UndoBackupScheduleCommands =\n%s\nwant\n%s", got, wantBackup)
+	}
+	if !strings.Contains(BackupScript("mikroview.lan", "47022", "rb5009", "tok", "a"), "mv-backup") {
+		t.Error("BackupScript no longer names its script mv-backup -- UndoBackupScheduleCommands would remove nothing")
+	}
+
+	wantBackupHTTPS := "/system scheduler remove [find name=mv-backup-https]\n/system script remove [find name=mv-backup-https]"
+	if got := UndoBackupPushScheduleCommands("a"); got != wantBackupHTTPS {
+		t.Errorf("UndoBackupPushScheduleCommands =\n%s\nwant\n%s", got, wantBackupHTTPS)
+	}
+	pushBody := BackupPushScript("mikroview.lan", "tok", "a")
+	if !strings.Contains(BackupPushScheduleCommands(pushBody, "a"), "mv-backup-https") {
+		t.Error("BackupPushScheduleCommands no longer names its script mv-backup-https -- UndoBackupPushScheduleCommands would remove nothing")
+	}
+}
+
 func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
 	if got := SyslogCommands("192.0.2.10:8080", ":16514", "a", ""); !strings.Contains(got, "remote-port=16514") {
 		t.Errorf("syslogCommands did not honour the configured port: %s", got)
@@ -74,6 +144,34 @@ func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
 	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote-log-format=syslog") {
 		t.Errorf("syslogCommands omitted remote-log-format=syslog: %s", cmd)
+	}
+}
+
+// TestSyslogCommandsSetsSrcAddressToRouterChoice is #1370: a src-address
+// an earlier setup left on the mikroview action used to survive a
+// re-paste, since the set branch only ever touched target/remote/
+// remote-port/remote-protocol/remote-log-format/check-certificate. That
+// let syslog stay pinned to an address HTTPS pushes had stopped using,
+// so the router enrolled from one address and every push was refused
+// from the other. The wizard now sets src-address=0.0.0.0 -- RouterOS's
+// "let the router pick" value, the same choice /tool fetch already makes
+// for the pushes -- on both the add and the set branch, so a stale
+// non-zero value from an older paste is always overwritten rather than
+// left in place.
+func TestSyslogCommandsSetsSrcAddressToRouterChoice(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
+	if n := strings.Count(cmd, "src-address=0.0.0.0"); n != 2 {
+		t.Fatalf("syslogCommands set src-address=0.0.0.0 %d times, want 2 (add and set branches): %s", n, cmd)
+	}
+	addBranch, setBranch, found := strings.Cut(cmd, "} else={")
+	if !found {
+		t.Fatalf("syslogCommands' action line has no add/set split: %s", cmd)
+	}
+	if !strings.Contains(addBranch, "src-address=0.0.0.0") {
+		t.Errorf("syslogCommands' add branch is missing src-address=0.0.0.0: %s", addBranch)
+	}
+	if !strings.Contains(setBranch, "src-address=0.0.0.0") {
+		t.Errorf("syslogCommands' set branch is missing src-address=0.0.0.0 -- a stale src-address from an earlier paste would survive: %s", setBranch)
 	}
 }
 
@@ -170,11 +268,17 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		// the array RouterOS sends rather than joined by the script.
 		`"connectionState"=($v->"connection-state")`,
 		`"inInterface"=($v->"in-interface")`,
+		// A4-F1: in-interface-list, so the doors panel can leave out list-scoped rules.
+		`"inInterfaceList"=($v->"in-interface-list")`,
 		`"outInterface"=($v->"out-interface")`,
 		// #435's rule counters -- the cost the Log every rule helper shows
-		// beside a tick-box before any logging is switched on.
-		`"packets"=($v->"packets")`,
-		`"bytes"=($v->"bytes")`,
+		// beside a tick-box before any logging is switched on -- and
+		// disabled, read back by the rule's own id (#1409): print
+		// as-value carries no counters on 7.18.2 or 7.24.4, and no
+		// disabled on 7.18.2.
+		`"disabled"=[/ip/firewall/filter get ($v->".id") disabled]`,
+		`"packets"=[/ip/firewall/filter get ($v->".id") packets]`,
+		`"bytes"=[/ip/firewall/filter get ($v->".id") bytes]`,
 		// The wrapping that makes it a list of records rather than one
 		// merged map -- silently wrong without it.
 		`{$rec}`,
@@ -182,6 +286,23 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		if !strings.Contains(block, want) {
 			t.Errorf("pushBlock(filter-rule) missing %q:\n%s", want, block)
 		}
+	}
+	for _, field := range []string{"disabled", "packets", "bytes"} {
+		if off := `($v->"` + field + `")`; strings.Contains(block, off) {
+			t.Errorf("pushBlock(filter-rule) reads %s off print as-value, which sends null for it (#1409):\n%s", field, block)
+		}
+	}
+}
+
+// #1409: 7.18.2's print as-value leaves an address-list entry's dynamic
+// out, so it is read back by the entry's own id.
+func TestPushBlockReadsAddressListDynamicWithGet(t *testing.T) {
+	block := PushBlock("h", "t", "address-list", "a")
+	if want := `"dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]`; !strings.Contains(block, want) {
+		t.Errorf("pushBlock(address-list) missing %q:\n%s", want, block)
+	}
+	if strings.Contains(block, `($v->"dynamic")`) {
+		t.Errorf("pushBlock(address-list) reads dynamic off print as-value, which 7.18.2 leaves out:\n%s", block)
 	}
 }
 
@@ -194,8 +315,15 @@ func TestLogPrefixForAction(t *testing.T) {
 		{"drop", "D|drop|"},
 		{"reject", "R|reject|"},
 		{"accept", "A|accept|"},
-		{"tarpit", "T|tarpit|"},
-		{"jump", "J|jump|"},
+		{"tarpit", ""},
+		{"jump", "L|jump|"},
+		{"return", "L|return|"},
+		{"passthrough", "L|passthrough|"},
+		{"add-src-to-address-list", "L|add-src-list|"},
+		{"fasttrack-connection", "L|fasttrack|"},
+		{"mark-connection", "M|mark-conn|"},
+		{"masquerade", "N|masquerade|"},
+		{"dst-nat", "N|dst-nat|"},
 		{"", ""},
 	} {
 		if got := LogPrefixForAction(tc.action, "a"); got != tc.want {
@@ -234,9 +362,23 @@ func TestLogPrefixForActionFitsAndDoesNotCollide(t *testing.T) {
 		"dst-nat", "masquerade", "netmap", "redirect", "same", "src-nat",
 	}
 
+	// Every key of logPrefixCode too, so a new over-long entry fails here.
+	listed := make(map[string]bool, len(actions))
+	for _, a := range actions {
+		listed[a] = true
+	}
+	for a := range logPrefixCode {
+		if !listed[a] {
+			actions = append(actions, a)
+		}
+	}
+
 	seen := make(map[string]string, len(actions))
 	for _, action := range actions {
 		got := LogPrefixForAction(action, "a")
+		if got == "" {
+			continue // tarpit has no prefix code; nothing to collide
+		}
 		if len(got) > maxLogPrefixLen {
 			t.Errorf("LogPrefixForAction(%q) = %q (%d bytes), want at most %d", action, got, len(got), maxLogPrefixLen)
 		}
@@ -245,6 +387,55 @@ func TestLogPrefixForActionFitsAndDoesNotCollide(t *testing.T) {
 			continue
 		}
 		seen[got] = action
+	}
+}
+
+// TestLogPrefixForActionDecodesToWhatTheRuleDoes (#1546): the prefix's
+// first byte is the verdict code the decoder reads back, so every
+// action's prefix must decode to the verdict the rule really has --
+// not the action's initial letter, which collides with the codes.
+func TestLogPrefixForActionDecodesToWhatTheRuleDoes(t *testing.T) {
+	actions := []string{
+		"accept", "add-dst-to-address-list", "add-src-to-address-list",
+		"drop", "fasttrack-connection", "jump", "log", "passthrough",
+		"reject", "return",
+		"mark-connection", "mark-packet", "mark-routing",
+		"change-mss", "change-ttl", "change-dscp", "clear-df",
+		"route", "sniff-pc", "sniff-tzsp", "strip-ipv4-options",
+		"dst-nat", "masquerade", "netmap", "redirect", "same", "src-nat",
+	}
+	want := func(a string) store.Action {
+		switch a {
+		case "accept":
+			return store.ActionAccept
+		case "drop":
+			return store.ActionDrop
+		case "reject":
+			return store.ActionReject
+		case "mark-connection", "mark-packet", "mark-routing":
+			return store.ActionMarked
+		case "masquerade", "src-nat", "dst-nat", "redirect", "netmap", "same":
+			return store.ActionNatted
+		}
+		return store.ActionLog
+	}
+	for _, a := range actions {
+		p := LogPrefixForAction(a, "a")
+		if p == "" {
+			t.Errorf("LogPrefixForAction(%q) = \"\", want a prefix", a)
+			continue
+		}
+		act, ok := actionFromCode(p[0])
+		if !ok {
+			t.Errorf("LogPrefixForAction(%q) = %q: code %q is not one the decoder reads", a, p, p[0])
+			continue
+		}
+		if act != want(a) {
+			t.Errorf("LogPrefixForAction(%q) = %q decodes to %v, want %v", a, p, act, want(a))
+		}
+	}
+	if got := LogPrefixForAction("tarpit", "a"); got != "" {
+		t.Errorf("LogPrefixForAction(\"tarpit\") = %q, want \"\" (no prefix code reads back as tarpit)", got)
 	}
 }
 
@@ -287,6 +478,151 @@ func TestPushBlockRenamesIPAddressFields(t *testing.T) {
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("pushBlock(ip-address) missing %q:\n%s", want, block)
+		}
+	}
+}
+
+// #1329: the pushed /ip/service table, same renaming contract as the
+// filter-rule and ip-address cases above. "dynamic" was added by #1405
+// so the server can tell RouterOS's own dhcpclient/btest/discover/
+// reverse-proxy rows apart from the eight an operator configures.
+// disabled is read back by the row's own id (#1410): 7.18.2's print
+// as-value leaves it out even for a disabled service.
+func TestPushBlockRenamesIPServiceFields(t *testing.T) {
+	block := PushBlock("h", "t", "ip-service", "a")
+	if strings.Contains(block, `($v->"disabled")`) {
+		t.Errorf("pushBlock(ip-service) reads disabled off print as-value, which 7.18.2 leaves out:\n%s", block)
+	}
+	for _, name := range []string{"address", "available-from"} {
+		if get := `get ($v->".id") ` + name; strings.Contains(block, get) {
+			t.Errorf("pushBlock(ip-service) reads %s with get, which stops the script on a release that lacks it:\n%s", name, block)
+		}
+	}
+	for _, want := range []string{
+		"/ip/service print as-value",
+		`"name"=($v->"name")`,
+		`"disabled"=[/ip/service get ($v->".id") disabled]`,
+		`"port"=($v->"port")`,
+		`"address"=($v->"address")`,
+		// #1411: 7.24's name for the same restriction, read off $v too --
+		// a get of either name errors on the release without it.
+		`"availableFrom"=($v->"available-from")`,
+		`"certificate"=($v->"certificate")`,
+		`"dynamic"=($v->"dynamic")`,
+		`{$rec}`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("pushBlock(ip-service) missing %q:\n%s", want, block)
+		}
+	}
+}
+
+// #1360: the raw table, both families into one record list, with the
+// same renaming contract as filter-rule's -- plus the family stamp and
+// the get-by-.id reads a real CHR showed print as-value cannot replace.
+func TestPushBlockRenamesRawRuleFields(t *testing.T) {
+	block := PushBlock("h", "t", "raw-rule", "a")
+	for _, family := range []struct{ name, menu string }{{"ip", "/ip/firewall/raw"}, {"ipv6", "/ipv6/firewall/raw"}} {
+		for _, want := range []string{
+			family.menu + " print as-value]",
+			`{"family"="` + family.name + `"; "ordinal"=$i;`,
+			// print as-value carries no counters on 7.18.2 or 7.24.4, and
+			// no disabled on 7.18.2 -- read back by the row's own id.
+			`"disabled"=[` + family.menu + ` get ($v->".id") disabled]`,
+			`"packets"=[` + family.menu + ` get ($v->".id") packets]`,
+			`"bytes"=[` + family.menu + ` get ($v->".id") bytes]`,
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("pushBlock(raw-rule) missing %q:\n%s", want, block)
+			}
+		}
+	}
+	for _, want := range []string{
+		`"srcAddressList"=($v->"src-address-list")`,
+		`"dstAddressList"=($v->"dst-address-list")`,
+		`"logPrefix"=($v->"log-prefix")`,
+		`"log"=($v->"log")`,
+		`"comment"=($v->"comment")`,
+		`"kind"="raw-rule"`,
+		`{$rec}`,
+	} {
+		if n := strings.Count(block, want); n == 0 {
+			t.Errorf("pushBlock(raw-rule) missing %q:\n%s", want, block)
+		}
+	}
+	if n := strings.Count(block, `:set rawRecs ($rawRecs, {$rec})`); n != 2 {
+		t.Errorf("pushBlock(raw-rule) appends to rawRecs in %d loops, want 2 (one per family, one list):\n%s", n, block)
+	}
+	if strings.Contains(block, familyMenu) {
+		t.Errorf("pushBlock(raw-rule) left the %q placeholder in what a router runs:\n%s", familyMenu, block)
+	}
+}
+
+// #1360: one record per blocklist name per family, built from the
+// router's own count -- never an entry. The names are the fixed list, so
+// the block is the same text whatever a router has on.
+func TestPushBlockSendsBlocklistCountsNotEntries(t *testing.T) {
+	block := PushBlock("h", "t", "address-list-count", "a")
+	for _, name := range blcatalogue.ListNames() {
+		if !strings.Contains(block, `"`+name+`"`) {
+			t.Errorf("pushBlock(address-list-count) does not count %s:\n%s", name, block)
+		}
+	}
+	for _, want := range []string{
+		`[/ip/firewall/address-list print count-only where list=$n]`,
+		`[/ipv6/firewall/address-list print count-only where list=$n]`,
+		`[/ip/firewall/address-list get ([find where list=$n]->0) creation-time]`,
+		`[/ipv6/firewall/address-list get ([find where list=$n]->0) creation-time]`,
+		`{{"list"=$n; "family"="ip"; "count"=$c4; "loadedAt"=$t4}}`,
+		`{{"list"=$n; "family"="ipv6"; "count"=$c6; "loadedAt"=$t6}}`,
+		`"kind"="address-list-count"`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("pushBlock(address-list-count) missing %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, `"address"=`) || strings.Contains(block, "print as-value") {
+		t.Errorf("pushBlock(address-list-count) reads entries, which is what it exists not to send:\n%s", block)
+	}
+	if again := PushBlock("h", "t", "address-list-count", "a"); again != block {
+		t.Error("pushBlock(address-list-count) is not the same text twice")
+	}
+}
+
+// The address-list block leaves out every list matching the prefix, so
+// a catalogue name outside it would be pushed entry by entry -- the
+// overflow the exclusion exists to prevent.
+func TestBlocklistPrefixCoversEveryCatalogueName(t *testing.T) {
+	names := blcatalogue.ListNames()
+	if len(names) == 0 {
+		t.Fatal("the catalogue names no lists, so this proves nothing")
+	}
+	for _, n := range names {
+		if !strings.HasPrefix(n, blocklistListPrefix) {
+			t.Errorf("catalogue list %q is not under %q, so the address-list block would push its entries", n, blocklistListPrefix)
+		}
+	}
+}
+
+// #1360: the mv-bl-* exclusion belongs to the address-list block and to
+// nothing else -- every other block, the count block included, must
+// still see those lists.
+func TestBlocklistExclusionIsInTheAddressListBlockOnly(t *testing.T) {
+	const exclusion = `where !(list~"^mv-bl-")`
+	al := PushBlock("h", "t", "address-list", "a")
+	if !strings.Contains(al, `[/ip/firewall/address-list print as-value `+exclusion+`]`) {
+		t.Errorf("the address-list block does not leave out the blocklist lists:\n%s", al)
+	}
+	kinds := []string{addressListCountKind, loggingKind}
+	for kind := range blockSpecs {
+		kinds = append(kinds, kind)
+	}
+	for _, kind := range kinds {
+		if kind == "address-list" {
+			continue
+		}
+		if block := PushBlock("h", "t", kind, "a"); strings.Contains(block, "^mv-bl-") || strings.Contains(block, "!(list~") {
+			t.Errorf("pushBlock(%s) carries the blocklist exclusion:\n%s", kind, block)
 		}
 	}
 }
@@ -414,9 +750,9 @@ func TestRuleTaggingCommandsRepairsAnAlreadyFloodedRouter(t *testing.T) {
 }
 
 // unescapeRouterOS reads a `source="..."` value back the way RouterOS
-// does: a backslash escapes the character after it, and the three
-// escapes scriptSource emits -- \\, \" and \$ -- are the only ones it
-// is ever handed. Anything else is a backslash this package produced by
+// does: a backslash escapes the character after it, and the four
+// escapes scriptSource emits -- \\, \", \$ and \n -- are the only ones
+// it is ever handed. Anything else is a backslash this package produced by
 // accident, which is a failure rather than something to read past.
 //
 // It is deliberately the inverse written independently of scriptSource,
@@ -437,6 +773,8 @@ func unescapeRouterOS(t *testing.T, s string) string {
 		switch s[i+1] {
 		case '\\', '"', '$':
 			b.WriteByte(s[i+1])
+		case 'n':
+			b.WriteByte('\n')
 		default:
 			t.Errorf("escaped source carries \\%c, which RouterOS reads as something else: %q", s[i+1], s)
 			b.WriteByte(s[i+1])
@@ -508,8 +846,8 @@ func extractEscapedValue(t *testing.T, s, marker string) string {
 // TestScriptSourceRoundTrips is the escaping's real contract: whatever
 // body goes in, RouterOS's own un-escaping takes back out. The fixture
 // carries every character the rule is about -- a quote, a backslash, a
-// dollar, and newlines, which pass through as themselves because a
-// saved script keeps its own lines (#394's proven multi-line form).
+// dollar, and newlines, which go in as \n so the add is one console
+// line and come back out as the script's own line breaks.
 func TestScriptSourceRoundTrips(t *testing.T) {
 	bodies := []string{
 		":local v \"quoted\"\n:put $v",
@@ -526,6 +864,28 @@ func TestScriptSourceRoundTrips(t *testing.T) {
 		got := unescapeRouterOS(t, scriptSource(body))
 		if got != body {
 			t.Errorf("scriptSource did not round-trip:\n got %q\nwant %q", got, body)
+		}
+	}
+}
+
+// TestScriptAddIsOneConsoleLine is #1360's finding on a real 7.18.2:
+// RouterOS before 7.19 drops a line break typed inside a quoted
+// argument, so a pasted multi-line source="..." saved as one run-on line
+// and the script did nothing. Every saved script the wizard hands over
+// is therefore one console line, its own line breaks escaped.
+func TestScriptAddIsOneConsoleLine(t *testing.T) {
+	for name, block := range map[string]string{
+		"ScheduleCommands":           ScheduleCommands(PushScript("192.0.2.10:8080", "tok", []string{"filter-rule", "address-list"}, "a"), "a"),
+		"BackupScript":               BackupScript("192.0.2.10", "47022", "rb5009", "tok", "a"),
+		"BackupPushScheduleCommands": BackupPushScheduleCommands(BackupPushScript("192.0.2.10:8080", "tok", "a"), "a"),
+	} {
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, ":if ([:len [/system script find") && !strings.HasSuffix(line, "\" }") {
+				t.Errorf("%s: the script add does not end on its own line:\n%.300s", name, line)
+			}
+			if !strings.HasPrefix(line, ":if (") && !strings.HasPrefix(line, "/") {
+				t.Errorf("%s: a line that is no console command -- a source broken across lines?\n%.200s", name, line)
+			}
 		}
 	}
 }
@@ -549,7 +909,9 @@ func TestScriptSourceLeavesNoBareVariableOrQuote(t *testing.T) {
 // operator to paste into anything.
 func TestScheduleCommands(t *testing.T) {
 	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
-	const source = ":local recs [:toarray \\\"\\\"]\n" +
+	// One console line: the body's line break goes in as \n (#1360;
+	// RouterOS before 7.19 drops a literal one inside quotes).
+	const source = ":local recs [:toarray \\\"\\\"]\\n" +
 		":set recs (\\$recs, 1)"
 	want := ":if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=\"" + source + "\" } else={ /system script set [find name=mv-push] policy=read,test source=\"" + source + "\" }\n" +
 		":if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event=\"/system script run mv-push\" disabled=no }\n" +
@@ -680,7 +1042,7 @@ func TestBackupScriptIsIdempotent(t *testing.T) {
 // TestBackupScriptMatchesRound45 pins the wizard's step 6 script
 // (docs/design/concepts/round-45/build.py's SCRIPT constant) byte for
 // byte -- the copy is drawn, not invented, and a builder must match it
-// word for word (AGENTS.md, "Building a ratified design").
+// word for word (docs/design/screens/README.md, "Building a ratified design").
 //
 // One line differs from the round deliberately, on #895's ruling: the
 // export is `hide-sensitive` into `mv-export.rsc`, so the readable half
@@ -688,16 +1050,17 @@ func TestBackupScriptIsIdempotent(t *testing.T) {
 // and the two files' names say which is which.
 func TestBackupScriptMatchesRound45(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", `mvt-8f3a2c…c21e`, "a")
-	const source = "\n" +
-		"  /system backup save name=mv-backup dont-encrypt=yes\n" +
-		"  /export hide-sensitive file=mv-export\n" +
-		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n" +
-		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n" +
-		"  /file remove mv-backup.backup\n" +
-		"  /file remove mv-export.rsc\n"
+	const source = "\\n" +
+		"  /system backup save name=mv-backup dont-encrypt=yes\\n" +
+		"  /export hide-sensitive file=mv-export\\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\\n" +
+		"  /file remove mv-backup.backup\\n" +
+		"  /file remove mv-export.rsc\\n"
 	// The guard is #1266's plumbing (scriptAdd, same as every other
 	// saved script in this file); the source="..." body between the
-	// quotes is round 45's drawn script, unchanged.
+	// quotes is round 45's drawn script, unchanged but for its line
+	// breaks, which go in as \n so the add is one console line (#1360).
 	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"" + source + "\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"" + source + "\" }"
 	if got != want {
 		t.Errorf("BackupScript =\n%s\nwant\n%s", got, want)
@@ -867,7 +1230,7 @@ func TestBackupPushScriptEscapesQuotedHost(t *testing.T) {
 // TestBackupPushScriptEscapesQuotedToken is TestBackupPushScriptEscapesQuotedHost's
 // twin for the token: unlike PushBlock's bare Bearer header (which
 // relies on the handler's own Token validation), this function quotes
-// token itself -- AGENTS.md's "validated and quoted, never interpolated
+// token itself -- the "validated and quoted, never interpolated
 // raw" rule -- so a hostile token cannot break out of the
 // http-header-field string either.
 func TestBackupPushScriptEscapesQuotedToken(t *testing.T) {
@@ -963,7 +1326,7 @@ func TestBackupScriptEscapesQuotedToken(t *testing.T) {
 // this is the test that would catch it being anything else.
 func TestBackupScriptNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123_ABC", "a")
-	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" }"
+	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"\\n  /system backup save name=mv-backup dont-encrypt=yes\\n  /export hide-sensitive file=mv-export\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\\n  /file remove mv-backup.backup\\n  /file remove mv-export.rsc\\n\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"\\n  /system backup save name=mv-backup dont-encrypt=yes\\n  /export hide-sensitive file=mv-export\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\\n  /file remove mv-backup.backup\\n  /file remove mv-export.rsc\\n\" }"
 	if got != want {
 		t.Errorf("BackupScript with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -995,7 +1358,7 @@ func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // a normal token's rendered output is byte-for-byte identical.
 func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
-	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1027,7 +1390,7 @@ func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // loggingPushBlock: captured before quote() was added to token.
 func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
-	want := ":local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"name\") = \"mikroview\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if (($v->\"action\") = \"mikroview\") do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local matchNames \"\"\n:local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"target\") = \"remote\" and ($v->\"remote\") = \"192.0.2.10\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\"); \"srcAddress\"=($v->\"src-address\")}\n    :set logRecs ($logRecs, {$rec})\n    :set matchNames ($matchNames . \",\" . ($v->\"name\") . \",\")\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if ($matchNames ~ (\",\".($v->\"action\").\",\")) do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1040,14 +1403,15 @@ func TestPushBlockSendsTheMikroviewLoggingSetup(t *testing.T) {
 	block := PushBlock("h", "t", "logging", "a")
 	for _, want := range []string{
 		`/system/logging/action print as-value`,
-		`:if (($v->"name") = "mikroview")`,
+		`:if (($v->"target") = "remote" and ($v->"remote") = "h")`,
 		`"type"="action"`,
 		`"remotePort"=($v->"remote-port")`,
 		`"remoteProtocol"=($v->"remote-protocol")`,
 		`"remoteLogFormat"=($v->"remote-log-format")`,
 		`"checkCertificate"=($v->"check-certificate")`,
+		`"srcAddress"=($v->"src-address")`,
 		`/system/logging print as-value`,
-		`:if (($v->"action") = "mikroview")`,
+		`:if ($matchNames ~ (",".($v->"action").","))`,
 		`"type"="rule"`,
 		`"topics"=($v->"topics")`,
 		`"disabled"=($v->"disabled")`,
@@ -1090,6 +1454,13 @@ func TestPushScriptStampsEveryBlockWithTheWizardVersion(t *testing.T) {
 	stamp := fmt.Sprintf(`"wizardVersion"=%d`, WizardVersion)
 	if n := strings.Count(script, stamp); n != 3 {
 		t.Errorf("pushScript carried %q %d times, want 3 (two tables plus the logging block):\n%s", stamp, n, script)
+	}
+	// #1360's two kinds are blocks like any other: each stamps the
+	// version, so a router whose script carries them says which wizard
+	// wrote it from whichever page arrives.
+	blocklist := PushScript("h", "t", []string{"address-list", "raw-rule", "address-list-count"}, "a")
+	if n := strings.Count(blocklist, stamp); n != 4 {
+		t.Errorf("pushScript with the blocklist kinds carried %q %d times, want 4:\n%s", stamp, n, blocklist)
 	}
 	if !strings.Contains(script, `"routerosVersion"=[/system/resource get version]; "wizardVersion"=`) {
 		t.Errorf("the wizard stamp is not on the envelope beside routerosVersion:\n%s", script)

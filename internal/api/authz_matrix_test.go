@@ -3,11 +3,9 @@
 package api
 
 import (
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,14 +15,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
 )
 
 // access is the level of caller a route requires once authentication is
 // active (an account exists and auth has not been disabled). #653
 // introduced the third tier: viewer, sitting below user, replacing what
 // used to be the single "any authenticated session" level of that name.
-// Tiers stack (auth.Role.AtLeast): admin implies user implies viewer.
+// Tiers stack (gauntlet.Role.AtLeast): admin implies user implies viewer.
 type access int
 
 const (
@@ -60,20 +58,20 @@ func (a access) String() string {
 }
 
 // allowsRole reports whether access level a permits a caller holding
-// role, per auth.Role.AtLeast's stacked tiers. accessPublic permits
+// role, per gauntlet.Role.AtLeast's stacked tiers. accessPublic permits
 // every role including no session at all, which is why the anonymous
 // caller in TestAuthorizationMatrixIsEnforced isn't driven through this
-// method -- there's no auth.Role to hold when there's no session.
-func (a access) allowsRole(role auth.Role) bool {
+// method -- there's no gauntlet.Role to hold when there's no session.
+func (a access) allowsRole(role gauntlet.Role) bool {
 	switch a {
 	case accessPublic:
 		return true
 	case accessViewer:
-		return role.AtLeast(auth.RoleViewer)
+		return role.AtLeast(gauntlet.RoleViewer)
 	case accessUser:
-		return role.AtLeast(auth.RoleUser)
+		return role.AtLeast(gauntlet.RoleUser)
 	default:
-		return role.AtLeast(auth.RoleAdmin)
+		return role.AtLeast(gauntlet.RoleAdmin)
 	}
 }
 
@@ -105,42 +103,6 @@ var authzMatrix = []routeExpectation{
 	// -- Public by necessity -------------------------------------------
 	{http.MethodGet, "/api/healthz", accessPublic,
 		"liveness probe -- hit by Docker's HEALTHCHECK, which has no session"},
-	{http.MethodGet, "/api/auth/session", accessPublic,
-		"reports auth state so the frontend can decide which screen to draw; must answer before a session exists"},
-	{http.MethodPost, "/api/auth/login", accessPublic,
-		"the login endpoint itself"},
-	{http.MethodPost, "/api/auth/logout", accessPublic,
-		"calling it without a session is a harmless no-op, not worth a 401"},
-	{http.MethodPost, "/api/auth/password", accessViewer,
-		"changes the caller's own password, so any signed-in caller may reach it -- not admin-gated, because a " +
-			"non-admin unable to change their own credential is the gap this closes (#294 item 4). It acts only on " +
-			"the session's own account: there is no username in the body to point elsewhere, deliberately, the same " +
-			"way /api/auth/oidc/link takes its target from the session rather than the request. #653 introduced the " +
-			"viewer tier below user, and this stays open to it for the same reason -- even the lowest tier must be " +
-			"able to change its own credential"},
-	{http.MethodPost, "/api/auth/logout-all", accessViewer,
-		"ends every session the caller holds, everywhere, then re-establishes the caller's own -- the settings " +
-			"page's 'sign out everywhere' (#677). Same reasoning as /api/auth/password directly above: it acts only " +
-			"on the session's own account (SessionStore.RevokeAllForUser(user.ID), the ID coming from the session, " +
-			"never a request body), so there is nothing an admin-only gate would add, and the viewer tier must be " +
-			"able to end its own stolen or forgotten sessions same as any other tier. Ending someone *else's* " +
-			"sessions stays admin-only, via DELETE /api/auth/users/{id} below"},
-	{http.MethodGet, "/api/auth/oidc/login", accessPublic,
-		"starts the SSO redirect; a login must work before a session exists"},
-	{http.MethodGet, "/api/auth/oidc/callback", accessPublic,
-		"the provider redirects the browser here; protected by state/nonce/PKCE, not by a session"},
-	{http.MethodPost, "/api/auth/register", accessPublic,
-		"first-run only -- auth.Store.Register refuses once any account exists"},
-	{http.MethodPost, "/api/auth/login/factor", accessPublic,
-		"#1249's second login step, reached with the short-lived pending-login cookie handleAuthLogin sets in " +
-			"place of a session when the account holds an active factor -- like /api/auth/login itself, this has to " +
-			"work before a session exists. Its own rate limiting (the same LoginLimiter buckets as the password " +
-			"step) is what stands in for a session here, same as state/nonce/PKCE do for the OIDC callback above"},
-	{http.MethodPost, "/api/auth/login/factor/begin", accessPublic,
-		"#1250's passkey half of the same second login step, reached with the identical pending-login cookie -- " +
-			"same reasoning as POST /api/auth/login/factor directly above: it has to work before a session exists, " +
-			"and its own LoginLimiter reservations (shared with the code path once the assertion is actually " +
-			"submitted to the route above) stand in for one"},
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
@@ -148,6 +110,33 @@ var authzMatrix = []routeExpectation{
 		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 	{http.MethodGet, "/api/config/upgrade", accessAdmin,
 		"the \"N new settings are available\" notice (#1218) and its ready-to-paste YAML -- admin-only like the wizard's own writes, since there is no read-only wizard for a viewer to reach this alongside"},
+
+	// The config editor (#1347). Every route admin-only: the config is
+	// the instance itself, secrets included, and the editor's whole job
+	// is producing the file that decides everything else. Setup-only
+	// mode serves these same rows (setuponly.go).
+	{http.MethodPost, "/api/config/editor/open", accessAdmin,
+		"re-checks the caller's password and returns the running config's text (secrets masked) and path -- the " +
+			"infrastructure map /api/config/problems is admin-gated for, and then some; the password is on top of the role, not instead of it"},
+	{http.MethodGet, "/api/config/editor/summary", accessAdmin,
+		"the Engine Room Config card's facts about the running config -- its path, header, schema and snapshot count, " +
+			"no text and no secrets, so no password either; admin-only for the path, the same infrastructure-map disclosure as /api/config/problems"},
+	{http.MethodGet, "/api/config/editor/reveal", accessAdmin,
+		"hands back the config's secret values in the clear, within the fifteen-minute unlock the password bought -- the most sensitive read here"},
+	{http.MethodPost, "/api/config/validate", accessAdmin,
+		"runs a config text through start-up's checks; the answers name keys, paths and hosts, the same disclosure as /api/config/problems"},
+	{http.MethodPost, "/api/config/carry-forward", accessAdmin,
+		"rewrites a config text for this build and snapshots the old one, writing to the snapshot store and the audit log"},
+	{http.MethodPost, "/api/config/download", accessAdmin,
+		"returns the whole config file with its secrets put back, within the unlock window -- a config file is the instance's keys"},
+	{http.MethodGet, "/api/config/snapshots", accessAdmin,
+		"lists the kept config snapshots (who took them, when, why); the texts themselves are behind the unlock on the route below"},
+	{http.MethodPost, "/api/config/snapshots", accessAdmin,
+		"keeps a whole config file, secrets included, in the snapshot store, and writes the audit log"},
+	{http.MethodGet, "/api/config/snapshots/{id}", accessAdmin,
+		"returns one kept config file (secrets masked, their values released to this session), within the unlock window"},
+	{http.MethodDelete, "/api/config/snapshots/{id}", accessAdmin,
+		"deletes a kept config file, possibly the copy a rollback needs, and writes the audit log"},
 
 	{http.MethodGet, "/api/upgrade", accessViewer,
 		"the upgrade notice's facts (#1240): the version this data directory last ran, this one, and how many of " +
@@ -220,9 +209,16 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/droplist/key", accessAdmin,
 		"mints (or rotates) the droplist-pull key a router's own scheduled fetch presents at GET " +
 			"/api/droplist.rsc -- admin-only, mirroring POST /api/tokens: minting a bearer credential is a setup " +
-			"task, not day-to-day product use"},
+			"task, not day-to-day product use. Since #1447 the admin tier is the floor: the admin's password is " +
+			"re-checked too, in the enrolment re-check budget"},
 	{http.MethodDelete, "/api/droplist/key", accessAdmin,
 		"revokes the droplist-pull key -- same tier as minting it"},
+	{http.MethodGet, "/api/blocklist/builder", accessAdmin,
+		"the blocklist builder's page (#1360): the catalogue, the router's version and what it holds of each " +
+			"list -- admin-only beside the drop list, since the page exists to write enforcement onto a router"},
+	{http.MethodPost, "/api/blocklist/builder/commands", accessAdmin,
+		"renders the blocklist block (#1360), which re-sets the router's push script with an ingest token and " +
+			"adds raw drop rules -- a setup task in the same tier as minting the drop list's key"},
 
 	{http.MethodPut, "/api/settings/store", accessAdmin,
 		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
@@ -240,8 +236,39 @@ var authzMatrix = []routeExpectation{
 			"anywhere to put it"},
 	{http.MethodPut, "/api/settings/history", accessAdmin,
 		"turns the on-disk event history on or off and sets its two caps (#910). Admin for the memory slider's " +
-			"reasons and one of its own: turning it off deletes every retained event before the call returns, " +
-			"which is the largest single act of evidence destruction available anywhere in mikroview"},
+			"reasons and one of its own: a smaller day count or cap deletes the oldest retained days at once. " +
+			"Turning it off keeps the files (#1354); deleting them is the route below"},
+	{http.MethodDelete, "/api/settings/history/files", accessAdmin,
+		"deletes every retained history file an off history left on disk (#1354) -- the largest single act of " +
+			"evidence destruction available anywhere in mikroview, so admin-only and behind a password re-check " +
+			"on top of the session"},
+
+	{http.MethodPut, "/api/settings/router-backups", accessAdmin,
+		"opens or closes the router-backup SFTP drop box (#1361) -- a second listening port a stolen session " +
+			"could otherwise open, so admin-only and password-gated on the way open (closing needs no password: " +
+			"it is the safe direction). Same tier as the history switch above, for the same reason: an on/off " +
+			"control with an instance-wide, hard-to-undo cost"},
+
+	{http.MethodGet, "/api/settings/geo", accessAdmin,
+		"the Engine Room's \"Country and network owner\" card (#1352): which country source is live and each " +
+			"source's fetch state, plus whether an API key is set and by whom -- never the key itself. Admin for " +
+			"the read too: the card sits in the admin-only Engine Room grid, and who configured which provider " +
+			"account is instance configuration, not something the stream needs (healthz carries the one fact it " +
+			"does need, geoSource)"},
+	{http.MethodPut, "/api/settings/geo/ipinfo", accessAdmin,
+		"stores an IPinfo Lite token, sealed under the retention key (#1352) -- entering a credential is a setup " +
+			"task, the same tier as minting the droplist pull key"},
+	{http.MethodDelete, "/api/settings/geo/ipinfo", accessAdmin,
+		"removes the IPinfo token -- same tier as setting it"},
+	{http.MethodPut, "/api/settings/geo/maxmind", accessAdmin,
+		"stores a MaxMind account ID and licence key, sealed under the retention key (#1352) -- same tier as " +
+			"the IPinfo token"},
+	{http.MethodDelete, "/api/settings/geo/maxmind", accessAdmin,
+		"removes the MaxMind credentials -- same tier as setting them"},
+	{http.MethodGet, "/api/geo/lookup", accessViewer,
+		"on-demand country and network owner for one public address (#1352), for the IP popover and host " +
+			"dossier -- any signed-in caller, like /api/lookup/ip/{ip}: it reveals nothing about an address the " +
+			"stream is not already showing, and no key or provider detail reaches the browser"},
 
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
@@ -258,8 +285,12 @@ var authzMatrix = []routeExpectation{
 			"The gate the issue asks for is the same gate the existing query carries. The mode learns nothing new in kind: a token that already reaches GET /api/events reads the live feed for every device, and a bounded page of matches is a strictly smaller view of the same traffic. And it is bounded by construction, not by the caller -- matchlog.RecentQuery clamps the limit to 5000 (100 by default) before either backend runs, which is the property that stops an all-entries read on an unrate-limited route being an arbitrarily large response. " +
 			"What did NOT change: the per-identity path still refuses an empty identity (matchlog.ErrEmptyIdentity), and entries=all refuses to be combined with mac/ip, so 'no identity' can never silently mean 'every device'"},
 	{http.MethodGet, "/api/rules", accessViewer, "core read"},
+	{http.MethodGet, "/api/networks", accessViewer,
+		"the configured home networks (networks.home, #1481), so the browser classifies inside/outside the " +
+			"way the server does -- any signed-in caller, like /api/devices: it is a deployment fact the events " +
+			"already imply, and carries no credential"},
 	{http.MethodGet, "/api/me/preferences", accessViewer,
-		"reads the caller's own preferences record (#1283) -- same reasoning as /api/auth/password above: it acts " +
+		"reads the caller's own preferences record (#1283) -- same reasoning as gauntlet's /api/auth/password: it acts " +
 			"only on the session's own account, there is no id in the request that could point it at someone else's, " +
 			"and even the lowest tier must be able to see its own presets, widgets and layout"},
 	{http.MethodPatch, "/api/me/preferences", accessViewer,
@@ -286,6 +317,8 @@ var authzMatrix = []routeExpectation{
 		"the pushed NAT table, same reasoning as the rules row above"},
 	{http.MethodGet, "/api/routeros/{device}/addresses", accessViewer,
 		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
+	{http.MethodGet, "/api/routeros/{device}/services", accessViewer,
+		"the pushed /ip/service table (#1329) -- the router's own management services, same tier as the rules/NAT/addresses rows above"},
 	{http.MethodGet, "/api/routeros/{device}/wireguard", accessViewer,
 		"the pushed WireGuard tables with derived per-tunnel state (#874), same tier as the rules/NAT/addresses rows above -- display data annotating what a viewer already sees on the topography"},
 	{http.MethodGet, "/api/routeros/{device}/ppp-active", accessViewer,
@@ -406,6 +439,10 @@ var authzMatrix = []routeExpectation{
 		"the port filter's answer (#1018 round 53): which boundaries and hosts carried a port in the window, and which pushed filter rules name it. Same viewer-tier read as GET /api/baseline/off directly above and for the same reason -- a non-admin looking at the map is exactly who asks where a port is used. Deliberately not on readOnlyRoutes for the same reason too: it is the operator's private address space with a port attached, which no bearer token has ever been able to read"},
 	{http.MethodGet, "/api/trace", accessViewer,
 		"one logged line's single hop through the router (#1018 round 53): the interfaces it came in and left on, the rule that decided, the NAT if any. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports above -- it names both ends of one connection on the operator's own network"},
+	{http.MethodGet, "/api/ports/serving", accessViewer,
+		"the 'seen serving' lens's answer (#1320): every host the window saw actually answer, and what. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports directly above, for the same reason -- it is the operator's own address space with the ports each host answered on, which no bearer token has ever been able to read"},
+	{http.MethodGet, "/api/doors/internet", accessViewer,
+		"the doors panel's answer (#1319): every pushed rule that lets the internet reach the router itself or a host behind it, and the pushed /ip service rows beside them. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports directly above, for the same reason -- it is the operator's own address space with which hosts a WAN door leads to, which no bearer token has ever been able to read"},
 	{http.MethodPut, "/api/baseline/{key}/expected", accessUser,
 		"saying a line is expected is an on-record statement that traffic belongs, and it is the only way a line leaves the bright state early -- the same weight as marking a quiet host intended, so the same user tier and the same audit line. It also exempts the line from eviction, which is a second reason it is not a viewer's to make"},
 	{http.MethodDelete, "/api/baseline/{key}/expected", accessUser,
@@ -424,62 +461,6 @@ var authzMatrix = []routeExpectation{
 		"same reasoning as hide. Widened from admin to user tier by #653"},
 	{http.MethodPost, "/api/suggestions/reset", accessUser,
 		"destructively wipes every expectation definition -- the most dangerous single endpoint in this feature, and the one row in this whole surface the owner's #653 ruling considered keeping admin-only for that reason. It was widened to user tier anyway, on the view that the confirm:true body this handler requires is the real safeguard against an accidental call, not the role gate -- a safeguard user and admin are equally bound by"},
-	{http.MethodPost, "/api/auth/oidc/link", accessViewer,
-		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a caller can only ever affect themselves, at any tier including viewer"},
-	{http.MethodPost, "/api/auth/totp/enrol", accessViewer,
-		"starts enrolling an authenticator app on the caller's OWN account (#1249) -- same reasoning as " +
-			"/api/auth/password and /api/auth/oidc/link above: the target is always the session's own account, so " +
-			"even the lowest tier must be able to reach for a second factor of its own. Refused separately, inside " +
-			"the handler, for an SSO-only caller (409) -- that is not this row's concern, since it still gets past " +
-			"the gate"},
-	{http.MethodPost, "/api/auth/totp/confirm", accessViewer,
-		"finishes the enrolment the row above started, same tier and same reasoning -- it still only ever acts on " +
-			"the caller's own account"},
-	{http.MethodDelete, "/api/auth/totp", accessViewer,
-		"turns the caller's OWN factor off, gated by their own password inside the handler -- same tier as the two " +
-			"rows above for the same reason; the password check is the real protection, not the role"},
-	{http.MethodGet, "/api/auth/passkeys", accessViewer,
-		"lists the caller's OWN passkeys (#1250) -- same reasoning as the TOTP rows above: the target is always " +
-			"the session's own account, so even the lowest tier must be able to see what can sign in as them"},
-	{http.MethodPost, "/api/auth/passkeys/register/begin", accessViewer,
-		"starts registering a passkey on the caller's OWN account -- same tier and reasoning as " +
-			"/api/auth/totp/enrol above. Refused separately, inside the handler, when the relying party isn't ready " +
-			"(503) -- that's not this row's concern, since it still gets past the gate"},
-	{http.MethodPost, "/api/auth/passkeys/register/finish", accessViewer,
-		"finishes the registration the row above started, same tier and same reasoning -- it still only ever acts " +
-			"on the caller's own account"},
-	{http.MethodPatch, "/api/auth/passkeys/{id}", accessViewer,
-		"renames one of the caller's OWN passkeys -- cosmetic, no password check (RenamePasskey's own doc " +
-			"comment), same tier as the rows above for the same reason"},
-	{http.MethodDelete, "/api/auth/passkeys/{id}", accessViewer,
-		"removes one of the caller's OWN passkeys, gated by their own password inside the handler -- same tier as " +
-			"DELETE /api/auth/totp above for the same reason: the password check is the real protection, not the role"},
-	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
-	{http.MethodGet, "/api/auth/users", accessAdmin,
-		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only. #653 added a viewer role beneath that non-admin space and left this row exactly where it was -- account creation and the account list are the owner-level items #653's tiers deliberately keep out of user's reach too"},
-	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
-		"removes an account and revokes its sessions and API tokens"},
-	{http.MethodDelete, "/api/auth/users/{id}/totp", accessAdmin,
-		"clears ANOTHER user's authenticator-app factor from the Users group (#1249) -- admin-only for the same " +
-			"reason account deletion and password reset are: this removes a credential guard on somebody else's " +
-			"account, so a user or viewer able to do it to a colleague could use it to make that account easier to " +
-			"take over. The caller's own account is refused inside the handler (409, which this matrix reads as " +
-			"allowed, the same convention the reset-password row below uses), not here"},
-	{http.MethodDelete, "/api/auth/users/{id}/passkeys", accessAdmin,
-		"clears ANOTHER user's passkeys from the Users group (#1250) -- same tier and same reasoning as " +
-			"DELETE /api/auth/users/{id}/totp directly above, including the caller's-own-account refusal living " +
-			"inside the handler (409, read as allowed here) rather than at this gate"},
-	{http.MethodPost, "/api/auth/users/{id}/reset-password", accessAdmin,
-		"mints a one-time code that stands in for another account's password for 24 hours (#1251), kills that " +
-			"account's old password and every session it holds. Admin-only for the same reason account creation and " +
-			"deletion are: this is a credential handed to somebody, and a user or viewer able to mint one for a " +
-			"colleague's account would be able to take it over. The caller's own account and an SSO-only account are " +
-			"refused inside the handler, not here -- both are 409, which this matrix reads as allowed, because they " +
-			"are the right answer for a request that got through the gate"},
-	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
-	{http.MethodGet, "/api/tokens", accessAdmin,
-		"narrowed back from accessViewer (#657). #490 widened it to serve a viewer-readable settings page; #657 removed that page from a viewer's navigation, and ruled the doors station admin-only on the grounds that issuing keys is a setup task rather than using the product -- so the user tier deliberately loses metadata it could see before. The old reasoning (the raw value never appears here, so the read hands out no secret) is still true and no longer the point: the surface it was widened for is gone"},
-	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
 
 	{http.MethodPost, "/api/devices", accessAdmin,
 		"declares a syslog-only router by name (issue #1281) -- admin-only, same tier as POST /api/tokens beside it: " +
@@ -489,11 +470,6 @@ var authzMatrix = []routeExpectation{
 		"removes a device this registry itself created, clearing its enrolled address and any pending token with " +
 			"it -- same tier as creating one. A config.yaml declaration refuses with 400 rather than reaching this " +
 			"tier check meaningfully, since it would simply reappear on the next restart"},
-	{http.MethodPost, "/api/devices/{id}/registration", accessAdmin,
-		"records the operator's confirmation of a router on the device itself -- the ledger's final Register step " +
-			"(#1291). Admin tier like its neighbours, but deliberately no password re-proof on top: registering " +
-			"grants nothing (it never sets AcceptedIP), so spoofing it renames a device and stamps a date. The " +
-			"re-proof belongs on the endpoint that opens the door, which is minting"},
 	{http.MethodPost, "/api/devices/{id}/enrolment", accessAdmin,
 		"mints (or rerolls) a device's enrolment token (#1281) -- a bearer credential that attributes syslog traffic " +
 			"to a device, the same tier every other token-issuing endpoint in this API holds to (POST /api/tokens, " +
@@ -582,10 +558,56 @@ func TestEveryRouteIsInTheAuthorizationMatrix(t *testing.T) {
 	}
 }
 
+// retiredRoutes are routes this API used to serve and must not serve
+// again. A retired route has no row in authzMatrix -- there is no tier
+// to state -- so without this list nothing would notice one coming
+// back. TestRetiredRoutesAreAbsent proves each is gone, not merely
+// admin-only.
+var retiredRoutes = []routeExpectation{
+	{http.MethodPost, "/api/devices/{id}/registration", accessAdmin,
+		"the ledger's old Register step (#1291), retired by #1493: a router is registered the moment its enrol " +
+			"line is accepted, so no web request records a registration any more"},
+}
+
+// TestRetiredRoutesAreAbsent checks each retired route twice: it is not
+// in the route table, and an admin -- who passes every tier check --
+// gets 404 from the running server.
+func TestRetiredRoutesAreAbsent(t *testing.T) {
+	registered := make(map[string]bool)
+	for _, p := range registeredRoutePatterns(t) {
+		registered[p] = true
+	}
+
+	s := newAuthTestServer(t)
+	s.TestHooks = true
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	admin := registerAdmin(t, s, ts)
+
+	for _, r := range retiredRoutes {
+		t.Run(r.method+" "+r.path, func(t *testing.T) {
+			if registered[r.method+" "+r.path] {
+				t.Errorf("%s %s is registered again, but it was retired: %s", r.method, r.path, r.why)
+			}
+			resp := doRouteRequest(t, admin, ts.URL, r)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("admin %s %s: status %d, want 404 for a retired route", r.method, r.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
 // TestAuthorizationMatrixIsEnforced drives every row against a running
 // server in the state that actually matters -- auth active, with an
 // admin and one account at each of the other two roles (#653) -- and
 // asserts each of the four caller kinds gets what the matrix says.
+//
+// Every account holds a confirmed factor, so none is held at gauntlet's
+// must-enrol-factor door: that door is gauntlet's subject, and this
+// matrix is about mikroview's own role tiers. The /api/auth/* and
+// /api/tokens routes are gauntlet's (#1202) and covered by its own
+// suite, so they have no rows here.
 func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	s := newAuthTestServer(t)
 	// The matrix covers the two MV_TEST_HOOKS routes, so the server it is
@@ -596,61 +618,17 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	// Establish the admin via the real first-run path, then add one
-	// account at each of the other two roles through the store
-	// (self-registration is closed by then).
-	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register",
-		credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	if _, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Auth.CreateUser("watcher", "password789", auth.RoleViewer, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
 	anon := &http.Client{}
-	viewer := loggedInClient(t, ts.URL, "watcher", "password789")
-	user := loggedInClient(t, ts.URL, "operator", "password456")
-	admin := loggedInClient(t, ts.URL, "admin", "password123")
-
-	// #1253: all three are local accounts, so the forced-enrolment door
-	// refuses every route below but the four enrolment ones until each
-	// holds a confirmed factor. Seeded through the store (seedFactor)
-	// rather than the routes -- the door itself is
-	// secondfactordoor_test.go's subject, and this matrix is about
-	// roles -- and remembered, so the throwaway re-logins the logout
-	// row drives further down (loggedInClient) can complete #1249's
-	// second step themselves.
-	seedFactor(t, s, ts, "watcher")
-	seedFactor(t, s, ts, "operator")
-	seedFactor(t, s, ts, "admin")
+	admin := registerAdmin(t, s, ts)
+	user := createAccount(t, s, ts, "operator", fixtureUserPassword, gauntlet.RoleUser)
+	viewer := createAccount(t, s, ts, "watcher", fixtureOtherPassword, gauntlet.RoleViewer)
 
 	for _, r := range authzMatrix {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
-			// Skip the first-run endpoint: an account now exists, so it
-			// legitimately refuses everyone. Its "public"
-			// classification is about reachability before setup, which
-			// its own dedicated tests cover.
-			if r.path == "/api/auth/register" {
-				t.Skip("first-run only; refuses all callers once an account exists (covered separately)")
-			}
-
-			// Logout destroys the session it is called with, so it gets
-			// throwaway clients rather than the shared ones -- otherwise
-			// probing it would silently log the shared viewer/user/admin
-			// out and every subsequent row would fail with a misleading
-			// 401. (It did, while this test was being written.)
-			viewerClient, userClient, adminClient := viewer, user, admin
-			if r.path == "/api/auth/logout" {
-				viewerClient = loggedInClient(t, ts.URL, "watcher", "password789")
-				userClient = loggedInClient(t, ts.URL, "operator", "password456")
-				adminClient = loggedInClient(t, ts.URL, "admin", "password123")
-			}
-
 			assertAccess(t, anon, ts.URL, r, "anonymous", r.want == accessPublic)
-			assertAccess(t, viewerClient, ts.URL, r, "viewer", r.want.allowsRole(auth.RoleViewer))
-			assertAccess(t, userClient, ts.URL, r, "user", r.want.allowsRole(auth.RoleUser))
-			assertAccess(t, adminClient, ts.URL, r, "admin", true)
+			assertAccess(t, viewer, ts.URL, r, "viewer", r.want.allowsRole(gauntlet.RoleViewer))
+			assertAccess(t, user, ts.URL, r, "user", r.want.allowsRole(gauntlet.RoleUser))
+			assertAccess(t, admin, ts.URL, r, "admin", true)
 		})
 	}
 }
@@ -706,46 +684,6 @@ func doRouteRequest(t *testing.T, c *http.Client, base string, r routeExpectatio
 		t.Fatalf("%s %s: %v", r.method, path, err)
 	}
 	return resp
-}
-
-// loggedInClient returns a client holding a live session cookie for the
-// given credentials.
-//
-// #1249 (and #1253's forced-enrolment door, which is what makes every
-// account this package tests hold a factor sooner or later) means the
-// password step alone no longer guarantees that: an account with a
-// confirmed factor gets back {"secondFactor":[...]} and a pending-login
-// cookie instead of a session. When that happens here, the fixture's own
-// remembered secret (rememberTOTPFactor, set by whatever enrolled it --
-// enrolAndRememberFactor, or this test's own setup) completes the second
-// step, so every caller of this helper still gets what its name promises.
-func loggedInClient(t *testing.T, base, username, password string) *http.Client {
-	t.Helper()
-	c := &http.Client{Jar: mustCookieJar(t)}
-	resp := postJSON(t, c, base+"/api/auth/login", credentialsRequest{Username: username, Password: password})
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		t.Fatalf("login as %q failed with %d", username, resp.StatusCode)
-	}
-	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		resp.Body.Close()
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if _, pending := out["secondFactor"]; pending {
-		code, ok := totpFixtureCode(base, username)
-		if !ok {
-			t.Fatalf("login as %q stopped at the pending-factor step, but no fixture-enrolled secret is on record for it", username)
-		}
-		factorResp := postJSON(t, c, base+"/api/auth/login/factor", loginFactorRequest{Code: code})
-		defer factorResp.Body.Close()
-		if factorResp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(factorResp.Body)
-			t.Fatalf("completing the factor step for %q failed with %d: %s", username, factorResp.StatusCode, body)
-		}
-	}
-	return c
 }
 
 // registeredRoutePatterns reads the real route table -- the reason
@@ -811,9 +749,9 @@ var bearerMuxRoutes = map[string][]string{
 // one that was added. Source is where "a route was added" is visible.
 func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "auth.go", nil, 0)
+	f, err := parser.ParseFile(fset, "gauntlet.go", nil, 0)
 	if err != nil {
-		t.Fatalf("parsing auth.go: %v", err)
+		t.Fatalf("parsing gauntlet.go: %v", err)
 	}
 
 	found := map[string][]string{}
@@ -860,7 +798,7 @@ func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 	for name, want := range bearerMuxRoutes {
 		got, ok := found[name]
 		if !ok {
-			t.Errorf("could not find the %s mux constructor in auth.go", name)
+			t.Errorf("could not find the %s mux constructor in gauntlet.go", name)
 			continue
 		}
 		sort.Strings(got)
@@ -870,42 +808,22 @@ func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 			t.Errorf("the %s bearer mux serves %v, declared %v.\n"+
 				"If this is intended, update bearerMuxRoutes -- and note that every route here is "+
 				"reachable by anyone holding that kind of token, including a router-side script's "+
-				"ingest token, which internal/auth.Token documents as readable by any RouterOS "+
+				"ingest token, which gauntlet's Token documents as readable by any RouterOS "+
 				"'read' user.", name, got, expect)
 		}
 	}
 }
 
-// resetCodeSessionOpenPaths is everything a session flagged
-// MustChangePassword (#1251) may still reach. Two kinds of thing are on
-// it: the route that lifts the flag, and the handful requireAuth exempts
-// from needing a session at all, which return before the gate is
-// reached.
+// resetCodeSessionOpenPaths is every row of the matrix a session
+// flagged MustChangePassword (#1251) may still reach: only the one that
+// needs no session at all. The way out of that state, POST
+// /api/auth/password, is gauntlet's and has no row here.
 //
-// Deliberately a literal list rather than something derived from
-// exemptPaths -- the point of this test is that widening what a
-// half-authenticated session can touch has to be written down here as
-// well as done in the middleware.
+// Deliberately a literal list -- the point of this test is that widening
+// what a half-authenticated session can touch has to be written down
+// here as well as done in the gate.
 var resetCodeSessionOpenPaths = map[string]bool{
-	changePasswordPath:   true,
-	"/api/healthz":       true,
-	"/api/auth/session":  true,
-	"/api/auth/register": true,
-	"/api/auth/login":    true,
-	"/api/auth/logout":   true,
-	// #1249's second login step is on exemptPaths for the same reason
-	// /api/auth/login is -- it completes a login, so it has to work
-	// before (and regardless of) any session, including one carrying
-	// this flag. A reset-code session holds no pending-login cookie
-	// anyway, so this handler's own check refuses it on the merits a
-	// moment later; the point here is only that requireAuth lets the
-	// request through to find that out.
-	"/api/auth/login/factor": true,
-	// #1250's passkey half of the same second login step, exempt for the
-	// identical reason -- see exemptPaths' own comment in auth.go.
-	"/api/auth/login/factor/begin": true,
-	"/api/auth/oidc/login":         true,
-	"/api/auth/oidc/callback":      true,
+	"/api/healthz": true,
 }
 
 // TestResetCodeSessionReachesNothingButTheChangePasswordRoute walks the
@@ -914,33 +832,30 @@ var resetCodeSessionOpenPaths = map[string]bool{
 // list above -- including the admin-tier ones, since the account here is
 // an ordinary user, and including the plain reads a viewer could do.
 //
-// The matrix is walked rather than a handful of representative routes
-// for the reason authzMatrix itself exists: a gate that is only checked
-// on the endpoints somebody remembered would miss the next one added.
+// gauntlet's gate holds the door; what this pins is that it holds it in
+// front of every one of mikroview's own routes, walked rather than
+// sampled for the reason authzMatrix itself exists: a gate that is only
+// checked on the endpoints somebody remembered would miss the next one
+// added.
 func TestResetCodeSessionReachesNothingButTheChangePasswordRoute(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.TestHooks = true
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	admin := registerAdmin(t, s, ts)
-	postJSON(t, admin, ts.URL+"/api/auth/users",
-		createUserRequest{Username: "bilbo", Password: resetOldPassword, Role: "user"}).Body.Close()
-	var id string
-	for _, u := range s.Auth.List() {
-		if u.Username == "bilbo" {
-			id = u.ID
-		}
+	registerAdmin(t, s, ts)
+	bilbo, err := s.Auth.CreateUser("bilbo", fixtureUserPassword, gauntlet.RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	out := resetPassword(t, admin, ts, id)
-	flagged := loggedInClient(t, ts.URL, "bilbo", out.Code)
+	_, code, err := s.Auth.IssueResetCode(bilbo.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged := loggedInClient(t, ts.URL, "bilbo", code)
 
 	for _, r := range authzMatrix {
 		if resetCodeSessionOpenPaths[r.path] {
-			// The change-password route is the way out of this state and
-			// is covered by its own test; probing it here would clear the
-			// flag and make every later row meaningless. The rest return
-			// before the gate, without a session in play at all.
 			continue
 		}
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
@@ -948,8 +863,8 @@ func TestResetCodeSessionReachesNothingButTheChangePasswordRoute(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusForbidden {
 				t.Errorf("a session holding nothing but a reset code got %d from %s %s, want 403.\n"+
-					"Until the person sets a password only they know, this session may reach %s and nothing else.",
-					resp.StatusCode, r.method, r.path, changePasswordPath)
+					"Until the person sets a password only they know, this session may reach POST /api/auth/password and nothing else.",
+					resp.StatusCode, r.method, r.path)
 			}
 		})
 	}

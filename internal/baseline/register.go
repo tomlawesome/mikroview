@@ -16,7 +16,7 @@
 //
 // This package holds the recurrence half. Like internal/hosts it records
 // nothing the feed did not already show and asks the network nothing --
-// mikroview observes, it never probes (see AGENTS.md) -- so a line
+// mikroview observes, it never probes (see docs/decisions/observe-never-probe.md) -- so a line
 // exists here only because an event carrying it arrived.
 //
 // # What counts as a line

@@ -508,79 +508,6 @@ func TestListOrdersConfiguredFirstThenByID(t *testing.T) {
 	}
 }
 
-// TestRegisterRecordsIntentAndGrantsNoAddress is the heart of issue
-// #1291: the ledger's final step records that the operator confirmed
-// this router, and confers nothing on it. If registering could set
-// AcceptedIP, an admin session alone would be enough to have an address
-// treated as a log source -- which is exactly the hole #1291 closes.
-func TestRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
-	r := NewRegistry(nil)
-	now := time.Now()
-	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := r.Register("hap-ax3", "Upstairs hAP", now)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if info.RegisteredAt.IsZero() {
-		t.Error("registeredAt is zero after registering, want it stamped")
-	}
-	if info.Name != "Upstairs hAP" {
-		t.Errorf("name = %q, want the confirmed name", info.Name)
-	}
-	if info.AcceptedIP != "" {
-		t.Fatalf("acceptedIp = %q after registering, want registering to grant no address at all", info.AcceptedIP)
-	}
-	// And nothing anywhere else in the registry started attributing an
-	// address to it either.
-	if id := r.Resolve("10.10.0.1", now); id == "hap-ax3" {
-		t.Error("Resolve() attributed an address to a merely registered device, want registering to grant nothing")
-	}
-	if r.AcceptsConnectionFrom("10.10.0.1") {
-		t.Error("AcceptsConnectionFrom() = true after registering, want registering to open no window")
-	}
-}
-
-// TestRegisterKeepsTheExistingNameWhenGivenNone: the operator is
-// confirming the router, not necessarily renaming it.
-func TestRegisterKeepsTheExistingNameWhenGivenNone(t *testing.T) {
-	r := NewRegistry(nil)
-	now := time.Now()
-	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
-		t.Fatal(err)
-	}
-	info, err := r.Register("hap-ax3", "", now)
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if info.Name != "hap-ax3" {
-		t.Errorf("name = %q, want the name it already had", info.Name)
-	}
-	if info.RegisteredAt.IsZero() {
-		t.Error("registeredAt is zero, want registering to stamp it even with no rename")
-	}
-}
-
-// TestRegisterRefusesAConfigDeclaredDevice: config.yaml rebuilds it on
-// every boot, so a registration written here would vanish at the next
-// restart -- the same reason Delete refuses one.
-func TestRegisterRefusesAConfigDeclaredDevice(t *testing.T) {
-	r := NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "10.0.0.1"}})
-	if _, err := r.Register("core", "Renamed", time.Now()); err != ErrDeviceConfigured {
-		t.Errorf("Register(config-declared) error = %v, want ErrDeviceConfigured", err)
-	}
-}
-
-// TestRegisterUnknownDevice is the 404 the API answers with.
-func TestRegisterUnknownDevice(t *testing.T) {
-	r := NewRegistry(nil)
-	if _, err := r.Register("nope", "", time.Now()); err != ErrDeviceNotFound {
-		t.Errorf("Register(unknown) error = %v, want ErrDeviceNotFound", err)
-	}
-}
-
 // TestARouterEnrolledBeforeRegistrationExistedReadsAsRegistered is
 // issue #1291's upgrade path. A registry written before this shipped
 // has no registeredAt at all, so every router already enrolled under
@@ -648,5 +575,30 @@ func TestABareDeviceCarriesNoTimestamps(t *testing.T) {
 		if v, present := wire[key]; present {
 			t.Errorf("a device that has never been enrolled or registered sent %s = %v, want the key absent", key, v)
 		}
+	}
+}
+
+// TestAcceptingAnEnrolLineRegistersTheRouter is #1493: registration
+// folds into acceptance. The moment TryEnrol accepts a router's line the
+// server stamps RegisteredAt, equal to EnrolledAt.
+func TestAcceptingAnEnrolLineRegistersTheRouter(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Create("hap-ax3", "hap-ax3", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	got := r.List()
+	if len(got) != 1 {
+		t.Fatalf("List() = %d devices, want 1", len(got))
+	}
+	if got[0].EnrolledAt.IsZero() {
+		t.Fatal("EnrolledAt is zero after a successful TryEnrol")
+	}
+	if got[0].RegisteredAt.IsZero() {
+		t.Error("RegisteredAt is zero after a successful TryEnrol, want it stamped on acceptance")
+	}
+	if !got[0].RegisteredAt.Equal(got[0].EnrolledAt) {
+		t.Errorf("RegisteredAt = %v, want it equal to EnrolledAt %v", got[0].RegisteredAt, got[0].EnrolledAt)
 	}
 }

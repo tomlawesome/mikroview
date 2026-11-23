@@ -30,6 +30,12 @@
 # a locally built one -- which is what #273 slice 3 needs.
 set -eu
 
+# The first admin needs the setup code from the server's log (#1415).
+. "$(cd "$(dirname "$0")" && pwd -P)/setup-code.sh"
+# MV_PASSWORDLIST_OFFLINE_URL: keeps the common-password list's fetch off
+# the network (#1202).
+. "$(cd "$(dirname "$0")" && pwd -P)/live-stores.sh"
+
 MV_IMAGE="${MV_IMAGE:-mikroview:e2e}"
 MV_BACKEND="${MV_BACKEND:-file}"
 MV_DIR="${MV_DIR:-/tmp/mikroview-container}"
@@ -134,6 +140,18 @@ up() {
   # httpRedirect is off: the redirect listener is covered by its own unit
   # tests, and leaving it on would mean publishing a third port for
   # something no scenario drives.
+  # Since #1202 MikroView refuses to start without a key: the accounts,
+  # tokens, recovery keys and sign-in history are sealed under it. A fresh
+  # random one per run, mounted read-only from outside the data volume as
+  # an operator mounts theirs (deploy/docker-compose.yml). 0644, not 0600,
+  # for the reason pg.dsn gives below: the image runs as uid 1000, which
+  # need not be the user running this harness. Throwaway, never committed.
+  head -c 32 /dev/urandom | base64 > "$MV_DIR/history.key"
+  chmod 644 "$MV_DIR/history.key"
+
+  # adminPasskey is optional because the harness has no passkey to
+  # register; the rule's default would hold the admin at must-enrol-passkey
+  # wherever publicUrl is an https address.
   cat > "$MV_DIR/config.yaml" <<EOF
 listen:
   http: "0.0.0.0:8080"
@@ -149,6 +167,8 @@ auth:
   recoveryPepperPath: /var/lib/mikroview/pepper
   tokensStorePath: /var/lib/mikroview/tokens.json
   secureCookie: true
+  adminPasskey: optional
+history: {keyFile: /etc/mikroview/history.key}
 flags: {storePath: /var/lib/mikroview/flags.json}
 entities: {storePath: /var/lib/mikroview/entities.json}
 audit: {storePath: /var/lib/mikroview/audit.json}
@@ -193,10 +213,12 @@ EOF
     --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 128 --memory 512m --cpus 1.0 \
     -v "$MV_DIR/config.yaml:/etc/mikroview/config.yaml:ro" \
+    -v "$MV_DIR/history.key:/etc/mikroview/history.key:ro" \
     -v "$MV_DIR/pg.dsn:/etc/mikroview/pg.dsn:ro" \
     -v "$APP_NAME-data:/var/lib/mikroview" \
     -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
     -e MV_TEST_HOOKS=1 \
+    -e MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
     $PG_ENV \
     -p "$BIND:$HTTP_PORT:8080" \
     -p "$BIND:$SYSLOG_TLS_PORT:6514" \
@@ -210,9 +232,11 @@ EOF
         --cap-drop ALL --security-opt no-new-privileges \
         --pids-limit 128 --memory 512m --cpus 1.0 \
         -v "$MV_DIR/config.yaml:/etc/mikroview/config.yaml:ro" \
+        -v "$MV_DIR/history.key:/etc/mikroview/history.key:ro" \
         -v "$APP_NAME-data:/var/lib/mikroview" \
         -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
         -e MV_TEST_HOOKS=1 \
+        -e MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
         -p "$BIND:$HTTP_PORT:8080" \
         -p "$BIND:$SYSLOG_TLS_PORT:6514" \
         "$MV_IMAGE" >/dev/null
@@ -230,10 +254,21 @@ EOF
     return 1
   fi
 
-  curl -fsS $CURL_TLS -X POST -H 'Content-Type: application/json' \
-    -H 'X-Requested-With: mikroview' \
-    -d "{\"username\":\"$MV_USER\",\"password\":\"$MV_PASS\"}" \
-    "https://$BIND:$HTTP_PORT/api/auth/register" >/dev/null
+  # The first admin, with the setup code the container just logged
+  # (#1415) -- read from `docker logs` as an operator would, and sent
+  # over stdin so it never sits in a process listing. Never printed:
+  # this function's stdout is eval'd by the caller. `up` starts from an
+  # emptied volume, so no code means the server never logged one.
+  setup_code="$(mv_wait_setup_code 40 docker logs "$APP_NAME")" || {
+    log "no setup code in the container's log -- the server did not log the first-run line"
+    docker logs "$APP_NAME" 2>&1 | tail -20 >&2
+    return 1
+  }
+  printf '{"username":"%s","password":"%s","setupCode":"%s"}' "$MV_USER" "$MV_PASS" "$setup_code" |
+    curl -fsS $CURL_TLS -X POST -H 'Content-Type: application/json' \
+      -H 'X-Requested-With: mikroview' \
+      --data-binary @- \
+      "https://$BIND:$HTTP_PORT/api/auth/register" >/dev/null
 
   echo "export MV_URL=https://$BIND:$HTTP_PORT"
   echo "export MV_USER=$MV_USER"

@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/droplist"
 )
@@ -42,6 +43,12 @@ func droplistTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) 
 	t.Cleanup(ts.Close)
 	admin := setUpAdmin(t, s, ts)
 	return s, ts, admin
+}
+
+// droplistMintBody is the body a mint carries since #1447: the admin's
+// password, re-checked the way router enrolment's is.
+func droplistMintBody() map[string]string {
+	return map[string]string{"password": fixtureAdminPassword}
 }
 
 // deleteNoBody is deleteJSON (entities_test.go) without a body -- what
@@ -163,9 +170,9 @@ func TestDroplistAddUnknownFlagRefused(t *testing.T) {
 // alone would look for it.
 func TestDroplistWriteRoutesAreAdminOnly(t *testing.T) {
 	s, ts, admin := droplistTestServer(t)
-	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: fixtureUserPassword, Role: "user"}).Body.Close()
 	user := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "operator") // #1253: needed before /api/droplist below
 
 	if resp, err := user.Get(ts.URL + "/api/droplist"); err != nil {
@@ -234,7 +241,7 @@ func TestDroplistAddNoWarningOnceOwnRangesAreKnown(t *testing.T) {
 		t.Fatal("admin account not found")
 	}
 	enrolIngestTestDevice(t, s, "router-1")
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -298,7 +305,7 @@ func TestDroplistPullKeyServesTheFeed(t *testing.T) {
 	_, ts, admin := droplistTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "scanning"}).Body.Close()
 
-	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	defer mintResp.Body.Close()
 	if mintResp.StatusCode != http.StatusCreated {
 		t.Fatalf("mint status = %d, want 201", mintResp.StatusCode)
@@ -375,7 +382,7 @@ func TestDroplistPullKeyServesTheFeed(t *testing.T) {
 func TestDroplistPullRefusesEmptyFeedWhenNotPersisted(t *testing.T) {
 	_, ts, admin := droplistTestServer(t)
 
-	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	defer mintResp.Body.Close()
 	var minted droplistKeyCreateResponse
 	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
@@ -402,7 +409,7 @@ func TestDroplistPullKeyBlastRadiusIsTheFeedAndNothingElse(t *testing.T) {
 	if !ok {
 		t.Fatal("admin account not found")
 	}
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -413,7 +420,7 @@ func TestDroplistPullKeyBlastRadiusIsTheFeedAndNothingElse(t *testing.T) {
 		t.Error("an ingest token reached GET /api/droplist.rsc")
 	}
 
-	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	defer mintResp.Body.Close()
 	var minted droplistKeyCreateResponse
 	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
@@ -446,12 +453,12 @@ func TestDroplistPullKeyRevokeLeavesIngestWorking(t *testing.T) {
 		t.Fatal("admin account not found")
 	}
 	enrolIngestTestDevice(t, s, "router-1")
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
 
-	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	var minted droplistKeyCreateResponse
 	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
 		t.Fatal(err)
@@ -493,14 +500,14 @@ func TestDroplistPullKeyMintTwiceRotates(t *testing.T) {
 	// TestDroplistPullRefusesEmptyFeedWhenNotPersisted).
 	postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "scanning"}).Body.Close()
 
-	first := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	first := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	var firstKey droplistKeyCreateResponse
 	if err := json.NewDecoder(first.Body).Decode(&firstKey); err != nil {
 		t.Fatal(err)
 	}
 	first.Body.Close()
 
-	second := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	second := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusCreated {
 		t.Fatalf("second mint status = %d, want 201", second.StatusCode)
@@ -525,7 +532,7 @@ func TestDroplistPullKeyMintTwiceRotates(t *testing.T) {
 		t.Errorf("the second key does not work: status = %d, want 200", secondPull.StatusCode)
 	}
 
-	if got := len(s.Tokens.ByKind(auth.TokenKindDroplistPull)); got != 1 {
+	if got := len(s.Tokens.ByKind(TokenKindDroplistPull)); got != 1 {
 		t.Errorf("ByKind(droplist-pull) = %d tokens, want exactly 1 after rotating", got)
 	}
 }
@@ -545,13 +552,13 @@ func TestDroplistKeyMintConcurrentRequestsLeaveExactlyOneKey(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			resp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+			resp := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 			resp.Body.Close()
 		}()
 	}
 	wg.Wait()
 
-	if got := len(s.Tokens.ByKind(auth.TokenKindDroplistPull)); got != 1 {
+	if got := len(s.Tokens.ByKind(TokenKindDroplistPull)); got != 1 {
 		t.Errorf("ByKind(droplist-pull) = %d tokens after %d concurrent mints, want exactly 1", got, n)
 	}
 }
@@ -563,7 +570,7 @@ func TestDroplistKeyMintConcurrentRequestsLeaveExactlyOneKey(t *testing.T) {
 func TestDroplistLastUsedAtAppearsAfterPull(t *testing.T) {
 	_, ts, admin := droplistTestServer(t)
 
-	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
 	var minted droplistKeyCreateResponse
 	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
 		t.Fatal(err)
@@ -705,7 +712,7 @@ func TestDroplistListRoutersReportsHeldAgainstPushedSnapshot(t *testing.T) {
 		t.Fatal("admin account not found")
 	}
 	enrolIngestTestDevice(t, s, "router-1")
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	ingestRaw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -745,7 +752,7 @@ func TestDroplistListRoutersReportsHeldAgainstPushedSnapshot(t *testing.T) {
 func TestDroplistKeyCreateAcceptsOptionalAddressAndFillsScheduler(t *testing.T) {
 	_, ts, admin := droplistTestServer(t)
 
-	withAddress := postJSON(t, admin, ts.URL+"/api/droplist/key", map[string]string{"address": "mv.example:8443"})
+	withAddress := postJSON(t, admin, ts.URL+"/api/droplist/key", map[string]string{"address": "mv.example:8443", "password": fixtureAdminPassword})
 	defer withAddress.Body.Close()
 	if withAddress.StatusCode != http.StatusCreated {
 		t.Fatalf("mint with address status = %d, want 201", withAddress.StatusCode)
@@ -762,10 +769,10 @@ func TestDroplistKeyCreateAcceptsOptionalAddressAndFillsScheduler(t *testing.T) 
 		t.Errorf("Scheduler does not carry the real minted key: %q", minted.Scheduler)
 	}
 
-	// A genuinely empty body (no request payload at all, as opposed to
-	// postJSON's JSON "null") must still work -- decodeJSONBody's
-	// io.EOF is not a request error.
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/droplist/key", nil)
+	// A body with only the password (no address) still mints: the
+	// address falls back to r.Host. Since #1447 a truly empty body is a
+	// 400, as for enrolment.
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/droplist/key", strings.NewReader(`{"password":"`+fixtureAdminPassword+`"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -810,5 +817,117 @@ func TestDroplistAddressOrRefusesAnythingButAHostPort(t *testing.T) {
 		if got := droplistAddressOr(in, "fallback:1"); got != want {
 			t.Errorf("droplistAddressOr(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// droplistLiveKeyCount is how many drop-list pull keys exist.
+func droplistLiveKeyCount(s *Server) int { return len(s.Tokens.ByKind(TokenKindDroplistPull)) }
+
+// TestDroplistKeyMintRefusesWithoutAPassword (#1447): an admin session
+// alone must not mint, as with router enrolment.
+func TestDroplistKeyMintRefusesWithoutAPassword(t *testing.T) {
+	s, ts, admin := droplistTestServer(t)
+	for name, body := range map[string]any{"null body": nil, "empty object": map[string]string{}, "address only": map[string]string{"address": "mv.example:8443"}} {
+		resp := postJSON(t, admin, ts.URL+"/api/droplist/key", body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d, want 401", name, resp.StatusCode)
+		}
+	}
+	if got := droplistLiveKeyCount(s); got != 0 {
+		t.Errorf("%d keys minted by refused requests, want 0", got)
+	}
+}
+
+// TestDroplistKeyMintRefusesAWrongPasswordAndKeepsTheOldKey (#1447).
+func TestDroplistKeyMintRefusesAWrongPasswordAndKeepsTheOldKey(t *testing.T) {
+	s, ts, admin := droplistTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "scanning"}).Body.Close()
+	first := postJSON(t, admin, ts.URL+"/api/droplist/key", droplistMintBody())
+	var firstKey droplistKeyCreateResponse
+	if err := json.NewDecoder(first.Body).Decode(&firstKey); err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	if firstKey.Key == "" {
+		t.Fatal("setup: no key minted with the right password")
+	}
+
+	resp := postJSON(t, admin, ts.URL+"/api/droplist/key", map[string]string{"password": "not-the-password"})
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (body %s)", resp.StatusCode, body)
+	}
+	if strings.Contains(string(body), firstKey.Key) || strings.Contains(string(body), `"key"`) {
+		t.Errorf("a refused mint returned key material: %s", body)
+	}
+	if got := droplistLiveKeyCount(s); got != 1 {
+		t.Errorf("keys = %d after a refused rotation, want the original 1", got)
+	}
+	pull := bearerGet(t, ts.URL+"/api/droplist.rsc", firstKey.Key)
+	pull.Body.Close()
+	if pull.StatusCode != http.StatusOK {
+		t.Errorf("existing key pull status = %d after a refused mint, want 200", pull.StatusCode)
+	}
+}
+
+// TestDroplistKeyMintWrongPasswordsShareTheEnrolmentBudget (#1447): the
+// guesses are counted in the per-account budget, so they run out.
+func TestDroplistKeyMintWrongPasswordsShareTheEnrolmentBudget(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Devices = device.NewRegistry(nil)
+	ds, err := droplist.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds.SetAuditor(s.Audit)
+	ds.SetOwnRanges(s.Devices)
+	s.Droplist = ds
+	s.LoginLimiter = mustLimiter(t, 3, time.Minute)
+	mustGate(t, s)
+	ts := httptest.NewServer(s.Routes())
+	t.Cleanup(ts.Close)
+	admin := setUpAdmin(t, s, ts)
+
+	limited := false
+	for range 6 {
+		resp := postJSON(t, admin, ts.URL+"/api/droplist/key", map[string]string{"password": "not-the-password"})
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Error("six wrong-password mints never hit 429: guesses are not counted in the re-check budget")
+	}
+	if got := droplistLiveKeyCount(s); got != 0 {
+		t.Errorf("%d keys minted, want 0", got)
+	}
+}
+
+// TestDroplistKeyMintRefusesAnIdentityProviderAccount (#1447): an admin
+// with no local password gets the same 409 enrolment gives.
+func TestDroplistKeyMintRefusesAnIdentityProviderAccount(t *testing.T) {
+	s, ts, _ := droplistTestServer(t)
+	u, _, err := s.Auth.FindOrCreateOIDCUser("https://idp.example", "subject-placeholder", "frodo", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Auth.SetRole(u.ID, gauntlet.RoleAdmin, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	seedFactor(t, s, ts, "frodo")
+	sso := sessionClient(t, s, ts, "frodo")
+
+	resp := postJSON(t, sso, ts.URL+"/api/droplist/key", map[string]string{"password": fixtureAdminPassword})
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (body %s)", resp.StatusCode, body)
+	}
+	if got := droplistLiveKeyCount(s); got != 0 {
+		t.Errorf("%d keys minted for an identity-provider account, want 0", got)
 	}
 }

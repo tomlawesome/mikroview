@@ -53,14 +53,19 @@ a token's raw value is only ever returned once and there is no
 supported way to recover an earlier one.
 """
 import argparse
+import base64
 import collections
 import concurrent.futures
+import hashlib
+import hmac
 import os
 import random
 import socket
 import ssl
 import stat
+import struct
 import sys
+import tempfile
 import time
 
 import requests
@@ -70,6 +75,30 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CSRF_HEADER = "X-Requested-With"
 CSRF_VALUE = "mikroview"
+
+# ---------------------------------------------------------------------------
+# Addresses (#1481): only the documentation ranges and the per-network /27
+# blocks in docs/design/sample-names.md, so no one has to ask whether an
+# address here is real. A zone's prefix below is the first three octets of
+# its block; a host's octet in HOSTS is the absolute last octet, so it
+# must sit inside the block (ZONE_BASE gives each block's first address).
+# Networks the table names (LAN, Servers, IoT, Guest, Workshop, Cams) use
+# the table's block. The estate's other networks sit in 192.0.2.0/24
+# beside the router WANs, one /27 each, none overlapping a named block:
+#   192.0.2.0/29, .8/29, .16/29   router WANs (border+rb5009, office, lab)
+#   192.0.2.30                    the design host (MV_URL below)
+#   192.0.2.32/27 staff           192.0.2.64/27 office
+#   192.0.2.96/27 voip            192.0.2.128/27 wifi
+#   192.0.2.160/27 mgmt           192.0.2.192/27 core
+#   192.0.2.224/28 l2tp tunnel    192.0.2.240/29, .248/29 old DMZ segments
+# ---------------------------------------------------------------------------
+
+# First address of each zone's block (its network address, last octet).
+ZONE_BASE = {
+    "lan": 0, "servers": 32, "iot": 64, "guest": 96,
+    "workshop": 160, "cams": 192,
+    "staff": 32, "office": 64, "voip": 96, "wifi": 128, "mgmt": 160, "core": 192,
+}
 
 # ---------------------------------------------------------------------------
 # The estate. One small, plausible network: a border router with four
@@ -82,34 +111,34 @@ ROUTERS = {
     "border-rb5009": {
         "src": "127.0.0.1",
         "wan": "ether1",
-        "wan_addr": "203.0.113.5/29",
-        "wan_net": "203.0.113.0",
+        "wan_addr": "192.0.2.5/29",
+        "wan_net": "192.0.2.0",
         "zones": [
             ("bridge1", "192.0.2", "core"),
-            ("vlan10", "192.168.10", "staff"),
-            ("vlan20", "192.168.20", "iot"),
-            ("vlan30", "192.168.30", "guest"),
+            ("vlan10", "192.0.2", "staff"),
+            ("vlan20", "198.51.100", "iot"),
+            ("vlan30", "198.51.100", "guest"),
         ],
     },
     "office-hex": {
         "src": "127.0.0.2",
         "wan": "ether1",
-        "wan_addr": "203.0.113.13/29",
-        "wan_net": "203.0.113.8",
+        "wan_addr": "192.0.2.13/29",
+        "wan_net": "192.0.2.8",
         "zones": [
-            ("vlan40", "192.168.40", "office"),
-            ("vlan50", "192.168.50", "voip"),
-            ("wlan1", "192.168.60", "wifi"),
+            ("vlan40", "192.0.2", "office"),
+            ("vlan50", "192.0.2", "voip"),
+            ("wlan1", "192.0.2", "wifi"),
         ],
     },
     "lab-crs": {
         "src": "127.0.0.3",
         "wan": "sfp-sfpplus1",
-        "wan_addr": "203.0.113.21/29",
-        "wan_net": "203.0.113.16",
+        "wan_addr": "192.0.2.21/29",
+        "wan_net": "192.0.2.16",
         "zones": [
-            ("vlan99", "172.16.5", "mgmt"),
-            ("bridge-srv", "10.10.0", "servers"),
+            ("vlan99", "192.0.2", "mgmt"),
+            ("bridge-srv", "198.51.100", "servers"),
         ],
     },
     # guest-ap (127.0.0.4) is declared in cfg.yaml and deliberately never
@@ -121,33 +150,33 @@ ROUTERS = {
 # stretch of the run, so `new_device` fires for them once, on schedule,
 # rather than never -- see the module docstring on stable identity.
 HOSTS = [
-    ("border-rb5009", "core", 10, "aa:bb:cc:01:01:01", "core-switch", 0),
-    ("border-rb5009", "core", 21, "aa:bb:cc:01:01:02", "home-nas", 0),
-    ("border-rb5009", "staff", 15, "aa:bb:cc:01:02:01", "alex-laptop", 0),
-    ("border-rb5009", "staff", 22, "aa:bb:cc:01:02:02", "printer-office", 0),
-    ("border-rb5009", "iot", 31, "aa:bb:cc:01:03:01", "kitchen-cam", 0),
-    ("border-rb5009", "iot", 42, "aa:bb:cc:01:03:02", "thermostat", 0),
-    ("border-rb5009", "guest", 50, "aa:bb:cc:01:04:01", "guest-phone-1", 0),
-    ("office-hex", "office", 12, "aa:bb:cc:02:01:01", "reception-pc", 0),
-    ("office-hex", "office", 18, "aa:bb:cc:02:01:02", "office-nas", 0),
-    ("office-hex", "voip", 20, "aa:bb:cc:02:02:01", "front-desk-phone", 0),
-    ("office-hex", "wifi", 30, "aa:bb:cc:02:03:01", "staff-phone-1", 0),
-    ("lab-crs", "mgmt", 5, "aa:bb:cc:03:01:01", "lab-switch-mgmt", 0),
-    ("lab-crs", "servers", 10, "aa:bb:cc:03:02:01", "build-server", 0),
-    ("lab-crs", "servers", 11, "aa:bb:cc:03:02:02", "test-server", 0),
-    ("border-rb5009", "staff", 77, "aa:bb:cc:01:02:99", None, 480),
-    ("office-hex", "wifi", 66, "aa:bb:cc:02:03:99", None, 1200),
+    ("border-rb5009", "core", 202, "aa:bb:cc:01:01:01", "core-switch", 0),
+    ("border-rb5009", "core", 213, "aa:bb:cc:01:01:02", "home-nas", 0),
+    ("border-rb5009", "staff", 47, "aa:bb:cc:01:02:01", "alex-laptop", 0),
+    ("border-rb5009", "staff", 54, "aa:bb:cc:01:02:02", "printer-office", 0),
+    ("border-rb5009", "iot", 66, "aa:bb:cc:01:03:01", "kitchen-cam", 0),
+    ("border-rb5009", "iot", 67, "aa:bb:cc:01:03:02", "thermostat", 0),
+    ("border-rb5009", "guest", 98, "aa:bb:cc:01:04:01", "guest-phone-1", 0),
+    ("office-hex", "office", 76, "aa:bb:cc:02:01:01", "reception-pc", 0),
+    ("office-hex", "office", 82, "aa:bb:cc:02:01:02", "office-nas", 0),
+    ("office-hex", "voip", 116, "aa:bb:cc:02:02:01", "front-desk-phone", 0),
+    ("office-hex", "wifi", 158, "aa:bb:cc:02:03:01", "staff-phone-1", 0),
+    ("lab-crs", "mgmt", 165, "aa:bb:cc:03:01:01", "lab-switch-mgmt", 0),
+    ("lab-crs", "servers", 50, "aa:bb:cc:03:02:01", "build-server", 0),
+    ("lab-crs", "servers", 51, "aa:bb:cc:03:02:02", "test-server", 0),
+    ("border-rb5009", "staff", 56, "aa:bb:cc:01:02:99", None, 480),
+    ("office-hex", "wifi", 153, "aa:bb:cc:02:03:99", None, 1200),
 ]
 
-# Real, geolocatable public addresses (so the country column has data)
-# plus a documentation-range WAN, per the brief: real ones where it
-# matters for country, documentation ranges everywhere else.
-PUBLIC = ["203.0.113.1", "192.0.2.8", "192.0.2.9", "198.51.100.222", "198.51.100.1",
-          "198.51.100.10", "192.0.2.1", "198.51.100.33", "203.0.113.1",
-          "192.0.2.1", "198.51.100.1", "198.51.100.153", "198.51.100.70",
-          "198.51.100.5", "203.0.113.14", "198.51.100.140"]
-SCANNER_RECURRING = "203.0.113.233"   # fires repeatedly, gaps between -- "intermittent"
-SCANNER_ONE_OFF = "198.51.100.100"     # fires once, never again -- "stopped"
+# Outside parties (resolvers, web hosts, peers): all in 203.0.113.0/24
+# (RFC 5737), the table's range for outside peers. None geolocates, so
+# the country column stays empty -- the price of using no real address.
+PUBLIC = ["203.0.113.10", "203.0.113.11", "203.0.113.12", "203.0.113.20",
+          "203.0.113.21", "203.0.113.33", "203.0.113.58", "203.0.113.70",
+          "203.0.113.96", "203.0.113.140", "203.0.113.153", "203.0.113.206",
+          "203.0.113.229", "203.0.113.240", "203.0.113.250", "203.0.113.251"]
+SCANNER_RECURRING = "203.0.113.44"   # fires repeatedly, gaps between -- "intermittent"
+SCANNER_ONE_OFF = "203.0.113.7"      # fires once, never again -- "stopped"
 
 # Filter rules (kind=filter-rule). `fires` marks whether the feed below
 # ever emits a matching line -- False gives Entities' rules tab a rule
@@ -197,7 +226,7 @@ FILTER_RULES = {
              inInterface="ether1"),
         dict(ordinal=7, comment="Old DMZ segment drop (decommissioned)", chain="forward", action="drop",
              logPrefix="old-dmz-rule", log=True, dstPort=139, protocol="tcp",
-             dstAddress="192.168.99.0/24", fires=False,
+             dstAddress="192.0.2.240/29", fires=False,
              inInterface="ether1", outInterface="bridge1"),
     ],
     "office-hex": [
@@ -244,7 +273,7 @@ NAT_RULES = {
         dict(ordinal=0, comment="Masquerade WAN egress", chain="srcnat", action="masquerade",
              logPrefix="masq-wan", inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=1, comment="Port-forward web", chain="dstnat", action="dst-nat",
-             logPrefix="port-fwd-web", dstPort=8080, toAddresses="192.0.2.10", toPorts=8080,
+             logPrefix="port-fwd-web", dstPort=8080, toAddresses="192.0.2.202", toPorts=8080,
              protocol="tcp", inInterface="ether1", outInterface="bridge1"),
     ],
     "office-hex": [
@@ -259,22 +288,22 @@ NAT_RULES = {
 
 IP_ADDRESSES = {
     "border-rb5009": [
-        dict(address="192.0.2.1/24", network="192.0.2.0", interface="bridge1", comment="core"),
-        dict(address="192.168.10.1/24", network="192.168.10.0", interface="vlan10", comment="staff"),
-        dict(address="192.168.20.1/24", network="192.168.20.0", interface="vlan20", comment="iot"),
-        dict(address="192.168.30.1/24", network="192.168.30.0", interface="vlan30", comment="guest"),
-        dict(address="203.0.113.5/29", network="203.0.113.0", interface="ether1", comment="wan"),
+        dict(address="192.0.2.193/27", network="192.0.2.192", interface="bridge1", comment="core"),
+        dict(address="192.0.2.33/27", network="192.0.2.32", interface="vlan10", comment="staff"),
+        dict(address="198.51.100.65/27", network="198.51.100.64", interface="vlan20", comment="iot"),
+        dict(address="198.51.100.97/27", network="198.51.100.96", interface="vlan30", comment="guest"),
+        dict(address="192.0.2.5/29", network="192.0.2.0", interface="ether1", comment="wan"),
     ],
     "office-hex": [
-        dict(address="192.168.40.1/24", network="192.168.40.0", interface="vlan40", comment="office"),
-        dict(address="192.168.50.1/24", network="192.168.50.0", interface="vlan50", comment="voip"),
-        dict(address="192.168.60.1/24", network="192.168.60.0", interface="wlan1", comment="wifi"),
-        dict(address="203.0.113.13/29", network="203.0.113.8", interface="ether1", comment="wan"),
+        dict(address="192.0.2.65/27", network="192.0.2.64", interface="vlan40", comment="office"),
+        dict(address="192.0.2.97/27", network="192.0.2.96", interface="vlan50", comment="voip"),
+        dict(address="192.0.2.129/27", network="192.0.2.128", interface="wlan1", comment="wifi"),
+        dict(address="192.0.2.13/29", network="192.0.2.8", interface="ether1", comment="wan"),
     ],
     "lab-crs": [
-        dict(address="172.16.5.1/24", network="172.16.5.0", interface="vlan99", comment="mgmt"),
-        dict(address="10.10.0.1/24", network="10.10.0.0", interface="bridge-srv", comment="servers"),
-        dict(address="203.0.113.21/29", network="203.0.113.16", interface="sfp-sfpplus1", comment="wan"),
+        dict(address="192.0.2.161/27", network="192.0.2.160", interface="vlan99", comment="mgmt"),
+        dict(address="198.51.100.33/27", network="198.51.100.32", interface="bridge-srv", comment="servers"),
+        dict(address="192.0.2.21/29", network="192.0.2.16", interface="sfp-sfpplus1", comment="wan"),
     ],
 }
 
@@ -287,7 +316,7 @@ IP_ADDRESSES = {
 # What each block below feeds, in the city's terms:
 #
 #   ROUND40 (routers)   the two boroughs. rb5009 is the primary; hap-ax3's
-#                       own WAN address is 10.0.10.9 -- inside rb5009's LAN
+#                       own WAN address is 198.51.100.9 -- inside rb5009's LAN
 #                       -- so the second borough is reached by a road from
 #                       the LAN district rather than from the river.
 #   ROUND40_HOSTS       the buildings, one per named device in the story,
@@ -309,7 +338,7 @@ IP_ADDRESSES = {
 #                       both directions (DARK), and everything the story
 #                       calls LOGGED has a logging rule each way.
 #   NAT_RULES           hap-ax3 masquerades its two districts behind
-#                       10.0.10.9, which is why workshop -> servers arrives
+#                       198.51.100.9, which is why workshop -> servers arrives
 #                       at rb5009 as traffic from that one address.
 #   IP_ADDRESSES        the district plaques: zones.svelte.ts takes a
 #                       zone's name from an entry's `comment` and its CIDR
@@ -339,25 +368,25 @@ ROUTERS.update({
     "rb5009": {
         "src": "127.0.0.5",
         "wan": "ether1",
-        "wan_addr": "203.0.113.7/29",
-        "wan_net": "203.0.113.0",
+        "wan_addr": "192.0.2.7/29",
+        "wan_net": "192.0.2.0",
         "zones": [
-            ("bridge-lan", "10.0.10", "lan"),
-            ("vlan-srv", "10.0.20", "servers"),
-            ("vlan-iot", "10.0.30", "iot"),
-            ("vlan-guest", "10.0.40", "guest"),
+            ("bridge-lan", "198.51.100", "lan"),
+            ("vlan-srv", "198.51.100", "servers"),
+            ("vlan-iot", "198.51.100", "iot"),
+            ("vlan-guest", "198.51.100", "guest"),
         ],
     },
-    # Its ether1 is not on the river: 10.0.10.9 is an address in rb5009's
+    # Its ether1 is not on the river: 198.51.100.9 is an address in rb5009's
     # own LAN, so this borough hangs off the LAN district's road.
     "hap-ax3": {
         "src": "127.0.0.6",
         "wan": "ether1",
-        "wan_addr": "10.0.10.9/24",
-        "wan_net": "10.0.10.0",
+        "wan_addr": "198.51.100.9/27",
+        "wan_net": "198.51.100.0",
         "zones": [
-            ("bridge-workshop", "10.0.50", "workshop"),
-            ("vlan-cams", "10.0.60", "cams"),
+            ("bridge-workshop", "198.51.100", "workshop"),
+            ("vlan-cams", "198.51.100", "cams"),
         ],
     },
 })
@@ -370,42 +399,42 @@ ROUTERS.update({
 HOSTS += [
     # rb5009 -- LAN. hap-ax3 is a building here as well as a borough.
     ("rb5009", "lan", 9, "aa:bb:cc:40:01:09", "hap-ax3", 0),
-    ("rb5009", "lan", 20, "aa:bb:cc:40:01:20", "alex-desktop", 0),
-    ("rb5009", "lan", 21, "aa:bb:cc:40:01:21", "phone-alex", 0),
-    ("rb5009", "lan", 22, "aa:bb:cc:40:01:22", "laptop-anna", 0),
-    ("rb5009", "lan", 23, "aa:bb:cc:40:01:23", "tv-lounge", 0),
+    ("rb5009", "lan", 21, "aa:bb:cc:40:01:20", "alex-desktop", 0),
+    ("rb5009", "lan", 24, "aa:bb:cc:40:01:21", "phone-alex", 0),
+    ("rb5009", "lan", 5, "aa:bb:cc:40:01:22", "laptop-anna", 0),
+    ("rb5009", "lan", 6, "aa:bb:cc:40:01:23", "tv-lounge", 0),
     # rb5009 -- Servers.
-    ("rb5009", "servers", 10, "aa:bb:cc:40:02:10", "nas", 0),
-    ("rb5009", "servers", 11, "aa:bb:cc:40:02:11", "pihole", 0),
-    ("rb5009", "servers", 12, "aa:bb:cc:40:02:12", "unifi", 0),
+    ("rb5009", "servers", 42, "aa:bb:cc:40:02:10", "nas", 0),
+    ("rb5009", "servers", 37, "aa:bb:cc:40:02:11", "pihole", 0),
+    ("rb5009", "servers", 44, "aa:bb:cc:40:02:12", "unifi", 0),
     # rb5009 -- IoT. cam-porch is the one that starts the alarm road.
-    ("rb5009", "iot", 31, "aa:bb:cc:40:03:31", "cam-porch", 0),
-    ("rb5009", "iot", 32, "aa:bb:cc:40:03:32", "hue-bridge", 0),
+    ("rb5009", "iot", 78, "aa:bb:cc:40:03:31", "cam-porch", 0),
+    ("rb5009", "iot", 85, "aa:bb:cc:40:03:32", "hue-bridge", 0),
     # "thermostat-hall" rather than the story's bare "thermostat": the
     # original estate above already has a host by that name, and two
     # entities with one label would break this file's own promise that a
     # name on the stream is one thing.
-    ("rb5009", "iot", 33, "aa:bb:cc:40:03:33", "thermostat-hall", 0),
-    ("rb5009", "iot", 34, "aa:bb:cc:40:03:34", "doorbell", 0),
-    ("rb5009", "iot", 35, "aa:bb:cc:40:03:35", "esp-weather", 0),
-    ("rb5009", "iot", 36, "aa:bb:cc:40:03:36", "plug-kettle", 0),
-    ("rb5009", "iot", 37, "aa:bb:cc:40:03:37", None, 0),
-    ("rb5009", "iot", 38, "aa:bb:cc:40:03:38", None, 0),
+    ("rb5009", "iot", 94, "aa:bb:cc:40:03:33", "thermostat-hall", 0),
+    ("rb5009", "iot", 76, "aa:bb:cc:40:03:34", "doorbell", 0),
+    ("rb5009", "iot", 88, "aa:bb:cc:40:03:35", "esp-weather", 0),
+    ("rb5009", "iot", 92, "aa:bb:cc:40:03:36", "plug-kettle", 0),
+    ("rb5009", "iot", 79, "aa:bb:cc:40:03:37", None, 0),
+    ("rb5009", "iot", 80, "aa:bb:cc:40:03:38", None, 0),
     # rb5009 -- Guest: named, never heard from (no logging rule).
-    ("rb5009", "guest", 50, "aa:bb:cc:40:04:50", "guest-e8b2", 0),
-    ("rb5009", "guest", 51, "aa:bb:cc:40:04:51", None, 0),
+    ("rb5009", "guest", 115, "aa:bb:cc:40:04:50", "guest-e8b2", 0),
+    ("rb5009", "guest", 116, "aa:bb:cc:40:04:51", None, 0),
     # A guest that appears once and never returns -- #738 item 3's "guest
     # device that appears once", distinct from a plain newcomer (which
     # joins once and then stays for the rest of the run). See
     # HOST_PRESENCE above: this mac is active for one bounded window only.
-    ("rb5009", "guest", 53, "aa:bb:cc:40:04:53", None, 0),
+    ("rb5009", "guest", 117, "aa:bb:cc:40:04:53", None, 0),
     # hap-ax3 -- Workshop.
-    ("hap-ax3", "workshop", 10, "aa:bb:cc:40:05:10", "cnc", 0),
-    ("hap-ax3", "workshop", 11, "aa:bb:cc:40:05:11", "printer-3d", 0),
-    ("hap-ax3", "workshop", 12, "aa:bb:cc:40:05:12", "pc-bench", 0),
+    ("hap-ax3", "workshop", 164, "aa:bb:cc:40:05:10", "cnc", 0),
+    ("hap-ax3", "workshop", 167, "aa:bb:cc:40:05:11", "printer-3d", 0),
+    ("hap-ax3", "workshop", 169, "aa:bb:cc:40:05:12", "pc-bench", 0),
     # hap-ax3 -- Cams: named, never heard from (no logging rule).
-    ("hap-ax3", "cams", 20, "aa:bb:cc:40:06:20", "cam-yard", 0),
-    ("hap-ax3", "cams", 21, "aa:bb:cc:40:06:21", "cam-gate", 0),
+    ("hap-ax3", "cams", 195, "aa:bb:cc:40:06:20", "cam-yard", 0),
+    ("hap-ax3", "cams", 196, "aa:bb:cc:40:06:21", "cam-gate", 0),
 ]
 
 # rb5009's 41 rules, in the order a real /ip/firewall/filter print shows
@@ -557,7 +586,7 @@ FILTER_RULES["rb5009"] = [
 
     dict(ordinal=39, comment="Old DMZ segment drop (decommissioned)", chain="forward", action="drop",
          logPrefix="r40-old-dmz", log=True, dstPort=139, protocol="tcp",
-         dstAddress="10.0.99.0/24", fires=False,
+         dstAddress="192.0.2.248/29", fires=False,
          inInterface="ether1", outInterface="bridge-lan"),
     # The last forward rule -- what the city's alarm road ends against.
     # A real default drop names no interface and no port; this one names
@@ -617,36 +646,36 @@ NAT_RULES["rb5009"] = [
     dict(ordinal=0, comment="Masquerade WAN egress", chain="srcnat", action="masquerade",
          logPrefix="r40-masq-wan", inInterface="bridge-lan", outInterface="ether1"),
     dict(ordinal=1, comment="Port-forward NAS app", chain="dstnat", action="dst-nat",
-         logPrefix="r40-fwd-nas", dstPort=5001, toAddresses="10.0.20.10", toPorts=5001,
+         logPrefix="r40-fwd-nas", dstPort=5001, toAddresses="198.51.100.42", toPorts=5001,
          protocol="tcp", inInterface="ether1", outInterface="bridge-lan"),
 ]
 # This masquerade is the reason workshop -> servers arrives at rb5009 as
-# traffic from 10.0.10.9 rather than from 10.0.50.x: the second borough
+# traffic from 198.51.100.9 rather than from 198.51.100.160/27: the second borough
 # hides behind its own uplink address, which is a building in the LAN.
 NAT_RULES["hap-ax3"] = [
-    dict(ordinal=0, comment="Masquerade behind 10.0.10.9", chain="srcnat", action="masquerade",
+    dict(ordinal=0, comment="Masquerade behind 198.51.100.9", chain="srcnat", action="masquerade",
          logPrefix="ax3-masq-uplink", inInterface="bridge-workshop", outInterface="ether1"),
 ]
 
 # The district plaques, plus the two tunnel interfaces' own addresses.
-# wg0 carries the story's 10.99.0.0/24; the l2tp entry is what a RouterOS
+# wg0 carries the story's 198.51.100.128/27; the l2tp entry is what a RouterOS
 # l2tp-server actually produces for a connected peer -- a dynamic /32 on
 # the per-peer interface, local address with the peer's as the network.
 IP_ADDRESSES["rb5009"] = [
-    dict(address="10.0.10.1/24", network="10.0.10.0", interface="bridge-lan", comment="LAN"),
-    dict(address="10.0.20.1/24", network="10.0.20.0", interface="vlan-srv", comment="Servers"),
-    dict(address="10.0.30.1/24", network="10.0.30.0", interface="vlan-iot", comment="IoT"),
-    dict(address="10.0.40.1/24", network="10.0.40.0", interface="vlan-guest", comment="Guest"),
-    dict(address="203.0.113.7/29", network="203.0.113.0", interface="ether1", comment="wan"),
-    dict(address="10.99.0.1/24", network="10.99.0.0", interface="wg0", comment="wg0"),
-    dict(address="10.98.0.1/32", network="10.98.0.2", interface="l2tp-anna-remote",
+    dict(address="198.51.100.1/27", network="198.51.100.0", interface="bridge-lan", comment="LAN"),
+    dict(address="198.51.100.33/27", network="198.51.100.32", interface="vlan-srv", comment="Servers"),
+    dict(address="198.51.100.65/27", network="198.51.100.64", interface="vlan-iot", comment="IoT"),
+    dict(address="198.51.100.97/27", network="198.51.100.96", interface="vlan-guest", comment="Guest"),
+    dict(address="192.0.2.7/29", network="192.0.2.0", interface="ether1", comment="wan"),
+    dict(address="198.51.100.129/27", network="198.51.100.128", interface="wg0", comment="wg0"),
+    dict(address="192.0.2.225/32", network="192.0.2.226", interface="l2tp-anna-remote",
          comment="l2tp anna-remote"),
 ]
 IP_ADDRESSES["hap-ax3"] = [
-    dict(address="10.0.50.1/24", network="10.0.50.0", interface="bridge-workshop",
+    dict(address="198.51.100.161/27", network="198.51.100.160", interface="bridge-workshop",
          comment="Workshop"),
-    dict(address="10.0.60.1/24", network="10.0.60.0", interface="vlan-cams", comment="Cams"),
-    dict(address="10.0.10.9/24", network="10.0.10.0", interface="ether1",
+    dict(address="198.51.100.193/27", network="198.51.100.192", interface="vlan-cams", comment="Cams"),
+    dict(address="198.51.100.9/27", network="198.51.100.0", interface="ether1",
          comment="uplink -- inside rb5009's LAN"),
 ]
 
@@ -659,9 +688,11 @@ WIREGUARD_INTERFACES = {
              publicKey="DEMO-FAKE-wg0-public-key-not-a-real-key"),
     ],
 }
+# phone-alex-away's address inside wg0 (198.51.100.128/27).
+WG_PEER_IP = "198.51.100.130"
 WIREGUARD_PEERS = {
     "rb5009": [
-        dict(publicKey="DEMO-FAKE-phone-alex-away-public-key", allowedAddress=["10.99.0.2/32"],
+        dict(publicKey="DEMO-FAKE-phone-alex-away-public-key", allowedAddress=[WG_PEER_IP + "/32"],
              endpointAddress="", comment="phone-alex-away"),
     ],
 }
@@ -694,16 +725,16 @@ PORT_ENTITIES = {
 # one that will be paused ("held"), one whose port no pushed rule logs
 # at all ("broken ring" -- internal/engine/coverage.go's CoverageOutOfScope).
 WATCHLIST_ENTRIES = [
-    dict(name="kitchen-cam-web-only", ip="192.168.20.31", ports=[80, 443], pause=False, note=None),
-    dict(name="guest-phone-smb-watch", ip="192.168.30.50", ports=[445], pause=True, note=None),
-    dict(name="front-desk-phone-voip", ip="192.168.50.20", ports=[5060], pause=False, note=None),
-    dict(name="build-server-db-exposure", ip="10.10.0.11", ports=[3306], pause=False,
+    dict(name="kitchen-cam-web-only", ip="198.51.100.66", ports=[80, 443], pause=False, note=None),
+    dict(name="guest-phone-smb-watch", ip="198.51.100.98", ports=[445], pause=True, note=None),
+    dict(name="front-desk-phone-voip", ip="192.0.2.116", ports=[5060], pause=False, note=None),
+    dict(name="build-server-db-exposure", ip="198.51.100.51", ports=[3306], pause=False,
          note="no pushed filter rule logs port 3306 anywhere -- ring broken by design"),
     # Round-40: the two the story says the operator is watching, so the
     # city's watch lens has buildings to ring (BRIEF.md's "watched"
     # importance reading -- cam-porch tall, nas mid).
-    dict(name="cam-porch-smb-watch", ip="10.0.30.31", ports=[445], pause=False, note=None),
-    dict(name="nas-shares-watch", ip="10.0.20.10", ports=[445, 5001], pause=False, note=None),
+    dict(name="cam-porch-smb-watch", ip="198.51.100.78", ports=[445], pause=False, note=None),
+    dict(name="nas-shares-watch", ip="198.51.100.42", ports=[445, 5001], pause=False, note=None),
 ]
 
 
@@ -724,6 +755,12 @@ def zone_iface(router, zone):
         if name == zone:
             return iface
     raise KeyError(zone)
+
+
+def zone_victim(router, zone):
+    """An address inside the zone's /27 that no host holds (offsets 25-29
+    are kept free of hosts), for drop lines aimed at a zone."""
+    return f"{zone_subnet(router, zone)}.{ZONE_BASE[zone] + random.randint(25, 29)}"
 
 
 def full_ip(h):
@@ -911,7 +948,7 @@ def lines_for_router(router, elapsed, tick):
         for _ in range(random.randint(1, 3)):
             h = weighted_pick(drop_hosts)
             ip = full_ip(h)
-            victim = f"{zone_subnet(router, drop_dst_zone)}.{random.randint(60, 99)}"
+            victim = zone_victim(router, drop_dst_zone)
             out.append(f"firewall,info D|{drop}| forward: in:{zone_iface(router, drop_src_zone)} "
                         f"out:{zone_iface(router, drop_dst_zone)}, connection-state:new src-mac {h[3]}, "
                         f"proto TCP (SYN), {ip}:{random.randint(1024, 65000)}->{victim}:445, len 60")
@@ -948,19 +985,19 @@ def lines_for_router(router, elapsed, tick):
 
     # Router-specific extras.
     if router == "border-rb5009" and random.random() < 0.3:
-        # port-fwd-web's toAddresses is fixed to 192.0.2.10 (core-
-        # switch's own address, HOSTS octet 10) -- picking any host here
+        # port-fwd-web's toAddresses is fixed to 192.0.2.202 (core-
+        # switch's own address, HOSTS octet 202) -- picking any host here
         # would DNAT-translate to an address the pushed NAT rule never
         # names, so this is core-switch specifically, not pick_host().
-        core_switch = next((x for x in hosts if x[1] == "core" and x[2] == 10), None)
+        core_switch = next((x for x in hosts if x[1] == "core" and x[2] == 202), None)
         if core_switch:
             out.append(f"firewall,info A|port-fwd-web| dstnat: in:{wan} out:{zone_iface(router, 'core')}, "
                         f"proto TCP (SYN), {random.choice(PUBLIC)}:{random.randint(1024, 65000)}"
-                        f"->192.0.2.1:8080, NAT ->({full_ip(core_switch)}:8080), len 60")
+                        f"->192.0.2.193:8080, NAT ->({full_ip(core_switch)}:8080), len 60")
     if router == "border-rb5009" and "guest-isolate" in rules and random.random() < 0.4:
         h = next((x for x in hosts if x[1] == "guest"), None)
         if h:
-            victim = f"{zone_subnet(router, 'core')}.{random.randint(60, 99)}"
+            victim = zone_victim(router, "core")
             out.append(f"firewall,info D|guest-isolate| forward: in:{zone_iface(router, 'guest')} "
                         f"out:{zone_iface(router, 'core')}, connection-state:new src-mac {h[3]}, "
                         f"proto TCP (SYN), {full_ip(h)}:{random.randint(1024, 65000)}->{victim}:445, len 60")
@@ -1061,6 +1098,10 @@ def _eph():
     return random.randint(1024, 65000)
 
 
+# rb5009's LAN hosts that initiate traffic toward hap-ax3 (octets in HOSTS).
+LAN_TALKERS = [5, 6, 21, 24]
+
+
 def lines_for_round40(router, elapsed, tick):
     out = []
     hosts = active_hosts(router, elapsed)
@@ -1089,32 +1130,32 @@ def lines_for_round40(router, elapsed, tick):
             h = one("workshop")
             if h:
                 out.append(_fw("A", "ax3-work-backup", "forward", "bridge-workshop", "ether1",
-                               full_ip(h), _eph(), "10.0.20.10", 445, mac=h[3]))
+                               full_ip(h), _eph(), "198.51.100.42", 445, mac=h[3]))
         if random.random() < 0.25:
             h = one("workshop")
             if h:
                 out.append(_fw("A", "ax3-winbox", "input", "bridge-workshop", None,
-                               full_ip(h), _eph(), "10.0.50.1", 8291, mac=h[3]))
+                               full_ip(h), _eph(), "198.51.100.161", 8291, mac=h[3]))
         if random.random() < 0.2:
             out.append(_fw("D", "ax3-uplink-drop", "input", "ether1", None,
-                           f"10.0.10.{random.randint(20, 23)}", _eph(), "10.0.10.9",
+                           f"198.51.100.{random.choice(LAN_TALKERS)}", _eph(), "198.51.100.9",
                            random.choice([22, 8291, 8728])))
         if random.random() < 0.15:
             h = one("workshop")
             if h:
                 out.append(_fw("D", "ax3-default-drop", "forward", "ether1", "bridge-workshop",
-                               f"10.0.10.{random.randint(20, 23)}", _eph(), full_ip(h),
+                               f"198.51.100.{random.choice(LAN_TALKERS)}", _eph(), full_ip(h),
                                random.choice([139, 445, 3389])))
         h = one("workshop")
         if h:
             pub = random.choice(PUBLIC)
             out.append(f"firewall,info A|ax3-masq-uplink| srcnat: in:bridge-workshop out:ether1, "
                        f"proto TCP, {full_ip(h)}:{_eph()}->{pub}:443, "
-                       f"NAT (10.0.10.9:12345->{pub}:443), len 73")
+                       f"NAT (198.51.100.9:12345->{pub}:443), len 73")
         return out
 
     # --- rb5009, the primary borough ---------------------------------
-    nas, pihole = "10.0.20.10", "10.0.20.11"
+    nas, pihole = "198.51.100.42", "198.51.100.37"
 
     # LAN -> WAN, the busiest road out.
     for _ in range(random.randint(3, 5)):
@@ -1146,7 +1187,7 @@ def lines_for_round40(router, elapsed, tick):
                            full_ip(s), _eph(), full_ip(h), port, mac=s[3]))
 
     # The second borough's backups, seen again on this side of the road:
-    # hap-ax3 masquerades, so they arrive from 10.0.10.9 -- the building
+    # hap-ax3 masquerades, so they arrive from 198.51.100.9 -- the building
     # in the LAN district that is also a borough.
     gw = next((x for x in hosts if x[4] == "hap-ax3"), None)
     if gw and random.random() < 0.5:
@@ -1186,7 +1227,7 @@ def lines_for_round40(router, elapsed, tick):
     # The river's own boundary: unsolicited inbound, no local src-mac.
     if random.random() < 0.6:
         out.append(_fw("D", "r40-wan-in-drop", "input", "ether1", None,
-                       random.choice(PUBLIC), _eph(), "203.0.113.7",
+                       random.choice(PUBLIC), _eph(), "192.0.2.7",
                        random.choice([22, 23, 445, 3389, 8291])))
     if random.random() < 0.3:
         out.append(_fw("D", "r40-wan-srv-drop", "forward", "ether1", "vlan-srv",
@@ -1205,14 +1246,14 @@ def lines_for_round40(router, elapsed, tick):
         if h:
             prefix, port = random.choice([("r40-winbox-lan", 8291), ("r40-ssh-lan", 22)])
             out.append(_fw("A", prefix, "input", "bridge-lan", None,
-                           full_ip(h), _eph(), "10.0.10.1", port, mac=h[3]))
+                           full_ip(h), _eph(), "198.51.100.1", port, mac=h[3]))
 
     h = one("lan")
     if h:
         pub = random.choice(PUBLIC)
         out.append(f"firewall,info A|r40-masq-wan| srcnat: in:bridge-lan out:ether1, "
                    f"proto TCP, {full_ip(h)}:{_eph()}->{pub}:443, "
-                   f"NAT (203.0.113.7:12345->{pub}:443), len 73")
+                   f"NAT (192.0.2.7:12345->{pub}:443), len 73")
 
     # The two footbridges. wg0 is QUIET -- a trickle, not silence and not
     # a stream; l2tp carries anna-remote's session at roughly 0.3/s (the
@@ -1222,11 +1263,11 @@ def lines_for_round40(router, elapsed, tick):
     # in a device that does not exist.
     if random.random() < 0.12:
         out.append(_fw("A", "r40-wg-lan", "forward", "wg0", "bridge-lan",
-                       "10.99.0.2", _eph(), full_ip(one("lan")),
+                       WG_PEER_IP, _eph(), full_ip(one("lan")),
                        random.choice([22, 445, 5001])))
     for _ in range(random.randint(1, 2)):
         out.append(_fw("A", "r40-l2tp-srv", "forward", "l2tp-anna-remote", "vlan-srv",
-                       "10.98.0.2", _eph(), nas, random.choice([445, 5001])))
+                       "192.0.2.226", _eph(), nas, random.choice([445, 5001])))
 
     # The alarm road: UNPLANNED, iot -> lan, tcp/445, 14x, caught by the
     # default drop. cam-porch to alex-desktop, the same two buildings every
@@ -1311,6 +1352,86 @@ def cmd_feed(args):
 # API-side seeding.
 # ---------------------------------------------------------------------------
 
+def totp_code(secret_b32, counter):
+    """RFC 6238 as internal/auth/totp.go computes it: HMAC-SHA1 of the
+    big-endian 30-second counter, dynamic truncation, six digits."""
+    secret = base64.b32decode(secret_b32.upper() + "=" * (-len(secret_b32) % 8))
+    mac = hmac.new(secret, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = mac[-1] & 0x0F
+    return f"{(struct.unpack('>I', mac[offset:offset + 4])[0] & 0x7FFFFFFF) % 1000000:06d}"
+
+
+# Lock age is judged on the real wall clock, bound at import so a test that
+# fakes `time` to skip the 30 s code step does not age live locks.
+_wall_clock = time.time
+
+
+def fresh_totp_code():
+    """A code for a time step nobody has spent yet, waiting for the next
+    step if need be. The server refuses a spent step as a replay and
+    counts the refusal against the login limiter, so the last spent step
+    is shared through $MV_DIR/totp-last-counter -- the same file
+    live-env.sh seeds and freshTotpCode in
+    frontend/scripts/live-browser.mjs uses."""
+    secret = os.environ.get("MV_TOTP_SECRET")
+    if not secret:
+        sys.exit('seed-demo: MV_TOTP_SECRET unset -- run: eval "$(scripts/live-env.sh up)"')
+    counter_file = os.path.join(os.environ["MV_DIR"], "totp-last-counter") if os.environ.get("MV_DIR") else None
+    while True:
+        if counter_file:
+            code = _claim_step_locked(secret, counter_file)
+        else:
+            counter = int(time.time() // 30)
+            code = totp_code(secret, counter)
+        if code is not None:
+            return code
+        # +1s so the server's clock has certainly crossed the boundary too.
+        time.sleep(30 - time.time() % 30 + 1)
+
+
+def _claim_step_locked(secret, counter_file):
+    """Read-check-write of the counter file under the mkdir lock
+    `<counter_file>.lock` (#1466), shared with freshTotpCode in
+    live-browser.mjs. Returns the code, or None when the current step is
+    already spent. A lock older than 30 s (by its mtime) is stale."""
+    lock = counter_file + ".lock"
+    while True:
+        try:
+            os.mkdir(lock)
+            break
+        except FileExistsError:
+            try:
+                if _wall_clock() - os.stat(lock).st_mtime > 30:
+                    try:
+                        os.rmdir(lock)
+                    except OSError:
+                        pass
+                    continue
+            except OSError:
+                continue  # released between mkdir and stat
+            time.sleep(0.05)
+    try:
+        counter = int(time.time() // 30)
+        try:
+            with open(counter_file) as f:
+                spent = int(f.read().strip())
+        except (OSError, ValueError):
+            spent = -1
+        if counter <= spent:
+            return None
+        fd, tmp = tempfile.mkstemp(prefix="totp-last-counter.", suffix=".tmp",
+                                   dir=os.path.dirname(counter_file))
+        with os.fdopen(fd, "w") as f:
+            f.write(str(counter))
+        os.rename(tmp, counter_file)
+        return totp_code(secret, counter)
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+
+
 class API:
     def __init__(self, base_url, user, password):
         self.base = base_url.rstrip("/")
@@ -1320,6 +1441,14 @@ class API:
                          json={"username": user, "password": password},
                          headers={CSRF_HEADER: CSRF_VALUE})
         r.raise_for_status()
+        # Since #1253 every local account holds a factor, so the password
+        # alone answers {"secondFactor": [...]} rather than a session (#1429).
+        if r.headers.get("Content-Type", "").startswith("application/json") \
+                and "totp" in (r.json() or {}).get("secondFactor", []):
+            r = self.s.post(f"{self.base}/api/auth/login/factor",
+                             json={"code": fresh_totp_code()},
+                             headers={CSRF_HEADER: CSRF_VALUE})
+            r.raise_for_status()
 
     def get(self, path, **kw):
         r = self.s.get(f"{self.base}{path}", **kw)
@@ -1388,8 +1517,11 @@ def ingest_push(base_url, token, kind, records, page=1, pages=1, src_ip=None):
 def cmd_push(args):
     api = API(args.url, args.user, args.password)
     for router in FILTER_RULES:
+        # Minting re-checks the admin's own password, and an ingest token
+        # says it never expires (#1202).
         tok = api.post("/api/tokens", json={"name": f"{router}-ingest-seed", "kind": "ingest",
-                                             "device": router}).json()["value"]
+                                             "device": router, "expiresAt": "never",
+                                             "password": args.password}).json()["value"]
         src = ROUTERS[router]["src"]
         filt = [{k: v for k, v in r.items() if k != "fires"} for r in FILTER_RULES[router]]
         ack = ingest_push(args.url, tok, "filter-rule", filt, src_ip=src)
@@ -1424,8 +1556,9 @@ def cmd_entities(args):
     # type+key with no shared state between them -- so a small thread
     # pool fires them concurrently instead of waiting on each round trip
     # in turn. list() drives the map to completion and re-raises the
-    # first request's exception, same failure behaviour as the loop this
-    # replaced.
+    # first request's exception, but unlike the sequential loop this
+    # replaced -- which stopped at the first failure -- every POST has
+    # already been submitted by the time that exception surfaces.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(lambda body: api.post("/api/entities", json=body), bodies))
     print(f"seeded {len(bodies)} named entities")

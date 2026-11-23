@@ -9,7 +9,7 @@
 // either sibling feature.
 //
 // Persistence follows the exact convention already established by
-// internal/flags.Store and internal/auth.Store: mutex-protected,
+// internal/flags.Store and gauntlet.Store: mutex-protected,
 // optional atomic-write JSON persistence (an empty StorePath keeps
 // everything in-memory only, same as every other optional store in this
 // codebase -- see SECURITY.md).
@@ -97,7 +97,7 @@ func id(entityType, key string) string {
 }
 
 // storeFile is the on-disk shape: an object wrapping the entity list
-// plus a Seeded marker, mirroring auth.Store's own storeFile. The marker
+// plus a Seeded marker, mirroring gauntlet.Store's own storeFile. The marker
 // is what makes Seed's "should this run" decision independent of whether
 // the store happens to be empty *right now* -- without it, an admin
 // deleting every entity via the UI (this same package's own Delete,

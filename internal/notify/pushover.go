@@ -72,7 +72,7 @@ func (n *PushoverNotifier) Send(batch []flags.Flag) error {
 	if err != nil {
 		return fmt.Errorf("notify/pushover: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("notify/pushover: unexpected status %s", resp.Status)
 	}

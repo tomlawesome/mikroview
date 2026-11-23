@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { addressInCidr, parseCidr, type ParsedCidr } from './addressMatch'
+import { homeNetworks } from './homeNetworks.svelte'
+
 export function formatTime(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -21,10 +24,10 @@ export function formatAddr(ip?: string, port?: number): string {
   return port ? `${ip}:${port}` : ip
 }
 
-// IPv4-only mirror of internal/reputation's isPublic (the same RFC1918 /
-// loopback / link-local ranges the backend already rejects with
-// ErrNotPublic) -- used client-side just to decide whether the
-// investigate affordance is worth showing at all, not as a security
+// IPv4-only mirror of the server's inside/outside rule (internal/ipscope:
+// RFC1918 / loopback / link-local, plus the configured networks.home) --
+// used client-side to decide whether the investigate affordance is worth
+// showing and which interface is a router's WAN, not as a security
 // boundary (the backend re-checks regardless).
 export function isPublicIp(ip?: string): boolean {
   if (!ip) return false
@@ -41,7 +44,15 @@ export function isPublicIp(ip?: string): boolean {
   if (a === 127) return false
   if (a === 169 && b === 254) return false
   if (a === 0) return false
+  if (homeNetworks.v4.some((c) => addressInCidr(ip, c))) return false
   return true
+}
+
+// setHomeNetworks installs networks.home from GET /api/networks (#1481).
+// IPv4 only, like isPublicIp; IPv6 and unparsable entries are skipped
+// (the server has already validated the list).
+export function setHomeNetworks(cidrs: string[]): void {
+  homeNetworks.v4 = cidrs.map(parseCidr).filter((c): c is ParsedCidr => c !== null && c.family === 4)
 }
 
 // Converts an ISO 3166-1 alpha-2 country code (e.g. "US") to its flag
@@ -292,4 +303,14 @@ export function formatLastHeard(iso: string, nowMs: number): string {
 // deliberately oversized input. See #285.
 export function rawTooltip(raw: string, truncated?: boolean): string {
   return truncated ? `${raw}\n\n[truncated — the line sent was longer than MikroView stores]` : raw
+}
+
+// listenPort takes the port out of one of the server's own listen
+// addresses -- ":6514", "0.0.0.0:6514", "[::]:6514" -- where the router
+// needs the port, not the bind address. For those only: never for the
+// operator's setup address, which can be a bare IPv6 literal with no port;
+// the server splits that one (instance.addressHost, #1507).
+export function listenPort(listenAddr: string): string {
+  const colon = listenAddr.lastIndexOf(':')
+  return colon === -1 ? listenAddr : listenAddr.slice(colon + 1)
 }

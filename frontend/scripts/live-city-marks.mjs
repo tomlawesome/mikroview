@@ -33,7 +33,7 @@
 //     live-city-stops and live-city-walls all declare with this same
 //     range and name, and no sixth lane is ever created.
 
-import { session, check, done, feedRaw, waitForFlag } from './live-browser.mjs'
+import { session, check, done, feedRaw, waitForFlag, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // The lane is shared with this file's neighbours on purpose (see the
@@ -55,7 +55,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-marks', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-marks', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 
@@ -161,13 +161,14 @@ const readMark = () =>
 
 await toStreetStop()
 
-// Nothing switches a mark on or off any more. The one button left on
-// the row is the port pill (#1055), which is a filter, not a switch:
-// it is the only control there, and it stands idle.
+// Nothing switches a mark on or off any more. What is left on the row
+// is two sibling filter pills, port (#1055) and, beside it, serving
+// (#1320) -- neither is a switch, and both stand idle.
 const overlays = page.locator('[data-card="topography"] [aria-label="Map overlays"] button')
 const pills = await overlays.count()
-check(pills === 1, `the only button on the overlay row is the port pill (${pills} buttons)`)
-check((await overlays.first().textContent())?.trim() === '⌕ port', 'and it is the port pill, idle -- no flag or watch switch remains')
+check(pills === 2, `the only buttons on the overlay row are the port and serving pills (${pills} buttons)`)
+check((await overlays.first().textContent())?.trim() === '⌕ port', 'the first is the port pill, idle -- no flag or watch switch remains')
+check((await overlays.last().textContent())?.trim() === '⌕ serving', 'and beside it, the serving pill, also idle')
 
 await page.waitForSelector(BUILDING, { timeout: 15000 })
 // Same reasoning as the second toStreetStop() below: the building itself

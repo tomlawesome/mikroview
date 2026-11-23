@@ -26,7 +26,7 @@
 // make live-routeros rather than requiring one just to be included.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, enrolDevice, feedPortScan, pushFrom, waitForFlag } from './live-browser.mjs'
+import { session, check, done, enrolDevice, feedPortScan, pushFrom, waitForFlag, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -49,7 +49,7 @@ const { page } = await session()
 async function createToken(body) {
   const res = await page.request.post(`${URL_BASE}/api/tokens`, {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-    data: body,
+    data: tokenMint(body),
   })
   return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
@@ -220,6 +220,7 @@ if (scanFlag) {
     'five pushes naming the exact same address left the flag completely unchanged -- pushed data cannot clear, lower, or otherwise touch it',
   )
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, `skipped -- five pushes cannot be checked against a flag that never arrived (${raised.message})`)
 }
 

@@ -78,10 +78,15 @@ func restoreMarkerPath(cfg config.Config) string {
 
 // checkNoRestoreInProgress refuses to start while restoreMarkerName
 // exists: proof that a restore began overwriting this data directory and
-// never finished, so the stores on disk are some mixture of the backup
-// and whatever was here before it. Starting on that mixture is exactly
-// what #1293 is about -- the app would boot quietly on it, with nothing
-// to say which store came from which side.
+// never finished, so what is on disk is only partly the backup. Starting
+// on that is exactly what #1293 is about -- the app would boot quietly on
+// it, with nothing to say which part came from which side.
+//
+// The refusal does not claim the stores themselves are mixed: runRestore
+// keeps the marker through the vault bundle and retained-history writes
+// that follow the stores, so a restore that stopped there has every store
+// from the backup and only those two incomplete. The marker cannot say
+// which case this is, so the message names both.
 //
 // Skipped on Postgres for the same reason checkStoresUsable is:
 // refuseBackupOnPostgres already stops `-restore` from running at all on
@@ -98,9 +103,10 @@ func checkNoRestoreInProgress(cfg config.Config) error {
 		return fmt.Errorf("checking for an in-progress restore at %s: %w", path, err)
 	}
 	return fmt.Errorf("a restore into this data directory stopped part-way through -- the marker "+
-		"at %s is still there, which means the stores on disk are a mixture of the backup and "+
-		"whatever was here before it. Finish it by re-running the same `mikroview -restore <file> "+
-		"--force` that was interrupted, or replace this data directory with your own copy of it",
+		"at %s is still there, which means only part of the backup reached the disk: some stores "+
+		"may still hold whatever was here before it, or the stores all landed but the router backup "+
+		"vault or the retained event history did not. Finish it by re-running the same `mikroview -restore <file> "+
+		"-force` that was interrupted, or replace this data directory with your own copy of it",
 		path)
 }
 
@@ -128,7 +134,7 @@ func (e *storeUnusable) Unwrap() error { return e.Err }
 func checkPathUsable(path string) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err == nil {
-		f.Close()
+		_ = f.Close()
 		return nil
 	}
 	if !os.IsNotExist(err) {
@@ -141,7 +147,7 @@ func checkPathUsable(path string) error {
 	//
 	// Created rather than merely required, because that is what the
 	// stores themselves do on their first write (internal/persist's
-	// file.go, internal/auth's recovery.go, and servertls). A check
+	// file.go, internal/recoverykeys, and servertls). A check
 	// stricter than the code it guards would refuse deployments that
 	// actually work.
 	dir := filepath.Dir(path)
@@ -156,8 +162,8 @@ func checkPathUsable(path string) error {
 		return &storeUnusable{Path: path, Dir: dir, Err: unwrapPathErr(err)}
 	}
 	name := probe.Name()
-	probe.Close()
-	os.Remove(name)
+	_ = probe.Close()
+	_ = os.Remove(name)
 	return nil
 }
 

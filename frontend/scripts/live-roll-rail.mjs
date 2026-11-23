@@ -28,7 +28,7 @@
 // and is not disturbed) and leaves nothing behind but its syslog batch
 // and a viewer account it deletes again.
 
-import { session, feedSyslog, check, responsive, done, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, launchBrowser, enrolFactorAndSignIn, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -102,8 +102,10 @@ await page.waitForFunction(
   null,
   { timeout: 10000 },
 )
+// safe: waitForFunction above throws on timeout
 check(true, "and the Stream card is the one at the deck's scroll position")
 await page.waitForFunction(() => document.querySelectorAll('.grid .row').length >= 1, null, { timeout: 20000 })
+// safe: waitForFunction above throws on timeout
 check(true, 'with the live table rendering real events')
 
 await page.click('.roll-rail .rail-name:text-is("Metrics")')
@@ -185,7 +187,7 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 // #1335: a fresh account holds no second factor at all, so the forced-
 // enrolment door sits between the password step and the app itself.
-await enrolFactorAndSignIn(viewerPage)
+await enrolFactorAndSignIn(viewerPage, VIEWER_PASS)
 await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
 const viewerNames = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
@@ -206,7 +208,9 @@ const users = usersRes.status() < 400 ? await usersRes.json() : []
 const viewerAccount = (Array.isArray(users) ? users : []).find((u) => u.username === VIEWER_USER)
 if (viewerAccount) {
   const del = await page.request.delete(`${URL_BASE}/api/auth/users/${encodeURIComponent(viewerAccount.id)}`, {
-    headers: { 'X-Requested-With': 'mikroview' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    // Deleting an account re-checks the calling admin's password (#1202).
+    data: { password: adminPassword },
   })
   check(del.status() === 200 || del.status() === 204, `the viewer account is removed again (${del.status()})`)
 }

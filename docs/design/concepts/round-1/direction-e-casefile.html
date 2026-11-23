@@ -236,15 +236,15 @@
     <aside class="streamrail">
       <h3><i></i>The stream · 34/s</h3>
       <div class="srow hot"><span class="t">14:02:11</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → nas</span> :445</div>
-      <div class="srow"><span class="t">14:02:11</span> <span class="a-nat">NAT</span> phone-alex → 192.0.2.206</div>
-      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 198.51.100.34 → rb5009 :8291</div>
+      <div class="srow"><span class="t">14:02:11</span> <span class="a-nat">NAT</span> phone-alex → 203.0.113.206</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 203.0.113.34 → rb5009 :8291</div>
       <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> alex-desktop → nas :5001</div>
       <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> hue-bridge → pihole :53</div>
-      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 198.51.100.78 → rb5009 :22</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 203.0.113.78 → rb5009 :22</div>
       <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> guest-e8b2 → alex-desktop :445</div>
-      <div class="srow"><span class="t">14:02:09</span> <span class="a-nat">NAT</span> 198.51.100.55 → nas :443</div>
-      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> laptop-anna → 198.51.100.223 :443</div>
-      <div class="srow hot"><span class="t">14:02:09</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → 198.51.100.8</span> :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-nat">NAT</span> 203.0.113.55 → nas :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> laptop-anna → 203.0.113.223 :443</div>
+      <div class="srow hot"><span class="t">14:02:09</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → 203.0.113.8</span> :443</div>
       <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> phone-alex-wg → rb5009 :51820</div>
       <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> alex-desktop → pihole :53</div>
       <div class="note">Amber marks rows touching the open case. Click any row to ask about it — the stage pivots, the stream keeps flowing.</div>
@@ -264,7 +264,7 @@
           <svg viewBox="0 0 470 150" role="img" aria-label="Flow fan: cam-porch reaches toward nas on ports 445 and 139, and alex-desktop on 445; all dropped">
             <circle cx="60" cy="75" r="5" fill="var(--iot)"/>
             <text x="34" y="56" class="f-name">cam-porch</text>
-            <text x="34" y="103" class="f-sub">198.51.100.31 · iot lane</text>
+            <text x="34" y="103" class="f-sub">198.51.100.65 · iot lane</text>
             <path class="fanline" d="M72 68 C 160 30, 240 30, 310 44" stroke="var(--drop)"/>
             <path class="fanline" d="M72 75 C 160 70, 240 70, 310 82" stroke="var(--drop)"/>
             <path class="fanline" d="M72 82 C 160 115, 240 115, 310 120" stroke="var(--drop)"/>
@@ -306,7 +306,7 @@
 
         <div class="ev wide">
           <h4>What you can do about it — mikroview never touches the router</h4>
-          <div class="cmd">/ip firewall filter add chain=forward src-address=198.51.100.0/24 dst-address=203.0.113.0/24 \
+          <div class="cmd">/ip firewall filter add chain=forward src-address=198.51.100.64/27 dst-address=198.51.100.0/27 \
     action=drop log=yes log-prefix="iot-to-lan-drop" comment="name the thing the default drop was hiding" \
     place-before=[find comment="default-drop"]</div>
           <p class="cmd-note"><b>Print the command, never run it.</b> This names the boundary so the next knock arrives with a rule name instead of silence — and the UNPLANNED stamp on this edge retires itself the moment the router starts saying so.</p>
@@ -329,8 +329,8 @@
       </div>
       <div class="pincard">
         <div class="k">Host</div>
-        <div class="n">cam-porch <small>198.51.100.31</small></div>
-        <div class="s">also probing 198.51.100.8 · dropped</div>
+        <div class="n">cam-porch <small>198.51.100.65</small></div>
+        <div class="s">also probing 203.0.113.8 · dropped</div>
       </div>
       <div class="addnote">Every pin is a question you asked. The thread is the case. Close it with a conclusion — or export it as a lookback query.</div>
     </aside>
@@ -350,14 +350,14 @@
     <aside class="streamrail">
       <h3><i></i>The stream · 34/s</h3>
       <div class="srow hot"><span class="t">14:02:11</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → nas</span> :445</div>
-      <div class="srow"><span class="t">14:02:11</span> <span class="a-nat">NAT</span> phone-alex → 192.0.2.206</div>
-      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 198.51.100.34 → rb5009 :8291</div>
+      <div class="srow"><span class="t">14:02:11</span> <span class="a-nat">NAT</span> phone-alex → 203.0.113.206</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 203.0.113.34 → rb5009 :8291</div>
       <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> alex-desktop → nas :5001</div>
       <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> hue-bridge → pihole :53</div>
-      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 198.51.100.78 → rb5009 :22</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 203.0.113.78 → rb5009 :22</div>
       <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> guest-e8b2 → alex-desktop :445</div>
-      <div class="srow hot"><span class="t">14:02:09</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → 198.51.100.8</span> :443</div>
-      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> laptop-anna → 198.51.100.223 :443</div>
+      <div class="srow hot"><span class="t">14:02:09</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → 203.0.113.8</span> :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> laptop-anna → 203.0.113.223 :443</div>
       <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> phone-alex-wg → rb5009 :51820</div>
       <div class="note">The subject's rows glow amber as they happen — the dossier and the stream are one clock.</div>
     </aside>
@@ -371,18 +371,18 @@
       </div>
 
       <div class="rename" role="group" aria-label="Name this host">
-        <div class="prov"><b>198.51.100.31</b> — currently “cam-porch”, from a DHCP lease · renaming is display only; raw values stay the identity</div>
+        <div class="prov"><b>198.51.100.65</b> — currently “cam-porch”, from a DHCP lease · renaming is display only; raw values stay the identity</div>
         <input type="text" value="Porch camera" aria-label="Display name">
         <button class="cancel">Cancel</button>
         <button class="save">Save name</button>
-        <div class="scope">Applies everywhere 198.51.100.31 appears — the stream, the map, every case that ever mentions it.</div>
+        <div class="scope">Applies everywhere 198.51.100.65 appears — the stream, the map, every case that ever mentions it.</div>
       </div>
 
       <div class="evidence">
         <div class="ev">
           <h4>Identity</h4>
           <div class="idgrid">
-            <div><div class="k">address</div><div class="v">198.51.100.31</div></div>
+            <div><div class="k">address</div><div class="v">198.51.100.65</div></div>
             <div><div class="k">mac</div><div class="v">D8:0D:17:2A:4C:9E <small>· TP-Link</small></div></div>
             <div><div class="k">lane</div><div class="v">iot · vlan20</div></div>
             <div><div class="k">first seen</div><div class="v">41 days ago</div></div>
@@ -403,7 +403,7 @@
             <text x="318" y="36" class="f-val" style="fill:var(--ok)">nvr :554 ok</text>
             <text x="318" y="74" class="f-val">nas :445 ✕</text>
             <text x="318" y="112" class="f-val">alex-desktop ✕</text>
-            <text x="318" y="142" class="f-val">198.51.100.8 ✕</text>
+            <text x="318" y="142" class="f-val">203.0.113.8 ✕</text>
           </svg>
         </div>
 
@@ -441,7 +441,7 @@
       </div>
       <div class="pincard now">
         <div class="k">Host · now on stage</div>
-        <div class="n">cam-porch <small>198.51.100.31</small></div>
+        <div class="n">cam-porch <small>198.51.100.65</small></div>
         <div class="s">renaming to “Porch camera”</div>
       </div>
       <div class="addnote">The trail remembers the order you asked. Scene 3 is where it becomes a verdict.</div>
@@ -481,7 +481,7 @@
       </div>
       <div class="bcard">
         <div class="k">Host</div>
-        <h4>Porch camera <small>198.51.100.31</small></h4>
+        <h4>Porch camera <small>198.51.100.65</small></h4>
         <p>TP-Link · iot lane · 41 days quiet, knocking for 3 — since the day after its firmware update.</p>
       </div>
       <div class="bcard">

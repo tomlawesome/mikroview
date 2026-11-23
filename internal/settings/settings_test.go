@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -166,6 +167,64 @@ func TestStoredOffIsDistinguishableFromNothingStored(t *testing.T) {
 	}
 }
 
+func TestFirstRunHasNoBackupSwitchStored(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Backup(); ok {
+		t.Error("a fresh store reported a stored backup switch position -- a fresh install starts closed with nothing stored")
+	}
+}
+
+func TestSetBackupSurvivesAReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Backup{Enabled: true, ChangedAt: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), ChangedBy: "alice"}
+	if err := s.SetBackup(want); err != nil {
+		t.Fatalf("SetBackup: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.Backup()
+	if !ok || !got.ChangedAt.Equal(want.ChangedAt) || got.Enabled != want.Enabled || got.ChangedBy != want.ChangedBy {
+		t.Errorf("after a reopen: (%+v, %v), want (%+v, true)", got, ok, want)
+	}
+}
+
+// The switch's whole point is that a stored "closed" beats a leftover
+// legacy config value -- so "nothing stored" cannot be read off Enabled,
+// which is false in both cases. Set is what carries that distinction, the
+// same reasoning history.enabled's own test above gives for Days.
+func TestStoredClosedIsDistinguishableFromNothingStored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetBackup(Backup{Enabled: false, ChangedBy: "alice"}); err != nil {
+		t.Fatalf("SetBackup: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.Backup()
+	if !ok {
+		t.Fatal("a stored closed position reads back as nothing stored -- a leftover legacy config value would seed it again on every restart")
+	}
+	if got.Enabled {
+		t.Error("a stored closed position read back as open")
+	}
+}
+
 func TestSetHistoryRefusesWhatItCannotStore(t *testing.T) {
 	s, err := Open("")
 	if err != nil {
@@ -251,5 +310,60 @@ func TestNegativeStoredHistoryRefusesToOpen(t *testing.T) {
 		if _, err := Open(path); err == nil {
 			t.Errorf("%s opened cleanly", doc)
 		}
+	}
+}
+
+// #1352: the country data sources' sealed keys ride in this document
+// beside the other settings -- each change must leave the rest intact,
+// survive a reopen, and a removal must stick.
+func TestGeoKeysSurviveAReopenAndLeaveTheRestAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMaxMemory(480 << 20); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	if err := s.SetGeoKey("ipinfo", GeoKey{Sealed: []byte{1, 2, 3}, SetAt: at, SetBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetGeoKey("maxmind", GeoKey{Sealed: []byte{4, 5}, SetAt: at, SetBy: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearGeoKey("maxmind"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearGeoKey("never-set"); err != nil {
+		t.Errorf("clearing an absent key: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, ok := reopened.GeoKey("ipinfo")
+	if !ok || string(k.Sealed) != "\x01\x02\x03" || !k.SetAt.Equal(at) || k.SetBy != "admin" {
+		t.Errorf("ipinfo after a reopen = %+v, %v", k, ok)
+	}
+	if _, ok := reopened.GeoKey("maxmind"); ok {
+		t.Error("a removed key came back after a reopen")
+	}
+	if got, ok := reopened.MaxMemory(); !ok || got != 480<<20 {
+		t.Errorf("the event-buffer figure was lost: %d, %v", got, ok)
+	}
+	if err := s.SetGeoKey("ipinfo", GeoKey{}); err == nil {
+		t.Error("a key with no ciphertext was accepted")
+	}
+}
+
+func TestEmptySealedGeoKeyRefusesToOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"store":{},"history":{},"geo":{"ipinfo":{"sealed":""}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Error("a geo entry with no ciphertext opened as if it were a key")
 	}
 }

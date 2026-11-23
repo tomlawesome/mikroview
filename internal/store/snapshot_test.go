@@ -194,7 +194,7 @@ func TestExportCarriesNoEventLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-	for _, forbidden := range []string{"raw line", "192.168.1.50", "1.2.3.4"} {
+	for _, forbidden := range []string{"raw line", "192.168.1.50", "198.51.100.4"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Errorf("the exported document contains %q -- snapshots hold no event lines", forbidden)
 		}

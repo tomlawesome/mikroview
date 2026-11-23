@@ -16,7 +16,7 @@
 // where sign-in happens to land.
 //
 // Produces three shots for the README and the GitHub Pages site, against
-// a seeded demo (AGENTS.md's "Seed it: a demo on bare syslog is not a
+// a seeded demo (docs/demos.md, "Seed it: a demo on bare syslog is not a
 // demo" -- run scripts/seed-demo.py push/entities/accounts and capture
 // while `feed` is still running, or the header rate reads 0.0/s and the
 // stream rows all carry one stale timestamp instead of a live spread):
@@ -51,6 +51,7 @@
 import { chromium } from 'playwright'
 import { fileURLToPath } from 'url'
 import path from 'path'
+import { completeSecondFactor } from './live-browser.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
@@ -75,6 +76,8 @@ async function signedInPage(browser, beforeLoad) {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
+  // Every local account needs a second factor since #1253 (#1429).
+  await completeSecondFactor(page)
   await page.waitForSelector('#main-content', { timeout: 15000 })
   await page.waitForTimeout(2000)
   return { context, page }

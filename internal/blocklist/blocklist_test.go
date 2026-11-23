@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 	"github.com/tomlawesome/mikroview/internal/logging"
 )
 
@@ -281,6 +282,44 @@ func TestKnownSourcesMatchesRegistryOrder(t *testing.T) {
 	}
 }
 
+// #1360: the router's ET list (the blocklist builder's catalogue) and
+// the one MikroView flags from must be the same file, or what the
+// router drops and what MikroView flags drift apart. Spamhaus differs by
+// design for now: the catalogue loads Spamhaus's JSON files, which it
+// recommends, while this fetcher still reads drop.txt -- moving it is its
+// own issue (BUILD.md, "What stays out"). The test pins that difference
+// too, so closing it is a deliberate change here rather than an
+// accident.
+func TestFeedURLsMatchTheBlocklistCatalogue(t *testing.T) {
+	et, ok := blcatalogue.Lookup("et")
+	if !ok {
+		t.Fatal("the catalogue has no et list")
+	}
+	if got := registryBySource[SourceEmergingThreatsCompromised].URL; got != et.URL {
+		t.Errorf("Emerging Threats: MikroView flags from %q but the router is told to load %q", got, et.URL)
+	}
+
+	spamhaus, ok := blcatalogue.Lookup("spamhaus")
+	if !ok {
+		t.Fatal("the catalogue has no spamhaus list")
+	}
+	if got := registryBySource[SourceSpamhausDROP].URL; got != "https://www.spamhaus.org/drop/drop.txt" || spamhaus.URL != "https://www.spamhaus.org/drop/drop_v4.json" {
+		t.Errorf("Spamhaus: fetcher %q, catalogue %q -- the drop.txt/JSON difference is deliberate until its own issue moves the fetcher; update this test with that change", got, spamhaus.URL)
+	}
+
+	// The catalogue marks as many lists FlaggedByMikroView as there are
+	// feeds MikroView flags from.
+	var flagged int
+	for _, l := range blcatalogue.Lists() {
+		if l.FlaggedByMikroView {
+			flagged++
+		}
+	}
+	if flagged != len(feedRegistry) {
+		t.Errorf("the catalogue marks %d lists FlaggedByMikroView, but MikroView flags from %d feeds", flagged, len(feedRegistry))
+	}
+}
+
 func TestNewSkipsUnknownSources(t *testing.T) {
 	b := New([]string{"spamhaus_drop", "not_a_real_feed"}, logging.New("blocklist-test"))
 	if !b.HasFeeds() {
@@ -449,6 +488,21 @@ func TestRetiredEdropIsNotOnTheMenu(t *testing.T) {
 	for _, s := range DefaultSources {
 		if strings.Contains(s, "edrop") {
 			t.Errorf("DefaultSources still enables %q by default", s)
+		}
+	}
+}
+
+// FlagLabel names a feed for exactly the catalogue lists marked
+// FlaggedByMikroView, and by the label a known_bad_ip flag's detail
+// carries (#1360's ledger counts flags by it).
+func TestFlagLabelMatchesTheCatalogue(t *testing.T) {
+	for _, l := range blcatalogue.Lists() {
+		label, ok := FlagLabel(l.Key)
+		if ok != l.FlaggedByMikroView {
+			t.Errorf("%s: FlagLabel ok = %v, FlaggedByMikroView = %v", l.Key, ok, l.FlaggedByMikroView)
+		}
+		if ok && label != l.Name {
+			t.Errorf("%s: flag label %q, catalogue name %q", l.Key, label, l.Name)
 		}
 	}
 }

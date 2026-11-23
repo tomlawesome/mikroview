@@ -15,7 +15,7 @@
 // byte would be a second, drifting copy of code this binary already has.
 // scripts/seed-demo.py keeps the job of everything that goes in over the
 // HTTP API (push, entities, accounts) -- this command only builds the file
-// `-restore` reads, per AGENTS.md's "Demos the owner reviews" recipe.
+// `-restore` reads, per the recipe in docs/demos.md.
 //
 // The watchlist entries mirror scripts/seed-demo.py's WATCHLIST_ENTRIES
 // (#738) by name, IP and ports, so the story started here is the one the
@@ -103,12 +103,12 @@ type demoEntry struct {
 }
 
 var demoWatchlist = []demoEntry{
-	{"demo-kitchen-cam-web-only", "kitchen-cam-web-only", "192.168.20.31", []int{80, 443}, false, storyHealthy},
-	{"demo-guest-phone-smb-watch", "guest-phone-smb-watch", "192.168.30.50", []int{445}, true, storyHeld},
-	{"demo-front-desk-phone-voip", "front-desk-phone-voip", "192.168.50.20", []int{5060}, false, storyHealthy},
-	{"demo-build-server-db-exposure", "build-server-db-exposure", "10.10.0.11", []int{3306}, false, storyNoCoverage},
-	{"demo-cam-porch-smb-watch", "cam-porch-smb-watch", "10.0.30.31", []int{445}, false, storyBrokenRing},
-	{"demo-nas-shares-watch", "nas-shares-watch", "10.0.20.10", []int{445, 5001}, false, storyHealthy},
+	{"demo-kitchen-cam-web-only", "kitchen-cam-web-only", "198.51.100.66", []int{80, 443}, false, storyHealthy},
+	{"demo-guest-phone-smb-watch", "guest-phone-smb-watch", "198.51.100.98", []int{445}, true, storyHeld},
+	{"demo-front-desk-phone-voip", "front-desk-phone-voip", "192.0.2.116", []int{5060}, false, storyHealthy},
+	{"demo-build-server-db-exposure", "build-server-db-exposure", "198.51.100.51", []int{3306}, false, storyNoCoverage},
+	{"demo-cam-porch-smb-watch", "cam-porch-smb-watch", "198.51.100.78", []int{445}, false, storyBrokenRing},
+	{"demo-nas-shares-watch", "nas-shares-watch", "198.51.100.42", []int{445, 5001}, false, storyHealthy},
 }
 
 // backgroundHost is a non-watchlist identity the corpus's background
@@ -121,14 +121,16 @@ type backgroundHost struct {
 }
 
 var backgroundHosts = []backgroundHost{
-	{"192.0.2.10", "aa:bb:cc:01:01:01"},    // core-switch, border-rb5009/core
-	{"192.0.2.21", "aa:bb:cc:01:01:02"},    // home-nas, border-rb5009/core
-	{"192.168.10.15", "aa:bb:cc:01:02:01"}, // alex-laptop, border-rb5009/staff
-	{"192.168.40.12", "aa:bb:cc:02:01:01"}, // office-hex/office, unnamed
-	{"172.16.5.5", "aa:bb:cc:03:01:01"},    // lab-crs/mgmt, unnamed
+	{"192.0.2.202", "aa:bb:cc:01:01:01"}, // core-switch, border-rb5009/core
+	{"192.0.2.213", "aa:bb:cc:01:01:02"}, // home-nas, border-rb5009/core
+	{"192.0.2.47", "aa:bb:cc:01:02:01"},  // alex-laptop, border-rb5009/staff
+	{"192.0.2.76", "aa:bb:cc:02:01:01"},  // reception-pc, office-hex/office
+	{"192.0.2.165", "aa:bb:cc:03:01:01"}, // lab-switch-mgmt, lab-crs/mgmt
 }
 
-var wanTargets = []string{"203.0.113.5", "192.0.2.8", "203.0.113.1", "198.51.100.34"}
+// wanTargets are outside peers, from the table's outside block (#1481:
+// documentation addresses only, never a real public host).
+var wanTargets = []string{"203.0.113.5", "203.0.113.53", "203.0.113.54", "203.0.113.80"}
 
 func main() {
 	out := flag.String("out", "", "path to write the backup envelope to (required)")
@@ -174,7 +176,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := backup.Write(f, *appVersion, stores); err != nil {
-		f.Close()
+		_ = f.Close()
 		fmt.Fprintf(os.Stderr, "writing the envelope: %v\n", err)
 		os.Exit(1)
 	}
@@ -203,7 +205,7 @@ func buildDefinitions(now time.Time) ([]byte, error) {
 		return nil, err
 	}
 	path := tmp.Name()
-	tmp.Close()
+	_ = tmp.Close()
 	// Removed rather than left empty: OpenDefinitionsStore treats a
 	// missing file as the expected first-run case but an existing,
 	// zero-byte one as a document that failed to parse -- see
@@ -211,7 +213,7 @@ func buildDefinitions(now time.Time) ([]byte, error) {
 	if err := os.Remove(path); err != nil {
 		return nil, err
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	defs, err := engine.OpenDefinitionsStore(path)
 	if err != nil {
@@ -286,10 +288,12 @@ func buildRetainedEvents(now time.Time, days int) ([]byte, int, error) {
 	rng := mathrand.New(mathrand.NewSource(cryptoSeed()))
 	var records []retainedRecord
 
-	// Ends yesterday, never today: today belongs to the live feeder that
-	// starts right after -restore (AGENTS.md's demo recipe), and a
-	// retained event timestamped later than "now" would be a corpus
-	// claiming to have seen the future.
+	// Background traffic ends yesterday, never today: today belongs to the
+	// live feeder that starts right after -restore (docs/demos.md).
+	// Matching traffic below may fall in the last closed window, which can
+	// end this morning, but never later than now: a retained event
+	// timestamped after "now" would be a corpus claiming to have seen the
+	// future.
 	dayStart := now.Truncate(24*time.Hour).AddDate(0, 0, -days)
 	for day := 0; day < days; day++ {
 		base := dayStart.AddDate(0, 0, day)

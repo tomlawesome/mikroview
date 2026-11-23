@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — W · Console</title>
+<style>
+/* W — Console. The router's own lines are the interface: a live console
+   fills the screen, and setup is the section markers appearing in it as
+   each thing is proved. The form is a narrow instrument panel beside it. */
+:root {
+  --bg: #06080e; --panel: #090c14; --console: #020409; --elev: #0f1422; --hover: rgba(160,185,230,0.08);
+  --border: rgba(160,185,230,0.13); --border-2: rgba(160,185,230,0.26);
+  --fg: #e9eefb; --muted: #97a4c4; --dim: #55628a; --accent: #9db8e8;
+  --ok: #3ecf7e; --warn: #f28a1e; --bad: #ef4444; --drop: #f5a623;
+  --sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --p0:#9db8e8; --p1:#3ecf7e; --p2:#f5a623; --p3:#e879f9; --p4:#22d3ee; --p5:#fb7185; --p6:#a3e635; --p7:#c4b5fd;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.app { position: fixed; inset: 0; display: grid; grid-template-rows: 44px 1fr; }
+.bar { display: flex; align-items: center; gap: 22px; padding: 0 18px; border-bottom: 1px solid var(--border); font: 12.5px var(--mono); color: var(--muted); }
+.bar .crumbs b { color: var(--fg); font-weight: 600; }
+.bar .crumbs span { color: var(--dim); margin: 0 6px; }
+.bar .steps { margin-left: auto; display: flex; gap: 18px; letter-spacing: 0.06em; text-transform: uppercase; font-size: 11px; }
+.bar .steps i { font-style: normal; color: var(--dim); margin-right: 6px; }
+.bar .steps .now { color: var(--fg); } .bar .steps .now i { color: var(--accent); }
+.bar .steps .done { color: var(--ok); } .bar .steps .done i { color: var(--ok); }
+.bar .leave { background: none; border: 1px solid var(--border); border-radius: 5px; padding: 4px 10px; color: var(--muted); font: 12px var(--sans); }
+.bar .leave:hover { background: var(--hover); color: var(--fg); }
+.body { display: grid; grid-template-columns: 440px 1fr; min-height: 0; }
+.panel { background: var(--panel); border-right: 1px solid var(--border); padding: 28px 28px 80px; overflow-y: auto; }
+.panel::-webkit-scrollbar { width: 6px; } .panel::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+h1 { margin: 0 0 4px; font-size: 21px; font-weight: 600; letter-spacing: -0.01em; }
+.sub { margin: 0 0 22px; font-size: 13px; color: var(--muted); }
+.sub code { font: 12px var(--mono); color: var(--fg); }
+.view { animation: in 260ms ease-out both; }
+@keyframes in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+label.f { display: block; margin: 0 0 16px; }
+label.f .l { display: flex; justify-content: space-between; font: 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+label.f .l em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--dim); }
+label.f input { width: 100%; background: var(--console); border: 1px solid var(--border-2); border-radius: 5px; padding: 8px 10px; font: 13.5px var(--mono); color: var(--fg); outline: none; }
+label.f input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(157,184,232,0.14); }
+label.f .h { font-size: 12px; color: var(--dim); margin-top: 5px; line-height: 1.45; }
+.row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 6px 0 20px; font-size: 13.5px; }
+.row .r { margin-left: auto; font: 11px var(--mono); color: var(--dim); }
+.sw { position: relative; width: 34px; height: 20px; border-radius: 10px; background: var(--border-2); border: none; padding: 0; flex: none; }
+.sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg); transition: transform 160ms; }
+.sw[aria-checked=true] { background: var(--accent); } .sw[aria-checked=true]::after { transform: translateX(14px); background: var(--bg); }
+.btn { border: 1px solid var(--border-2); background: var(--elev); border-radius: 6px; padding: 8px 16px; font-size: 13.5px; }
+.btn:hover { background: var(--hover); }
+.btn.p { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.btn.p:disabled { background: var(--dim); border-color: var(--dim); opacity: 0.55; cursor: not-allowed; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #04140a; }
+.btn.danger { background: none; border-color: var(--bad); color: var(--bad); }
+.link { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; font-size: 13px; }
+.link.q { color: var(--muted); }
+.acts { display: flex; align-items: center; gap: 14px; margin-top: 18px; flex-wrap: wrap; }
+.note { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 14px 0 0; }
+.note b { color: var(--muted); font-weight: 500; }
+pre.block { margin: 0; background: var(--console); border: 1px solid var(--border-2); border-radius: 6px; padding: 12px 14px; font: 12px/1.6 var(--mono); color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 62px; overflow: hidden; position: relative; }
+pre.block.open { max-height: 420px; overflow: auto; }
+.fold { margin: 8px 0 14px; }
+.ev { list-style: none; margin: 0 0 6px; padding: 0; font: 12.5px var(--mono); }
+.ev li { display: grid; grid-template-columns: 62px 14px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); align-items: baseline; animation: in 220ms ease-out both; }
+.ev .t { color: var(--dim); } .ev .m { color: var(--ok); } .ev li.wait .m { color: var(--dim); } .ev li.bad .m { color: var(--bad); }
+.ev .d { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.ev .d b { color: var(--fg); font-weight: 500; }
+.tag { display: inline-block; font: 10.5px var(--mono); padding: 2px 6px; border-radius: 4px; border: 1px solid; margin-left: 4px; vertical-align: 1px; }
+.tag.ok { color: var(--ok); border-color: rgba(62,207,126,0.4); } .tag.warn { color: var(--warn); border-color: rgba(242,138,30,0.5); }
+.blink { display: inline-block; width: 7px; height: 12px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.checks { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; font-size: 12.5px; }
+.checks h4 { margin: 8px 0 6px; font: 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.checks ul { list-style: none; margin: 0; padding: 0; } .checks li { display: flex; gap: 8px; color: var(--muted); padding: 3px 0; line-height: 1.45; }
+.checks li .m { flex: none; width: 12px; } .checks .ok .m { color: var(--ok); } .checks .bad .m { color: var(--bad); } .checks .q .m { color: var(--dim); }
+.checks code { font: 11.5px var(--mono); color: var(--fg); }
+table.rules { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 0 0 14px; }
+table.rules th { text-align: left; font: 10.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); padding: 0 6px 6px 0; border-bottom: 1px solid var(--border-2); font-weight: 500; }
+table.rules td { padding: 7px 6px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.rules tr.off td { opacity: 0.4; }
+table.rules code { font: 11.5px var(--mono); color: var(--muted); }
+table.rules .why { color: var(--dim); font-size: 11.5px; }
+table.rules .pre { font: 11.5px var(--mono); }
+.chk { width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--border-2); background: none; padding: 0; color: var(--bg); font-size: 11px; line-height: 1; }
+tr:not(.off) .chk { background: var(--accent); border-color: var(--accent); }
+.ledger { list-style: none; margin: 0 0 18px; padding: 0; }
+.ledger li { padding: 9px 0; border-bottom: 1px solid var(--border); }
+.ledger .h { display: flex; align-items: baseline; gap: 10px; font-size: 13.5px; }
+.ledger .h .u { margin-left: auto; font-size: 12px; color: var(--dim); background: none; border: none; text-decoration: underline; padding: 0; }
+.ledger .e { font: 11.5px var(--mono); color: var(--ok); margin-top: 2px; }
+.ledger li.skip .e { color: var(--dim); }
+.undo { margin-top: 10px; border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--console); font-size: 12.5px; animation: in 200ms ease-out both; }
+.undo h5 { margin: 0 0 5px; font: 10.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.undo p { margin: 0 0 8px; color: var(--muted); }
+.undo pre { margin: 0 0 8px; font: 11.5px/1.6 var(--mono); color: var(--fg); white-space: pre-wrap; }
+.undo .r { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+.undo .r .btn { padding: 5px 12px; font-size: 12.5px; }
+.undo .note { margin: 0; }
+
+/* the console */
+.console { background: var(--console); position: relative; overflow: hidden; font: 12.5px/1.75 var(--mono); }
+.console .head { position: absolute; top: 0; left: 0; right: 0; padding: 8px 20px; display: flex; gap: 22px; align-items: center; border-bottom: 1px solid var(--border); color: var(--dim); font-size: 11.5px; letter-spacing: 0.04em; background: rgba(2,4,9,0.9); z-index: 2; }
+.console .head b { color: var(--muted); font-weight: 500; }
+.console .head .live { margin-left: auto; color: var(--dim); }
+.console .head .live.on { color: var(--ok); }
+.console .head .live.on::before { content: '●'; margin-right: 6px; animation: blink 1.2s steps(2) infinite; }
+.scroll { position: absolute; inset: 37px 0 0 0; overflow-y: auto; padding: 14px 20px 30px; }
+.scroll::-webkit-scrollbar { width: 6px; } .scroll::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+.ln { display: grid; grid-template-columns: 70px 1fr; gap: 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.ln .t { color: var(--dim); }
+.ln.sys { color: var(--dim); }
+.ln.sys b { color: var(--muted); font-weight: 500; }
+.ln.mark { margin: 10px 0 4px; color: var(--ok); }
+.ln.mark .t { color: var(--ok); }
+.ln.mark.bad, .ln.mark.bad .t { color: var(--bad); }
+.ln.mark .rule { display: inline-block; width: 100%; border-top: 1px solid rgba(62,207,126,0.35); vertical-align: middle; margin-top: -1px; }
+.ln.detail { color: var(--muted); }
+.ln.detail .k { display: inline-block; width: 12ch; color: var(--dim); }
+.ln.detail b { color: var(--fg); font-weight: 500; }
+.ln .pre { font-weight: 600; }
+.ln .warn { color: var(--warn); }
+.ln .link { font: inherit; }
+.ln.new { animation: lnIn 180ms ease-out both; }
+@keyframes lnIn { from { opacity: 0; } to { opacity: 1; } }
+.p0 { color: var(--p0); } .p1 { color: var(--p1); } .p2 { color: var(--p2); } .p3 { color: var(--p3); } .p4 { color: var(--p4); } .p5 { color: var(--p5); } .p6 { color: var(--p6); } .p7 { color: var(--p7); }
+
+.proto-bar { position: fixed; right: 14px; bottom: 12px; display: flex; align-items: center; gap: 12px; padding: 7px 11px; border: 1px dashed rgba(245,166,35,0.5); border-radius: 7px; background: rgba(6,8,14,0.9); font: 12px var(--sans); color: var(--drop); z-index: 9; }
+.proto-bar select { background: var(--elev); border: 1px solid var(--border-2); border-radius: 4px; padding: 2px 5px; font-size: 12px; color: var(--fg); }
+.proto-bar button { background: none; border: 1px solid var(--border-2); border-radius: 4px; padding: 2px 8px; font-size: 12px; color: var(--muted); }
+.proto-bar b { letter-spacing: 0.08em; text-transform: uppercase; font-size: 10.5px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="crumbs"><b>MikroView</b><span>›</span>setup<span id="crumb"></span></div>
+    <nav class="steps" id="steps" aria-label="Setup progress"></nav>
+    <button type="button" class="leave" data-act="leave">Leave setup</button>
+  </header>
+  <div class="body">
+    <aside class="panel" id="panel"></aside>
+    <section class="console" aria-live="polite" aria-label="Router console">
+      <div class="head"><b>console</b><span id="c-listen"></span><span id="c-token"></span><span class="live" id="c-live">no stream</span></div>
+      <div class="scroll" id="scroll"></div>
+    </section>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script>
+const { story, esc } = MV;
+const pal = {}; const palOf = p => { if (!(p in pal)) pal[p] = 'p' + (Object.keys(pal).length % 8); return pal[p]; };
+const has = MV.has, ev = MV.ev;
+const stepIdx = { tell: 0, paste: 0, watch: 0, tune: 1, done: 2 };
+
+const panels = {
+  tell: s => `<div class="view">
+    <h1>Connect a router</h1><p class="sub">MikroView learns the rest from the router.</p>
+    <label class="f"><span class="l">Router name</span><input data-field="name" value="${esc(s.name)}" autocomplete="off" spellcheck="false"></label>
+    <label class="f"><span class="l">Router address</span><input data-field="addr" value="${esc(s.addr)}" autocomplete="off" spellcheck="false" placeholder="192.168.…"><span class="h">The log port opens for this address only, until its first line arrives.</span></label>
+    <label class="f"><span class="l">MikroView address <em>as the router reaches it</em></span><input value="${story.mv}" readonly></label>
+    <label class="f"><span class="l">Password</span><input data-field="pass" type="password" value="${esc(s.pass)}"><span class="h">Opens the port. Not kept.</span></label>
+    <div class="row"><button type="button" class="sw" role="switch" aria-checked="${s.backup}" data-act="backup" aria-label="Nightly backup"></button>Nightly backup<span class="r">key file present</span></div>
+    <div class="acts"><button type="button" class="btn p" data-act="go-paste">Continue</button></div>
+    <p class="note">MikroView never connects to the router. One paste in its terminal does everything that follows.</p>
+  </div>`,
+  paste: s => `<div class="view">
+    <h1>Paste</h1><p class="sub">One block: certificate, log stream, state push${s.backup ? ', nightly backup' : ''}.</p>
+    <pre class="block ${s.open ? 'open' : ''}">${esc(MV.pasteBlock())}</pre>
+    <div class="fold"><button type="button" class="link q" data-act="fold">${s.open ? 'Show first line' : `Show all ${MV.pasteLines()} lines`}</button></div>
+    <div class="acts"><button type="button" class="btn ${s.copied ? 'ok' : 'p'}" data-act="copy">${s.copied ? 'Copied' : 'Copy'}</button>${s.copied ? '<span class="note" style="margin:0">Watching the console…</span>' : `<button type="button" class="link q" data-act="back-tell">Back</button>`}</div>
+    <p class="note"><b>Router terminal only</b> — WinBox › New Terminal, WebFig › Terminal. Not System › Scripts.<br>Enrol token valid until ${story.tokenUntil}. Push token is this router's.</p>
+  </div>`,
+  watch: s => {
+    const done = has('push');
+    const rows = s.evidence.map(e => `<li><span class="t">${e.t}</span><span class="m">✓</span><span>${esc(e.h)}${detail(e)}</span></li>`).join('');
+    const bad = s.refused && !s.useOther ? `<li class="bad"><span class="t">${MV.hms(MV.now())}</span><span class="m">✗</span><span>Lines from <b>${story.other}</b> refused<span class="d">Not the address given. If it is ${esc(s.name)}: <button type="button" class="link" data-act="use-other">use ${story.other}</button></span></span></li>` : '';
+    const wait = done ? '' : `<li class="wait"><span class="t"></span><span class="m">·</span><span>${!has('cert') ? 'certificate fetch' : !has('enrol') ? 'enrol line' : 'first push'}<span class="blink" style="margin-left:6px"></span></span></li>`;
+    return `<div class="view">
+      <h1>${done ? 'Connected' : 'Connecting'}</h1><p class="sub">${done ? `${story.rules} rules · ${story.alreadyLog.length} logging` : `waiting on ${esc(s.name)}`}</p>
+      <ul class="ev">${rows}${bad}${wait}</ul>
+      ${done ? `<div class="acts"><button type="button" class="btn p" data-act="to-tune">Continue</button></div>` : `<div class="acts"><button type="button" class="link q" data-act="checks">${s.checks ? 'Hide checks' : 'Checks'}</button></div>${s.checks ? checks(s) : ''}`}
+    </div>`;
+  },
+  tune: s => `<div class="view">
+    <h1>Logging</h1><p class="sub">${story.rules} rules · ${story.alreadyLog.length} log · ${s.chosen.size} proposed</p>
+    <table class="rules"><thead><tr><th></th><th>Rule</th><th>Prefix</th></tr></thead><tbody>
+    ${story.suggestions.map((r, i) => `<tr class="${s.chosen.has(i) ? '' : 'off'}"><td><button type="button" class="chk" data-act="toggle" data-i="${i}" aria-pressed="${s.chosen.has(i)}" aria-label="Log ${r.comment}">${s.chosen.has(i) ? '✓' : ''}</button></td><td><code>${r.chain} ${r.action}</code> ${esc(r.comment)}<div class="why">${r.why}</div></td><td class="pre ${palOf(r.prefix)}">${r.prefix}</td></tr>`).join('')}
+    </tbody></table>
+    ${s.tagged ? `<ul class="ev"><li><span class="t">${s.tunedAt}</span><span class="m">✓</span><span>${s.chosen.size} rules logging<span class="d">${[...s.chosen].sort().map(i => `<span class="${palOf(story.suggestions[i].prefix)}">${story.suggestions[i].prefix}</span>`).join(' · ')}</span></span></li></ul><div class="acts"><button type="button" class="btn p" data-act="to-done">Continue</button></div>`
+      : s.tuneCopied ? `<ul class="ev"><li class="wait"><span class="t"></span><span class="m">·</span><span>first tagged line<span class="blink" style="margin-left:6px"></span></span></li></ul>`
+      : `<pre class="block">${esc(MV.tagBlock()) || '(nothing selected)'}</pre><div class="acts" style="margin-top:12px"><button type="button" class="btn p" data-act="tune-copy" ${s.chosen.size ? '' : 'disabled'}>Copy</button><button type="button" class="link q" data-act="tune-skip">Skip</button></div><p class="note">One <b>set</b> per rule, found by chain, action and comment. Router terminal.</p>`}
+  </div>`,
+  done: s => {
+    const rows = [
+      { k: 'connect', h: 'Connect', e: `cert ${ev('cert').t} · enrol ${ev('enrol').t}` },
+      { k: 'push', h: 'State push', e: `first ${ev('push').t} · every ${story.interval} · RouterOS ${s.version}` },
+      s.tuneSkipped ? { k: null, h: 'Logging', e: `skipped · ${story.alreadyLog.length} rules log as before`, skip: true } : { k: 'tune', h: 'Logging', e: `${s.chosen.size} rules · ${s.tunedAt}` },
+      s.backup ? { k: 'backup', h: 'Backup', e: 'nightly 03:00' } : { k: null, h: 'Backup', e: 'off', skip: true },
+    ];
+    return `<div class="view">
+      <h1>${esc(s.name)}</h1><p class="sub">set up · ${MV.hm(MV.now())}</p>
+      <ul class="ledger">${rows.map(r => `<li class="${r.skip ? 'skip' : ''}"><div class="h">${r.h}${r.k ? `<button type="button" class="u" data-act="undo" data-u="${r.k}">${s.undoOpen === r.k ? 'close' : 'Undo…'}</button>` : ''}</div><div class="e">${r.e}</div>${r.k && s.undoOpen === r.k ? undo(r.k, s) : ''}</li>`).join('')}</ul>
+      <div class="acts"><button type="button" class="btn p" data-act="fall">Open the fall</button><button type="button" class="btn" data-act="another">Add a router</button></div>
+      <p class="note"><button type="button" class="link q" data-act="reset">Reset setup…</button> — forgets ${esc(s.name)} on MikroView; prints the router's undo lines.</p>
+    </div>`;
+  },
+};
+const detail = e => e.k === 'push' ? `<span class="d">RouterOS <b>${MV.state.version}</b><span class="tag ${MV.state.standing === 'reviewed' ? 'ok' : 'warn'}">${MV.state.standing === 'reviewed' ? 'reviewed' : 'ahead of review'}</span> · <b>${story.rules}</b> rules · <b>${story.ifaces.length}</b> interfaces · <b>${story.leases}</b> leases${MV.state.standing === 'ahead' ? `<br><span style="color:var(--warn)">1 upgrade warning · <button type="button" class="link" data-act="warn">${MV.state.showWarning ? 'hide' : 'show'}</button></span>${MV.state.showWarning ? '<br>7.25 renamed <code>log-prefix</code> in <code>print as-value</code>. If prefixes vanish from the pushed table after an upgrade, re-run the paste from this router\'s page.' : ''}` : ''}</span>` : e.k === 'backup' ? `<span class="d">next 03:00 · drop box</span>` : e.k === 'enrol' ? `<span class="d">stream open</span>` : '';
+const checks = s => `<div class="checks">
+  <h4>MikroView checked</h4><ul>
+    <li class="ok"><span class="m">✓</span><span>certificate covers <code>${story.mvHost}</code></span></li>
+    <li class="ok"><span class="m">✓</span><span>log port open for <code>${esc(s.addr)}</code> until ${story.tokenUntil}</span></li>
+    ${s.refused ? `<li class="bad"><span class="m">✗</span><span>lines from <code>${story.other}</code> refused</span></li>` : `<li class="ok"><span class="m">✓</span><span>no other address knocking</span></li>`}</ul>
+  <h4>Only you can</h4><ul>
+    <li class="q"><span class="m">?</span><span>pasted into the terminal, not System › Scripts</span></li>
+    <li class="q"><span class="m">?</span><span>the paste ended with <code>/log info "mikroview-enrol …"</code></span></li>
+    <li class="q"><span class="m">?</span><span>token still valid (until ${story.tokenUntil}) · <button type="button" class="link" data-act="reroll">reroll</button></span></li></ul></div>`;
+const undo = (k, s) => {
+  const mv = { connect: `Forgets ${esc(s.name)}'s enrolment; its logs are refused until it enrols again. Name, tokens and tables stay.`, push: `Drops the pushed tables; names fall back to bare addresses until the next push.`, backup: `Stops accepting backups; the ones kept stay.`, tune: null }[k];
+  const lines = typeof MV.undoLines[k] === 'function' ? MV.undoLines[k]() : MV.undoLines[k];
+  return `<div class="undo">${mv ? `<h5>On MikroView</h5><p>${mv}</p><div class="r"><button type="button" class="btn danger">Undo</button></div>` : ''}<h5>On the router</h5><pre>${lines.join('\n')}</pre><div class="r"><button type="button" class="btn">Copy</button><p class="note">${mv ? 'Optional — MikroView cannot tell whether it ran.' : 'Nothing to undo on MikroView; the rules are the router\'s.'}</p></div></div>`;
+};
+
+/* ---- console ---- */
+const scroll = document.getElementById('scroll');
+let printed = 0, marks = new Set();
+const ln = (cls, t, html) => { const d = document.createElement('div'); d.className = 'ln new ' + cls; d.innerHTML = `<span class="t">${t}</span><span>${html}</span>`; scroll.appendChild(d); return d; };
+const mark = (k, t, text, cls = '') => { if (marks.has(k)) return; marks.add(k); ln('mark ' + cls, t, `${cls === 'bad' ? '✗' : '✓'} ${text}`); };
+function sysHeader(s) {
+  scroll.innerHTML = ''; printed = 0; marks = new Set();
+  ln('sys', '', `<b>mikroview</b> 0.7.0 · setup console`);
+  if (s.stage === 'tell') { ln('sys', '', `no router configured — fill in the panel to begin`); return; }
+  ln('sys', '', `listening  <b>0.0.0.0:6514</b> tcp+tls   accepting <b>${esc(MV.from() || '—')}</b> only`);
+  ln('sys', '', `token      <b>k7q2m9x4…y5</b>   valid until <b>${story.tokenUntil}</b>`);
+  ln('sys', '', `awaiting   certificate fetch · enrol line · first push`);
+  if (!s.copied) ln('sys', '', `paste the block from the panel into the router's terminal`);
+}
+function paintConsole(s) {
+  document.getElementById('c-listen').textContent = s.stage === 'tell' ? '' : `0.0.0.0:6514 · ${MV.from() || '—'}`;
+  document.getElementById('c-token').textContent = s.stage === 'tell' ? '' : `token until ${story.tokenUntil}`;
+  const live = document.getElementById('c-live'); live.className = 'live' + (has('enrol') ? ' on' : ''); live.textContent = has('enrol') ? `stream · ${s.lines.toLocaleString()} lines` : 'no stream';
+  if (s.stage === 'tell' || (s.stage === 'paste' && !scroll.dataset.stage) || scroll.dataset.stage !== (s.stage === 'tell' ? 'tell' : 'run')) { sysHeader(s); scroll.dataset.stage = s.stage === 'tell' ? 'tell' : 'run'; }
+  for (const e of s.evidence) {
+    if (e.k === 'cert') mark('cert', e.t, `certificate fetched by ${MV.from()}  <span class="rule"></span>`);
+    if (e.k === 'enrol') { mark('enrol', e.t, `enrol line from ${MV.from()} — stream open  <span class="rule"></span>`); if (!marks.has('enrol-raw')) { marks.add('enrol-raw'); ln('detail', e.t, `system,info,account log info "mikroview-enrol k7q2m9x4p1w8e3r6t0y5"`); } }
+    if (e.k === 'push') { mark('push', e.t, `first push from ${esc(s.name)}  <span class="rule"></span>`); if (!marks.has('push-d')) { marks.add('push-d');
+      ln('detail', '', `<span class="k">routeros</span><b>${s.version}</b>  ${s.standing === 'reviewed' ? '<span class="p1">reviewed</span>' : '<span class="warn">ahead of review · 1 warning</span>'}`);
+      ln('detail', '', `<span class="k">filter</span><b>${story.rules}</b> rules · <b>${story.alreadyLog.length}</b> logging (${story.alreadyLog.map(p => `<span class="${palOf(p)}">${p}</span>`).join(' ')})`);
+      ln('detail', '', `<span class="k">interfaces</span>${story.ifaces.map(f => `<b>${f.n}</b> ${f.d} ${f.a}`).join(' · ')}`);
+      ln('detail', '', `<span class="k">tables</span>address-list ${story.lists} · dhcp-lease ${story.leases} · arp 44 · wireguard-peer ${story.peers}`);
+      ln('detail', '', `<span class="k">schedule</span>mv-push every ${story.interval}`); } }
+    if (e.k === 'backup') mark('backup', e.t, `backup scheduled nightly 03:00  <span class="rule"></span>`);
+  }
+  if (s.refused && !s.useOther) mark('refused', MV.hms(MV.now()), `lines arriving from ${story.other} — refused (not ${esc(s.addr)})  <span class="rule"></span>`, 'bad');
+  if (s.tagged) mark('tagged', s.tunedAt, `${s.chosen.size} rules logging: ${[...s.chosen].sort().map(i => `<span class="${palOf(story.suggestions[i].prefix)}">${story.suggestions[i].prefix}</span>`).join(' ')}  <span class="rule"></span>`);
+  tick(s);
+}
+function tick(s) {
+  const live = document.getElementById('c-live'); if (has('enrol')) live.textContent = `stream · ${s.lines.toLocaleString()} lines`;
+  const near = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+  while (printed < s.tail.length) { const l = s.tail[printed++]; ln('', l.t, l.text.replace(l.pre, `<span class="pre ${palOf(l.pre)}">${l.pre}</span>`)); }
+  while (scroll.children.length > 400) scroll.removeChild(scroll.firstChild);
+  if (near) scroll.scrollTop = scroll.scrollHeight;
+}
+function render(s) {
+  document.getElementById('panel').innerHTML = panels[s.stage](s);
+  document.getElementById('crumb').innerHTML = s.name ? `<span>›</span>${esc(s.name)}` : '';
+  const i = stepIdx[s.stage];
+  document.getElementById('steps').innerHTML = ['connect', 'logging', 'done'].map((n, j) => `<span class="${j < i ? 'done' : j === i ? 'now' : ''}"><i>0${j + 1}</i>${n}</span>`).join('');
+  if (s.tail.length === 0) printed = 0;
+}
+MV.boot({ render, paint: paintConsole, tick, field: () => { document.getElementById('crumb').innerHTML = MV.state.name ? `<span>›</span>${esc(MV.state.name)}` : ''; } });
+</script>
+</body>
+</html>

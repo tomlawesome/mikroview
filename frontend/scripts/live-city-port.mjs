@@ -43,7 +43,7 @@
 // non-WAN lanes' event counts and sends enough SMB connections to clear
 // the cap's cutoff, rather than a fixed handful that only happened to
 // be enough before -declared and -marks existed.
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -64,7 +64,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-port', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-port', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value
@@ -207,8 +207,12 @@ await page.waitForSelector(`${CARD} .pills .pill.p`, { timeout: 10000 })
 // live-topography-port-trace.mjs already exercises on the flat map. What
 // this scenario is actually here to prove is what happens once it
 // collapses: does the city read the same settled answer.
+//
+// #1320 added a sibling lens pill (⌕ serving) beside the port pill, so
+// `.pill.p` alone now matches two buttons -- scope to the port pill by
+// its own data-pill attribute.
 
-const idle = page.locator(`${CARD} .pills .pill.p`)
+const idle = page.locator(`${CARD} .pills .pill.p[data-pill="port"]`)
 check((await idle.textContent())?.trim() === '⌕ port', 'the port pill sits idle bottom-left at the city stop too')
 
 await idle.click()

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"math"
 	"net"
 	"path/filepath"
@@ -17,7 +18,8 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
@@ -39,9 +41,10 @@ func testHostKey(t *testing.T) ssh.Signer {
 	return signer
 }
 
-func testTokens(t *testing.T) *auth.TokenStore {
+func testTokens(t *testing.T) *gauntlet.TokenStore {
 	t.Helper()
-	ts, err := auth.OpenTokenStoreWithBackend(persist.NewFileBackend(filepath.Join(t.TempDir(), "tokens.json")))
+	ts, err := gauntlet.OpenTokenStore(persist.NewFileBackend(filepath.Join(t.TempDir(), "tokens.json")),
+		gauntlet.TokenOptions{Kinds: []gauntlet.TokenKind{gauntlet.TokenKindAPI, gauntlet.TokenKindIngest}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +68,7 @@ func testKey(t *testing.T) *retention.Key {
 type harness struct {
 	addr   string
 	vault  *backupvault.Vault
-	tokens *auth.TokenStore
+	tokens *gauntlet.TokenStore
 }
 
 func newHarness(t *testing.T, key *retention.Key) *harness {
@@ -82,41 +85,20 @@ func newHarness(t *testing.T, key *retention.Key) *harness {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
 
+	// Serve on the listener already open, so no readiness probe is
+	// needed: a probe connection holds a slot until the server notices it
+	// closed, and the connection-limit tests run with a single slot.
 	ctx, cancel := context.WithCancel(context.Background())
-	ready := make(chan struct{})
-	go func() {
-		go func() {
-			// crude readiness: retry-dial loop below handles the race,
-			// this just gives ListenAndServe a moment to bind first.
-			close(ready)
-		}()
-		_ = srv.ListenAndServe(ctx, addr)
-	}()
-	<-ready
+	go func() { _ = srv.Serve(ctx, ln) }()
 	t.Cleanup(cancel)
-
-	// Retry the dial briefly: ListenAndServe's net.Listen happens
-	// asynchronously above.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			c.Close()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("server never started listening on %s", addr)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 
 	return &harness{addr: addr, vault: v, tokens: tokens}
 }
 
 func (h *harness) mintIngestToken(t *testing.T, device string) string {
 	t.Helper()
-	raw, _, err := h.tokens.Create("test", auth.TokenKindIngest, device, nil, time.Now())
+	raw, _, err := h.tokens.Create("test", gauntlet.TokenKindIngest, device, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,5 +350,125 @@ func TestWriteAtRejectsOutOfRangeOffsets(t *testing.T) {
 				t.Fatalf("WriteAt(off=%d) reported %d bytes written, want 0", tc.off, n)
 			}
 		})
+	}
+}
+
+// O1-R10: the drop box must not let a host hold unlimited connections
+// open, nor keep one open for ever without a finished handshake.
+
+// TestConnectionThatNeverFinishesTheHandshakeIsClosedAfterIdleTimeout
+// sends half an SSH version line and nothing more; the server must hang
+// up within the idle timeout rather than wait for ever.
+func TestConnectionThatNeverFinishesTheHandshakeIsClosedAfterIdleTimeout(t *testing.T) {
+	old := idleTimeoutNS.Load()
+	idleTimeoutNS.Store(int64(100 * time.Millisecond))
+	t.Cleanup(func() { idleTimeoutNS.Store(old) })
+
+	h := newHarness(t, testKey(t))
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("SSH-2.0-")); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadAll(conn); err != nil {
+		t.Fatalf("server kept a connection that never finished the handshake open past the idle timeout: %v", err)
+	}
+}
+
+func TestConnectionsBeyondTheGlobalLimitAreRefused(t *testing.T) {
+	old := maxConnections.Load()
+	maxConnections.Store(1)
+	t.Cleanup(func() { maxConnections.Store(old) })
+
+	h := newHarness(t, testKey(t))
+	holder, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	time.Sleep(50 * time.Millisecond) // let the accept loop take the slot
+
+	rejected, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rejected.Close()
+	rejected.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	n, err := rejected.Read(make([]byte, 64))
+	if err == nil {
+		t.Fatalf("got %d bytes, want the server to refuse the over-limit connection", n)
+	}
+	if err != io.EOF {
+		t.Fatalf("over-limit connection was neither served nor closed: %v", err)
+	}
+}
+
+func TestConnectionsBeyondThePerSourceLimitAreRefused(t *testing.T) {
+	old := maxConnectionsPerSource.Load()
+	maxConnectionsPerSource.Store(2)
+	t.Cleanup(func() { maxConnectionsPerSource.Store(old) })
+
+	h := newHarness(t, testKey(t))
+	refused, admitted := 0, 0
+	for i := 0; i < 6; i++ {
+		c, err := net.Dial("tcp", h.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, err := c.Read(make([]byte, 64))
+		switch {
+		case err == io.EOF:
+			refused++
+		case err == nil && n > 0:
+			admitted++
+		}
+	}
+	if refused != 4 || admitted != 2 {
+		t.Fatalf("refused=%d admitted=%d, want refused=4 admitted=2", refused, admitted)
+	}
+}
+
+// The guard: limits must not break a legitimate upload, and a finished
+// connection must give its slot and per-source count back.
+func TestUploadStillSucceedsWithinTheLimitsAndReleasesItsSlot(t *testing.T) {
+	oldG, oldS := maxConnections.Load(), maxConnectionsPerSource.Load()
+	maxConnections.Store(1)
+	maxConnectionsPerSource.Store(1)
+	t.Cleanup(func() { maxConnections.Store(oldG); maxConnectionsPerSource.Store(oldS) })
+
+	h := newHarness(t, testKey(t))
+	tok := h.mintIngestToken(t, "r1")
+	body := append([]byte{0x88, 0xac, 0xa1, 0xb1}, []byte("a real backup")...)
+	for round := 1; round <= 2; round++ {
+		conn, err := h.dial(t, "r1", tok)
+		if err != nil {
+			t.Fatalf("round %d: dial: %v", round, err)
+		}
+		client, err := sftp.NewClient(conn)
+		if err != nil {
+			t.Fatalf("round %d: sftp client: %v", round, err)
+		}
+		f, err := client.Create("r1.backup")
+		if err != nil {
+			t.Fatalf("round %d: create: %v", round, err)
+		}
+		if _, err := f.Write(body); err != nil {
+			t.Fatalf("round %d: write: %v", round, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("round %d: close: %v", round, err)
+		}
+		client.Close()
+		conn.Close()
+		time.Sleep(100 * time.Millisecond) // let the server release the slot
+	}
+	if gens := h.vault.Generations("r1"); len(gens) != 2 {
+		t.Fatalf("got %d generations, want 2", len(gens))
 	}
 }

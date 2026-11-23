@@ -17,13 +17,15 @@ vi.mock('../lib/api', () => ({
   fetchNameProvenance: vi.fn(async () => ({ editable: true, source: 'none', name: '', label: '' })),
   upsertEntity: vi.fn(async () => ''),
   deleteEntity: vi.fn(async () => ''),
+  geoLookup: vi.fn(async () => ({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' })),
 }))
 
-import { fetchHostDossier } from '../lib/api'
+import { fetchHostDossier, geoLookup } from '../lib/api'
 import { dossierState } from '../lib/dossier.svelte'
 import { authState } from '../lib/auth.svelte'
 import type { HostDossier as HostDossierResponse } from '../lib/types'
 import HostDossier from './HostDossier.svelte'
+import { expectTabWraps, focusedTrigger } from './dialogKit'
 
 // A host with something in every block: the card's full-house case.
 let FIXTURE: HostDossierResponse
@@ -114,6 +116,7 @@ beforeEach(() => {
   authState.role = 'user'
   vi.mocked(fetchHostDossier).mockClear()
   vi.mocked(fetchHostDossier).mockImplementation(async () => FIXTURE)
+  vi.mocked(geoLookup).mockClear()
 })
 
 afterEach(() => {
@@ -216,7 +219,7 @@ describe('HostDossier', () => {
 
     reject(new Error('boom'))
     await vi.waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
-    expect(screen.getByText('Could not assemble the dossier')).toBeTruthy()
+    expect(screen.getByText('Could not assemble the dossier: boom')).toBeTruthy()
 
     vi.mocked(fetchHostDossier).mockImplementation(async () => FIXTURE)
     await fireEvent.click(screen.getByText('Try again'))
@@ -247,5 +250,49 @@ describe('HostDossier', () => {
     authState.role = 'viewer'
     await open()
     expect(screen.queryByText('Name this device')).toBeNull()
+  })
+
+  // #1352: the network owner, beside the MAC vendor, for a public
+  // address only -- looked up on demand, drawn only when known.
+  it('shows the network owner for a public address', async () => {
+    FIXTURE.ip = '192.0.2.2'
+    await open('192.0.2.2')
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('dossier-network-owner').textContent?.trim()).toBe(
+        'network owner · AS13335 Cloudflare, Inc.',
+      ),
+    )
+    expect(geoLookup).toHaveBeenCalledWith('192.0.2.2')
+  })
+
+  it('asks nothing and shows no owner for a local address', async () => {
+    await open('10.20.0.31')
+    expect(geoLookup).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('dossier-network-owner')).toBeNull()
+  })
+
+  it('shows no owner row when the source does not know one', async () => {
+    vi.mocked(geoLookup).mockResolvedValueOnce({ country: 'US', asn: null, asName: null })
+    FIXTURE.ip = '192.0.2.2'
+    await open('192.0.2.2')
+    await vi.waitFor(() => expect(geoLookup).toHaveBeenCalled())
+    flushSync()
+    expect(screen.queryByTestId('dossier-network-owner')).toBeNull()
+  })
+})
+
+// #1539 C3 (decision 19a): an aria-modal dialog owns focus -- Tab cannot
+// leave it. Closing already hands focus back (lib/dossier.svelte.ts).
+describe('the card traps focus (#1539 C3)', () => {
+  it('moves focus inside and wraps Tab and Shift+Tab at its ends', async () => {
+    const trigger = focusedTrigger()
+    render(HostDossier)
+    dossierState.open(FIXTURE.ip, trigger)
+    flushSync()
+    await vi.waitFor(() => expect(screen.getByText('Reads as')).toBeTruthy())
+    const card = screen.getByTestId('host-dossier')
+
+    expectTabWraps(card)
+    trigger.remove()
   })
 })

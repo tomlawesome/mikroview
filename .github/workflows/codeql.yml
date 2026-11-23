@@ -49,6 +49,13 @@ concurrency:
 permissions:
   contents: read
 
+# #1202/#1426: gauntlet is fetched straight from GitHub, never through the
+# public Go proxy or checksum database (resolving it there would publish
+# the version permanently), the same as .gitlab-ci.yml and the Dockerfile.
+# GOPRIVATE also sets GONOSUMDB.
+env:
+  GOPRIVATE: "github.com/tomlawesome/gauntlet"
+
 jobs:
   analyze:
     name: CodeQL (${{ matrix.language }})
@@ -76,13 +83,15 @@ jobs:
             build-mode: none
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
 
-      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: '/language:${{ matrix.language }}'

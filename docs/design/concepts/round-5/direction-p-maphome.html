@@ -314,7 +314,7 @@
       <g transform="translate(700 68)">
         <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12"/>
         <text x="-82" y="-3" class="n-name">Internet</text>
-        <text x="-82" y="14" class="n-cidr">ether1 · 203.0.113.7</text>
+        <text x="-82" y="14" class="n-cidr">ether1 · 192.0.2.7</text>
         <text x="48" y="-6" class="cov cov-l">LOGGED</text>
       </g>
       <g transform="translate(700 268)">
@@ -325,28 +325,28 @@
       <g transform="translate(1128 132)">
         <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12"/>
         <text x="-66" y="-2" class="n-name" style="font-size:13px">WireGuard</text>
-        <text x="-66" y="14" class="n-cidr">wg0 · 203.0.113.0/24</text>
+        <text x="-66" y="14" class="n-cidr">wg0 · 198.51.100.128/27</text>
         <text x="54" y="-4" class="cov cov-q">QUIET</text>
       </g>
 
       <g transform="translate(285 490)">
         <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
         <circle cx="-90" cy="22" r="3.5" fill="var(--lan)"/>
-        <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">203.0.113.0/24</text>
+        <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">198.51.100.0/27</text>
         <text x="-90" y="52" class="n-sub" style="font-size:10px">alex-desktop · phone-alex · laptop-anna · +9</text>
         <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
       </g>
       <g transform="translate(577 490)">
         <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
         <circle cx="-90" cy="22" r="3.5" fill="var(--srv)"/>
-        <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">198.51.100.0/24</text>
+        <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">198.51.100.32/27</text>
         <text x="-90" y="52" class="n-sub" style="font-size:10px">nas · pihole · unifi</text>
         <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
       </g>
       <g transform="translate(848 490)">
         <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
         <circle cx="-90" cy="22" r="3.5" fill="var(--iot)"/>
-        <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">198.51.100.0/24</text>
+        <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">198.51.100.64/27</text>
         <text x="-90" y="52" class="n-sub" style="font-size:10px">cam-porch · hue-bridge · thermostat · +4</text>
         <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         <circle cx="-58" cy="48" r="4" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
@@ -354,7 +354,7 @@
       <g transform="translate(1116 490)">
         <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
         <circle cx="-90" cy="22" r="3.5" fill="var(--guest)"/>
-        <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">192.0.2.0/24</text>
+        <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">198.51.100.96/27</text>
         <text x="-90" y="52" class="n-sub" style="font-size:10px">guest-e8b2 · +2</text>
         <text x="-90" y="74" class="cov cov-d">DARK TOWARD WAN</text>
         <text x="-90" y="88" class="n-sub">no log rule on this boundary</text>
@@ -373,8 +373,8 @@
   <div class="ticker">
     <div class="head"><span><i></i>The stream · 34/s</span><span class="lift">▲ lift to the full stream</span></div>
     <div class="trow"><span class="t">14:02:11.482</span><span class="badge b-drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
-    <div class="trow"><span class="t">14:02:11.407</span><span class="badge b-nat">NAT</span><span>phone-alex → 192.0.2.206 :443 quic · nat-wan</span></div>
-    <div class="trow"><span class="t">14:02:10.951</span><span class="badge b-drop">DROP</span><span>198.51.100.34 DE → rb5009 :8291 winbox · wan-in-drop</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="badge b-nat">NAT</span><span>phone-alex → 203.0.113.206 :443 quic · nat-wan</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="badge b-drop">DROP</span><span>203.0.113.34 DE → rb5009 :8291 winbox · wan-in-drop</span></div>
   </div>
 </section>
 
@@ -487,26 +487,26 @@
       <tr><th class="num">time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr>
     </thead>
     <tbody>
-      <tr class="hl"><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-alex</td><td class="num">203.0.113.23</td><td class="geo">192.0.2.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
-      <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td class="geo">198.51.100.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
-      <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td class="host">pihole</td><td class="num">198.51.100.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
-      <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">203.0.113.7</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
-      <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td class="geo">198.51.100.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
-      <tr class="hl"><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">14:00:58.667</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">hue-bridge</td><td class="num">198.51.100.4</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
-      <tr><td class="num">14:00:41.120</td><td><span class="badge b-nat">NAT</span></td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td class="geo">203.0.113.4</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
-      <tr class="hl"><td class="num">14:00:03.155</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">13:59:52.089</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">unifi</td><td class="num">198.51.100.7</td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td>tcp</td><td class="num">8443</td><td>srv-to-lan-mgmt</td></tr>
-      <tr><td class="num">13:59:31.844</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.199 RU</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">443</td><td>wan-in-drop</td></tr>
-      <tr><td class="num">13:58:59.081</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">13:58:41.336</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">phone-alex</td><td class="num">203.0.113.23</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
-      <tr><td class="num">13:58:22.510</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.11 NL</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
-      <tr><td class="num">13:58:03.902</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td class="host">pihole</td><td class="num">198.51.100.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
-      <tr class="hl"><td class="num">13:57:55.007</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">13:57:36.184</td><td><span class="badge b-nat">NAT</span></td><td class="host">laptop-anna</td><td class="num">203.0.113.7</td><td class="geo">198.51.100.229</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
-      <tr><td class="num">13:57:12.660</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">thermostat</td><td class="num">198.51.100.9</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
-      <tr class="hl"><td class="num">13:56:50.933</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr class="hl"><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-alex</td><td class="num">198.51.100.23</td><td class="geo">203.0.113.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td class="host">pihole</td><td class="num">198.51.100.35</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">198.51.100.7</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
+      <tr class="hl"><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:00:58.667</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">hue-bridge</td><td class="num">198.51.100.68</td><td class="geo">ntp.example.net</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr><td class="num">14:00:41.120</td><td><span class="badge b-nat">NAT</span></td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td class="geo">203.0.113.4</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr class="hl"><td class="num">14:00:03.155</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:59:52.089</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">unifi</td><td class="num">198.51.100.39</td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td>tcp</td><td class="num">8443</td><td>srv-to-lan-mgmt</td></tr>
+      <tr><td class="num">13:59:31.844</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.199 RU</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">443</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:59.081</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:58:41.336</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">phone-alex</td><td class="num">198.51.100.23</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">13:58:22.510</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.11 NL</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:03.902</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td class="host">pihole</td><td class="num">198.51.100.35</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr class="hl"><td class="num">13:57:55.007</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:57:36.184</td><td><span class="badge b-nat">NAT</span></td><td class="host">laptop-anna</td><td class="num">198.51.100.7</td><td class="geo">203.0.113.229</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">13:57:12.660</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">thermostat</td><td class="num">198.51.100.73</td><td class="geo">ntp.example.net</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr class="hl"><td class="num">13:56:50.933</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
     </tbody>
   </table>
   <div class="foot-legend">

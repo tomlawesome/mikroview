@@ -1,0 +1,71 @@
+# #1410: the ip-service push block's disabled, before (afcebc1c, read off
+# print as-value) and after (read with get by .id), on a real CHR 7.18.2,
+# 2026-10-01. Fixture: telnet disabled, nothing else changed.
+# Each block once at the console with its /tool fetch swapped for :put,
+# then the new block saved as a script under the push policy
+# (read,test) and run. No token: "tok".
+
+== :put [/system resource get version]
+:put [/system resource get version]
+7.18.2 (stable)
+[admin@MikroTik] >
+== /ip service disable telnet
+/ip service disable telnet
+[admin@MikroTik] >
+== /ip service print
+/ip service print
+Flags: X - DISABLED, I - INVALID
+Columns: NAME, PORT, CERTIFICATE, VRF, MAX-SESSIONS
+#   NAME     PORT  CERTIFICATE  VRF   MAX-SESSIONS
+0 X telnet     23               main            20
+1   ftp        21               main            20
+2   www        80               main            20
+3   ssh        22               main            20
+4 X www-ssl   443  none         main            20
+5   api      8728               main            20
+6   winbox   8291               main            20
+7   api-ssl  8729  none         main            20
+[admin@MikroTik] >
+== :put [/ip service print as-value]
+:put [/ip service print as-value]
+.id=*0;address=;max-sessions=20;name=telnet;port=23;vrf=main;.id=*1;address=;max-sessions=20;name=ftp;port=21;vrf=main;.id=*2;address=;max-sessions=20;name=www;port=80;vrf=main;.id=*4;address=;max-sessions=20;name=ssh;port=22;vrf=main;.id=*6;address=;certificate=none;max-sessions=20;name=www-ssl;port=443;vrf=main;.id=*7;address=;max-sessions=20;name=api;port=8728;vrf=main;.id=*8;address=;max-sessions=20;name=winbox;port=8291;vrf=main;.id=*9;address=;certificate=none;max-sessions=20;name=api-ssl;port=8729;vrf=main
+[admin@MikroTik] >
+== :foreach v in=[/ip service print as-value] do={ :put (($v->"name") . ": disabled=" . [/ip service get ($v->".id") disabled]) }
+:foreach v in=[/ip service print as-value] do={ :put (($v->"name") . ": disabled=" . [/ip service get ($v->".id") disabled]) }
+telnet: disabled=true
+ftp: disabled=false
+www: disabled=false
+ssh: disabled=false
+www-ssl: disabled=true
+api: disabled=false
+winbox: disabled=false
+api-ssl: disabled=false
+[admin@MikroTik] >
+
+# BEFORE (afcebc1c): ip-service block
+== :local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=($v->"disabled"); "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+:local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=($v->"disabled"); "port"=($v->"port"); "address"=($v->"ad
+dress"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page"=1; "pages"=1; "route
+rosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+{"kind":"ip-service","page":1,"pages":1,"records":[{"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"telnet","port":23},{"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"ftp","port":21},{"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"www","port":80},{"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"ssh","port":22},{"address":[],"certificate":"none","disabled":null,"dynamic":null,"name":"www-ssl","port":443},{"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"api","port":8728},{"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"winbox","port":8291},{"address":[],"certificate":"none","disabled":null,"dynamic":null,"name":"api-ssl","port":8729}],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}
+[admin@MikroTik] >
+
+# AFTER (#1410): ip-service block
+== :local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+:local svcRecs [:toarray ""]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port
+"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}; :set svcRecs ($svcRecs, {$rec}) }; :local svcPayload [:serialize to=json value={"kind"="ip-service"; "page
+"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=6; "records"=$svcRecs}]; :put $svcPayload
+{"kind":"ip-service","page":1,"pages":1,"records":[{"address":[],"certificate":null,"disabled":true,"dynamic":null,"name":"telnet","port":23},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ftp","port":21},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"www","port":80},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ssh","port":22},{"address":[],"certificate":"none","disabled":true,"dynamic":null,"name":"www-ssl","port":443},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"api","port":8728},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"winbox","port":8291},{"address":[],"certificate":"none","disabled":false,"dynamic":null,"name":"api-ssl","port":8729}],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}
+[admin@MikroTik] >
+
+# AFTER, saved as a script under the push policy and run
+== /system script add name=mv-push-1410 policy=read,test source=":local svcRecs [:toarray \"\"]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {\"name\"=(\$v->\"name\"); \"disabled\"=[/ip/service get (\$v->\".id\") disabled]; \"port\"=(\$v->\"port\"); \"address\"=(\$v->\"address\"); \"certificate\"=(\$v->\"certificate\"); \"dynamic\"=(\$v->\"dynamic\")}; :set svcRecs (\$svcRecs, {\$rec}) }; :local svcPayload [:serialize to=json value={\"kind\"=\"ip-service\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"records\"=\$svcRecs}]; :put \$svcPayload"
+/system script add name=mv-push-1410 policy=read,test source=":local svcRecs [:toarray \"\"]; :foreach i,v in=[/ip/service print as-value] do={ :local rec {\"name\"=(\$v->\"name\");
+ \"disabled\"=[/ip/service get (\$v->\".id\") disabled]; \"port\"=(\$v->\"port\"); \"address\"=(\$v->\"address\"); \"certificate\"=(\$v->\"certificate\"); \"dynamic\"=(\$v->\"dynamic\")}; :set svcRecs
+ (\$svcRecs, {\$rec}) }; :local svcPayload [:serialize to=json value={\"kind\"=\"ip-service\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=6; \"recor
+ds\"=\$svcRecs}]; :put \$svcPayload"
+[admin@MikroTik] >
+== /system script run mv-push-1410
+/system script run mv-push-1410
+{"kind":"ip-service","page":1,"pages":1,"records":[{"address":[],"certificate":null,"disabled":true,"dynamic":null,"name":"telnet","port":23},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ftp","port":21},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"www","port":80},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ssh","port":22},{"address":[],"certificate":"none","disabled":true,"dynamic":null,"name":"www-ssl","port":443},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"api","port":8728},{"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"winbox","port":8291},{"address":[],"certificate":"none","disabled":false,"dynamic":null,"name":"api-ssl","port":8729}],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}
+[admin@MikroTik] >

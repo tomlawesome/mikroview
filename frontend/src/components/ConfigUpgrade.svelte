@@ -15,25 +15,20 @@
   import { onMount } from 'svelte'
   import { configUpgradeState } from '../lib/configUpgrade.svelte'
   import { copyToClipboard } from '../lib/clipboard'
-  import { toastState } from '../lib/toast.svelte'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { plainWords } from '../lib/plainWords'
 
   onMount(() => {
     configUpgradeState.refresh()
   })
 
-  // Mirrors SetupWizard.svelte's own `copied` label state, keyed by
-  // setting rather than a single value since more than one block is on
+  // One flashing label, keyed by setting: more than one block is on
   // screen at once here.
-  let copiedKey = $state('')
+  const flash = new CopyFlash()
 
-  async function copy(key: string, block: string) {
-    const ok = await copyToClipboard(block)
-    toastState.show(ok ? 'Copied' : 'Copy failed')
-    if (!ok) return
-    copiedKey = key
-    setTimeout(() => {
-      if (copiedKey === key) copiedKey = ''
-    }, 1500)
+  function copy(key: string, block: string) {
+    return flash.run(key, () => copyToClipboard(block))
   }
 
   // Plain per-visit close, not a remembered dismissal (owner ruling,
@@ -48,9 +43,9 @@
   {#if closed}
     <!-- nothing: closed for this visit only -->
   {:else if configUpgradeState.error}
-    <p class="empty error">Could not check for new settings: {configUpgradeState.error}</p>
+    <FailureLine verb="check for" thing="new settings" said={plainWords(configUpgradeState.error)} />
   {:else if configUpgradeState.loaded && configUpgradeState.settings.length === 0}
-    <p class="empty">Nothing new -- every setting this version understands is already set.</p>
+    <p class="empty">Nothing new — every setting this version understands is already set.</p>
   {:else if configUpgradeState.loaded}
     <div class="head">
       <p class="intro">
@@ -64,7 +59,7 @@
       <div class="paste">
         <pre class="script">{setting.block}</pre>
         <button type="button" class="copy" onclick={() => copy(setting.key, setting.block)}>
-          {copiedKey === setting.key ? 'copied' : 'copy'}
+          {flash.label(setting.key, 'copy')}
         </button>
       </div>
     {/each}
@@ -110,10 +105,6 @@
     color: var(--fg-dim);
     font-size: 13px;
     padding: 10px 0;
-  }
-
-  .empty.error {
-    color: var(--reject);
   }
 
   /* Same paste-block shape as SetupWizard.svelte's .paste/pre.script/

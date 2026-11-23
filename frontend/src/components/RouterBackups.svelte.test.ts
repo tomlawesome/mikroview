@@ -26,6 +26,8 @@ vi.mock('../lib/api', () => ({
   keepRouterBackup: vi.fn(),
   releaseRouterBackup: vi.fn(),
   setRouterBackupComment: vi.fn(),
+  setRouterBackupSwitch: vi.fn(),
+  saveSetupBackupTransport: vi.fn(),
 }))
 
 // Blob/URL.createObjectURL are unreliable in jsdom -- faked at the
@@ -46,8 +48,10 @@ import {
   lockRouterBackupVault,
   releaseRouterBackup,
   removeRouterBackupPassphrase,
+  saveSetupBackupTransport,
   setRouterBackupComment,
   setRouterBackupPassphrase,
+  setRouterBackupSwitch,
   unlockRouterBackupVault,
 } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
@@ -75,6 +79,7 @@ function resp(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse 
     totalRouters: 0,
     totalBytes: 0,
     port: ':47022',
+    transport: 'sftp',
     lock: lock(),
     ...over,
   }
@@ -135,6 +140,84 @@ describe('nothing pushed yet', () => {
   })
 })
 
+// #1361: the drop box's own on/off switch. Opening asks for the admin's
+// password (owner's ruling 3a); closing does not.
+describe('the drop box switch (#1361)', () => {
+  beforeEach(() => {
+    vi.mocked(setRouterBackupSwitch).mockReset()
+  })
+
+  it('shows closed with an "open…" link when nothing is listening', () => {
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    expect(screen.getByText(/^closed/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'open…' })).toBeTruthy()
+  })
+
+  it('shows open on its port with a "close" link when the drop box is listening', () => {
+    render(RouterBackups, { props: { resp: resp({ port: ':47022' }), fetchedAt: 0, onopenlost: vi.fn() } })
+    expect(screen.getByText(/open on port 47022/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'close' })).toBeTruthy()
+  })
+
+  it('opening asks for the password and carries the trust caveat and the HTTPS alternative', async () => {
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    expect(screen.getByLabelText('your password')).toBeTruthy()
+    expect(screen.getByText(/RouterOS never checks who it is sending to/)).toBeTruthy()
+    expect(screen.getByText(/HTTPS-only alternative/)).toBeTruthy()
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalled()
+  })
+
+  it('cancelling the open dialog calls nothing', async () => {
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+    expect(screen.queryByLabelText('your password')).toBeNull()
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalled()
+  })
+
+  it('submits the password and reports the new state up on success', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue({ open: true, port: '47022' })
+    const onswitchchanged = vi.fn()
+    render(RouterBackups, {
+      props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn(), onswitchchanged },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open' }))
+    await waitFor(() => expect(onswitchchanged).toHaveBeenCalledWith({ open: true, port: '47022' }))
+    expect(vi.mocked(setRouterBackupSwitch)).toHaveBeenCalledWith(true, 'hunter2')
+    // The dialog closes on success -- the password field is gone.
+    expect(screen.queryByLabelText('your password')).toBeNull()
+  })
+
+  it('a wrong password shows the refusal and leaves the dialog open', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue('incorrect password')
+    const onswitchchanged = vi.fn()
+    render(RouterBackups, {
+      props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn(), onswitchchanged },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open' }))
+    await waitFor(() => expect(screen.getByText('Could not open the drop box: incorrect password')).toBeTruthy())
+    expect(screen.getByLabelText('your password')).toBeTruthy()
+    expect(onswitchchanged).not.toHaveBeenCalled()
+  })
+
+  it('closing needs no password and reports the new state up', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue({ open: false })
+    const onswitchchanged = vi.fn()
+    render(RouterBackups, {
+      props: { resp: resp({ port: ':47022' }), fetchedAt: 0, onopenlost: vi.fn(), onswitchchanged },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'close' }))
+    await waitFor(() => expect(onswitchchanged).toHaveBeenCalledWith({ open: false }))
+    expect(vi.mocked(setRouterBackupSwitch)).toHaveBeenCalledWith(false)
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalledWith(false, expect.anything())
+  })
+})
+
 describe('a router at rest', () => {
   it('reads the kept count, the cadence and the oldest date, with download buttons', () => {
     render(RouterBackups, {
@@ -186,7 +269,7 @@ describe('a router at rest', () => {
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
 
     expect((await screen.findByRole('alert')).textContent).toBe(
-      "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+      "Could not download this file: it was refused, and mikroview couldn't refresh the lock status. Try again.",
     )
   })
 
@@ -199,7 +282,7 @@ describe('a router at rest', () => {
       props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('The download failed. Try again.')
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not download this file: the download failed. Try again.')
   })
 
   it('clears a previous download error once a later download succeeds', async () => {
@@ -439,7 +522,7 @@ describe('keeping a backup', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
     await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
-    expect(screen.getByText('say why you are keeping it')).toBeTruthy()
+    expect(screen.getByText('Say why you are keeping it.')).toBeTruthy()
     expect(keepRouterBackup).not.toHaveBeenCalled()
   })
 
@@ -758,5 +841,123 @@ describe('reading one export, and comparing two', () => {
     })
     expect(screen.queryByRole('button', { name: 'read' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'compare with previous' })).toBeNull()
+  })
+})
+
+// #1494: the backup transport is chosen in this group's "deliver by" row,
+// right under the drop box row -- an instance-wide fact, one click, no
+// password, calling PUT /api/setup/backup-transport.
+describe('the deliver-by row (#1494)', () => {
+  beforeEach(() => {
+    vi.mocked(saveSetupBackupTransport).mockReset()
+  })
+
+  it('shows SFTP with a switch to HTTPS, also when no key is mounted', () => {
+    const { unmount } = render(RouterBackups, {
+      props: { resp: resp({ transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+    expect(screen.getByText('deliver by')).toBeTruthy()
+    expect(screen.getByText(/SFTP to the drop box/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'switch to HTTPS…' })).toBeTruthy()
+    unmount()
+
+    render(RouterBackups, {
+      props: { resp: resp({ enabled: false, transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+    expect(screen.getByText('deliver by')).toBeTruthy()
+    expect(screen.getByText(/SFTP to the drop box/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'switch to HTTPS…' })).toBeTruthy()
+  })
+
+  it('switching saves https and the row then reads HTTPS through the ingest channel', async () => {
+    vi.mocked(saveSetupBackupTransport).mockResolvedValue(null)
+    const view = render(RouterBackups, {
+      props: {
+        resp: resp({ transport: 'sftp' }),
+        fetchedAt: 0,
+        onopenlost: vi.fn(),
+        // A host that folds the new value into its copy of resp, as
+        // EngineRoom does; a component holding the value itself passes too.
+        ontransportchanged: (t: 'sftp' | 'https') => view.rerender({ resp: resp({ transport: t }) }),
+      },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'switch to HTTPS…' }))
+    expect(vi.mocked(saveSetupBackupTransport)).toHaveBeenCalledWith('https')
+    await waitFor(() => expect(screen.getByText(/HTTPS through the ingest channel/)).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'switch to SFTP…' })).toBeTruthy()
+  })
+
+  it('a refusal leaves the row on SFTP and shows the error text', async () => {
+    vi.mocked(saveSetupBackupTransport).mockResolvedValue('could not save the setting')
+    render(RouterBackups, { props: { resp: resp({ transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'switch to HTTPS…' }))
+    await waitFor(() => expect(screen.getByText(/could not save the setting/)).toBeTruthy())
+    expect(screen.getByText(/SFTP to the drop box/)).toBeTruthy()
+    expect(screen.queryByText(/HTTPS through the ingest channel/)).toBeNull()
+  })
+
+  it('arrive by reads the HTTPS line when the transport is https and the port is set', () => {
+    const restingRouter = { device: 'rb5009', generations: [], intervalKnown: false, missed: 0 }
+    render(RouterBackups, {
+      props: {
+        resp: resp({ routers: [restingRouter], transport: 'https', port: ':47022' }),
+        fetchedAt: 0,
+        onopenlost: vi.fn(),
+      },
+    })
+    expect(screen.getByText(/HTTPS to the ingest channel — the drop box's port is not used/)).toBeTruthy()
+    expect(screen.queryByText(/SFTP on port 47022/)).toBeNull()
+  })
+})
+
+// #1540 (C4): the failure paths go through the shared failure line:
+// role="alert", a "Could not <verb> <thing>" lead-in, the server's words kept.
+describe('failures use the shared failure line (#1540 C4)', () => {
+  function expectSharedLine(rest: RegExp) {
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(rest)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  }
+
+  it('a refused drop box open', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue('incorrect password')
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open' }))
+    await waitFor(() => expectSharedLine(/^Could not [a-z]+ .+: incorrect password$/))
+  })
+
+  it('a refused transport switch', async () => {
+    vi.mocked(saveSetupBackupTransport).mockResolvedValue('could not save the setting')
+    render(RouterBackups, { props: { resp: resp({ transport: 'sftp' }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'switch to HTTPS…' }))
+    await waitFor(() => expectSharedLine(/^Could not [a-z]+ .+: could not save the setting$/))
+  })
+
+  it('a refused read of a stored export', async () => {
+    const twoGenerations = {
+      device: 'rb5009',
+      generations: [
+        { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z' },
+        { id: 'g1', backupArrivedAt: '2026-08-25T03:00:00Z', rscArrivedAt: '2026-08-25T03:00:05Z' },
+      ],
+      intervalKnown: false,
+      missed: 0,
+    }
+    vi.mocked(fetchRouterBackupText).mockResolvedValue('the vault is locked -- unlock it with the vault passphrase first')
+    vi.mocked(fetchRouterBackups).mockResolvedValue(resp({ lock: lock({ passphraseSet: true, locked: true }) }))
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'read' }))
+    await screen.findByRole('alert')
+    expectSharedLine(/^Could not [a-z]+ .+: the vault is locked -- unlock it with the vault passphrase first$/)
+  })
+
+  it('a failed download', async () => {
+    vi.mocked(downloadFromUrl).mockResolvedValue('failed')
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
+    await screen.findByRole('alert')
+    expectSharedLine(/^Could not download /)
   })
 })

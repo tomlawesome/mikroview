@@ -49,7 +49,7 @@ describe('matchesAddressQuery precedence', () => {
     {
       name: '/0 matches every address of that family',
       query: '0.0.0.0/0',
-      candidates: [{ ip: '8.8.8.8' }],
+      candidates: [{ ip: '192.0.2.8' }],
       want: true,
     },
     {

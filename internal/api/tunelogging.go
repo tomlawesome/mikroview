@@ -3,7 +3,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,7 +28,7 @@ const tuneLoggingMaxBodyBytes = 2 * 1024 * 1024
 // in place of the shared cap -- see that constant's doc comment.
 func decodeTuneLoggingBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, tuneLoggingMaxBodyBytes)
-	return json.NewDecoder(r.Body).Decode(v)
+	return strictDecode(r.Body, v)
 }
 
 // tuneLoggingObserving is #435 decision 5's honesty bound: the page is
@@ -78,8 +77,8 @@ type tuneLoggingRule struct {
 	EveryPacket   bool   `json:"everyPacket"`
 	Log           bool   `json:"log"`
 	LogPrefix     string `json:"logPrefix"`
-	Packets       int    `json:"packets"`
-	Bytes         int    `json:"bytes"`
+	Packets       int64  `json:"packets"`
+	Bytes         int64  `json:"bytes"`
 	CountersKnown bool   `json:"countersKnown"`
 	Line          int    `json:"line"`
 }
@@ -209,13 +208,22 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 	if row, ok := routeros.RowFor(before.Version); ok {
 		dialect = row.Dialect
 	}
-	prefixFor := func(action string) string { return routeros.LogPrefixForAction(action, dialect) }
+	prefixFor := func(action string) string {
+		return routeros.LogPrefixForAction(effectiveFilterAction(action), dialect)
+	}
+
+	if reason := noPrefixCodeReason(before, req.Selected, prefixFor); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]tuneLoggingRejectReason{
+			"rejected": {Reason: reason},
+		})
+		return
+	}
 
 	annotated, changed := renderExport(before, req.Selected, prefixFor)
 
 	after, err := export.Parse(annotated)
 	if err != nil || !export.LoggingOnlyDiff(before, after) {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "logging-only check failed"})
+		http.Error(w, "logging-only check failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -227,9 +235,37 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// effectiveFilterAction (#1546): RouterOS's filter action defaults to
+// accept and /export omits default values, so a rule with no action= is an
+// accept rule.
+func effectiveFilterAction(action string) string {
+	if action == "" {
+		return "accept"
+	}
+	return action
+}
+
+// noPrefixCodeReason (#1546) names the first selected rule that has no
+// log-prefix of its own and whose action has no code MikroView can read
+// back (prefixFor gives ""), or "" when every selected rule can be tagged.
+func noPrefixCodeReason(ex *export.Export, selected []int, prefixFor export.LogPrefixFunc) string {
+	want := make(map[int]bool, len(selected))
+	for _, id := range selected {
+		want[id] = true
+	}
+	for _, r := range ex.FilterRules {
+		if want[r.Index] && r.LogPrefix == "" && prefixFor(r.Action) == "" {
+			return fmt.Sprintf("rule %d (action=%s, comment %q) has no log-prefix code MikroView can read back; untick it or give it a log-prefix yourself", r.Index, effectiveFilterAction(r.Action), r.Comment)
+		}
+	}
+	return ""
+}
+
 // writeTuneLoggingRejection answers a *export.SecretFieldError with the
-// contract's 400 {"rejected":{"reason":...}} shape; any other error --
-// including a *export.ControlCharError -- falls back to a plain 400.
+// contract's 400 {"rejected":{"reason":...}} shape (application/json, the
+// one documented JSON refusal on this route; the frontend reads it as
+// text); any other error -- including a *export.ControlCharError --
+// falls back to a plain 400.
 func writeTuneLoggingRejection(w http.ResponseWriter, err error) {
 	var secretErr *export.SecretFieldError
 	if errors.As(err, &secretErr) {
@@ -314,10 +350,11 @@ func buildTuneLoggingRules(s *Server, device string, ex *export.Export, darkBoun
 			crosses = crossesDarkBoundary(rule.InInterface, rule.OutInterface, darkBoundaries)
 		}
 
-		packets, bytesCount, known := 0, 0, false
+		var packets, bytesCount int64
+		known := false
 		if havePushed {
 			if p, ok := pushedByOrdinal[rule.Index]; ok && p.Chain == rule.Chain && p.Action == rule.Action {
-				packets, bytesCount, known = int(p.Packets), int(p.Bytes), true
+				packets, bytesCount, known = int64(p.Packets), int64(p.Bytes), true
 			}
 		}
 

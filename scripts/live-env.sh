@@ -13,6 +13,7 @@
 #
 # Usage:
 #   eval "$(scripts/live-env.sh up)"   # exports MV_URL, MV_USER, MV_PASS, MV_DIR
+#   MV_FIRST_RUN=1 scripts/live-env.sh up   # no account yet: the create-account screen
 #   scripts/live-env.sh syslog 200     # feed N synthetic firewall events
 #   scripts/live-env.sh down
 #
@@ -30,6 +31,8 @@ set -euo pipefail
 # standalone scripts -- two allocators handing out overlapping ranges,
 # which collided by construction rather than by luck.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-slot.sh"
+# The first admin needs the setup code from the server's log (#1415).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/setup-code.sh"
 
 # Defaults are derived per checkout, not fixed, because two live checks
 # running at once used to destroy each other rather than merely clash.
@@ -102,7 +105,8 @@ else
 fi
 
 # MV_DEMO_DEVICES=1 declares the estate scripts/seed-demo.py feeds, which
-# is the only way its pushed tables can ever be read back (#709).
+# is the only way its pushed tables can ever be read back (#709). It also
+# sets networks.home to the estate's inside blocks (#1481), below.
 #
 # A pushed rule/NAT/address table is keyed by *device id*. seed-demo.py
 # mints its ingest tokens against the router names below and then streams
@@ -131,6 +135,16 @@ fi
 # router's, so the two are unrelated and 127.0.0.6 is not a typo.
 if [ "${MV_DEMO_DEVICES:-}" = "1" ]; then
   DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}, {id: rb5009, name: rb5009, sourceIp: 127.0.0.5}, {id: hap-ax3, name: hap-ax3, sourceIp: 127.0.0.6}]'
+  # networks.home (#1481): the seeded estate's inside lives on
+  # documentation blocks (docs/design/sample-names.md), which read as
+  # outside by address alone. The first /27 of 192.0.2.0/24 (router WANs,
+  # design host) stays out: it is the outside part of the mixed block.
+  # Demo only, like the devices: the gate's scenarios use 198.51.100.0/24
+  # as outside sources (scanners, investigate targets), which this set
+  # would turn inside.
+  NETWORKS_BLOCK='networks:
+  home: [198.51.100.0/24, 192.0.2.32/27, 192.0.2.64/27, 192.0.2.96/27, 192.0.2.128/27,
+    192.0.2.160/27, 192.0.2.192/27, 192.0.2.224/28, 192.0.2.240/29, 192.0.2.248/29]'
 fi
 
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
@@ -203,6 +217,25 @@ with socket.create_connection((host, port), timeout=10, source_address=(src, 0) 
 }
 
 build() {
+  # #1363: computed here, before the frontend build below, and exported
+  # as VERSION so vite.config.ts's `define` bakes the exact same string
+  # into the bundle that the Go binary is stamped with a few lines down.
+  # Without this the frontend always built as "dev:local" (its own
+  # un-stamped default) while the server carried this real, unique-per-
+  # build stamp -- a permanent mismatch that would have made every live
+  # scenario either reload or show the freshness banner the instant it
+  # opened a page, having nothing to do with what that scenario was
+  # trying to check.
+  #
+  # -buildvcs=false further down stays: it is what stops `go build`
+  # dying in a linked worktree (#348), and the sha below is read from git
+  # explicitly instead.
+  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  mv_dirty=""
+  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
+  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  export VERSION="$mv_stamp"
+
   # No /dev/null here, and the exit code is checked explicitly. `set -e`
   # alone already aborted `up` here on a fresh checkout (no
   # frontend/node_modules) -- but silently, because npm's own error was
@@ -231,8 +264,8 @@ build() {
   #
   # Not set here: the live-check gate needs a real worker so
   # live-sw-navigation.mjs can prove a typed /api/* navigation reaches the
-  # server (#753); a demo sets MV_DEMO_BUILD=1 itself (AGENTS.md, "Demos
-  # the owner reviews").
+  # server (#753); a demo sets MV_DEMO_BUILD=1 itself (docs/demos.md,
+  # "Seed it").
   if ! ( cd frontend && npm run build ) 1>&2; then
     echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
     if [ ! -d frontend/node_modules ]; then
@@ -281,14 +314,9 @@ build() {
   # fallback), so an instance built before a fix was indistinguishable in
   # the browser from one built after it -- which is how round 30 lost a
   # day to the owner reviewing a stale build and finding faults that were
-  # already fixed in the tree. AGENTS.md carries the rule; this is what
-  # makes it true. -buildvcs=false stays: it is what stops `go build`
-  # dying in a linked worktree (#348), and the sha below is read from git
-  # explicitly instead.
-  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-  mv_dirty=""
-  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
-  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  # already fixed in the tree. docs/demos.md carries the rule; this is what
+  # makes it true. Same $mv_stamp the frontend build above was given, not
+  # recomputed -- see this function's own top.
   go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "${1:-$MV_DIR/mikroview}" .
   echo "live-env: built $mv_stamp" >&2
 }
@@ -378,6 +406,7 @@ $TLS_BLOCK
 $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
 publicUrl: "$MV_SCHEME://localhost:$HTTP_PORT"
+${NETWORKS_BLOCK:-}
 $DEVICES_BLOCK
 EOF
   # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset
@@ -389,18 +418,58 @@ EOF
   # docs/configuration.md. It is set here and only here, so the routes
   # exist on a harness instance and nowhere else. The server logs a
   # warning naming both routes when it sees it.
-  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  #
+  # MV_TEST_PASSWORDLIST_URL (honoured only alongside MV_TEST_HOOKS=1)
+  # points the common-password list's daily fetch at a closed local port,
+  # so the run makes no outbound request and downloads nothing (#1202).
+  MV_TEST_HOOKS=1 MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
+    MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
+  # From here to the last thing that can fail (TOTP confirm below), a
+  # curl/python hiccup would otherwise trip set -e and exit with the
+  # server already running -- Makefile's `live-check` only arms its own
+  # `down` trap *after* `up` returns, precisely so `up`'s "port already in
+  # use" refusal (which happens before the server is spawned) isn't undone
+  # by a spurious `down`. That reasoning does not cover a failure here,
+  # after spawn, so this instance would otherwise leak until the next
+  # `up`'s own `down >/dev/null 2>&1 || true` reclaims it (R6B-F1).
+  # Cleared once up() has nothing left that can fail.
+  trap 'down >/dev/null 2>&1 || true' EXIT
 
   for _ in $(seq 1 40); do
     if curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi
     sleep 0.25
   done
 
+  # MV_FIRST_RUN=1 leaves the instance as a fresh install is: no account,
+  # so the browser lands on the create-account screen and the setup code
+  # is still waiting in server.log. Only scripts/live-setup-code.sh asks
+  # for this -- every other check wants the admin below. MV_USER and
+  # MV_PASS are still exported, as the account the check should create.
+  if [ "${MV_FIRST_RUN:-}" = "1" ]; then
+    trap - EXIT
+    echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
+    echo "export MV_USER=$MV_USER"
+    echo "export MV_PASS=$MV_PASS"
+    echo "export MV_DIR=$MV_DIR"
+    echo "export MV_SYSLOG_TLS_PORT=$SYSLOG_TLS_PORT"
+    return 0
+  fi
+
+  # The first admin, with the setup code the server just logged (#1415)
+  # -- read from server.log the way an operator reads it, and sent over
+  # stdin so it never sits in a process listing. Nothing prints it: this
+  # function's stdout is eval'd by the caller.
+  local setup_code
+  setup_code="$(mv_wait_setup_code 40 cat "$MV_DIR/server.log")" || {
+    echo "live-env: no setup code in $MV_DIR/server.log -- the server did not log the first-run line" >&2
+    exit 1
+  }
   jar="$MV_DIR/admin.cookies"
-  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -c "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-    -d "{\"username\":\"$MV_USER\",\"password\":\"$MV_PASS\"}" \
-    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/register" >/dev/null
+  printf '{"username":"%s","password":"%s","setupCode":"%s"}' "$MV_USER" "$MV_PASS" "$setup_code" |
+    curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -c "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+      --data-binary @- \
+      "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/register" >/dev/null
 
   # Enrol an authenticator-app factor for the admin (#1253, #1335).
   #
@@ -420,14 +489,20 @@ EOF
   # The secret is exported rather than kept, because enrolling a factor
   # also puts a second step in front of every sign-in: live-browser.mjs
   # needs it to finish the login it starts with MV_PASS.
-  totp_secret="$(curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
-    -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
-    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/enrol" \
+  # #1418/#1422: totp/enrol now needs the account's own password in the
+  # body, re-checked server-side on the same budget handleTOTPDelete
+  # uses -- sent over stdin, same as the register call above, so it
+  # never sits in this process's argv.
+  totp_secret="$(printf '{"password":"%s"}' "$MV_PASS" |
+    curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+      -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+      --data-binary @- \
+      "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/enrol" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"])')"
 
   # RFC 6238 over the standard library: HMAC-SHA1 of the big-endian
   # 30-second counter, dynamic truncation, six digits -- the same thing
-  # internal/auth/totp.go does, checked against GenerateTOTPCode for
+  # gauntlet's totp.go does, checked against GenerateTOTPCode for
   # matching secrets and counters rather than assumed compatible.
   # Prints the counter alongside the code, because confirming enrolment
   # spends that counter: VerifyTOTP's replay guard refuses it ever after,
@@ -446,11 +521,23 @@ print(counter, "%06d" % ((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 1
   totp_counter="${totp_pair%% *}"
   totp_code="${totp_pair##* }"
 
-  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+  totp_confirm="$(curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
     -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
     -d "{\"code\":\"$totp_code\"}" \
-    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm" >/dev/null
+    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm")"
+  # The first second factor is held until its recovery codes are
+  # confirmed (#1202): the answer says pendingConfirmation: true and the
+  # door stays shut until POST /api/auth/recovery-codes/confirm (empty
+  # object body). The codes themselves are not kept. The cookie jar
+  # carries the session, and the confirm hands this browser a fresh one.
+  if printf '%s' "$totp_confirm" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("pendingConfirmation") is True else 1)'; then
+    curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+      -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+      -d '{}' \
+      "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/recovery-codes/confirm" >/dev/null
+  fi
   echo "$totp_counter" > "$MV_DIR/totp-last-counter"
+  trap - EXIT
 
   echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
   # The same instance under the name passkeys need (#1250). A WebAuthn
@@ -607,6 +694,46 @@ down() {
   rm -rf "$MV_DIR"
 }
 
+# upgrade -- rebuild and restart the running instance *in place*: same
+# $MV_DIR data, same cfg.yaml, same admin session cookies, only a new
+# VERSION and the binary/frontend bundle it stamps. `up` always boots a
+# fresh instance, which cannot exercise #1363 at all -- the whole defect
+# is what an *already-open tab* does when the server behind it changes
+# out from under it, #1362's own case. This is what lets
+# live-freshness-reload.mjs watch that happen for real, with a real
+# service worker, rather than asserting on freshness.svelte.ts in
+# isolation the way the vitest suite already does.
+#
+# Requires `up` to have stood one up already -- refuses rather than
+# silently starting a fresh instance nothing has signed into yet.
+upgrade() {
+  if [ ! -f "$MV_DIR/pid" ]; then
+    echo "live-env: no running instance in $MV_DIR -- run 'up' first." >&2
+    exit 1
+  fi
+  local old_pid
+  old_pid="$(cat "$MV_DIR/pid")"
+  kill "$old_pid" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    kill -0 "$old_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  # build()'s own $mv_stamp is timestamped to the second
+  # (date -u +%Y%m%dT%H%M%SZ) -- sleep past the second the instance's
+  # first build landed in, so a rebuild moments later is provably a
+  # different VERSION rather than betting on the rebuild itself (npm
+  # plus go, normally several seconds) taking that long on every host.
+  sleep 1.1
+  build "$MV_DIR/mikroview"
+  MV_TEST_HOOKS=1 MV_TEST_PASSWORDLIST_URL="$MV_PASSWORDLIST_OFFLINE_URL" \
+    MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  echo $! > "$MV_DIR/pid"
+  for _ in $(seq 1 40); do
+    if curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi
+    sleep 0.25
+  done
+}
+
 case "${1:-}" in
   up) up ;;
   # build PATH -- build the binary (and the UI it embeds) to PATH without
@@ -618,6 +745,7 @@ case "${1:-}" in
   perfseed) shift; perfseed "$@" ;;
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
+  upgrade) upgrade ;;
   down) down ;;
-  *) echo "usage: $0 {up|build PATH|syslog N [label]|perfseed [SCANS] [EVENTS]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|perfseed [SCANS] [EVENTS]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|upgrade|down}" >&2; exit 2 ;;
 esac

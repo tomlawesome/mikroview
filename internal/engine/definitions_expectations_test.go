@@ -565,7 +565,7 @@ func TestObserveAndPermittedSurviveRestart(t *testing.T) {
 	mustUpsertInvertedExpectation(t, s1, "e1")
 	s1.RecordObservation("e1", "10.0.0.5", 8883, time.Now())
 	if err := s1.UpdateExpectation("e1", func(e *watchlist.Entry) error {
-		e.Promote([]watchlist.PermittedDest{{DestIP: "1.2.3.4", Port: 443}})
+		e.Promote([]watchlist.PermittedDest{{DestIP: "203.0.113.4", Port: 443}})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -592,7 +592,7 @@ func TestObserveAndPermittedSurviveRestart(t *testing.T) {
 	if e.Observing {
 		t.Error("Observing did not survive restart as false")
 	}
-	if len(e.Permitted) != 1 || e.Permitted[0].DestIP != "1.2.3.4" {
+	if len(e.Permitted) != 1 || e.Permitted[0].DestIP != "203.0.113.4" {
 		t.Errorf("Permitted did not survive restart: %+v", e.Permitted)
 	}
 	if len(e.Observed) != 1 || e.Observed[0].DestIP != "10.0.0.5" {

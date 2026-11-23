@@ -30,6 +30,19 @@
   "updateOwner": "mikroview maintainers",
   "ciActions": [
     {
+      "name": "actions/attest",
+      "commit": "1e69f48acb82d1966a394da916b4c1698aa569d6",
+      "version": "v4.2.2",
+      "license": "MIT",
+      "source": "https://github.com/actions/attest",
+      "locations": [
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
       "name": "actions/attest-build-provenance",
       "commit": "4d101475d8b20a2381f78447822ac1eab6504dd8",
       "version": "v4.2.2",
@@ -54,15 +67,17 @@
         ".github/workflows/routeros-freshness.yml",
         ".github/workflows/pages.yml",
         ".github/workflows/docker.yml",
-        ".github/workflows/secret-scan.yml"
+        ".github/workflows/secret-scan.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
     },
     {
       "name": "actions/deploy-pages",
-      "commit": "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
-      "version": "v5.0.0",
+      "commit": "368f82528645a54fb793d4d04e342629a3f51346",
+      "version": "v5.0.1",
       "license": "MIT",
       "source": "https://github.com/actions/deploy-pages",
       "locations": [
@@ -86,8 +101,8 @@
     },
     {
       "name": "actions/setup-node",
-      "commit": "820762786026740c76f36085b0efc47a31fe5020",
-      "version": "v7.0.0",
+      "commit": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+      "version": "v7.1.0",
       "license": "MIT",
       "source": "https://github.com/actions/setup-node",
       "locations": [
@@ -95,6 +110,32 @@
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
+    },
+    {
+      "name": "actions/download-artifact",
+      "commit": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+      "version": "v8.0.2",
+      "license": "MIT",
+      "source": "https://github.com/actions/download-artifact",
+      "locations": [
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
+      "name": "actions/upload-artifact",
+      "commit": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "version": "v7.0.2",
+      "license": "MIT",
+      "source": "https://github.com/actions/upload-artifact",
+      "locations": [
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "actions/upload-pages-artifact",
@@ -110,8 +151,8 @@
     },
     {
       "name": "docker/build-push-action",
-      "commit": "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
-      "version": "v7.3.0",
+      "commit": "c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      "version": "v7.4.0",
       "license": "Apache-2.0",
       "source": "https://github.com/docker/build-push-action",
       "locations": [
@@ -123,13 +164,16 @@
     },
     {
       "name": "docker/login-action",
-      "commit": "dbcb813823bdd20940b903addbd779551569679f",
-      "version": "v4.6.0",
+      "commit": "8aa5831fb8d48d8f76594c7ddde61ae58019f550",
+      "version": "v4.8.0",
       "license": "Apache-2.0",
       "source": "https://github.com/docker/login-action",
       "locations": [
         ".github/workflows/live-check-image.yml",
-        ".github/workflows/docker.yml"
+        ".github/workflows/docker.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml",
+        ".github/workflows/countersign.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
@@ -149,21 +193,23 @@
     },
     {
       "name": "docker/setup-buildx-action",
-      "commit": "37fe631027851001ddb9b187196cc803df7f5f0e",
-      "version": "v4.3.0",
+      "commit": "f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      "version": "v4.4.1",
       "license": "Apache-2.0",
       "source": "https://github.com/docker/setup-buildx-action",
       "locations": [
         ".github/workflows/docker.yml",
-        ".github/workflows/live-check-image.yml"
+        ".github/workflows/live-check-image.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
     },
     {
       "name": "github/codeql-action/analyze",
-      "commit": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
-      "version": "v4.37.9",
+      "commit": "33d7b85da1a04171e211befe2c739303b9a4c066",
+      "version": "v4.39.3",
       "license": "MIT",
       "source": "https://github.com/github/codeql-action",
       "locations": [
@@ -174,8 +220,8 @@
     },
     {
       "name": "github/codeql-action/init",
-      "commit": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
-      "version": "v4.37.9",
+      "commit": "33d7b85da1a04171e211befe2c739303b9a4c066",
+      "version": "v4.39.3",
       "license": "MIT",
       "source": "https://github.com/github/codeql-action",
       "locations": [
@@ -186,13 +232,16 @@
     },
     {
       "name": "sigstore/cosign-installer",
-      "commit": "6f9f17788090df1f26f669e9d70d6ae9567deba6",
-      "version": "v4.1.2",
+      "commit": "756fe2d284c7292c4e9b62c8a28f1e5629c59532",
+      "version": "v4.1.3",
       "license": "Apache-2.0",
       "source": "https://github.com/sigstore/cosign-installer",
       "locations": [
         ".github/workflows/docker.yml",
-        ".github/workflows/live-check-image.yml"
+        ".github/workflows/live-check-image.yml",
+        ".github/workflows/publish-from-gitlab.yml",
+        ".github/workflows/release-on-tag.yml",
+        ".github/workflows/countersign.yml"
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
@@ -213,7 +262,7 @@
     },
     {
       "name": "Go toolchain (CI build/test image)",
-      "reference": "golang:1.27.1",
+      "reference": "golang:1.27.4",
       "shipped": false,
       "license": "BSD-3-Clause",
       "source": "https://github.com/docker-library/golang",
@@ -225,7 +274,7 @@
     },
     {
       "name": "Go toolchain (Dockerfile build stage)",
-      "reference": "golang:1.27.1-alpine",
+      "reference": "golang:1.27.4-alpine",
       "shipped": false,
       "license": "BSD-3-Clause",
       "source": "https://github.com/docker-library/golang",
@@ -274,20 +323,20 @@
       "reviewBy": "2026-11-06"
     },
     {
-      "name": "Docker CLI (container smoke-test and gate:image build, #1106)",
-      "reference": "docker:29-cli",
+      "name": "Docker CLI (sign:release-digest job image on the signing runner, #1472)",
+      "reference": "docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/docker/cli",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-10",
-      "reviewBy": "2026-11-10"
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "Semgrep static analysis scanner",
-      "reference": "semgrep/semgrep:1.177.0",
+      "reference": "semgrep/semgrep:1.184.0",
       "shipped": false,
       "license": "LGPL-2.1-only",
       "source": "https://github.com/semgrep/semgrep",
@@ -299,7 +348,7 @@
     },
     {
       "name": "gosec static analysis scanner",
-      "reference": "ghcr.io/securego/gosec:2.29.0",
+      "reference": "ghcr.io/securego/gosec:2.30.0",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/securego/gosec",
@@ -322,16 +371,16 @@
       "reviewBy": "2026-11-05"
     },
     {
-      "name": "Trivy filesystem/dependency scanner",
-      "reference": "aquasec/trivy:0.74.0",
+      "name": "Trivy vulnerability, image and misconfiguration scanner",
+      "reference": "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb",
       "shipped": false,
       "license": "Apache-2.0",
       "source": "https://github.com/aquasecurity/trivy",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-10",
-      "reviewBy": "2026-11-10"
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "PostgreSQL (integration test service)",
@@ -347,15 +396,15 @@
     },
     {
       "name": "Renovate dependency-update bot",
-      "reference": "renovate/renovate:44",
+      "reference": "renovate/renovate:44.222.2@sha256:227e723ed8c57f1b8b629066c7e0ad8d8f933d905f4a2f6fb4d597a74118637c",
       "shipped": false,
       "license": "AGPL-3.0-only",
       "source": "https://github.com/renovatebot/renovate",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     },
     {
       "name": "Distroless static runtime (production base image)",
@@ -368,6 +417,78 @@
       ],
       "reviewedOn": "2026-09-05",
       "reviewBy": "2026-11-05"
+    },
+    {
+      "name": "Docker-in-Docker daemon (CI service on the docker runner, #1457)",
+      "reference": "${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-dind@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659",
+      "shipped": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/docker-library/docker",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-10-23",
+      "reviewBy": "2026-12-23"
+    },
+    {
+      "name": "Docker CLI (job image for the Docker-in-Docker jobs, #1457)",
+      "reference": "${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-cli@sha256:be132a9f282288de4afaf63379dff75711fda0147c6b72a9df44e51841402144",
+      "shipped": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/docker-library/docker",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-10-23",
+      "reviewBy": "2026-12-23"
+    },
+    {
+      "name": "Gitleaks (job image for the shared private-details check, #1460)",
+      "reference": "${CI_IMAGE_CACHE_GHCR}/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+      "shipped": false,
+      "license": "MIT",
+      "source": "https://github.com/gitleaks/gitleaks",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
+      "name": "shellcheck (job image for lint:shellcheck, #1462)",
+      "reference": "${CI_IMAGE_CACHE_DOCKERHUB}/koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002",
+      "shipped": false,
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/koalaman/shellcheck",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
+      "name": "golangci-lint (job image for lint:golangci, #1462)",
+      "reference": "${CI_IMAGE_CACHE_DOCKERHUB}/golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481",
+      "shipped": false,
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/golangci/golangci-lint",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
+    },
+    {
+      "name": "ruff (job image for lint:ruff, #1462)",
+      "reference": "${CI_IMAGE_CACHE_GHCR}/astral-sh/ruff:0.17.4-alpine@sha256:7a717be3a7cfbef698a9b99e1555add93ec6b195242fe273997683e49b051f51",
+      "shipped": false,
+      "license": "MIT",
+      "source": "https://github.com/astral-sh/ruff",
+      "locations": [
+        ".gitlab-ci.yml"
+      ],
+      "reviewedOn": "2026-11-15",
+      "reviewBy": "2027-01-15"
     }
   ]
 }

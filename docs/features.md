@@ -14,24 +14,34 @@
   responsible rule visible at all.
 - **Storage**: by default, events live in a fixed block of memory — a
   ring buffer that overwrites the oldest event once full, windowed to
-  `store.retention` (default 24h) and gone on restart. An optional
-  on-disk history (`history:` in config.yaml, off by default) writes
-  the same events to one encrypted, compressed file per day and keeps
+  `store.retention` (default 24h) and gone on restart. An on-disk
+  history (`history:` in config.yaml, on by default) writes the same
+  events to one encrypted, compressed file per day and keeps
   `history.days` of them, so flag thresholds can be judged against
-  weeks of real traffic rather than just what the ring still holds.
-  See
-  [docs/configuration.md](configuration.md#on-disk-event-history-optional-off-by-default).
+  weeks of real traffic rather than just what the ring still holds; it
+  needs a key, which a fresh install's `install.sh` generates on its
+  own. See
+  [docs/configuration.md](configuration.md#on-disk-event-history-on-by-default).
   Behavioral flags (see below) can still persist to a small JSON file
   as before, since they're meant to stay visible until a human clears
   them.
-- **Router backups**: an optional SFTP drop box (`backup:` in
-  config.yaml, off by default) where the router's own nightly script
+- **Router backups**: an optional SFTP drop box, switched on and off
+  from Settings → router backups (off by default), where the router's
+  own nightly script
   pushes its binary `.backup` and plain-text `.rsc` export, so the
   copies are still to hand when the router itself is gone. An admin
   can mark a generation kept, with a comment saying why, so it sits
   outside the usual ten-generation retention until released back into
   it. See
-  [docs/configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default).
+  [docs/configuration.md](configuration.md#router-backups-over-sftp-issue-394).
+- **Known-bad lists on the router**: an admin page that builds one
+  RouterOS block making the router fetch published known-bad lists
+  (Spamhaus DROP and Emerging Threats on by default, five more offered,
+  each with its terms on its card) straight from their sources and drop
+  what is on them in raw prerouting. MikroView prints the block and
+  never runs it or serves a list; what the router holds, and how often
+  each list's rule fired, comes back in its own push. See
+  [docs/configuration.md](configuration.md#block-known-bad-addresses-on-the-router-optional-1360).
 - **Behavioral flags**: watches for port scans, per-source activity
   spikes, repeated attempts against critical ports (SSH, RDP, Winbox,
   ...) from external IPs, and network-wide volume spikes — each raises a
@@ -61,10 +71,9 @@
   [docs/configuration.md](configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~230KB of JavaScript over the wire (~781KB before compression). CI
-  gates the bundle at 265KB gzipped — the measured reading plus ~15%,
-  re-derived after #1249 added the `qrcode` package for TOTP
-  enrolment's QR code (see
+  ~266KB of JavaScript over the wire (~898KB before compression). CI
+  gates the bundle at 300KB gzipped, a round figure the owner set when
+  the blocklist builder (#1360) outgrew the old 265KB gate (see
   [docs/decisions/ui-framework.md](decisions/ui-framework.md) for the
   gate's own history).
 - **Logging**: leveled (debug/info/warn/error) and colorized server

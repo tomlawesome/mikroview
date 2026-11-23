@@ -12,7 +12,6 @@ vi.mock('./api', () => ({
   saveSetupBackupTransport: vi.fn(),
   rebindEnrolment: vi.fn(),
   fetchRefusedSenders: vi.fn(),
-  registerDevice: vi.fn(),
 }))
 
 import {
@@ -22,7 +21,6 @@ import {
   fetchSetupStatus,
   mintEnrolment,
   rebindEnrolment,
-  registerDevice,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
@@ -129,79 +127,17 @@ describe('openLostRouter (#394)', () => {
   })
 })
 
-// #1291's other unmet checklist item: a router that enrolled but was
-// never registered must be resumable at Register alone, without being
-// sent through Re-enrol's full mint-a-fresh-token walk to close the one
-// step it is actually short of.
-describe('openRegister resumes an enrolled-but-unregistered router (#1291)', () => {
-  it('lands on Register for the named router, minting nothing', () => {
-    wizardState.close()
-    wizardState.openRegister('edge-1')
-
-    expect(wizardState.open).toBe(true)
-    expect(wizardState.steps).toEqual(ROUTER_STEPS)
-    expect(wizardState.ledgerDevice).toBe('edge-1')
-    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
-    // No fresh proof of identity was asked for and no token exists --
-    // this door only opens the ledger, it never mints.
-    expect(wizardState.enrolment).toBeNull()
-    expect(wizardState.enrolmentMintedAt).toBe('')
-    expect(mintEnrolment).not.toHaveBeenCalled()
-  })
-
-  it('carries no enrolment form leftovers from a previous walk', () => {
-    wizardState.openReEnrol('edge-2')
-    wizardState.enrolExpectedAddress = '192.0.2.50'
-    wizardState.enrolPassword = 'the-admin-password'
-
-    wizardState.openRegister('edge-1')
-
-    expect(wizardState.enrolExpectedAddress).toBe('')
-    expect(wizardState.enrolPassword).toBe('')
-  })
-
-  it('is cleared by Run setup…, the same as Re-enrol…', () => {
-    wizardState.status = status()
-    wizardState.openRegister('edge-1')
-
-    wizardState.launch()
-
-    expect(wizardState.ledgerDevice).toBe('')
-    expect(wizardState.steps).toEqual(SETUP_STEPS)
-  })
-
-  // v0.6.0 pre-release audit: registerError and registering were written
-  // only by launch() and registerRouter(), and close() -- Escape or the
-  // X -- never touched them. Entities.svelte's Finish registering… calls
-  // openRegister() directly, with no launch() on that path, so router
-  // A's refusal was still sitting there when the operator closed the
-  // wizard on A and reopened it on a different router B: B's Register
-  // pane rendered A's error before any request for B had been made.
-  it('does not carry another router\'s register refusal into this one', () => {
-    wizardState.openRegister('edge-1')
-    wizardState.registerError = 'a name is already registered for this router'
-    wizardState.registering = true
-
-    wizardState.close()
-    wizardState.openRegister('edge-2')
-
-    expect(wizardState.registerError).toBeNull()
-    expect(wizardState.registering).toBe(false)
-  })
-
-  // Same gap, the sign-out door: reset() (#1083) was audited and fixed
-  // for most of wizardState's fields but missed these two, so a register
-  // refusal from one account's session could still be sitting there for
-  // whoever signs in next on the same tab.
-  it('reset() clears a stale register error and its busy flag too', () => {
-    wizardState.openRegister('edge-1')
-    wizardState.registerError = 'a name is already registered for this router'
-    wizardState.registering = true
+describe('reset() clears module-lifetime walk state', () => {
+  // syslogCopiedAddress (#1370) is a module-lifetime field the same way
+  // token and address are -- what one account's session
+  // last copied the Send logs block for is not something the next
+  // account signing in on this tab should see a stale warning about.
+  it('reset() clears which address the Send logs block was last copied for', () => {
+    wizardState.syslogCopiedAddress = '192.0.2.10'
 
     wizardState.reset()
 
-    expect(wizardState.registerError).toBeNull()
-    expect(wizardState.registering).toBe(false)
+    expect(wizardState.syslogCopiedAddress).toBeNull()
   })
 })
 
@@ -222,7 +158,7 @@ describe('a thrown call surfaces the same way a refusal does', () => {
 
     await wizardState.saveAddress()
 
-    expect(wizardState.addressSaveError).toBe('network unreachable')
+    expect(wizardState.addressSaveError).toBe('Could not save the address: network unreachable')
   })
 
   it('setBackupTransport, without silently applying the switch it never confirmed', async () => {
@@ -232,7 +168,7 @@ describe('a thrown call surfaces the same way a refusal does', () => {
 
     await wizardState.setBackupTransport('https')
 
-    expect(wizardState.backupTransportError).toBe('network unreachable')
+    expect(wizardState.backupTransportError).toBe('Could not switch the backup transport: network unreachable')
     expect(wizardState.backupTransport).toBe('sftp')
   })
 })
@@ -515,12 +451,12 @@ describe('minting is one at a time whichever way it is asked for (#1291)', () =>
   })
 })
 
-// A slow mint or register response can still be in flight once the
+// A slow mint response can still be in flight once the
 // operator has clicked Back/Next, closed the modal, or opened a
 // different router's walk. Applying it then would flash a token or a
 // refusal onto a pane nobody is looking at any more. v0.6.0 audit Lows,
 // F4.
-describe('a stale enrol or register response is ignored once the operator has left (F4)', () => {
+describe('a stale enrol response is ignored once the operator has left (F4)', () => {
   it('mintEnrolmentToken drops a response that lands after the pane changed', async () => {
     wizardState.status = status()
     wizardState.openReEnrol('edge-1')
@@ -561,22 +497,92 @@ describe('a stale enrol or register response is ignored once the operator has le
     expect(wizardState.enrolment).toBeNull()
     expect(wizardState.ledgerDevice).toBe('edge-2')
   })
+})
 
-  it('registerRouter drops a response that lands after the modal was closed', async () => {
+// #1361: what The router's Back up nightly choice reads and does.
+describe('the drop box (#1361)', () => {
+  function backups(port?: string) {
+    return {
+      enabled: true,
+      keyUnreadable: false,
+      transport: 'sftp' as const,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      port,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    }
+  }
+
+  it('dropBoxClosed is only ever true after the backups read landed with no port, on an SFTP install', () => {
+    wizardState.reset()
+    expect(wizardState.dropBoxClosed).toBe(false)
+    wizardState.backups = backups(':47022')
+    expect(wizardState.dropBoxClosed).toBe(false)
+    wizardState.backups = backups(undefined)
+    expect(wizardState.dropBoxClosed).toBe(true)
+    wizardState.backupTransport = 'https'
+    expect(wizardState.dropBoxClosed).toBe(false)
+    wizardState.reset()
+  })
+
+  it('dropBoxSwitched folds the switch into the backups read, and re-renders the block only once one stands', async () => {
+    wizardState.reset()
+    vi.mocked(fetchSetupCommands).mockReset()
+    wizardState.backups = backups(undefined)
+    await wizardState.dropBoxSwitched({ open: true, port: '47022' })
+    expect(wizardState.backups?.port).toBe('47022')
+    expect(vi.mocked(fetchSetupCommands)).not.toHaveBeenCalled()
+
+    await wizardState.dropBoxSwitched({ open: false })
+    expect(wizardState.backups?.port).toBeUndefined()
+
     wizardState.status = status()
-    wizardState.openRegister('edge-1')
-    let settle: (v: string) => void = () => {}
-    vi.mocked(registerDevice).mockReturnValueOnce(
-      new Promise((resolve) => {
-        settle = resolve
-      }),
-    )
+    wizardState.ledgerDevice = 'rb5009'
+    wizardState.token = 'tok-ingest'
+    const rendered = { steps: {} } as never
+    wizardState.commands = rendered
+    vi.mocked(fetchSetupCommands).mockResolvedValue(rendered)
+    await wizardState.dropBoxSwitched({ open: true, port: '47022' })
+    expect(vi.mocked(fetchSetupCommands)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchSetupCommands).mock.calls[0][0]).toMatchObject({ device: 'rb5009', token: 'tok-ingest' })
+    wizardState.reset()
+  })
+})
 
-    const register = wizardState.registerRouter('edge-1')
-    wizardState.close()
-    settle('a name is already registered for this router')
-    await register
 
-    expect(wizardState.registerError).toBeNull()
+// #1507 review decision: Go judges the certificate for the address being
+// typed, so refresh() must hand the wizard's current typed address to the
+// status fetch, and the CA step must block on the served verdict for it
+// even with nothing stored.
+describe('status is fetched for the typed address (#1507)', () => {
+  it('sends the current typed address when it fetches status', async () => {
+    vi.mocked(fetchSetupStatus).mockReset()
+    vi.mocked(fetchSetupStatus).mockResolvedValue(status())
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    wizardState.address = '2001:db8::10'
+    // Already initialised: refresh() must not overwrite the typed value.
+    await wizardState.refresh()
+    expect(fetchSetupStatus).toHaveBeenCalledWith('2001:db8::10')
+  })
+
+  it('blocks the CA step for an uncovered typed address with nothing stored', async () => {
+    vi.mocked(fetchSetupStatus).mockReset()
+    // The server answers for whatever address it is asked about.
+    vi.mocked(fetchSetupStatus).mockImplementation(async (address?: string) => {
+      const base = status()
+      const uncovered = address === '192.0.2.99:8443'
+      return {
+        ...base,
+        instance: { ...base.instance, hosts: ['router.example.net'], effectiveHosts: ['router.example.net'], certificateCoversAddress: !uncovered, addressHost: uncovered ? '192.0.2.99' : '' },
+      } as SetupStatus
+    })
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    wizardState.address = '192.0.2.99:8443'
+    await wizardState.refresh()
+    expect(wizardState.address).toBe('192.0.2.99:8443')
+    const ca = wizardState.ledger.find((st) => st.key === 'ca')
+    expect(ca?.status.state).toBe('blocked')
   })
 })

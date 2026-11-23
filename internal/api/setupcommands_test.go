@@ -5,13 +5,16 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/retention"
@@ -62,7 +65,7 @@ func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setu
 // renders regardless, and the request itself still succeeds.
 func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	key := testRetentionKey(t)
 	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
@@ -227,8 +230,78 @@ func TestHandleSetupCommandsListsRoutersWithKnownVersions(t *testing.T) {
 	if r.ID != "core" || r.RouterOSVersion != "7.24" || r.Standing != "reviewed" {
 		t.Errorf("Routers[0] = %+v, want core at 7.24, reviewed", r)
 	}
-	if !strings.Contains(r.Note, "find") {
-		t.Errorf("Routers[0].Note = %q, want 7.24's find-lookup-bug note carried per-router", r.Note)
+}
+
+// TestHandleSetupCommandsUpgradeWarnings covers #1344's contract: the
+// catalogue rides along on RouterOS.Upgrades, and both a known router
+// and the operator's own pick carry only the IDs that apply to their
+// version, always as a present-but-possibly-empty slice.
+func TestHandleSetupCommandsUpgradeWarnings(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// core at 7.24 -- before the change -- gets no warning, and the
+	// contract needs this asserted on the raw body: present, empty, and
+	// "[]" rather than "null".
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.24","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rawBody, err := json.Marshal(setupCommandsRequest{Address: "mv.example.net:8443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(rawBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawOut, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out setupCommandsResponse
+	if err := json.Unmarshal(rawOut, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(out.RouterOS.Upgrades, routeros.Upgrades) {
+		t.Errorf("RouterOS.Upgrades = %+v, want routeros.Upgrades verbatim", out.RouterOS.Upgrades)
+	}
+	if len(out.Routers) != 1 || !slicesEqual(out.Routers[0].Upgrades, []string{}) {
+		t.Errorf("Routers[0].Upgrades (7.24) = %+v, want []", out.Routers)
+	}
+	if !strings.Contains(string(rawOut), `"upgrades":[]`) {
+		t.Errorf("raw body has no empty-but-present upgrades array: %s", rawOut)
+	}
+
+	// core moves to 7.24.4 -- at or past cert-store-7.24.3's From --
+	// which must now carry that ID.
+	p2, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.24.4","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p2, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	out = postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "mv.example.net:8443", Version: "7.24.3"})
+	if len(out.Routers) != 1 || !slicesEqual(out.Routers[0].Upgrades, []string{"cert-store-7.24.3"}) {
+		t.Errorf("Routers[0].Upgrades (7.24.4) = %+v, want [cert-store-7.24.3]", out.Routers)
+	}
+	if out.Picked == nil || !slicesEqual(out.Picked.Upgrades, []string{"cert-store-7.24.3"}) {
+		t.Errorf("Picked.Upgrades = %+v, want [cert-store-7.24.3] for version 7.24.3", out.Picked)
+	}
+
+	below := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "mv.example.net:8443", Version: "7.24.2"})
+	if below.Picked == nil || !slicesEqual(below.Picked.Upgrades, []string{}) {
+		t.Errorf("Picked.Upgrades for 7.24.2 = %+v, want []", below.Picked)
 	}
 }
 
@@ -354,7 +427,7 @@ func TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken(t *testing.T)
 // its "no key" state.
 func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
@@ -430,7 +503,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Vault = v
-	s.SetupInstance.BackupPort = ""
+	s.SetupInstance.BackupPort = func() string { return "" }
 	onlyBackupsOff := postSetupCommands(t, ts.URL, setupCommandsRequest{
 		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
 	})
@@ -438,7 +511,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 		t.Errorf("Backup.Blocked = %v, want just [backups-off]", onlyBackupsOff.Steps.Backup.Blocked)
 	}
 
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	onlyNoDevice := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(onlyNoDevice.Steps.Backup.Blocked, []string{"no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want just [no-device]", onlyNoDevice.Steps.Backup.Blocked)
@@ -452,7 +525,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	// Several missing at once -- the owner's instance actually hit this:
 	// two preconditions unmet together, and both keys must come back,
 	// not just the first one found.
-	s.SetupInstance.BackupPort = ""
+	s.SetupInstance.BackupPort = func() string { return "" }
 	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
@@ -469,7 +542,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 // encrypted under the old one.
 func TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	s.SetupInstance.BackupKeyUnreadable = true
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
@@ -537,6 +610,40 @@ func TestHandleSetupCommandsHTTPSTransport(t *testing.T) {
 	}
 	if noAddress.Steps.Backup.Commands != "" {
 		t.Errorf("backup commands with no address = %q, want blank", noAddress.Steps.Backup.Commands)
+	}
+}
+
+// TestHandleSetupCommandsUndoRendersRegardlessOfAddressAndFollowsTransport
+// covers #1385's ledger: every Undo line embeds a fixed resource name,
+// never the address or a token, so all four render even with nothing
+// else answered -- and Backup's follows the stored transport the same
+// way the forward pair does (TestHandleSetupCommandsHTTPSTransport).
+func TestHandleSetupCommandsUndoRendersRegardlessOfAddressAndFollowsTransport(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	bare := postSetupCommands(t, ts.URL, setupCommandsRequest{})
+	if bare.Steps.Undo.CaTrust != routeros.UndoCaTrustCommands("") {
+		t.Errorf("Undo.CaTrust = %q", bare.Steps.Undo.CaTrust)
+	}
+	if !strings.Contains(bare.Steps.Undo.Syslog, "mikroview") {
+		t.Errorf("Undo.Syslog = %q, want it to name the mikroview action", bare.Steps.Undo.Syslog)
+	}
+	if !strings.Contains(bare.Steps.Undo.Schedule, "mv-push") {
+		t.Errorf("Undo.Schedule = %q, want it to name mv-push", bare.Steps.Undo.Schedule)
+	}
+	if !strings.Contains(bare.Steps.Undo.Backup, "mv-backup") || strings.Contains(bare.Steps.Undo.Backup, "mv-backup-https") {
+		t.Errorf("Undo.Backup on the default (SFTP) transport = %q, want mv-backup and not mv-backup-https", bare.Steps.Undo.Backup)
+	}
+
+	if ok, err := s.Setup.SetBackupTransport(setup.BackupTransportHTTPS); err != nil || !ok {
+		t.Fatalf("SetBackupTransport refused https: ok=%v err=%v", ok, err)
+	}
+	https := postSetupCommands(t, ts.URL, setupCommandsRequest{})
+	if !strings.Contains(https.Steps.Undo.Backup, "mv-backup-https") {
+		t.Errorf("Undo.Backup on the https transport = %q, want mv-backup-https", https.Steps.Undo.Backup)
 	}
 }
 
@@ -689,17 +796,17 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 // TestValidSetupDeviceLengthMatchesTokenStore is #1304's Q9: this
 // validator's device-name length bound used to be a second constant
 // (maxSetupDeviceLen) kept equal to internal/auth's own
-// maxDeviceIDLen only by a comment saying so. It is auth.MaxDeviceIDLen
+// maxDeviceIDLen only by a comment saying so. It is gauntlet.MaxDeviceIDLen
 // itself now, so this test pins the boundary against that shared
 // constant directly -- it would catch either one changing without the
 // other the moment they next needed to differ.
 func TestValidSetupDeviceLengthMatchesTokenStore(t *testing.T) {
-	atLimit := strings.Repeat("a", auth.MaxDeviceIDLen)
+	atLimit := strings.Repeat("a", gauntlet.MaxDeviceIDLen)
 	if !validSetupDevice(atLimit) {
-		t.Errorf("a device name of exactly auth.MaxDeviceIDLen (%d) characters was refused", auth.MaxDeviceIDLen)
+		t.Errorf("a device name of exactly gauntlet.MaxDeviceIDLen (%d) characters was refused", gauntlet.MaxDeviceIDLen)
 	}
 	overLimit := atLimit + "a"
 	if validSetupDevice(overLimit) {
-		t.Errorf("a device name one character over auth.MaxDeviceIDLen (%d) was accepted", auth.MaxDeviceIDLen)
+		t.Errorf("a device name one character over gauntlet.MaxDeviceIDLen (%d) was accepted", gauntlet.MaxDeviceIDLen)
 	}
 }

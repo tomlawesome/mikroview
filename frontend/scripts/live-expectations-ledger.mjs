@@ -110,8 +110,17 @@ check(rowText.includes('since '), `the row states when the expectation was made 
 
 // --- forget it ----------------------------------------------------------
 
-await row.locator('button.forget').click()
+// Forget is arm-then-confirm (#1539): the first click arms it with the
+// consequence in its label, the second forgets.
+const forgetBtn = row.locator('button.forget')
+await forgetBtn.click()
+check(
+  ((await forgetBtn.textContent()) ?? '').trim() === 'confirm — it stops being expected',
+  'the first click on forget arms it, naming the consequence',
+)
+await forgetBtn.click()
 await row.waitFor({ state: 'detached', timeout: 15000 })
+// safe: waitFor above throws on timeout
 check(true, 'Forget removes the row from the ledger')
 
 // The row vanishing is not the claim -- the expectation being gone is.

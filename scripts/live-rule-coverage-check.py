@@ -25,7 +25,7 @@ def main() -> int:
     for r in rules:
         print(
             f"  ordinal={r['ordinal']:<2} "
-            f"log={str(r.get('log', False)):<5} "
+            f"log={r.get('log', False)!s:<5} "
             f"dstAddress={r.get('dstAddress', '') or '-':<20} "
             f"srcAddress={r.get('srcAddress', '') or '-':<18} "
             f"prefix={r.get('logPrefix', '') or '-'}"

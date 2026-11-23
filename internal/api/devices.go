@@ -4,9 +4,12 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tomlawesome/gauntlet"
 
 	"github.com/tomlawesome/mikroview/internal/device"
 )
@@ -61,72 +64,6 @@ func (s *Server) handleDeviceCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, info)
 }
 
-// deviceRegisterRequest is POST /api/devices/{id}/registration's body:
-// the name the operator confirmed the router under. Empty keeps the
-// name it already has.
-type deviceRegisterRequest struct {
-	Name string `json:"name"`
-}
-
-// handleDeviceRegister records the operator's confirmation of a router
-// on the device itself -- the ledger's final Register step (issue
-// #1291).
-//
-// Registering grants nothing, and this handler has no path that could:
-// device.Registry.Register never sets or changes AcceptedIP. That is
-// deliberate and is the rule this endpoint exists to keep -- no web
-// request may cause an address to be accepted as a log source.
-// Acceptance happens only when a valid, unexpired, single-use enrolment
-// token arrives in syslog traffic from that address.
-//
-// So this endpoint is admin-only and CSRF-gated like its neighbours,
-// but asks for no password re-proof: spoofing the click renames a
-// device and stamps a date, which is worth nothing to an attacker. The
-// re-proof belongs on the endpoint that opens the door, which is
-// minting (handleDeviceEnrolmentCreate).
-func (s *Server) handleDeviceRegister(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
-		return
-	}
-	if s.Devices == nil {
-		http.Error(w, "the device registry is not available", http.StatusServiceUnavailable)
-		return
-	}
-	var req deviceRegisterRequest
-	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	name := strings.TrimSpace(req.Name)
-	// Same charset gate as handleDeviceCreate's name, for the same
-	// reason: this value reaches routeros.BackupScript's bare
-	// placements. An empty name is allowed here and means "keep the one
-	// it has" -- the operator is confirming the router, not necessarily
-	// renaming it.
-	if name != "" && !validSetupDevice(name) {
-		http.Error(w, "name must be 1 to 64 characters from letters, digits, '.', '_' and '-'", http.StatusBadRequest)
-		return
-	}
-	id := r.PathValue("id")
-	info, err := s.Devices.Register(id, name, time.Now())
-	if err != nil {
-		status := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, device.ErrDeviceNotFound):
-			status = http.StatusNotFound
-		case errors.Is(err, device.ErrDeviceConfigured):
-			status = http.StatusBadRequest
-		}
-		// Safe to echo for both: each names only a rule about the
-		// requested id, never anything about another device.
-		http.Error(w, deviceErrorText(err), status)
-		return
-	}
-	s.Audit.Record(auditActor(r), "device.registered", info.ID, "")
-	writeJSON(w, http.StatusOK, info)
-}
-
 // deviceErrorText is what a device registry error says to the caller.
 // A failed save (device.ErrPersistFailed, #1303) wraps the backend's
 // own error, which names the store's path; the browser gets only the
@@ -146,6 +83,23 @@ func deviceErrorText(err error) string {
 // it would simply reappear on the next boot. Clears the device's
 // enrolled address and any pending enrolment token along with it
 // (issue #1281's "deleting a device clears its address").
+//
+// This is also the setup wizard ledger's "forget <name> on MikroView"
+// act (#1385, DESIGN.md's "✓ · Where setup stands"): the same endpoint,
+// not a second one, because forgetting a router is exactly this delete
+// with nothing left half-done. Registry.Delete above already accounts
+// for two of the three things the ledger promises to forget -- the
+// record itself and the pending enrolment token -- but it does not
+// reach into the token store, where a persistent ingest
+// bearer token (POST /api/tokens, gauntlet.TokenKindIngest, minted for the
+// push and backup scripts to authenticate with) lives in a separate
+// store keyed by its own id, not the device's. Left alone, that token
+// would keep authenticating pushes for a router this registry no
+// longer has any record of -- Authenticate checks only the token's own
+// kind, hash and revoked flag, never whether its device still exists.
+// So this revokes every ingest token scoped to id as part of the same
+// delete, and the one audit line below names whichever of the three
+// this call actually forgot.
 func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -170,7 +124,34 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, deviceErrorText(err), status)
 		return
 	}
-	s.Audit.Record(auditActor(r), "device.removed", id, "")
+	// Revoked after the delete, not before: a refused delete (a
+	// config.yaml device, an unknown id) must leave its tokens alone.
+	// A revoke that cannot be saved is said out loud rather than
+	// swallowed -- the token would still open pushes and SFTP backups
+	// for this name, and a 204 would tell the operator it had not.
+	revokedTokens, failedTokens := 0, 0
+	if s.Tokens != nil {
+		for _, tok := range s.Tokens.ByKind(gauntlet.TokenKindIngest) {
+			if tok.Device != id {
+				continue
+			}
+			if err := s.Tokens.Revoke(tok.ID); err != nil {
+				failedTokens++
+				continue
+			}
+			revokedTokens++
+		}
+	}
+	if failedTokens > 0 {
+		s.Audit.Record(auditActor(r), "device.removed", id, "its enrolment and its record; its token was not revoked")
+		http.Error(w, "The router is forgotten, but its token could not be revoked and still works. Revoke it under Tokens.", http.StatusInternalServerError)
+		return
+	}
+	detail := "its enrolment and its record"
+	if revokedTokens > 0 {
+		detail = "its token, its enrolment and its record"
+	}
+	s.Audit.Record(auditActor(r), "device.removed", id, detail)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -200,7 +181,7 @@ type deviceEnrolmentRequest struct {
 // affordance, since minting again is exactly a reroll. Admin-only: an
 // enrolment token is a bearer credential for attributing syslog traffic
 // to a device, the same tier every other token-issuing endpoint in this
-// API holds to (see handleTokensCreate).
+// API holds to (gauntlet's POST /api/tokens).
 func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -235,30 +216,21 @@ func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Requ
 	// inventing a weaker check for them would defeat the point of having
 	// one at all. Minting through a round trip back to the identity
 	// provider is its own piece of work; until it ships they are told
-	// plainly rather than quietly let through. Same shape and status as
-	// handleAuthChangePassword's answer to the same situation.
+	// plainly rather than quietly let through, with the 409 gauntlet's
+	// own password change gives the same situation.
 	if !user.LocalPassword() {
-		http.Error(w, "this account signs in through your identity provider, and minting an enrolment token needs a password re-check that does not exist for it yet; declare this router in config.yaml instead", http.StatusConflict)
+		http.Error(w, "this account signs in through your identity provider, and minting an ingest token needs a password re-check that does not exist for it yet; declare this router in config.yaml instead", http.StatusConflict)
 		return
 	}
-	// Rate-limited on the same limiter as login, in the shared
-	// password-re-check bucket: the password is a credential and this
-	// is a guess at it, so verifying one without counting the attempt
-	// is a brute-force oracle that happens to need a session -- and a
-	// session is exactly what an attacker who has stolen a cookie
-	// already has. handleAuthChangePassword guards the same thing
-	// through the same key rather than a copy of it.
-	userKey := passwordRecheckLimiterKey(user.Username)
-	if !s.LoginLimiter.Reserve(userKey, now) {
-		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+	// Counted in gauntlet's per-account password re-check budget (see
+	// recheckPassword): the password is a credential and this is a guess
+	// at it, so verifying one without counting the attempt is a
+	// brute-force oracle that happens to need a session -- and a session
+	// is exactly what an attacker who has stolen a cookie already has.
+	// gauntlet's own password change spends the same budget.
+	if !s.recheckPassword(w, r, user, req.Password, "password is incorrect") {
 		return
 	}
-	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
-		// Reservation stays claimed: that is what counts the failure.
-		writeUnauthorized(w, "password is incorrect")
-		return
-	}
-	s.LoginLimiter.Release(userKey, now)
 
 	id := r.PathValue("id")
 	token, expiresAt, err := s.Devices.MintEnrolment(id, strings.TrimSpace(req.ExpectedAddress), now)
@@ -378,6 +350,18 @@ func (s *Server) handleDeviceEnrolmentDelete(w http.ResponseWriter, r *http.Requ
 // that have never proven anything about themselves, which is closer to
 // GET /api/audit's "who has been probing this instance" than to the
 // fleet's own read.
+// refusedView is device.Refused plus #1373's own-address note: when the
+// address belongs to a router MikroView has already enrolled -- it
+// appears in that router's own pushed /ip/address table -- the refused
+// sender is not an unexplained stranger, it is that router's other
+// address, still sending logs from a setup MikroView's own wizard has
+// moved past (the owner's own case: a repointed built-in action kept
+// sending from a src-address the wizard never uses).
+type refusedView struct {
+	device.Refused
+	Note string `json:"note,omitempty"`
+}
+
 func (s *Server) handleDevicesRefused(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -387,8 +371,49 @@ func (s *Server) handleDevicesRefused(w http.ResponseWriter, r *http.Request) {
 	if s.Devices != nil {
 		refused = s.Devices.Refused()
 	}
-	if refused == nil {
-		refused = []device.Refused{}
+	owners := s.refusedAddressOwners()
+	views := make([]refusedView, 0, len(refused))
+	for _, ref := range refused {
+		v := refusedView{Refused: ref}
+		if name, ok := owners[ref.Address]; ok {
+			v.Note = fmt.Sprintf("this is %s's other address — a logging action is still sending from it", name)
+		}
+		views = append(views, v)
 	}
-	writeJSON(w, http.StatusOK, refused)
+	writeJSON(w, http.StatusOK, views)
+}
+
+// refusedAddressOwners maps every address in an enrolled router's own
+// pushed /ip/address table to that router's display name (#1373): the
+// evidence a refused sender's address is not a stranger's but an
+// enrolled router's other interface.
+func (s *Server) refusedAddressOwners() map[string]string {
+	out := map[string]string{}
+	if s.RouterState == nil || s.Devices == nil {
+		return out
+	}
+	names := make(map[string]string)
+	for _, info := range s.Devices.List() {
+		names[info.ID] = info.Name
+	}
+	for _, id := range s.RouterState.Devices() {
+		entries, _, ok := s.RouterState.IPAddresses(id)
+		if !ok {
+			continue
+		}
+		name := names[id]
+		if name == "" {
+			name = id
+		}
+		for _, e := range entries {
+			host := e.Address
+			if i := strings.IndexByte(host, '/'); i != -1 {
+				host = host[:i]
+			}
+			if host != "" {
+				out[host] = name
+			}
+		}
+	}
+	return out
 }

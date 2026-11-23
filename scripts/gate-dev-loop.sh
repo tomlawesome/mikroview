@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 #
 # Run the live-check gate on `dev`, after the merge, for as long as this
-# process lives. AGENTS.md, "The gate runs on `dev`, after the merge", has
+# process lives. docs/runner-host.md, "The dev loop is retired", has
 # the rule this implements; #831 is the issue.
 #
 # Each pass: fetch, move a detached worktree to the `gitlab` remote's dev

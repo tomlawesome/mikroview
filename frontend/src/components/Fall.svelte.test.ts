@@ -37,32 +37,19 @@ vi.mock('../lib/api', () => ({
   fetchRouterNat: vi.fn(async () => ({ available: false, rules: [] })),
   fetchEventsWindow: vi.fn(async () => ({ events: [], hasMore: false })),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
+  // #1352: the foot's DB-IP credit reads the live source from healthz
+  // through geoipState. Never answering keeps that fetch from racing the
+  // source each test below sets on the store directly.
+  fetchHealthz: vi.fn(() => new Promise(() => {})),
 }))
 
 import { fetchEventsWindow } from '../lib/api'
 import { formatHM } from '../lib/format'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { geoipState } from '../lib/geoip.svelte'
 import { appState } from '../lib/state.svelte'
 import type { WatchlistEntry } from '../lib/types'
-
-// jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
-// pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
-// matchMedia at module-load time, so this has to land before the
-// dynamic import below (same fix AccountMenu.svelte.test.ts needed).
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList
-}
 
 // jsdom implements no ResizeObserver, and `bind:clientWidth` on `.rig`
 // (#722 -- the sizing policy needs to know its own real pixel width) is
@@ -235,6 +222,35 @@ describe('the bottom-right timestamp is unmounted, not deleted (#700 fault 3)', 
   })
 })
 
+// #1352: DB-IP Lite's licence asks for a link; the owner settled it sits
+// at the foot of the fall, and only while DB-IP is the source in use.
+describe("the fall's foot credits DB-IP only while it is the source in use (#1352)", () => {
+  it('links to db-ip.com while DB-IP is live', async () => {
+    geoipState.source = 'dbip'
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    const credit = container.querySelector('.fall-foot a.geo-credit')
+    expect(credit?.textContent?.trim()).toBe('IP Geolocation by DB-IP')
+    expect(credit?.getAttribute('href')).toBe('https://db-ip.com')
+    expect(credit?.getAttribute('rel') ?? '').toContain('noopener')
+  })
+
+  it.each([['ipinfo'], ['maxmind'], [null]] as const)('draws nothing at all while the source is %s', async (source) => {
+    geoipState.source = source
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    expect(container.querySelector('.geo-credit')).toBeNull()
+    expect(container.textContent).not.toContain('DB-IP')
+  })
+
+  it('goes the moment the source switches away from DB-IP', async () => {
+    geoipState.source = 'dbip'
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    expect(container.querySelector('.geo-credit')).toBeTruthy()
+    geoipState.setSource('ipinfo')
+    flushSync()
+    expect(container.querySelector('.geo-credit')).toBeNull()
+  })
+})
+
 describe('the rig draws no inline width cap of its own (#700 faults 4 and 10)', () => {
   // #722 gave a single boundary its own reason not to fill the frame
   // (capped at MAX_PITCH -- see the band width policy tests below), so
@@ -360,6 +376,85 @@ describe('the window-cap chip (#801, round 36 item 6.1)', () => {
     const { container } = await renderFall({ boundaries: [boundary()], events: [] })
     expect(container.textContent).not.toContain('this window holds more')
     expect(container.querySelector('.att.dim')).toBeNull()
+  })
+
+  // #1345 R4B-F2: nothing makes two window polls answer in the order
+  // they were sent. The 15 m poll below is still out when the operator
+  // picks 1 h; the 1 h poll answers first, then the stale 15 m one lands
+  // -- it must not put its older window back over the newer one.
+  it('keeps a newer window when an older poll answers after it', async () => {
+    const page = (hasMore: boolean) => ({
+      events: [],
+      hasMore,
+      windowStart: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+      serverTime: new Date().toISOString(),
+    })
+    let answerOld!: (v: ReturnType<typeof page>) => void
+    vi.mocked(fetchEventsWindow)
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          answerOld = r
+        }),
+      )
+      .mockResolvedValue(page(false))
+    const { container, getByRole } = render(Fall)
+    await waitFor(() => expect(fallState.loading).toBe(false))
+    fallState.boundaries = [boundary()]
+    flushSync()
+
+    await fireEvent.click(getByRole('button', { name: '1 h' }))
+    await waitFor(() => expect(fetchEventsWindow).toHaveBeenCalledTimes(2))
+    expect(getByRole('button', { name: '1 h' }).getAttribute('aria-pressed')).toBe('true')
+    // Let the 1 h poll's answer land first.
+    await new Promise((r) => setTimeout(r, 0))
+
+    answerOld(page(true))
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+
+    expect(container.textContent).not.toContain('this window holds more')
+  })
+})
+
+// #1255: the sentence explaining the unmatched lane used to live only in
+// the caption's <title> and the band head's aria-label (#1164, #1196), so
+// a sighted user only saw it on hover. This chip carries the same words,
+// reused from unmatchedExplanation rather than duplicated, into the
+// attention row where they are always visible.
+describe("the unmatched lane's attention chip (#1255)", () => {
+  it('names the lane and the reason when its chain was never pushed at all', async () => {
+    const events = [makeEvent({ chain: 'srcnat', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toContain('other traffic -- events whose boundary is not in a pushed rule table yet')
+  })
+
+  it('names the narrower reason when the chain is pushed but the interfaces are not (#1196)', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toContain('other traffic -- their chain is in a pushed table, but no rule there names these interfaces')
+  })
+
+  it('is absent when the unmatched lane has no traffic', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    expect(chip).toBeUndefined()
+  })
+
+  it('opens Stream on the unmatched lane when activated, the same navigation the dark chip uses', async () => {
+    const events = [makeEvent({ chain: 'srcnat', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    appState.view = 'fall'
+    await fireEvent.click(chip!)
+    flushSync()
+    expect(appState.view).toBe('live')
+    expect(appState.filters.chain).toBe('')
+    expect(appState.filters.interface).toBe('')
   })
 })
 
@@ -694,6 +789,75 @@ describe('a long port label stays inside its own band, not clipped at the rig ed
     const w = text.length * CHAR_W_10
     const rightEdge = anchor === 'end' ? x : anchor === 'start' ? x + w : x + w / 2
     expect(rightEdge).toBeLessThanOrEqual(band.x + band.width)
+  })
+})
+
+// #1430: the v0.7.0 release capture of `ether1 · input` drew :445 SMB
+// and :23 Telnet on top of each other. Both carriers were near the
+// band's busiest, so both tips sat within a line of the band head, and
+// a far-off third carrier (assignX maps ports onto [10, 90] by number)
+// squeezed their x together. placeLabel lifts a label clear only while
+// there is headroom above it; with none, it drew the label where it
+// was, overlapping. The rule now is the foot's own (#700): the tallest
+// peak keeps its label and a label with no room folds.
+function crowdedTopEvents(now: number) {
+  const at = (dstPort: number, n: number, ageMs: number) =>
+    Array.from({ length: n }, () =>
+      makeEvent({
+        chain: 'input',
+        inInterface: 'ether1',
+        dstPort,
+        time: new Date(now - ageMs).toISOString(),
+      }),
+    )
+  // :445 and :23 both near the band's nowMax (tips at the top of the
+  // spectrum); :51820 active only earlier in the window, so it is a
+  // carrier for assignX's port range but draws no needle now.
+  return [...at(445, 40, 1000), ...at(23, 38, 1000), ...at(51820, 1, 10 * 60 * 1000)]
+}
+
+function peakLabelBoxes(container: HTMLElement) {
+  // CHAR_W_10, LABEL_ASCENT and LABEL_DESCENT in Fall.svelte: the rig's
+  // own measured label metrics (#1114), reproduced here so the test
+  // measures the same box placeLabel reasons about.
+  const CHAR_W_10 = 6.5
+  return [...container.querySelectorAll('text.plab:not(.carrier-label)')].map((el) => {
+    const text = el.textContent ?? ''
+    const x = Number(el.getAttribute('x'))
+    const y = Number(el.getAttribute('y'))
+    const w = text.length * CHAR_W_10
+    const anchor = el.getAttribute('text-anchor')
+    const x1 = anchor === 'end' ? x - w : anchor === 'start' ? x : x - w / 2
+    return { text, x1, x2: x1 + w, y1: y - 9, y2: y + 3 }
+  })
+}
+
+describe('a peak label with no headroom folds rather than overlapping (#1430)', () => {
+  it('never draws two peak labels across each other, and keeps the tallest one', async () => {
+    const { container } = await renderFall({
+      boundaries: [boundary({ key: 'input|ether1|', chain: 'input', inInterface: 'ether1', outInterface: '', label: 'ether1 · input' })],
+      events: crowdedTopEvents(Date.now()),
+    })
+    const boxes = peakLabelBoxes(container)
+    expect(boxes.map((b) => b.text)).toContain(':445 SMB')
+    for (let a = 0; a < boxes.length; a++) {
+      for (let b = a + 1; b < boxes.length; b++) {
+        const p = boxes[a]
+        const q = boxes[b]
+        const overlaps = p.x1 < q.x2 && q.x1 < p.x2 && p.y1 < q.y2 && q.y1 < p.y2
+        expect(overlaps, `${p.text} is drawn across ${q.text}`).toBe(false)
+      }
+    }
+  })
+
+  it('still lifts a label clear when there is room, rather than folding it', async () => {
+    // The #1254 fixture: NTP is small, so it has the whole spectrum's
+    // height to lift through, and must still be placed.
+    const { container } = await renderFall({
+      boundaries: [spectrumBandBoundary],
+      events: spectrumBandEvents(Date.now()),
+    })
+    expect(peakLabelBoxes(container).map((b) => b.text)).toContain(':123 NTP')
   })
 })
 

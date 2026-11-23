@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# Mints the first of two signatures over a release image (#1309): a
+# Mints the first of two signatures over a published image (#1309): a
 # cosign key-based signature from a private key that exists only on this
 # dedicated, protected `mikroview-signing` runner's host. The second is
 # GitHub's keyless (Sigstore/OIDC) signature over the same digest, added
@@ -12,20 +12,20 @@
 # owner's own GitHub login: compromising GitHub's OIDC issuer alone is not
 # enough to forge both.
 #
-# The image is published by GitHub Actions, not this pipeline, so this
-# script waits for it to appear on GHCR before it can resolve anything to
-# sign. That wait loop is copied from the `record:upgrade-fixture` job in
-# .gitlab-ci.yml (also triggered by a v* tag, also waiting on the same
-# GHCR image) rather than re-invented.
+# Since #1472 the image is built, tested and pushed by this same GitLab
+# pipeline (publish:image), so there is nothing to wait for: the script
+# signs the digest publish:image recorded in its evidence file, in this
+# project's registry, and attests security:trivy-image's SPDX SBOM to that
+# same digest (`cosign attest --key ... --type spdxjson --predicate
+# image.spdx.json <repository>@<digest>`). It runs on every publishing pipeline -- a push to preview
+# and a v* tag (owner, #1472: preview images are signed too).
 #
 # Usage:
-#   scripts/sign-release-digest.sh <tag>
-#
-# Argument:
-#   <tag>   The `v*` release tag naming the ghcr.io/tomlawesome/mikroview
-#           image to sign. Falls back to $CI_COMMIT_TAG when omitted --
-#           that is how the CI job below calls this; the argument form is
-#           for running it by hand.
+#   scripts/sign-release-digest.sh          sign the recorded digest
+#   scripts/sign-release-digest.sh <tag>    exercise path (#1309): sign
+#                                           ${MV_IMAGE}:<tag>, only if it
+#                                           resolves to the recorded
+#                                           digest; no SBOM attestation
 #
 # Inputs (environment):
 #   MV_SIGNING_DIR      The signing runner's read-only key mount. Must
@@ -45,22 +45,25 @@
 #   COSIGN_PASSWORD      The key's password. Takes priority over
 #                        MV_SIGNING_DIR when set, for the same reason.
 #                        cosign reads this from the environment itself.
-#   GHCR_PUBLISH_TOKEN   A GHCR token scoped to write:packages (already a
-#                        masked, protected CI/CD variable). Piped to
-#                        `docker login` on stdin -- never a command-line
-#                        argument, so it never appears in a process
-#                        listing.
-#   MV_IMAGE             Optional; default ghcr.io/tomlawesome/mikroview.
+#   CI_REGISTRY, CI_REGISTRY_USER, CI_REGISTRY_PASSWORD
+#                        GitLab's predefined job-token registry login.
+#                        The password is piped to `docker login` on stdin --
+#                        never a command-line argument, so it never appears
+#                        in a process listing.
+#   MV_IMAGE             The repository to sign in. Default:
+#                        $CI_REGISTRY_IMAGE (registry.tomlawson.io/ai/mikroview).
+#   MV_EVIDENCE          Optional; default
+#                        .mv-supply-chain/gitlab-tested-image.json, the
+#                        artifact publish:image writes
+#                        (scripts/gitlab-record-tested-image.sh).
+#   MV_SBOM              Optional; default image.spdx.json, the artifact
+#                        security:trivy-image writes.
 #   MV_DOCKER            Optional; the docker command to run. Overridable
 #                        only so tests can stub it; real use takes the
 #                        default `docker`.
 #   MV_COSIGN            Optional; the cosign command to run. Overridable
 #                        only so tests can stub it; real use resolves the
 #                        pinned binary via scripts/ensure-cosign.sh.
-#   MV_SIGN_WAIT_ATTEMPTS,
-#   MV_SIGN_WAIT_INTERVAL  Optional; default 45 and 60 (seconds), the same
-#                        45-minute budget record:upgrade-fixture uses.
-#                        Overridable only so tests do not actually wait.
 set -Eeuo pipefail
 
 repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -68,16 +71,19 @@ cd "$repo_root"
 
 fail() { printf 'sign-release-digest: %s\n' "$1" >&2; exit 1; }
 
-tag="${1:-${CI_COMMIT_TAG:-}}"
-[[ -n "$tag" ]] || fail "an image tag is required, as \$1 or \$CI_COMMIT_TAG"
-
-: "${GHCR_PUBLISH_TOKEN:?GHCR_PUBLISH_TOKEN is not set -- it is a masked, protected CI/CD variable scoped to write:packages only}"
+tag="${1:-}"
 
 docker_cmd="${MV_DOCKER:-docker}"
-repository="${MV_IMAGE:-ghcr.io/tomlawesome/mikroview}"
-image="${repository}:${tag}"
+repository="${MV_IMAGE:-${CI_REGISTRY_IMAGE:-}}"
+[[ -n "$repository" ]] || fail "no repository to sign in: CI_REGISTRY_IMAGE (or MV_IMAGE) is not set"
+: "${CI_REGISTRY:?CI_REGISTRY is not set -- this runs in a GitLab job, which predefines it}"
+: "${CI_REGISTRY_USER:?CI_REGISTRY_USER is not set -- this runs in a GitLab job, which predefines it}"
+: "${CI_REGISTRY_PASSWORD:?CI_REGISTRY_PASSWORD is not set -- this runs in a GitLab job, which predefines it}"
 
-# --- key material preflight, before the 45-minute wait below can even start ---
+evidence="${MV_EVIDENCE:-.mv-supply-chain/gitlab-tested-image.json}"
+sbom="${MV_SBOM:-image.spdx.json}"
+
+# --- key material preflight, before anything touches the registry ---
 signing_dir="${MV_SIGNING_DIR:-/etc/mikroview-signing}"
 
 if [[ -n "${COSIGN_PRIVATE_KEY:-}" ]]; then
@@ -98,80 +104,149 @@ else
 fi
 export COSIGN_PASSWORD="$password"
 
-# --- wait for GHCR to have the image (copied from record:upgrade-fixture, .gitlab-ci.yml) ---
-attempts="${MV_SIGN_WAIT_ATTEMPTS:-45}"
-interval="${MV_SIGN_WAIT_INTERVAL:-60}"
-echo "waiting for $image on GHCR (every ${interval}s, up to ${attempts} attempts)"
-found=0
-for attempt in $(seq 1 "$attempts"); do
-  if "$docker_cmd" manifest inspect "$image" > /dev/null 2>&1; then
-    found=1
-    break
-  fi
-  echo "  attempt $attempt/$attempts: not published yet"
-  [ "$attempt" = "$attempts" ] || sleep "$interval"
-done
-[ "$found" = 1 ] || fail "$image never appeared on GHCR after ${attempts} attempts"
-echo "$image is published"
+# --- what to sign: the recorded digest, or (exercise path) a named tag ---
+#
+# Both paths sign only the digest this pipeline's own publish:image tested
+# and recorded. A tag is never signed on its own say-so: any job token
+# with push access -- a merge-request job included -- can move a tag in
+# the GitLab registry, so the exercise path's tag must resolve to the
+# recorded digest too. gitlab-tested-image.py refuses a record of another
+# repository or of another pipeline's commit, and a digest that is not
+# sha256:<64 hex>.
+recorded="$(python3 -I scripts/gitlab-tested-image.py digest "$evidence" "$repository")" ||
+  fail "no usable evidence at ${evidence} -- publish:image must run and pass first"
+if [[ -z "$tag" ]]; then
+  # The SBOM is part of what a publishing run signs: refuse before the
+  # signature rather than leave a signed digest with no attestation.
+  [[ -s "$sbom" ]] || fail "no SBOM at ${sbom} -- security:trivy-image must run and pass first"
+  target="${repository}@${recorded}"
+else
+  target="${repository}:${tag}"
+fi
+
+printf '%s' "$CI_REGISTRY_PASSWORD" |
+  "$docker_cmd" login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin ||
+  fail "docker login to ${CI_REGISTRY} failed"
 
 # --- resolve the digest, refusing rather than guessing ---
 #
 # `imagetools inspect` always prints exactly one top-level `Digest:` line --
-# the digest of whatever the tag currently names, list or plain manifest --
+# the digest of whatever the reference names, list or plain manifest --
 # so counting that line can never catch a multi-arch image (verified
 # against a real multi-platform image, 2026-09-22). What makes an image
-# ambiguous is more than one *real* platform manifest under it: this
-# project's release build has no `platforms:` input, so today's image is a
-# single linux/amd64 manifest plus provenance/SBOM attestation manifests,
-# which buildx reports as `Platform: unknown/unknown` and which are not a
-# second image to be confused with the first. A genuine second platform
-# (say linux/arm64 added later) is the case this refuses on, rather than
-# silently signing one platform's digest and calling it the image's.
-inspect_out="$("$docker_cmd" buildx imagetools inspect "$image" 2>&1)" ||
-  fail "could not inspect $image: $inspect_out"
+# ambiguous is more than one *real* platform manifest under it: build:image
+# makes one linux/amd64 manifest with no attestation manifests, and an
+# older image may carry attestation manifests that buildx reports as
+# `Platform: unknown/unknown`, which are not a second image to be confused
+# with the first. A genuine second platform (say linux/arm64 added later)
+# is the case this refuses on, rather than silently signing one
+# platform's digest and calling it the image's.
+inspect_out="$("$docker_cmd" buildx imagetools inspect "$target" 2>&1)" ||
+  fail "could not inspect $target: $inspect_out"
 
 top_digest="$(printf '%s\n' "$inspect_out" | awk '$1 == "Digest:" { print $2; exit }')"
-[ -n "$top_digest" ] || fail "$image: buildx imagetools inspect produced no Digest: line"
+[ -n "$top_digest" ] || fail "$target: buildx imagetools inspect produced no Digest: line"
 
 platform_count="$(printf '%s\n' "$inspect_out" |
   awk '$1 == "Platform:" && $2 != "unknown/unknown" { c++ } END { print c + 0 }')"
 if [ "$platform_count" -gt 1 ]; then
-  fail "$image resolves to $platform_count platform manifests, not one -- refusing to guess which digest to sign for a multi-arch image"
+  fail "$target resolves to $platform_count platform manifests, not one -- refusing to guess which digest to sign for a multi-arch image"
 fi
 
 [[ "$top_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
-  fail "resolved digest for $image is not sha256:<64 hex>: ${top_digest}"
+  fail "resolved digest for $target is not sha256:<64 hex>: ${top_digest}"
+
+if [[ "$top_digest" != "$recorded" ]]; then
+  fail "$target resolves to $top_digest, not the recorded $recorded -- refusing"
+fi
 
 digest="$top_digest"
 
-# --- sign ---
+# --- sign, then attest the SBOM ---
 cosign_cmd="${MV_COSIGN:-}"
 if [ -z "$cosign_cmd" ]; then
   cosign_cmd="$(bash scripts/ensure-cosign.sh)"
 fi
 
-printf '%s' "$GHCR_PUBLISH_TOKEN" | "$docker_cmd" login ghcr.io -u tomlawesome --password-stdin ||
-  fail "docker login to ghcr.io failed"
-
 # The signature goes into the transparency log, unlike orbit's key-based
 # signing, which sets --tlog-upload=false. That is the one place the two
-# projects genuinely differ: orbit signs into its own private registry,
-# where nobody outside can verify anything anyway, while this image is
-# public on GHCR and the whole point of the pair is that an operator can
-# check both signatures themselves.
+# projects genuinely differ: since #1472 step 3 this signature stays in the
+# GitLab registry (GitHub copies the image only), so the Rekor entry is its
+# one public record, and it outlives the registry's retention.
 #
 # It is not a preference. `cosign verify --key` requires a log entry by
 # default (--insecure-ignore-tlog defaults to false, and cosign's own help
 # says an artefact "cannot be publicly verified when not included in a
-# log"), so a signature made with --tlog-upload=false would fail both the
-# GitHub countersignature's verify step and the plain command SECURITY.md
-# hands operators -- and telling them to pass --insecure-ignore-tlog to
-# check a release is not a story worth having. Rekor also timestamps the
-# signature, which only strengthens the second custody.
-"$cosign_cmd" sign \
-  --key "$key_path" \
-  --yes \
-  "${repository}@${digest}" ||
-  fail "cosign could not sign ${repository}@${digest}"
+# log"), so a signature made with --tlog-upload=false would fail
+# publish:channel's verify step, the GitHub countersignature's, and the
+# command SECURITY.md hands anyone checking the GitLab digest -- and telling them to pass
+# --insecure-ignore-tlog to check a release is not a story worth having.
+# Rekor also timestamps the signature, which only strengthens the second
+# custody.
+#
+# A retried job is a no-op, not a second signature (#1472 note 59703):
+# before signing, a signature that already verifies against cosign.pub on
+# this digest is left alone; before attesting, so is an SPDX attestation
+# that already verifies (`attest --replace` does not replace in cosign
+# 3.1.3). Only a verify that exits 0 *and* returns what a verification
+# returns counts: anything else is "not yet", and signing proceeds.
+pubkey="${repo_root}/cosign.pub"
 
-printf 'sign-release-digest: signed %s\n' "${repository}@${digest}"
+already_signed() {
+  local out
+  out="$("$cosign_cmd" verify --key "$pubkey" --output json "${repository}@${digest}" 2>/dev/null)" || return 1
+  python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(data, list) and len(data) > 0 else 1)
+' <<< "$out"
+}
+
+already_attested() {
+  local out
+  out="$("$cosign_cmd" verify-attestation --key "$pubkey" --type spdxjson "${repository}@${digest}" 2>/dev/null)" || return 1
+  python3 -c '
+import json, sys
+n = 0
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    try:
+        doc = json.loads(line)
+    except ValueError:
+        sys.exit(1)
+    if not isinstance(doc, dict) or "payload" not in doc:
+        sys.exit(1)
+    n += 1
+sys.exit(0 if n > 0 else 1)
+' <<< "$out"
+}
+
+if already_signed; then
+  printf 'sign-release-digest: %s already signed, skipping\n' "${repository}@${digest}"
+else
+  "$cosign_cmd" sign \
+    --key "$key_path" \
+    --yes \
+    "${repository}@${digest}" ||
+    fail "cosign could not sign ${repository}@${digest}"
+  printf 'sign-release-digest: signed %s\n' "${repository}@${digest}"
+fi
+
+if [[ -z "$tag" ]] && already_attested; then
+  printf 'sign-release-digest: %s already attested, skipping\n' "${repository}@${digest}"
+elif [[ -z "$tag" ]]; then
+  "$cosign_cmd" attest \
+    --key "$key_path" \
+    --yes \
+    --type spdxjson \
+    --predicate "$sbom" \
+    "${repository}@${digest}" ||
+    fail "cosign could not attest ${sbom} to ${repository}@${digest}"
+  printf 'sign-release-digest: attested %s (spdxjson) to %s\n' "$sbom" "${repository}@${digest}"
+else
+  printf 'sign-release-digest: exercise path (tag %s): no SBOM attestation\n' "$tag"
+fi

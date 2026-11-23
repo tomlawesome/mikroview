@@ -18,7 +18,7 @@
 // Everything is pushed through the real ingest endpoint, so the state on
 // each card is a router's answer rather than a fixture's.
 
-import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog as syslog, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session()
@@ -64,7 +64,7 @@ syslog(30, 'topo-tunnels-traffic')
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-tunnels', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-tunnels', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value
@@ -325,7 +325,7 @@ check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | '
 
 // --- put the estate back the way the scenario before this one left it ---
 //
-// Scenarios share one instance in filename order (AGENTS.md, "A scenario
+// Scenarios share one instance in filename order (docs/runner-host.md, "A scenario
 // cannot be judged on its own"), so five extra WireGuard interfaces
 // would follow this file into every later one's map and city. Push the
 // tables back to exactly what live-topography-tunnel.mjs leaves: wg0

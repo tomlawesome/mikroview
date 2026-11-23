@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/oui"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -76,7 +77,7 @@ func iotEvents() []store.Event {
 				Time: at.Add(time.Minute), DeviceID: "core", Action: store.Action("accept"),
 				RuleLabel: "lan-out", Chain: "forward",
 				Protocol: "udp", SrcMAC: "d4:8a:fc:11:22:33",
-				SrcIP: "10.0.10.5", SrcPort: 51000, DstIP: "203.0.113.1", DstPort: 123,
+				SrcIP: "10.0.10.5", SrcPort: 51000, DstIP: "192.0.2.1", DstPort: 123,
 				DstCountry: "US",
 			})
 		}
@@ -299,5 +300,31 @@ func TestInboundTrafficNamesTheTalkers(t *testing.T) {
 	}
 	if d.SuggestedProbe == nil || !strings.Contains(d.SuggestedProbe.Command, "445,3389") {
 		t.Errorf("probe = %+v, want it to scan the ports seen answering", d.SuggestedProbe)
+	}
+}
+
+// A host named by a config.yaml devices: entry, or by a router table the
+// lookup did not name, must still say where the name came from (#1508).
+// The sources are the naming package's own constants, so this exercises
+// the same tokens naming.Provenance hands the dossier.
+func TestAssembleNamesASourceForConfigDeviceAndRouterNames(t *testing.T) {
+	for _, c := range []struct{ label, source string }{
+		{"config-device", naming.SourceConfigDevice},
+		{"router", naming.SourceRouterUnknown},
+	} {
+		t.Run(c.label, func(t *testing.T) {
+			d := Assemble(Input{
+				IP:          "192.0.2.10",
+				Now:         testNow,
+				WindowStart: testNow.Add(-24 * time.Hour),
+				Name:        NameFacts{Name: "example-host", Source: c.source},
+			})
+			if d.Names.Name != "example-host" || d.Names.Source != c.source {
+				t.Fatalf("names = %+v, want the name with source %q", d.Names, c.source)
+			}
+			if strings.TrimSpace(d.Names.SourceNote) == "" {
+				t.Errorf("source %q gave an empty SourceNote: the dossier would print no \"from\" line", c.source)
+			}
+		})
 	}
 }

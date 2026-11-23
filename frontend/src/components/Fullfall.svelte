@@ -3,9 +3,9 @@
   //
   // The void's rain (#645 round 29, extracted and grown under #1214):
   // the fall's three inks falling across the whole dark ground, shared
-  // by every pre-deck screen -- the door (AuthScreen) and the journey's
-  // attach beat -- so the weather never stops between the first paint
-  // and the live fall. Identity texture, not data: it never claims
+  // by every pre-deck screen -- the sign-in door (AuthScreen) and the
+  // enrolment door -- so the weather never stops between the first
+  // paint and the live fall. Identity texture, not data: it never claims
   // traffic exists, so a virgin instance honestly shows the same sky.
   //
   // Forty strokes, transform-only, is the whole cost -- no particle
@@ -23,11 +23,11 @@
   // fourth batch) is that the rain never crosses the centred elements.
   let {
     // Which centre is carved out of the layer: the door's form stack,
-    // the attach beat's taller command card, or the enrolment door's
-    // wider staged walk (#1336, round 61).
+    // or the enrolment door's wider staged walk (#1336, round 61). The
+    // attach beat's variant went with #646's pre-wizard walk (#1386).
     mask = 'door',
   }: {
-    mask?: 'door' | 'attach' | 'enrol'
+    mask?: 'door' | 'enrol'
   } = $props()
 </script>
 
@@ -39,7 +39,7 @@
      one block at the layer's origin (#645, owner report 2026-08-30).
      Chromium let the same markup through, so no Chromium-driven check
      can see this class of breakage. -->
-<div class="fullfall" class:door={mask === 'door'} class:attach={mask === 'attach'} class:enrol={mask === 'enrol'} aria-hidden="true">
+<div class="fullfall" class:door={mask === 'door'} class:enrol={mask === 'enrol'} aria-hidden="true">
   <i></i>
   <i></i>
   <i class="r"></i>
@@ -92,16 +92,10 @@
 
   /* The centre is carved out entirely -- the rain never crosses the
      screen's own elements, whatever their combined height turns out to
-     be (round 5 fourth batch). One ellipse per consumer: the door's
-     form stack, and the attach beat's taller command card. */
+     be (round 5 fourth batch). One ellipse per consumer. */
   .fullfall.door {
     -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
     mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
-  }
-
-  .fullfall.attach {
-    -webkit-mask: radial-gradient(ellipse 520px 460px at 50% 50%, transparent 62%, black 78%);
-    mask: radial-gradient(ellipse 520px 460px at 50% 50%, transparent 62%, black 78%);
   }
 
   /* The enrolment door's own ellipse, two-keys.html's verbatim: its

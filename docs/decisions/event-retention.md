@@ -2,6 +2,16 @@
 
 **Status:** Decided (owner and Fable 5, 2026-09-02). Build tracked on #798.
 
+**Update, 2026-09-26 (#1357, owner's decision): point 3's "is the
+default" no longer holds.** `history.enabled` now defaults to `true`,
+and `install.sh` gives a fresh install a key so it actually retains
+something from the start. The mechanism below is unchanged: there is
+still no unencrypted mode, so memory-only is exactly what an install
+with no key mounted gets, on the same terms this document always
+described (superseded: see the addendum of 2026-10-10, a keyless install now
+refuses to start) -- only which state a bare install with no config file lands
+on has changed.
+
 ## Context
 
 The replay corpus is the in-memory ring only (`internal/engine/corpus.go`,
@@ -34,7 +44,7 @@ compress 5–10×. So:
    table is no more protected at rest than a file.
 2. **Encrypted at rest, key held outside the data directory.** The key comes
    from a secret file the operator mounts (never in the data directory, never
-   in config, never in an environment variable — AGENTS.md's secret rule).
+   in config, never in an environment variable — the house secret rule).
    Copying the data directory or a backup yields nothing readable. Root on
    the running host can still read what the process can; only not retaining
    at all avoids that.
@@ -157,7 +167,7 @@ Resolved the same day; see the addendum below.
 
 ## Addendum, 2026-09-05: rule 6 -- accounts, tokens and recovery keys are exempt (#853)
 
-**Status:** Decided (owner, 2026-09-05).
+**Status:** Decided (owner, 2026-09-05). Ended by the addendum of 2026-10-10 below.
 
 Rule 2 above ("no key, no storage ... no exception carved out for any one
 store") is amended. The question left open in "Not settled" was put to the
@@ -190,7 +200,7 @@ the refusal as needing a key, since that can no longer be the reason.
 
 ## Addendum, 2026-09-18: droplist joins the no-key exception (v0.6.0 pre-release audit)
 
-**Status:** Decided (owner ruling, during the v0.6.0 audit).
+**Status:** Decided (owner ruling, during the v0.6.0 audit). Ended by the addendum of 2026-10-10 below.
 
 `internal/droplist`'s entry store fell through rule 2 like any other store:
 memory-only with no `history.keyFile` configured, the common case on a
@@ -216,3 +226,76 @@ store at all, and `handleDroplistPull` refuses to serve the feed
 (503) when the store is both empty and unpersisted -- so an operator who
 explicitly sets `droplist.storePath` to `""` (still a supported choice)
 cannot have that combine with a restart to silently wipe a router's list.
+
+## Addendum, 2026-10-10: rule 6 and the drop-list exception end; the auth stores are the exception to "Postgres is unaffected" (#1202)
+
+**Status:** Decided (owner rulings 2, 11, 13 and 14 in
+`docs/decisions/gauntlet-adoption.md`, 2026-10-10; the sealing parts of
+rulings 2, 11 and 14 are superseded by ruling 19 there). Merged
+into `dev` (2026-11-13, aec97729) for v0.7.0 (was built on `feat/1202-gauntlet`).
+
+Authentication moves onto the gauntlet library, and its account store
+refuses to open over a backend that would hold the document in the clear
+unless the application sets `AllowPlaintextAtRest`. MikroView does not set
+it. That ends two exceptions recorded above:
+
+- **Rule 6 (addendum of 2026-09-05)** -- accounts, API tokens and
+  recovery-key digests persisting as plain JSON with no key. Its reasoning
+  was also incomplete, as #1441 found: the accounts file holds each
+  account's authenticator-app (TOTP) secret, which has to stay readable to
+  check a code and cannot be hashed, so a plaintext copy discloses more
+  than usernames and roles.
+- **The drop-list exception (addendum of 2026-09-18).**
+
+**A key is now required.** MikroView refuses to start without a usable
+`history.keyFile` (CFG-0083), in the server, in setup-only mode and in the
+four commands that open the account stores. So no install runs keyless any
+more, and the exception list (`plaintextWithoutKeyStores`) was deleted
+outright rather than trimmed, the drop list included. Rule 2's "no key, no
+storage" for the other stores can no longer arise in a running MikroView;
+the rest of rules 2 and 3 stand.
+
+**Four auth stores are sealed under the key**: accounts, API and ingest
+tokens, recovery-key digests and the new sign-in history. The drop list is
+sealed too, on the file backend, like every other file-backed store.
+
+**[Superseded by ruling 19 of `gauntlet-adoption.md`: a plaintext document is refused at any schema, never sealed in place.]** **Sealing in place happens once.** A plaintext document an earlier keyless
+release left is sealed on the first start of v0.7.0 (stored schema below
+4), and the schema moves to 4 only after every auth store and the drop list
+are sealed. From then on a plaintext document is refused. This is the one
+exception to rule 3's "no migration path". Left on, anyone able to write
+the data folder without the key could plant a plaintext accounts document.
+
+**Exception to rule 4, "Postgres is unaffected".** On Postgres the four
+auth stores are sealed too, each row under the key with its own name bound
+in, through gauntlet's `persist.Encrypt`. Every other store on Postgres is
+still unaffected, for rule 4's reasons. The auth stores are the exception
+because they hold secrets a database dump would otherwise carry, and
+gauntlet seals its stores on every backend (its ADR-0005).
+
+## Addendum, 2026-11-14: the match log is under rule 2 (#1470)
+
+The watchlist match log (`watchlist.matchLogPath`) was the one store a
+keyed install still wrote in the clear: JSON lines, whole matched events
+included. It is now under rule 2 like everything else. It cannot be one
+sealed document rewritten per match, so it uses the day files' framing,
+shared as `retention.FrameLog`: header `MVMLG`, version, per-file salt,
+then one AES-256-GCM frame per line, key derived under
+`mikroview/match-log/v1/`, additional data the store name `match_log`
+and the frame's sequence number. The store name, not the path, so the
+file moves with its data directory (#1450). Rule 3 holds: a plaintext
+log is refused at start-up, never read or sealed in place, and a frame of
+whole length that does not open is refused, never skipped.
+
+The same limit as the day files, said plainly: frames cut off the end
+are indistinguishable from a crash tail and are dropped as one (and a
+zero-filled tail left by a power loss mid-append is cut back as one; a
+header torn by a crash before any frame is written is started again), and the
+whole file replaced by an older valid copy is not detected. An
+append-only file cannot bind "nothing comes after me" without a commit
+record kept elsewhere; the match log is bounded evidence, not account
+state.
+
+`-backup` carries the lines as plain JSON lines (the #853 amendment's
+"the envelope stays plain, readable JSON") and `-restore` seals them under
+the restoring deployment's key (#1452).

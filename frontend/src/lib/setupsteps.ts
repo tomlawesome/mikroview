@@ -14,6 +14,7 @@
 // wasn't" would be worse than no wizard at all.
 
 import { formatSize } from './memory'
+import { listenPort } from './format'
 import type {
   BackupTransport,
   Device,
@@ -29,7 +30,7 @@ import type {
 // config-file work) is neither done nor waiting, and calling it either
 // would be a small lie in a feature whose whole point is not telling
 // them.
-export type StepState = 'done' | 'waiting' | 'blocked' | 'partial' | 'quiet'
+type StepState = 'done' | 'waiting' | 'blocked' | 'partial' | 'quiet'
 
 export interface StepStatus {
   state: StepState
@@ -43,48 +44,12 @@ export interface StepStatus {
   // shortfall set means there was no arrival to word -- one warning box
   // and nothing above it.
   shortfall?: string
-}
-
-// hostname strips a port. Certificate names never carry one, so this is
-// what tls.hosts is compared against.
-export function hostname(hostPort: string): string {
-  // IPv6 literals arrive as [::1]:8080.
-  if (hostPort.startsWith('[')) {
-    const end = hostPort.indexOf(']')
-    return end === -1 ? hostPort : hostPort.slice(1, end)
-  }
-  const colon = hostPort.lastIndexOf(':')
-  return colon === -1 ? hostPort : hostPort.slice(0, colon)
-}
-
-// certificateCovers reports whether the running certificate claims the
-// address the operator is using. This is step 0, and it exists because
-// getting it wrong produces a failure three steps later
-// ("name verification failed") whose cause is on MikroView's side, not
-// the router's.
-//
-// tls.enabled only turns HTTPS off on the API port -- it does not stop
-// a certificate from being loaded. main.go loads/generates one whenever
-// cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "", and hands that same
-// certificate to the syslog TLS listener regardless of tls.enabled
-// (#374). So the check only skips entirely when neither HTTP TLS nor
-// syslog TLS is on -- matching main.go's own condition for when a
-// certificate is even in play.
-export function certificateCovers(status: SetupStatus, address: string): boolean {
-  if (!status.instance.tlsEnabled && !status.instance.syslogEnabled) return true
-  const host = hostname(address)
-  const hosts = status.instance.hosts
-  // An empty list means the generated certificate covers
-  // localhost/127.0.0.1 only -- see internal/servertls.defaultHosts.
-  const effective = hosts.length > 0 ? hosts : ['localhost', '127.0.0.1']
-  return effective.includes(host)
-}
-
-// portOf takes the port out of a listen address like ":6514" or
-// "0.0.0.0:6514" -- the router needs the port, not the bind address.
-export function portOf(listenAddr: string): string {
-  const colon = listenAddr.lastIndexOf(':')
-  return colon === -1 ? listenAddr : listenAddr.slice(colon + 1)
+  // A ready-to-paste config.yaml snippet for a 'blocked' step whose fix
+  // is a config edit rather than a router command (#1365) -- caStep's
+  // only user so far. Set only where the detail names an edit to make;
+  // "add it to tls.hosts" is not something an operator can act on
+  // without seeing the syntax.
+  pasteBlock?: string
 }
 
 // deviceStanza is what an operator pastes into config.yaml to give a
@@ -92,8 +57,20 @@ export function portOf(listenAddr: string): string {
 // MikroView: the sourceIp -> id mapping decides who an event stream is
 // attributed to, and that stays under file control (owner decision on
 // #320, 2026-08-13).
-export function deviceStanza(sourceIp: string, name: string): string {
+function deviceStanza(sourceIp: string, name: string): string {
   return [`devices:`, `  - sourceIp: "${sourceIp}"`, `    name: "${name || 'my-router'}"`].join('\n')
+}
+
+// tlsHostsBlock is caStep's own pasteBlock (#1365): the whole resulting
+// tls.hosts list, not just the address that is missing -- an operator
+// told only "add 192.0.2.15" has to go and remember what else was
+// already in that list, and a block that only ever adds is safer than
+// one that could be pasted over something wider. Never drops an
+// existing entry, and never lists the missing address twice if it is
+// somehow already there.
+export function tlsHostsBlock(existingHosts: string[], missing: string): string {
+  const hosts = existingHosts.some((h) => h.toLowerCase() === missing.toLowerCase()) ? existingHosts : [...existingHosts, missing]
+  return `hosts: [${hosts.map((h) => JSON.stringify(h)).join(', ')}]`
 }
 
 // --- Step status --------------------------------------------------------
@@ -104,14 +81,20 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
   // check yet, not a wrong answer. It falls through to the ordinary
   // waiting/done read below, the same as it would before any address
   // existed to check at all.
-  if (address && !certificateCovers(status, address)) {
-    const shown = hostname(address)
+  // The server owns the verdict (#1507): it splits the address and
+  // compares names case-insensitively. addressHost is the stored
+  // address without its port; the typed address is the fallback only
+  // for a status that carries none.
+  if (address && status.instance.certificateCoversAddress === false) {
+    const shown = status.instance.addressHost || address
     return {
       state: 'blocked',
       detail:
         `MikroView's certificate does not cover ${shown}, so the router will refuse it ` +
-        `("name verification failed"). Add ${shown} to tls.hosts in config.yaml and restart, ` +
-        `then come back — the router needs no change, the same CA signs the new certificate.`,
+        `("name verification failed"). Paste the block below into config.yaml's tls: section, ` +
+        `replacing its tls.hosts line, and restart mikroview, then come back — the router needs ` +
+        `no change, the same CA signs the new certificate.`,
+      pasteBlock: tlsHostsBlock(status.instance.effectiveHosts ?? status.instance.hosts, shown),
     }
   }
   if (status.sources.some((s) => s.caFetchedAt)) {
@@ -269,7 +252,7 @@ export function backupStep(
     // install (#955) pushes over the address the router already reaches,
     // so naming a drop box port here would send the operator to check
     // something this deployment does not use.
-    const port = transport === 'sftp' && backups?.port ? portOf(backups.port) : null
+    const port = transport === 'sftp' && backups?.port ? listenPort(backups.port) : null
     return {
       state: 'waiting',
       detail: port
@@ -290,69 +273,25 @@ export function backupStep(
 // wizard header field above the numbered steps. Reuses #1217's own
 // mechanism (a machine-readable key the server states, worded here)
 // rather than a second "why is this blank" shape.
-export const NO_ADDRESS_KEY = 'no-address'
+const NO_ADDRESS_KEY = 'no-address'
 
 // NO_COMMAND_HEADING is caTrust/syslog/push's own no-command state --
 // simpler than backup's below, since a missing address is the only
 // reason any of those three ever come back blank.
-export const NO_COMMAND_HEADING = 'no commands yet'
-export const NO_ADDRESS_LINE =
+const NO_COMMAND_HEADING = 'no commands yet'
+const NO_ADDRESS_LINE =
   'no address has been given yet — answer "What address can your router reach MikroView on?" above, at the top of this wizard, and this fills in.'
 
-// --- The backup step's no-script state (#1217) --------------------------
-//
-// commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)
-// names every precondition the backup block came back blank for, as
-// machine-readable keys. The server states which keys apply; every
-// operator-facing sentence lives here instead, same split #436 already
-// draws for the RouterOS commands themselves.
-//
-// Order matters (owner's ruling, 2026-09-14): config problems first --
-// the operator edits config.yaml and restarts -- then the ones the
-// wizard itself can still fix, in the order it asks them (the header
-// field before either step-4/6 pick).
-export const BACKUP_BLOCKED_ORDER = [
-  'backups-off',
-  'retention-key-unreadable',
-  'no-retention-key',
-  NO_ADDRESS_KEY,
-  'no-device',
-  'no-token',
-] as const
-
-const BACKUP_BLOCKED_COPY: Record<string, string> = {
-  'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
-  // #1264 finding 5: a configured retention key that could not be read
-  // is not the same fact as no-retention-key below, and must never read
-  // like it -- "set history.keyFile" tells the operator to mint a fresh
-  // one, and a fresh key cannot decrypt what the old, now-unreadable one
-  // already wrote. This line says what actually happened and warns off
-  // the one action that would make it permanent.
-  'retention-key-unreadable':
-    'the retention key at history.keyFile is set but could not be read (missing, unreadable, or too short) — ' +
-    'check the server logs and fix that file in place. Do not replace it with a new one: every backup already ' +
-    'stored under the old key would become unrecoverable.',
-  'no-retention-key':
-    'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
-    'config.yaml and restart mikroview.',
-  [NO_ADDRESS_KEY]: NO_ADDRESS_LINE,
-  'no-device': 'this router has no name yet. Name it in the step above; the script files each backup under that name.',
-  'no-token': 'no token has been minted for this router yet. The step above mints it.',
-}
-
-// BACKUP_NO_SCRIPT_HEADING is the heading over the lines above -- the
-// no-script state entirely replaces the input boxes and Copy buttons
-// the step would otherwise show (#1217).
-export const BACKUP_NO_SCRIPT_HEADING = 'no script yet'
-
-// backupBlockedLines turns commandStep.blocked's keys into the sentences
-// the wizard shows, in the ratified order, regardless of what order the
-// server happened to list them in.
-export function backupBlockedLines(blocked: string[] | undefined): string[] {
-  if (!blocked || blocked.length === 0) return []
-  const set = new Set(blocked)
-  return BACKUP_BLOCKED_ORDER.filter((key) => set.has(key)).map((key) => BACKUP_BLOCKED_COPY[key])
-}
+// SYSLOG_ADDRESS_CHANGED_NOTE (#1370): the Send logs block embeds the
+// wizard's address at the moment it is copied. Editing the address
+// afterwards -- the header field the operator can change at any time --
+// leaves an already-pasted or already-copied block naming the old one,
+// with nothing telling the operator it no longer matches. Tracked
+// client-side (wizardState.syslogCopiedAddress, set when the Copy button
+// is pressed) rather than server-side: it is a fact about what this
+// browser has done, not about the router or the instance.
+const SYSLOG_ADDRESS_CHANGED_NOTE =
+  'The address changed since you copied this block — paste it again on the router.'
 
 // backupReceipt is the newest pair to have arrived, across every
 // router -- "today 03:00 · rb5009.backup 412 KiB + rb5009.rsc 38 KiB ·
@@ -403,7 +342,7 @@ export function backupReceiptForDevice(backups: RouterBackupsResponse | null, de
 // undeclaredDevices are routers sending syslog that config.yaml does not
 // name. They work as they are; declaring one only swaps its address for
 // a name of the operator's choosing.
-export function undeclaredDevices(devices: Device[]): Device[] {
+function undeclaredDevices(devices: Device[]): Device[] {
   return devices.filter((d) => !d.configured)
 }
 
@@ -437,20 +376,11 @@ export function sourceSplits(devices: Device[]): SourceSplit[] {
     .map((d) => ({ declared: d.sourceIp || d.id, arriving: d.multihomedCandidates ?? [] }))
 }
 
-// srcAddressCommand is the recommended remedy: the router keeps the
-// address it was declared under, so the token step 4 mints and the
-// tables it pushes need no reissuing. Assumes the logging action is
-// named mikroview -- step 2's own `add` created it under that name, the
-// same assumption every wizard command already makes.
-export function srcAddressCommand(declared: string): string {
-  return `/system logging action set mikroview src-address=${declared}`
-}
-
 // arrivingAddresses is every undeclared address across the splits, in
 // first-seen order and without repeats. The server pairs each silent
 // declared device with the same discovered set, so with two declared
 // devices silent this is the set once, not twice.
-export function arrivingAddresses(splits: SourceSplit[]): string[] {
+function arrivingAddresses(splits: SourceSplit[]): string[] {
   const seen = new Set<string>()
   for (const s of splits) for (const a of s.arriving) seen.add(a)
   return [...seen]
@@ -515,12 +445,12 @@ export function sourceSplitReceipt(splits: SourceSplit[]): string {
 // shortfall carried beside it in its own warning box -- warning
 // colour, never the reject red 'attention' uses, because nothing is
 // wrong on mikroview's side.
-export type Flavour = 'waiting' | 'arrived' | 'counting' | 'quiet' | 'attention'
+type Flavour = 'waiting' | 'arrived' | 'counting' | 'quiet' | 'attention'
 
 // Outcome is where a step stands in the ledger. 'open' is a step that
 // has neither evidence nor a decision yet -- it is not a fourth
 // outcome, it is the absence of one.
-export type Outcome = 'done' | 'skipped' | 'forced' | 'open'
+type Outcome = 'done' | 'skipped' | 'forced' | 'open'
 
 // StepKey names a step by what it is rather than by where it sits
 // (#1284). Adding a router is the wizard's router-side steps opened on
@@ -552,7 +482,11 @@ export const SETUP_STEPS: readonly StepKey[] = [
 // step 4 when the first push arrives), and ledgers written before
 // #1284 moved "Name your router" forward hold marks under them. Walking
 // order can change; this cannot, or every stored mark changes meaning.
-const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
+//
+// block is #1360's first-run tail, recorded as 8 (internal/setup's
+// StepBlocklist) without joining SETUP_STEPS: an offer after the steps,
+// not one of them.
+export const RECORD_NUMBERS: Readonly<Record<StepKey | 'block', number>> = {
   ca: 1,
   syslog: 2,
   rules: 3,
@@ -562,6 +496,7 @@ const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
   // 7 is new with #1291 and has no history to preserve; it is last
   // because nothing was ever recorded under it before.
   register: 7,
+  block: 8,
 }
 
 // ROUTER_STEPS is the router ledger (#1284): the same six router-side
@@ -572,7 +507,7 @@ export const ROUTER_STEPS: readonly StepKey[] = ['name', 'syslog', 'rules', 'pus
 // canonicalStep is the number a step's decisions are recorded under,
 // whichever ledger it is being walked in. A mark is persisted server
 // side, so it cannot mean "second row of whatever list was open".
-export function canonicalStep(key: StepKey): number {
+function canonicalStep(key: StepKey): number {
   return RECORD_NUMBERS[key]
 }
 
@@ -638,11 +573,25 @@ export const TITLES: Record<StepKey, string> = {
 // whichever row happens to sit there in the ledger being walked.
 // Sorted from RECORD_NUMBERS rather than written out again, so the two
 // cannot drift apart.
-export const STEP_TITLES: readonly string[] = [...SETUP_STEPS]
+const STEP_TITLES: readonly string[] = [...SETUP_STEPS]
   .sort((a, b) => RECORD_NUMBERS[a] - RECORD_NUMBERS[b])
   .map((k) => TITLES[k])
 
-export const STEP_COUNT = SETUP_STEPS.length
+// UPGRADE_STEP_LABELS maps a routeros.Upgrade's Steps key (#1344) to what
+// UpgradeWarnings.svelte's "Affects ..." sentence names it as. Three of
+// the four are TITLES' own step names -- syslog/push/backup are all
+// steps in this wizard -- and droplist is not a wizard step at all, so it
+// gets its own phrase pointing at where that scheduler actually lives.
+// An unknown key falls back to itself in the component, never here, so a
+// new Go key can never blank the sentence.
+export const UPGRADE_STEP_LABELS: Record<string, string> = {
+  syslog: TITLES.syslog,
+  push: TITLES.push,
+  backup: TITLES.backup,
+  droplist: 'the drop list scheduler in Settings ▸ Engine room',
+}
+
+const STEP_COUNT = SETUP_STEPS.length
 
 // arrived reports whether a step's evidence has landed. 'partial' counts:
 // every step's check is "waiting → arrived", and a partial reading means
@@ -670,7 +619,7 @@ function when(iso: string): string {
 // caReceipt: what arrived, when, from where. The source address is the
 // "from where" -- on a first run it is also the first proof the router
 // can reach mikroview at all.
-export function caReceipt(status: SetupStatus): string {
+function caReceipt(status: SetupStatus): string {
   const fetched = status.sources.filter((s) => s.caFetchedAt)
   if (fetched.length === 0) return ''
   const first = fetched[0]
@@ -695,7 +644,7 @@ export function syslogReceipt(status: SetupStatus, devices: Device[] = [], devic
   return `syslog connected from ${first.source} · ${when(first.syslogFirstSeenAt ?? '')}${more}`
 }
 
-export function rulesReceipt(status: SetupStatus): string {
+function rulesReceipt(status: SetupStatus): string {
   const withEvents = status.devices.filter((d) => d.events > 0)
   if (withEvents.length === 0) return ''
   const total = withEvents.reduce((n, d) => n + d.events, 0)
@@ -703,7 +652,7 @@ export function rulesReceipt(status: SetupStatus): string {
   return `${decoded} of ${total} events carry an action`
 }
 
-export function pushReceipt(status: SetupStatus): string {
+function pushReceipt(status: SetupStatus): string {
   let newest = ''
   const kinds = new Set<string>()
   for (const d of status.devices) {
@@ -788,7 +737,7 @@ export function registerReceipt(devices: Device[], device = ''): string {
 // right now. BACKUP_LEAD_SCRIPT_NOTE is only true once one can: #1217's
 // bug was this second sentence surviving into the no-script state,
 // describing a token and a script that were not on the screen.
-export const BACKUP_LEAD_INTRO =
+const BACKUP_LEAD_INTRO =
   'Every night the router saves itself twice — the binary backup that restores it whole, and the plain ' +
   'export you can read — and drops both into MikroView. Nothing is sent back, and nothing is left on ' +
   'the router.'
@@ -796,7 +745,7 @@ const BACKUP_LEAD_SCRIPT_NOTE = ' The token below is minted for this one router 
 
 // backupLead is step 6's lead, gated on whether a script actually
 // exists to describe (#1217).
-export function backupLead(scriptExists: boolean): string {
+function backupLead(scriptExists: boolean): string {
   return scriptExists ? BACKUP_LEAD_INTRO + BACKUP_LEAD_SCRIPT_NOTE : BACKUP_LEAD_INTRO
 }
 
@@ -805,7 +754,7 @@ export function backupLead(scriptExists: boolean): string {
 // the drop box #394 built -- and 'https' is for an install reachable
 // only through its reverse proxy, where the router reads its own backup
 // in slices and posts them through the channel that is already open.
-export const BACKUP_TRANSPORTS: { value: BackupTransport; label: string }[] = [
+const BACKUP_TRANSPORTS: { value: BackupTransport; label: string }[] = [
   { value: 'sftp', label: 'sftp' },
   { value: 'https', label: 'https' },
 ]
@@ -813,7 +762,7 @@ export const BACKUP_TRANSPORTS: { value: BackupTransport; label: string }[] = [
 // BACKUP_PORT_NOTE_HTTPS replaces the drop box's "publish this port"
 // note when the router is pushing over HTTPS (#955): there is no second
 // port to open, which is the whole reason that transport exists.
-export const BACKUP_PORT_NOTE_HTTPS =
+const BACKUP_PORT_NOTE_HTTPS =
   'Nothing new has to be opened: the script posts the backup to the same HTTPS address the router ' +
   'already reaches, in slices, over the connection it already uses for its pushes.'
 
@@ -821,21 +770,21 @@ export const BACKUP_PORT_NOTE_HTTPS =
 // when the backup block is blocked (#1217): "the script below runs once
 // at the end" is false with no script below, so the promise is dropped
 // rather than carried into a state that cannot make it true.
-export const BACKUP_WAITING_NO_SCRIPT = 'Waiting for the first push.'
+const BACKUP_WAITING_NO_SCRIPT = 'Waiting for the first push.'
 
 // SYSLOG_LEAD_ENROL is the enrolment half of the Send logs lead
 // (#1281), said once and correctly: the last line of the block carries
 // a token, and the address that line arrives from is the only address
 // this router's logs are accepted from afterwards.
 const SYSLOG_LEAD_ENROL =
-  ' The last line carries this router’s enrolment token, and the address it arrives from becomes the ' +
+  ' The last line carries this router’s ingest token, and the address it arrives from becomes the ' +
   'only address MikroView accepts this router’s logs from.'
 
 // syslogLead is the Send logs lead, with the enrolment sentence only
 // where an enrol line is actually in the block below it -- a promise
 // about a line that is not on the screen is #1217's bug in another
 // step's clothes.
-export function syslogLead(enrolling: boolean): string {
+function syslogLead(enrolling: boolean): string {
   const base =
     'Point the router at this instance. The handshake itself is the evidence — a failed one never ' +
     'counts as arrived.'
@@ -849,7 +798,7 @@ export function syslogLead(enrolling: boolean): string {
 // in the component.
 const LEADS: Record<StepKey, string> = {
   ca: "The router has to trust MikroView's certificate authority before it will open a TLS connection. Run this on the router; it fetches the certificate and imports it.",
-  name: 'Give the router a name. MikroView creates it here, and the enrolment token the next step mints belongs to it — a token is minted for a named router, never for an address.',
+  name: 'Give the router a name. MikroView creates it here, and the ingest token the next step mints belongs to it — a token is minted for a named router, never for an address.',
   syslog: syslogLead(false),
   rules: 'The letter in the log-prefix is how MikroView knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   push: 'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
@@ -857,7 +806,7 @@ const LEADS: Record<StepKey, string> = {
   register:
     'Confirm this router is one you meant to add. MikroView records that you did — the name, and that it is ' +
     'here to stay. Registering grants the router nothing on its own: its logs are accepted because its ' +
-    'enrolment token arrived from its address, and that does not change here.',
+    'ingest token arrived from its address, and that does not change here.',
 }
 
 // CHECKED says where Next runs a check. Tagging rules can only count
@@ -903,7 +852,7 @@ function witnessedWhen(iso: string): string {
 // the fact it recorded, plus plainly that this is a memory and not a
 // reading -- "seen on 13 Sep at 10:27" -- so it can never be mistaken
 // for a current observation the way a bare fact-plus-time could be.
-export function witnessReceipt(witness: SetupWitness): string {
+function witnessReceipt(witness: SetupWitness): string {
   return `${witness.receipt} — seen on ${witnessedWhen(witness.at)}`
 }
 
@@ -1144,8 +1093,11 @@ function count(n: number): string {
 // no decision behind it is simply empty, and inventing a cause for it
 // would be the opposite of this feature.
 export function silenceExplanation(marks: SetupMark[]): string | null {
-  const forced = marks.filter((m) => m.outcome === 'forced')
-  const skipped = marks.filter((m) => m.outcome === 'skipped')
+  // The first-run tail's Not now (record 8, #1360) sets aside an offer,
+  // not a step: blocking lists on the router silences nothing here.
+  const steps = marks.filter((m) => m.step !== RECORD_NUMBERS.block)
+  const forced = steps.filter((m) => m.outcome === 'forced')
+  const skipped = steps.filter((m) => m.outcome === 'skipped')
   const first = forced[0] ?? skipped[0]
   if (!first) return null
   const verb = first.outcome === 'forced' ? 'forced past' : 'skipped'
@@ -1157,7 +1109,7 @@ export function silenceExplanation(marks: SetupMark[]): string | null {
 // ledger's dashed row. The record is explicit that a skipped step is
 // never a reproach: it states its consequence, so the operator can see
 // what they chose rather than being told off for choosing it.
-export const SKIP_CONSEQUENCES: Record<StepKey, string> = {
+const SKIP_CONSEQUENCES: Record<StepKey, string> = {
   ca: 'the router will not trust this certificate, so its TLS connection will fail',
   name: 'no router is created here, so there is nothing to enrol',
   syslog: 'no logs arrive, so the stream stays empty',
@@ -1212,9 +1164,9 @@ export function tokenLine(expiresAt: string, now: Date = new Date()): string {
 
 // TOKEN_EXPIRED_LINE is the same line once the token has lapsed. The
 // command block above it dims: what it prints can no longer be pasted.
-export const TOKEN_EXPIRED_LINE = 'Token expired ·'
-export const TOKEN_REROLL_EXPIRED_LABEL = 'Reroll to mint another'
-export const TOKEN_REROLL_LABEL = 'Reroll'
+const TOKEN_EXPIRED_LINE = 'Token expired ·'
+const TOKEN_REROLL_EXPIRED_LABEL = 'Reroll to mint another'
+const TOKEN_REROLL_LABEL = 'Reroll'
 
 export function tokenExpired(expiresAt: string, now: Date = new Date()): boolean {
   const expiry = new Date(expiresAt)

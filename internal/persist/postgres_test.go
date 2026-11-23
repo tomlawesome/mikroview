@@ -4,6 +4,7 @@ package persist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -91,7 +92,7 @@ func newTestPool(t *testing.T) *Pool {
 	// [a-z0-9_] below so the shape of this can't drift into something
 	// that takes outside text.
 	for _, r := range schema {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 			t.Fatalf("test name produces an unsafe schema identifier: %q", schema)
 		}
 	}
@@ -472,13 +473,17 @@ func TestVerifyAppliedAcceptsRowsWithNoRecordedChecksum(t *testing.T) {
 	}
 }
 
-// A database that has run a migration this binary does not contain is an
-// older image against a newer database. Real, documented elsewhere, and
-// deliberately not this check's job -- refusing here would duplicate
-// that guidance badly.
-func TestVerifyAppliedIgnoresVersionsThisBuildDoesNotHave(t *testing.T) {
+// A database that has run a migration this binary does not contain was
+// migrated by a newer release. Ruling 18 (#1202 R19): refused with a
+// *SchemaTooNewError, replacing the old rule that skipped such rows.
+func TestVerifyAppliedRefusesVersionsThisBuildDoesNotHave(t *testing.T) {
 	m := migration{version: 1, name: "0001_first.sql", sql: "CREATE TABLE x (id int);"}
-	if err := verifyApplied(map[int64]string{1: m.checksum(), 99: "whatever"}, []migration{m}, "test"); err != nil {
-		t.Errorf("an unknown future version was refused by the checksum check: %v", err)
+	err := verifyApplied(map[int64]string{1: m.checksum(), 99: "whatever"}, []migration{m}, "test")
+	var tooNew *SchemaTooNewError
+	if !errors.As(err, &tooNew) {
+		t.Fatalf("an unknown future version was not refused: err = %v", err)
+	}
+	if tooNew.Stored != 99 || tooNew.Known != 1 {
+		t.Errorf("stored/known = %d/%d, want 99/1", tooNew.Stored, tooNew.Known)
 	}
 }

@@ -23,7 +23,7 @@
 // opens one overlay, feeds nothing, and deletes the viewer account it
 // creates, so nothing downstream inherits anything from it.
 
-import { session, check, responsive, openAccountMenu, done, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, responsive, openAccountMenu, done, launchBrowser, enrolFactorAndSignIn, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -98,6 +98,7 @@ if (upMatch) {
 // --- Escape closes it ------------------------------------------------------
 await page.keyboard.press('Escape')
 await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'Escape closes the menu')
 
 // --- Click-away closes it too ----------------------------------------------
@@ -113,6 +114,7 @@ await openAccountMenu(page)
 // death rather than a failed check.
 await page.click('.card[aria-hidden="false"] .scene-bar .wm')
 await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'clicking away closes the menu')
 
 // --- About & licence opens, and the licence is really in it ----------------
@@ -120,6 +122,7 @@ await openAccountMenu(page)
 await page.click('.account .menu button.row:has-text("About & licence")')
 const about = page.locator('[role="dialog"][aria-label="About MikroView"]')
 await about.waitFor({ state: 'visible', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'About & licence opens the about overlay')
 // The overlay spells the licence out in full; the short form "AGPL" only
 // ever appeared in the commercial-licence paragraph, gone since #1229.
@@ -129,6 +132,7 @@ check(
 )
 await page.keyboard.press('Escape')
 await about.waitFor({ state: 'detached', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Escape closes the overlay again')
 
 // --- A viewer's menu: admin rows absent, never disabled --------------------
@@ -149,7 +153,7 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 // #1335: a fresh account holds no second factor at all, so the forced-
 // enrolment door sits between the password step and #main-content.
-await enrolFactorAndSignIn(viewerPage)
+await enrolFactorAndSignIn(viewerPage, VIEWER_PASS)
 
 // The read-only viewer, declared once (#804, round 37): the chip is the
 // one place every screen already says who you are, so it is the one
@@ -185,7 +189,9 @@ const users = usersRes.status() < 400 ? await usersRes.json() : []
 const viewerAccount = (Array.isArray(users) ? users : []).find((u) => u.username === VIEWER_USER)
 if (viewerAccount) {
   const del = await page.request.delete(`${URL_BASE}/api/auth/users/${encodeURIComponent(viewerAccount.id)}`, {
-    headers: { 'X-Requested-With': 'mikroview' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    // Deleting an account re-checks the calling admin's password (#1202).
+    data: { password: adminPassword },
   })
   check(del.status() === 200 || del.status() === 204, `the viewer account is removed again (${del.status()})`)
 }

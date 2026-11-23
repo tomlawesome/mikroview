@@ -17,7 +17,7 @@
 // The data story is round 49's, which round 53 filters: 445/tcp
 // accepted from LAN to Servers, refused from IoT, and 3389/tcp seen
 // nowhere with one rule naming it.
-import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal, DESKTOP_VIEWPORT, clickSvgText } from './live-browser.mjs'
+import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal, DESKTOP_VIEWPORT, clickSvgText, tokenMint } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -95,7 +95,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-port-trace', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-port-trace', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value
@@ -330,7 +330,10 @@ await waitForSettle(page, `${CARD} .camera`)
 const lanesBefore = await page.locator(`${CARD} .zone`).count()
 check(lanesBefore > 0, `the map draws lanes to filter (${lanesBefore})`)
 
-const idle = page.locator(`${CARD} .pills .pill.p`)
+// #1320 added a second, sibling lens pill (⌕ serving) beside this one,
+// so `.pill.p` alone now matches two buttons -- scope to the port pill
+// by its own data-pill attribute.
+const idle = page.locator(`${CARD} .pills .pill.p[data-pill="port"]`)
 check((await idle.textContent())?.trim() === '⌕ port', 'the port pill sits idle bottom-left, where round 49\'s pills were')
 
 await idle.click()

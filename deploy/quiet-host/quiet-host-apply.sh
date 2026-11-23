@@ -13,6 +13,15 @@
 #
 # Idempotent: running this with the same state twice changes nothing the
 # second time and says so.
+#
+# While a hold is in force every run also prints one `leak:` line, counting
+# the jobs that started past the hold on other lanes (ai/agent-infra #24).
+# It is a measurement only: after two weeks of the journal it is decided
+# whether gap 1 (a job starting before the lowered limit is read) is
+# accepted. Prerequisite, set by the owner: `listen_address =
+# "127.0.0.1:9252"` in the global section of config.toml (loopback only).
+# The line is read from the runner's own metrics, needs no token, and a
+# failure to read them never changes the hold, any file or the exit status.
 set -euo pipefail
 
 # The largest legitimate hold is a job timeout plus 300s (scripts/quiet-host.sh
@@ -26,6 +35,7 @@ QH_DIR="${QH_DIR:-/srv/quiet-host}"
 # start limit on the first install, 2026-09-06).
 QH_STATE="${QH_STATE:-/var/lib/quiet-host}"
 CONFIG="${CONFIG:-/etc/gitlab-runner/config.toml}"
+QH_METRICS="${QH_METRICS:-http://127.0.0.1:9252/metrics}"
 
 HOLD="$QH_DIR/hold"
 ORIG="$QH_STATE/concurrent.orig"
@@ -35,6 +45,66 @@ ORIG="$QH_STATE/concurrent.orig"
 SINCE="$QH_STATE/hold.since"
 APPLIED="$QH_DIR/applied"
 FAILED="$QH_DIR/failed"
+
+# ai/agent-infra #24: print how many jobs run on other lanes while a hold is
+# in force. Always returns 0 -- a metrics failure must not touch the hold.
+log_leak() {
+  job="$1"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "leak: unknown (metrics unavailable: curl not installed)"
+    return 0
+  fi
+  leak_rc=0
+  leak_body=$(curl -fsS --max-time 3 "$QH_METRICS" 2>/dev/null) || leak_rc=$?
+  if [ "$leak_rc" -ne 0 ]; then
+    echo "leak: unknown (metrics unavailable: curl exited $leak_rc)"
+    return 0
+  fi
+  # Sum running jobs per runner (runner_name label, else runner), in the
+  # order first seen. Other states are ignored. NOMETRICS marks a body with
+  # no gitlab_runner_ line at all.
+  leak_text=$(printf '%s\n' "$leak_body" | awk '
+    function label(line, key,   re, rest) {
+      re = "[{,]" key "=\"[^\"]*\""
+      if (match(line, re)) {
+        rest = substr(line, RSTART, RLENGTH)
+        sub("^[{,]" key "=\"", "", rest)
+        sub("\"$", "", rest)
+        return rest
+      }
+      return ""
+    }
+    /^gitlab_runner_/ { seen = 1 }
+    /^gitlab_runner_jobs\{/ && /[{,]state="running"/ {
+      name = label($0, "runner_name")
+      if (name == "") name = label($0, "runner")
+      value = $NF + 0
+      if (!(name in sum)) { order[++count] = name }
+      sum[name] += value
+    }
+    END {
+      if (!seen) { print "NOMETRICS"; exit }
+      total = 0
+      list = ""
+      for (i = 1; i <= count; i++) {
+        total += sum[order[i]]
+        list = list (list == "" ? "" : " ") order[i] "=" sum[order[i]]
+      }
+      if (list == "") list = "none"
+      other = total - 1
+      if (other < 0) other = 0
+      printf "%d job(s) on other lanes (%s)\n", other, list
+    }') || leak_text=""
+  case "$leak_text" in
+    NOMETRICS)
+      echo "leak: unknown (metrics unavailable: no runner metrics in the body)" ;;
+    '')
+      echo "leak: unknown (metrics unavailable: could not parse the metrics)" ;;
+    *)
+      echo "leak: $leak_text for job=$job" ;;
+  esac
+  return 0
+}
 
 apply_hold() {
   job="$1"
@@ -88,6 +158,7 @@ apply_hold() {
   rm -f "$FAILED"
   printf 'concurrent=1 at %s for job=%s\n' "$(date +%s)" "$job" >"$APPLIED"
   echo "HOLD applied: concurrent=1 for job=$job"
+  log_leak "$job"
 }
 
 release_hold() {
@@ -165,8 +236,10 @@ if [ "$held" -eq 1 ]; then
     if ! grep -q "job=${flag_job}\$" "$APPLIED" 2>/dev/null; then
       printf 'concurrent=1 at %s for job=%s\n' "$now" "$flag_job" >"$APPLIED"
       echo "HOLD re-marked for job=$flag_job (concurrent already 1)"
+      log_leak "$flag_job"
     else
       echo "hold already applied for job=$flag_job (expires $flag_expires) -- nothing to do"
+      log_leak "$flag_job"
     fi
   else
     apply_hold "$flag_job"

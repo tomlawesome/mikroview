@@ -8,7 +8,58 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 )
+
+// LockFileSuffix names the sidecar lock file beside each file store:
+// <store path>.lock. It holds no data; -migrate-data skips it.
+const LockFileSuffix = ".lock"
+
+// lockStore takes an exclusive advisory lock on path's sidecar lock file,
+// blocking until it is free, and returns the function that releases it.
+//
+// #1468: Save's version check and its rename were not atomic across
+// processes, so two writers could both pass the check and one update was
+// lost. The lock is on a sidecar rather than the store file because the
+// rename replaces the store file, and a lock on the replaced inode
+// guards nothing. flock, not fcntl: its lock belongs to the open file,
+// so two goroutines of one process exclude each other too.
+var noLockOnce sync.Once
+
+func lockStore(path string) (func(), error) {
+	// #nosec G304 G703 -- the path is this deployment's own configured store path plus a fixed suffix.
+	f, err := os.OpenFile(path+LockFileSuffix, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err == syscall.ENOLCK || err == syscall.EOPNOTSUPP || err == syscall.ENOTSUP {
+		// Some filesystems (NFS without a lock daemon, some FUSE mounts)
+		// cannot lock at all. Saving worked there before #1468, so it
+		// still does, unlocked, with one warning rather than every
+		// store refusing to save.
+		noLockOnce.Do(func() {
+			rebindLog.Warn(fmt.Sprintf("the filesystem holding %s cannot lock files (%v); store saves "+
+				"run unlocked, so an offline command run against a live server can lose a save", path, err))
+		})
+		_ = f.Close()
+		return func() {}, nil
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("persist: locking %s: %w", path+LockFileSuffix, err)
+	}
+	return func() {
+		// Closing the file releases the lock.
+		_ = f.Close()
+	}, nil
+}
 
 // FileBackend is the default, zero-infrastructure backend: one JSON file
 // per store, atomically replaced on write.
@@ -30,7 +81,7 @@ func (b *FileBackend) Close() error { return nil }
 // Load reads the file. A missing file is the normal first-run case and
 // returns a zero Snapshot with a nil error; an unreadable one is a real
 // error, because treating it as absent is how a corrupt accounts file
-// silently becomes a fresh install (see internal/auth's own
+// silently becomes a fresh install (see gauntlet's own
 // fail-closed handling, which depends on being able to tell these
 // apart).
 func (b *FileBackend) Load(ctx context.Context) (Snapshot, error) {
@@ -84,6 +135,7 @@ func contentVersion(data []byte) int64 {
 // see Save's own comment for why the plain rename alone is not enough.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -93,8 +145,9 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	tmp := f.Name()
 	cleanup := func() {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
+		_ = os.Remove(tmp)
 	}
 	if err := f.Chmod(perm); err != nil {
 		cleanup()
@@ -108,14 +161,17 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		cleanup()
 		return err
 	}
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if d, err := os.Open(dir); err == nil {
 		// Best effort: some filesystems refuse to sync a directory, and
 		// a failure here costs durability of the rename, not
@@ -137,10 +193,18 @@ func (b *FileBackend) Save(ctx context.Context, payload []byte, expect int64) (i
 		return 0, fmt.Errorf("persist: no file path configured")
 	}
 	dir := filepath.Dir(b.path)
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, err
 	}
+	// Held from the version read through the rename (#1468).
+	unlock, err := lockStore(b.path)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 
+	// #nosec G703 -- the path is this deployment's own configured store path, never file contents; gosec only reaches it through AdoptFile's os.ReadFile payload passed to Save.
 	current, readErr := os.ReadFile(b.path)
 	switch {
 	case os.IsNotExist(readErr):
@@ -171,7 +235,7 @@ func (b *FileBackend) Save(ctx context.Context, payload []byte, expect int64) (i
 	// unfixed code: 12 of 300 concurrent write pairs left the document
 	// as invalid JSON *after both writers had finished*, so it is
 	// settled corruption rather than a transient. For the accounts
-	// store that is a total lockout -- internal/auth deliberately
+	// store that is a total lockout -- gauntlet deliberately
 	// refuses to boot on an unreadable document rather than treat it as
 	// a fresh install, and recovery then needs host access and a
 	// backup. Two processes writing this document at once is not

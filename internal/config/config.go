@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
 )
@@ -39,7 +39,7 @@ const DefaultDataDir = "/var/lib/mikroview"
 type Device struct {
 	// ID is the device's identity everywhere downstream: the deviceId on
 	// its events, the key its pushed router state is stored under, and
-	// the scope of an ingest token (internal/auth.Token.Device). Optional
+	// the scope of an ingest token (gauntlet.Token.Device). Optional
 	// in the file -- normaliseDevices fills it from SourceIP when unset,
 	// which is what a *discovered* router already gets
 	// (internal/device.Registry.Resolve), so declaring a router that has
@@ -300,17 +300,21 @@ type Log struct {
 	Level string `yaml:"level"`
 }
 
-// GeoIP is entirely optional -- see internal/geoip. Left empty, the
-// country-flag feature just doesn't show anything; there is no default
-// database bundled or fetched, since MaxMind requires a free account to
-// obtain one.
+// GeoIP configures internal/geoip's country flags and network-owner
+// lookups (#1352). On with no setup: DB-IP Lite needs no account, and
+// the two keyed sources (IPinfo Lite, MaxMind GeoLite2) are switched on
+// by entering their keys in the Engine Room -- never here. API keys are
+// deliberately not config fields (owner, 2026-09-27: "one source of
+// truth"); they live sealed in the settings store.
+//
+// There is no source or URL setting, for the reason OUI below gives: an
+// operator enabling a feed is trusting MikroView's vetting of it.
 type GeoIP struct {
-	// DBPath is kept out of the backup set (#372) on purpose: it names an
-	// external MaxMind database file the operator downloads themselves,
-	// not a store mikroview writes -- there is nothing here for a
-	// restore to reproduce that a fresh download would not already give
-	// back. See backup_cli.go's excludedFromBackup.
-	DBPath string `yaml:"dbPath"`
+	// CachePath is the directory the fetched databases are kept in
+	// between restarts, so flags are there on the first event rather
+	// than after the first download. Empty keeps them in memory only
+	// (every start fetches afresh).
+	CachePath string `yaml:"cachePath"`
 }
 
 // Reputation is entirely optional -- see internal/reputation. Shodan's
@@ -379,12 +383,12 @@ type Notify struct {
 	Webhook     Webhook       `yaml:"webhook"`
 }
 
-// Auth configures internal/auth's local authentication. Unlike Flags'
-// StorePath, StorePath here is not truly optional -- mikroview stays
-// fully open (today's behavior) as long as no user account exists, but
-// the moment one is created it's required for that account to survive a
-// restart, so registration refuses to proceed without it configured.
-// See docs/configuration.md's "Authentication" section.
+// Auth configures local authentication, which is gauntlet's since #1202.
+// Unlike Flags' StorePath, StorePath here is not truly optional: the
+// moment an account is created it is required for that account to
+// survive a restart, so registration refuses to proceed without it
+// configured. Every auth store is sealed under history.keyFile, which is
+// required. See docs/configuration.md's "Authentication" section.
 type Auth struct {
 	StorePath string `yaml:"storePath"`
 	// SecureCookie sets the session cookie's Secure flag. Defaults to
@@ -399,6 +403,13 @@ type Auth struct {
 	// on each authenticated request, so this is "how long you can go
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
+	//
+	// One hour by default, and at most one hour (#1202, ruling 3):
+	// gauntlet holds every session to NIST SP 800-63B-4's AAL2 limits
+	// and refuses a session store configured past them, so a longer
+	// value is cut down to the limit when the store is built, silently
+	// -- the CHANGELOG is where that is said, since every existing
+	// config carried the old 24-hour default.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
 	// SessionMaxLifetime is the ceiling SessionTTL does not have: the
 	// longest a session can live from the moment it was issued, however
@@ -410,11 +421,10 @@ type Auth struct {
 	// on a shared machine -- or a cookie taken months ago -- stays valid
 	// indefinitely (#294 item 3).
 	//
-	// Seven days by default: long enough that an operator checking their
-	// firewall most days is not re-authenticating constantly, short
-	// enough that a forgotten session is not a permanent one. Set to 0
-	// to remove the ceiling and keep the old behaviour, which is a
-	// deliberate choice rather than an oversight if you make it.
+	// 24 hours by default, and at most 24 hours (#1202, ruling 3): the
+	// same AAL2 limit as SessionTTL's, applied the same silent way. A
+	// longer value -- or 0, which used to mean no ceiling at all -- is
+	// cut down to it.
 	SessionMaxLifetime time.Duration `yaml:"sessionMaxLifetime"`
 	// TokensStorePath: where read-only API bearer tokens (issue #101)
 	// persist across restarts, as a small JSON file (names + SHA-256
@@ -432,6 +442,20 @@ type Auth struct {
 	// the only thing able to validate a recovery key -- exactly the
 	// situation those commands exist to recover from.
 	RecoveryKeysPath string `yaml:"recoveryKeysPath"`
+	// SignInsStorePath is the sign-in history (#1202, ruling 8): every
+	// sign-in attempt, kept for an admin to page through, sealed under
+	// history.keyFile like the other auth stores. Recorded from v0.7.0;
+	// the page that shows it is #1442. Empty keeps no history -- the
+	// audit log still records every sign-in either way.
+	SignInsStorePath string `yaml:"signInsStorePath"`
+	// AdminPasskey says whether every admin account must hold a passkey
+	// (#1202, ruling 1; gauntlet ADR-0015): "required" or "optional".
+	// Unset, it is required when publicUrl is https on a domain name --
+	// the only address a browser can make a passkey for -- and optional
+	// otherwise. "required" with no such publicUrl is refused at start-up
+	// (CFG-0023): an admin held at a door that can never open is a
+	// lockout, not a rule.
+	AdminPasskey string `yaml:"adminPasskey"`
 	// RecoveryPepperPath holds the server-side secret mixed into every
 	// recovery-key digest.
 	//
@@ -591,8 +615,11 @@ type Setup struct {
 // (CFG-0041) -- both a good default out of the box, not settings an
 // operator has to supply.
 type Watchlist struct {
-	// MatchLogPath is where internal/matchlog's append-only JSON-lines
-	// file lives.
+	// MatchLogPath is where internal/matchlog's append-only log lives: a
+	// sealed file of AES-256-GCM frames, one per match or repeat, under
+	// history.keyFile (#1470). The default's .jsonl name is kept for
+	// compatibility with existing configs and installs; the file has not
+	// held JSON lines since v0.7.0.
 	MatchLogPath string `yaml:"matchLogPath"`
 	// MatchLogCapacity is the match log's hard ceiling on distinct
 	// records -- #243 section 3 puts the file backend's realistic range
@@ -667,11 +694,11 @@ type TLS struct {
 // OIDC configures optional SSO login via an external OIDC provider
 // (issue #43, Authentik-targeted but any standard OIDC provider works)
 // on top of, never instead of, local password auth -- see
-// internal/oidc for the protocol implementation and
-// internal/auth.Store.FindOrCreateOIDCUser for identity storage/JIT
-// provisioning. Empty IssuerURL means OIDC is not configured, the same
+// gauntlet/oidc for the protocol implementation and gauntlet's
+// Store.FindOrCreateOIDCUser for identity storage/JIT provisioning
+// (#1202). Empty IssuerURL means OIDC is not configured, the same
 // "empty means opt-out, no separate enabled bool" contract
-// Reputation.AbuseIPDBKey/GeoIP.DBPath already use -- there's no
+// Reputation.AbuseIPDBKey already uses -- there's no
 // scenario where a fully-populated OIDC block should be silently
 // inert, unlike Notify's SMTP/Pushover (each independently optional
 // *within* one shared block), so a bare bool would be redundant here.
@@ -693,12 +720,12 @@ type OIDC struct {
 	// "https://mikroview.example.com").
 	PublicBaseURL string `yaml:"publicBaseUrl"`
 	// Scopes defaults to {openid, profile, email} if empty -- see
-	// internal/oidc.New.
+	// gauntlet/oidc.New.
 	Scopes []string `yaml:"scopes"`
 
 	// AllowedGroups/GroupsClaim/AllowedEmails/AllowedEmailDomains/
 	// RequiredClaims restrict *which* accounts at the issuer may sign in.
-	// See internal/oidc.Policy for the full semantics; in short, leaving
+	// See gauntlet/oidc.Policy for the full semantics; in short, leaving
 	// all of them empty permits anyone the issuer vouches for, and each
 	// one that is set adds a condition that must hold.
 	//
@@ -920,11 +947,11 @@ type Engine struct {
 // full menu, why it's a fixed menu rather than an arbitrary URL field,
 // and how the refresh cadence/entry-count cap were decided.
 //
-// On by default with Spamhaus's DROP list -- the issue's own
-// recommended starting point: small, free, no registration, and
-// curated specifically to only include netblocks Spamhaus is confident
-// are entirely malicious-controlled, a safe "flag on sight" default
-// unlike a larger, noisier aggregated list would be. Set sources to an
+// On by default with both feeds on the menu, Spamhaus's DROP list and
+// Emerging Threats' compromised-IPs list (owner decision, 2026-09-25,
+// #1359) -- see internal/blocklist.DefaultSources for why. An operator
+// who sets sources explicitly here keeps exactly the list they wrote;
+// this default only applies when the key is absent. Set sources to an
 // empty list (`sources: []`) to disable local blocklist matching
 // entirely. Refresh cadence is intentionally not configurable here --
 // see internal/blocklist.RefreshInterval's doc comment.
@@ -981,6 +1008,19 @@ type NetClass struct {
 	// unrecognized entry is logged and skipped, degrade-not-crash like
 	// every other optional integration here.
 	Sources []string `yaml:"sources"`
+}
+
+// Networks holds deployment facts about the networks MikroView watches.
+//
+// Home (#1481) lists inside networks the address alone does not reveal:
+// a routed public block on the LAN, an IPv6 global prefix. Addresses in
+// it classify as internal on top of the built-in rule (private,
+// loopback, link-local and unspecified are always internal), the way an
+// IDS's HOME_NET does. Empty, the default, changes nothing. A home entry
+// only ever makes addresses internal, never public, so it cannot widen
+// what MikroView dials out to.
+type Networks struct {
+	Home []string `yaml:"home"`
 }
 
 // OUI configures internal/oui's MAC-vendor lookups: the IEEE MA-L
@@ -1114,30 +1154,32 @@ const (
 // events the ring holds, so a replay can reach further back than memory
 // does.
 //
-// Off unless two things are true: KeyFile names a readable key, and
-// Enabled is set. Both, deliberately. The key alone must not start
-// writing events to disk on an operator who mounted it for something
-// else -- #853 puts the state store and the warm-restart snapshots under
-// the same key -- and the switch alone cannot write anything, because
-// there is no unencrypted mode to fall back to. See
+// On only when two things are true: KeyFile names a readable key, and
+// Enabled is set. Enabled is on by default (#1357), so in a config that
+// does not set it the key is what decides: a mounted key starts
+// retention unless the operator switches it off, and with none it stays
+// off, because the switch alone cannot write anything -- there is no
+// unencrypted mode to fall back to. (#853 puts the state store and the
+// warm-restart snapshots under the same key.) See
 // docs/decisions/event-retention.md.
 //
 // Unlike Snapshot above, this holds custody data: event lines,
-// addresses, who talked to whom. That is the entire reason for the key
-// and for the default being off. SECURITY.md says the same thing to
-// operators.
+// addresses, who talked to whom. That is the entire reason there is no
+// unencrypted mode: Enabled defaults to true (#1357), but with no key
+// mounted it comes straight back off, because there is nothing else it
+// could honestly do. SECURITY.md says the same thing to operators.
 type History struct {
 	// KeyFile is the path to the master key, which must live outside
 	// the data directory. A key kept beside the files it protects is
 	// decoration: whoever copies the directory copies both.
 	//
 	// Not a key value, and not an environment variable -- a path to a
-	// file the operator mounts, per AGENTS.md's secret rule.
+	// file the operator mounts, per the house secret rule.
 	KeyFile string `yaml:"keyFile"`
-	// Enabled is the operator's switch, beside the memory slider.
-	// Turning it off deletes what was retained (see CFG-0080's note and
-	// retention.Store.Purge): off has to mean the history is gone, or
-	// the setting is a lie.
+	// Enabled is the operator's switch, beside the memory slider. Off
+	// at startup stops retaining; it never deletes what an earlier run
+	// retained -- nothing in this file does. Deleting is only ever an
+	// admin choice made in the UI (#1354).
 	Enabled bool `yaml:"enabled"`
 	// Days is how many days are kept. Below 1 the default is applied
 	// (CFG-0081): zero would mean the day just written is deleted on the
@@ -1183,10 +1225,16 @@ const (
 // `-backup`/`-restore` CLI flags which back up mikroview's own state
 // (and, per #394, this vault along with it).
 type Backup struct {
-	// Enabled turns the SFTP listener on. Off by default: this is a
-	// second listening port, opened only once an operator has actually
-	// decided to use it -- the wizard's step 6 is what flips it on in
-	// practice.
+	// Enabled is retired (#1361): the drop box's switch moved into the
+	// settings store, beside history.enabled, so it can be moved from
+	// Settings or the wizard with no restart. This field, and
+	// MIKROVIEW_BACKUP_ENABLED, are read exactly once -- at the first
+	// startup that finds nothing stored yet, to seed that store's
+	// starting position from whatever an existing deployment already had
+	// here, logged when it does anything (see main.newBackupRuntime).
+	// Never read again after that: a leftover true or false in an old
+	// config.yaml is harmless and does not need to be removed, though it
+	// may be.
 	Enabled bool `yaml:"enabled"`
 	// Listen is the drop box's bind address. Fixed default port 47022
 	// (owner decision, #394, deliberately not a conventional SFTP port
@@ -1261,6 +1309,7 @@ type Config struct {
 	Droplist       Droplist       `yaml:"droplist"`
 	Prefs          Prefs          `yaml:"prefs"`
 	NetClass       NetClass       `yaml:"netClass"`
+	Networks       Networks       `yaml:"networks"`
 	OUI            OUI            `yaml:"oui"`
 	Engine         Engine         `yaml:"engine"`
 	Snapshot       Snapshot       `yaml:"snapshot"`
@@ -1382,10 +1431,11 @@ func defaults() Config {
 		},
 		Auth: Auth{
 			StorePath:          DefaultDataDir + "/users.json",
-			SessionTTL:         24 * time.Hour,
-			SessionMaxLifetime: 7 * 24 * time.Hour,
+			SessionTTL:         time.Hour,
+			SessionMaxLifetime: 24 * time.Hour,
 			SecureCookie:       true,
 			TokensStorePath:    DefaultDataDir + "/tokens.json",
+			SignInsStorePath:   DefaultDataDir + "/signins.json",
 			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
 			RecoveryPepperPath: DefaultDataDir + "/recovery-pepper.key",
 		},
@@ -1449,8 +1499,13 @@ func defaults() Config {
 			// internal/detect.Config's own defaults.
 			// EDROP is deliberately absent: Spamhaus merged it into
 			// DROP on 2024-04-10 and the endpoint now serves no ranges
-			// at all.
-			Sources: []string{"spamhaus_drop"},
+			// at all. TestBlocklistDefaultMatchesBlocklistPackage pins
+			// this literal to internal/blocklist.DefaultSources, the
+			// same drift guard TestNetClassDefaultMatchesNetclassPackage
+			// gives NetClass.Sources below, after that exact drift
+			// (config missing a source netclass.New was wired with)
+			// shipped once already.
+			Sources: []string{"spamhaus_drop", "emerging_threats_compromised"},
 		},
 		Droplist: Droplist{
 			StorePath: DefaultDataDir + "/droplist.json",
@@ -1475,6 +1530,9 @@ func defaults() Config {
 			Enabled:   true,
 			CachePath: DefaultDataDir + "/oui-registry.json",
 		},
+		GeoIP: GeoIP{
+			CachePath: DefaultDataDir + "/geoip",
+		},
 		Snapshot: Snapshot{
 			Interval: defaultSnapshotInterval,
 			Keep:     defaultSnapshotKeep,
@@ -1484,18 +1542,24 @@ func defaults() Config {
 			// it rather than on the default volume.
 		},
 		History: History{
-			// Enabled and KeyFile stay zero on purpose: memory-only is
-			// the default and a first-class mode, not a setup step
-			// somebody forgot. Dir is resolved from the data directory
-			// at startup, same as Snapshot.Dir.
+			// On by default (#1357): install.sh gives a fresh install a
+			// key, so on-disk history needs no setup step there.
+			// KeyFile stays zero -- applyAppFolder fills it in when a
+			// key is actually mounted, and validateHistory (CFG-0080)
+			// turns Enabled back off when none is, which is exactly
+			// what an install or upgrade with no key mounted needs: it
+			// comes up, memory-only, and says why. Dir is resolved from
+			// the data directory at startup, same as Snapshot.Dir.
+			Enabled:  true,
 			Days:     defaultRetentionDays,
 			MaxBytes: defaultRetentionMaxBytes,
 		},
 		Backup: Backup{
-			// Enabled stays false on purpose, same reasoning as
-			// History.Enabled above. Listen is set even though the
-			// listener does not start until Enabled is true, so turning
-			// it on needs no second decision about the port.
+			// Enabled's default no longer matters (#1361: retired, see
+			// its own doc comment) -- a fresh install has nothing stored
+			// either, so it starts closed regardless. Listen is set
+			// unconditionally so opening the drop box from Settings needs
+			// no second decision about the port.
 			Listen: ":47022",
 		},
 		Notify: Notify{
@@ -1539,6 +1603,15 @@ func load(configPath string, args []string) (Config, Result, error) {
 		}
 	}
 
+	return finishLoad(cfg, configPath, folder, args)
+}
+
+// finishLoad is everything load does after the YAML file: environment,
+// flags, the app folder, device identities and Validate, in that order.
+// Split out so the config editor's ValidateText (#1347) checks a text
+// against exactly the pipeline start-up would put it through, rather
+// than a second copy of it that could drift.
+func finishLoad(cfg Config, configPath string, folder []AppFolderLookup, args []string) (Config, Result, error) {
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
@@ -1598,7 +1671,7 @@ func loadYAML(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	dec := yaml.NewDecoder(f)
 	// KnownFields(true) (#1207): without it, a key the struct no longer
 	// has -- carried over from an old release, or simply mistyped -- is
@@ -1644,9 +1717,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
-	}
-	if v := os.Getenv("MIKROVIEW_GEOIP_DB_PATH"); v != "" {
-		cfg.GeoIP.DBPath = v
 	}
 	if v := os.Getenv("MIKROVIEW_ABUSEIPDB_KEY"); v != "" {
 		cfg.Reputation.AbuseIPDBKey = v
@@ -1908,6 +1978,12 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_AUTH_SIGN_INS_STORE_PATH"); v != "" {
+		cfg.Auth.SignInsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_ADMIN_PASSKEY"); v != "" {
+		cfg.Auth.AdminPasskey = v
+	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Notify.BatchWindow = d
@@ -2035,6 +2111,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_OUI_CACHE_PATH"); v != "" {
 		cfg.OUI.CachePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_GEOIP_CACHE_PATH"); v != "" {
+		cfg.GeoIP.CachePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
 		cfg.Engine.StorePath = v
 	}
@@ -2064,7 +2143,7 @@ func applyEnv(cfg *Config) {
 	}
 	// MIKROVIEW_HISTORY_KEY_FILE is a path, never the key itself.
 	// There is deliberately no environment variable carrying key
-	// material: AGENTS.md's secret rule keeps secrets out of the
+	// material: the house secret rule keeps secrets out of the
 	// environment, where a process listing, a crash dump or a container
 	// inspect would expose them.
 	if v := os.Getenv("MIKROVIEW_HISTORY_KEY_FILE"); v != "" {
@@ -2174,15 +2253,14 @@ func applyFlags(cfg *Config, args []string) error {
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
 	maxMemory := cfg.Store.MaxMemory
 	fs.Var(&maxMemory, "max-memory", "memory budget for the event ring buffer, e.g. 120MiB (see docs/configuration.md)")
-	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
 
 	// The flag package's own usage, with OtherCommands after it: the
 	// standalone modes never reach this FlagSet, so nothing else can
 	// put them in front of an operator running `mikroview --help`.
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage of mikroview:")
+		_, _ = fmt.Fprintln(fs.Output(), "Usage of mikroview:")
 		fs.PrintDefaults()
-		fmt.Fprint(fs.Output(), OtherCommands)
+		_, _ = fmt.Fprint(fs.Output(), OtherCommands)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -2194,6 +2272,5 @@ func applyFlags(cfg *Config, args []string) error {
 	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
 	cfg.Store.MaxMemory = maxMemory
-	cfg.GeoIP.DBPath = *geoipDB
 	return nil
 }

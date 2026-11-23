@@ -2,22 +2,27 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   //
   // The account menu (#633, slimmed by #647 round 23): the scene bar's
-  // account chip carries theme switching, Run setup…, sign out, and
-  // About & licence (AGPL 5(d)/13 -- the licence must stay reachable
+  // account chip carries Run setup…, sign out, and About & licence
+  // (AGPL 5(d)/13 -- the licence must stay reachable
   // from the running app). Settings, Entities and Audit log left the
   // menu once each had somewhere better to live -- Settings and
   // Entities joined the deck as cards of their own, and Audit log has
   // lived on the docket's own tab since rounds 17-19 -- so the menu's
-  // only remaining page-shaped action is the one thing that opens a
-  // modal rather than going anywhere: Run setup….
+  // only remaining page-shaped actions are the two that open something
+  // over the deck rather than going anywhere: Run setup…, and Take the
+  // tour (#1386, owner: the tour is "always available from" this menu).
+  // The tour row is every role's -- the tour walks whatever deck the
+  // signed-in tier can see -- and carries no ellipsis: it starts at
+  // once, nothing is asked first.
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { tourState } from '../lib/tour.svelte'
   import { versionState } from '../lib/version.svelte'
-  import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
   import PasskeysOverlay from './PasskeysOverlay.svelte'
+  import RecoveryCodesOverlay from './RecoveryCodesOverlay.svelte'
   import UptimeBadge from './UptimeBadge.svelte'
 
   let open = $state(false)
@@ -29,6 +34,8 @@
   let showAuthenticator = $state(false)
   // Same reasoning, same fix, for #1250's own overlay.
   let showPasskeys = $state(false)
+  // Same reasoning, same fix, for #1331's own overlay.
+  let showRecoveryCodes = $state(false)
   let logoutError = $state<string | null>(null)
   let menuEl: HTMLElement | undefined
 
@@ -59,11 +66,15 @@
     if (open) versionState.ensureLoaded().catch(() => {})
   }
 
-  type Row = { label: string; view?: View; action?: 'run-setup'; admin?: boolean }
-  const operate: Row[] = [{ label: 'Run setup…', action: 'run-setup', admin: true }]
+  type Row = { label: string; view?: View; action?: 'run-setup' | 'tour'; admin?: boolean }
+  const operate: Row[] = [
+    { label: 'Run setup…', action: 'run-setup', admin: true },
+    { label: 'Take the tour', action: 'tour' },
+  ]
 
   function go(row: Row) {
     if (row.action === 'run-setup') wizardState.launch()
+    else if (row.action === 'tour') tourState.begin()
     else if (row.view) appState.view = row.view
     open = false
   }
@@ -100,10 +111,6 @@
 
   {#if open}
     <div class="menu" role="menu">
-      <div class="row theme-row">
-        <ThemeMenu />
-      </div>
-      <div class="rule"></div>
       {#each operate.filter((r) => !r.admin || isAdmin) as row (row.label)}
         <button class="row" role="menuitem" class:on={row.view === appState.view} onclick={() => go(row)}>
           {row.label}
@@ -133,6 +140,16 @@
         <button class="row" role="menuitem" onclick={() => ((showPasskeys = true), (open = false))}>
           Passkeys{#if authState.passkeyCount > 0}<span class="on-tag">&nbsp;· {authState.passkeyCount}</span>{/if}
         </button>
+        <!-- #1331: only offered once there's a factor for the codes to
+             stand behind -- the server refuses the route on an account
+             with none (recovery codes are a spare key, not a
+             replacement for one), so this row would only invite that
+             refusal before either row above it has been set up. -->
+        {#if authState.hasTOTP || authState.passkeyCount > 0}
+          <button class="row" role="menuitem" onclick={() => ((showRecoveryCodes = true), (open = false))}>
+            New recovery codes…
+          </button>
+        {/if}
       {:else}
         <p class="row-note">
           Authenticator app — not offered. This account signs in through single sign-on; your
@@ -162,6 +179,7 @@
 <AboutOverlay bind:open={showAbout} />
 <AuthenticatorOverlay bind:open={showAuthenticator} />
 <PasskeysOverlay bind:open={showPasskeys} />
+<RecoveryCodesOverlay bind:open={showRecoveryCodes} />
 
 <style>
   .account {
@@ -203,7 +221,7 @@
     z-index: 40;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     /* #1144: the menu hangs below the scene bar inside #app, which is
-       `height: 100vh; overflow: hidden` -- so on a short window a menu
+       `height: 100vh; overflow: clip` -- so on a short window a menu
        taller than the space left under the bar was simply cut off, with
        no way to reach its last rows. Cap it at what the viewport leaves
        (bar plus the 6px gap, and a margin at the foot) and scroll
@@ -240,11 +258,6 @@
 
   .row.on {
     color: var(--fg);
-  }
-
-  .theme-row {
-    cursor: default;
-    justify-content: space-between;
   }
 
   /* The menu's foot, from round 37's `.whomenu .mg.foot`: the label on

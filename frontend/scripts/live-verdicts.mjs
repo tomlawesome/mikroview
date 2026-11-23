@@ -133,6 +133,7 @@ if (raised.every((r) => r.ok)) {
     beforeChecked,
     { timeout: 10000 },
   )
+  // safe: waitForFunction above throws on timeout
   check(true, `the chrome's ⚑ counted down once the checked call landed (from ${beforeChecked})`)
 
   // --- Undo puts it back exactly --------------------------------------
@@ -155,6 +156,7 @@ if (raised.every((r) => r.ok)) {
     beforeChecked,
     { timeout: 10000 },
   )
+  // safe: waitForFunction above throws on timeout
   check(true, "undo puts the flag back on the chrome's ⚑ count too")
 
   // --- Investigate: the row stays, and its chips change --------------
@@ -191,6 +193,7 @@ if (raised.every((r) => r.ok)) {
   await resolvedRow.locator('button.v.resolved').waitFor({ timeout: 5000 })
   await resolvedRow.locator('button.v.resolved').click()
   await resolvedRow.locator('.stamp.resolved').waitFor({ timeout: 5000 })
+  // safe: waitFor above throws on timeout
   check(true, 'calling resolved from an investigated row stamps RESOLVED and clears it')
 
   const resolvedFlag = await waitForApiVerdict(RESOLVED_IP, (f) => f.cleared && f.verdict === 'resolved')
@@ -278,6 +281,7 @@ if (raised.every((r) => r.ok)) {
     'and the whole trio is in the drawer the chevron opens, so the flag is still judgeable there',
   )
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the verdict row cannot be driven without its four port-scan flags')
 }
 

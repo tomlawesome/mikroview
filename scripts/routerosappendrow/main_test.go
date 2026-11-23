@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/routeros"
 )
 
 const fixture = `// SPDX-License-Identifier: AGPL-3.0-only
@@ -129,5 +131,16 @@ func TestMainAgainstRealDialectsFile(t *testing.T) {
 	}
 	if strings.Count(string(formatted), "VerifiedBy:") != strings.Count(string(real), "VerifiedBy:")+1 {
 		t.Errorf("row count did not grow by exactly one")
+	}
+}
+
+// #1451: the dialect a freshly exercised version is recorded against is the newest row's.
+func TestCurrentDialectIsTheNewestRowsDialect(t *testing.T) {
+	got := currentDialect()
+	if got == "" {
+		t.Fatal("currentDialect() is empty although the table has rows")
+	}
+	if want := routeros.Rows[len(routeros.Rows)-1].Dialect; got != want {
+		t.Errorf("currentDialect() = %q, want the last row's %q", got, want)
 	}
 }

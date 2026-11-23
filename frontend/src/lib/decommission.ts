@@ -170,7 +170,7 @@ export function receiptSentence(receipt: DecommissionReceipt): string {
 // with. Whole hours where it has them, because "the last 3 h" is what the
 // operator can hold in their head; minutes on a young instance, where
 // saying "the last 0 h" would read as a bug.
-export function spanWords(receipt: DecommissionReceipt): string {
+function spanWords(receipt: DecommissionReceipt): string {
   const ms = Date.parse(receipt.end) - Date.parse(receipt.start)
   if (!Number.isFinite(ms) || ms <= 0) return 'the ring so far'
   const hours = Math.floor(ms / 3_600_000)

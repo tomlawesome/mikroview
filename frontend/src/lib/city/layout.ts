@@ -28,7 +28,7 @@ const HOST_R = 4.4
 const POST_R = 3.4
 const FOOT_POST_R = 3.0
 /** Buildings drawn per plate; the rest is the plate's `more`. */
-export const MAX_BUILDINGS = 8
+const MAX_BUILDINGS = 8
 
 /** District centres relative to the primary router: lan, srv, iot,
  * guest, and a fifth south-east where there is room. */
@@ -49,7 +49,7 @@ const BOROUGH_SLOTS: Pt[] = [
 ]
 
 /** The mockup's river, before it is moved clear of the town. */
-export const BANK_N: Pt[] = [
+const BANK_N: Pt[] = [
   [-170, 12],
   [-120, -8],
   [-80, -26],
@@ -58,7 +58,7 @@ export const BANK_N: Pt[] = [
   [70, -58],
   [140, -68],
 ]
-export const RIVER_W = 24
+const RIVER_W = 24
 
 /** Plate radius from how many hosts stand on it. */
 export const plateRadius = (hostCount: number): number => Math.max(13, Math.min(21, 11 + 2.5 * hostCount))
@@ -190,7 +190,7 @@ const VERDICT_KIND: Record<CityEdge['verdict'], RoadKind> = {
   unjudged: 'q',
 }
 
-export const roadWidth = (events: number): number => Math.max(0.7, Math.min(2.8, 0.7 + Math.log2(1 + events) * 0.35))
+const roadWidth = (events: number): number => Math.max(0.7, Math.min(2.8, 0.7 + Math.log2(1 + events) * 0.35))
 
 /**
  * layoutGround lays the estate out. Districts are placed per borough

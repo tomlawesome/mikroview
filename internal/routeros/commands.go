@@ -4,7 +4,10 @@ package routeros
 
 import (
 	"fmt"
+	"net"
 	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 )
 
 // The RouterOS command templates the setup wizard renders (#320), moved
@@ -54,12 +57,17 @@ func QuoteScriptString(s string) string {
 // and unescaped, RouterOS would save a script with every variable
 // already substituted away to nothing.
 //
-// Newlines are left as they are: BackupScript's multi-line
-// source="..." is the proven form, run end to end against a real CHR
-// under #394, so a script body keeps its own line breaks rather than
-// being folded into `\n` escapes.
+// Newlines go in as `\n` escapes, so every script add is one console
+// line (#1360). RouterOS before 7.19 drops a line break typed inside a
+// double-quoted argument -- 7.19's CHANGELOG: "console - disallow
+// incomplete double-quoted arguments (allows multiline string
+// pasting)" -- so on 7.18.2 a pasted multi-line source="..." saved as
+// one run-on line and the script did nothing
+// (docs/routeros-verification-logs/7.18.2-blocklist.log). #394 proved
+// the multi-line form on 7.23.3, where it works; the escaped form saves
+// the same script on every release.
 func scriptSource(body string) string {
-	return QuoteScriptString(body)
+	return strings.ReplaceAll(QuoteScriptString(body), "\n", `\n`)
 }
 
 // scriptAdd wraps a script body in the `/system script add` that saves
@@ -110,31 +118,30 @@ func SchedulerAdd(name, settings string) string {
 }
 
 // Hostname strips a port. Certificate names never carry one, so this is
-// what tls.hosts is compared against.
+// what tls.hosts is compared against. It handles every form
+// validSetupAddress accepts: bare host, host:port, [ipv6]:port, and a bare
+// IPv6 literal with no port (#1507) -- which net.SplitHostPort rejects for
+// its extra colons, so the input comes back unchanged rather than cut at
+// its last group.
 func Hostname(hostPort string) string {
-	// IPv6 literals arrive as [::1]:8080.
-	if strings.HasPrefix(hostPort, "[") {
-		end := strings.Index(hostPort, "]")
-		if end == -1 {
-			return hostPort
-		}
-		return hostPort[1:end]
+	if host, _, err := net.SplitHostPort(hostPort); err == nil {
+		return host
 	}
-	colon := strings.LastIndex(hostPort, ":")
-	if colon == -1 {
-		return hostPort
+	// A bracketed IPv6 literal with no port.
+	if len(hostPort) > 2 && hostPort[0] == '[' && hostPort[len(hostPort)-1] == ']' {
+		return hostPort[1 : len(hostPort)-1]
 	}
-	return hostPort[:colon]
+	return hostPort
 }
 
 // PortOf takes the port out of a listen address like ":6514" or
 // "0.0.0.0:6514" -- the router needs the port, not the bind address.
+// An input with no splittable port comes back unchanged.
 func PortOf(listenAddr string) string {
-	colon := strings.LastIndex(listenAddr, ":")
-	if colon == -1 {
-		return listenAddr
+	if _, port, err := net.SplitHostPort(listenAddr); err == nil {
+		return port
 	}
-	return listenAddr[colon+1:]
+	return listenAddr
 }
 
 // CaTrustCommands is step 1: fetch mikroview's certificate authority and
@@ -143,6 +150,22 @@ func CaTrustCommands(address, dialect string) string {
 	return strings.Join([]string{
 		fmt.Sprintf(`/tool fetch url="https://%s/ca.crt" check-certificate=no dst-path=mikroview-ca.crt`, quote(address)),
 		`/certificate import file-name=mikroview-ca.crt passphrase=""`,
+	}, "\n")
+}
+
+// UndoCaTrustCommands is the ledger's Undo for "Certificate trusted"
+// (#1385): remove the certificate CaTrustCommands imported, and the file
+// it was fetched into. Matched by prefix, not by exact name: RouterOS
+// names an imported certificate after its file with an index appended
+// ("mikroview-ca.crt_0"), so an exact-name find would remove nothing and
+// say nothing. Not observed on a router yet; the CHR exercise (#1395)
+// confirms it. Embeds no address, so unlike its forward counterpart it
+// renders unconditionally. dialect is unused today -- the same seam
+// every builder in this package carries (see the file's own doc comment).
+func UndoCaTrustCommands(dialect string) string {
+	return strings.Join([]string{
+		`/certificate remove [find where name~"^mikroview-ca.crt"]`,
+		`/file remove [find name=mikroview-ca.crt]`,
 	}, "\n")
 }
 
@@ -167,7 +190,40 @@ func CaTrustCommands(address, dialect string) string {
 // compares against -- but the doc comment above is unconditional about
 // what triggers a bump, and re-pasting step 2 is exactly what an
 // operator should be nudged to do once this ships.
-const WizardVersion = 3
+//
+// Bumped to 4 by issue #1373: loggingPushBlock now reports every
+// target=remote action pointed at this instance's address (plus its own
+// src-address), not only the one named "mikroview", so a leftover from
+// an earlier setup -- another action, or a built-in repointed here --
+// shows up. A router whose script still reports only "mikroview" is
+// reporting a stale script, and the fix is the same paste.
+//
+// Bumped to 5 by issue #1405: PushBlock's ip-service record now also
+// requests RouterOS's own "dynamic" property, so mikroview can tell its
+// four dynamic /ip/service rows (dhcpclient, btest, discover,
+// reverse-proxy) from the eight an operator actually configures, rather
+// than showing all twelve as if they were management services. A router
+// whose script still omits "dynamic" is still handled correctly (the
+// server falls back to RouterOS's own address-key distinction), so this
+// bump is a nudge to re-paste for the more direct signal, not a
+// correctness requirement the way earlier bumps were.
+//
+// Bumped to 6 by issue #1360: the address-list block now leaves out the
+// blocklist builder's lists (mv-bl-*), and two kinds join the push --
+// raw-rule (the builder's drop rules and their counters) and
+// address-list-count (how many entries each mv-bl-* list holds). A
+// router on 5 still pushes correctly until it loads a blocklist; then
+// its address-list page outgrows /tool fetch's ~64 KiB body and stops
+// arriving, which is why the builder re-sets the push script as its
+// first part and a re-paste is worth nudging everywhere.
+//
+// Still 6 after #1409, which changed the filter-rule and address-list
+// blocks on the same unreleased branch: one bump per released change to
+// the script is what tells a router it is behind, and no router has run
+// a 6 that lacks #1409's reads. Still 6, for the same reason, after
+// the filter-rule block gained inInterfaceList for the doors panel
+// (v0.7.0 pre-release audit, A4-F1).
+const WizardVersion = 6
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
@@ -251,7 +307,19 @@ func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 	// header, so a burst of matching lines arriving at once is read as
 	// separate lines rather than one garbled one (#614). Keep this
 	// identical to docs/routeros-setup.md's block.
-	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
+	//
+	// src-address=0.0.0.0 is RouterOS's "let the router pick" value
+	// (#1370). Pasting this block a second time used to leave an
+	// earlier setup's src-address untouched, which is how one owner's
+	// router ended up pinned to the address an older wizard run had
+	// used for syslog while HTTPS pushes left from whichever address
+	// routing chose for them -- two different source addresses for one
+	// router, so it enrolled under one and every push was refused from
+	// the other. mikroview cannot know an operator's deliberate
+	// src-address (the push script's /tool fetch has no such field to
+	// carry it), so the wizard always sets both to the router's own
+	// routing choice rather than risk them drifting apart again.
+	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s src-address=0.0.0.0 remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
 	lines := []string{
 		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
 		fmt.Sprintf(`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=%s action=mikroview }`, strings.Join(want.Topics, ",")),
@@ -265,6 +333,14 @@ func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 		lines = append(lines, fmt.Sprintf(`/log info "mikroview-enrol %s"`, quote(enrolToken)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// UndoSyslogCommands is the ledger's Undo for "Logs flowing" (#1385):
+// the same two lines RemoveLoggingActionCommands already gives for a
+// leftover "mikroview" action (#1373), joined into the ledger's one
+// pre block. Embeds no address, so it renders unconditionally.
+func UndoSyslogCommands(dialect string) string {
+	return strings.Join(RemoveLoggingActionCommands("mikroview"), "\n")
 }
 
 // RuleTaggingCommands bulk-tags existing rules by action, which is the
@@ -334,8 +410,29 @@ func RuleTaggingCommands(dialect string) string {
 type blockSpec struct {
 	varName string
 	source  string
-	record  string
+	// where, when set, narrows source's print to the rows it matches --
+	// the RouterOS predicate itself, without the leading "where".
+	where string
+	// families, when set, replaces source: one loop per address family's
+	// menu into the same record list, each record stamped with that
+	// family ("ip" or "ipv6") ahead of the fields record names. For a
+	// table RouterOS keeps twice, once per family, that MikroView reads
+	// as one (#1360's raw rules).
+	families []familySource
+	record   string
 }
+
+// familySource is one address family's menu for a blockSpec that reads
+// both.
+type familySource struct {
+	family string
+	source string
+}
+
+// familyMenu stands in a families blockSpec's record for the menu of the
+// family being read, for a field the record has to go back to the router
+// for. Replaced before the block is rendered; never reaches a router.
+const familyMenu = "<family-menu>"
 
 // blockSpecs mirrors docs/routeros-setup.md's table, itself verified
 // against a real RouterOS 7.23.3 router -- see dialects.go's Rows, which
@@ -349,19 +446,61 @@ var blockSpecs = map[string]blockSpec{
 	// counter whether or not the rule logs, so the Log every rule helper
 	// can show a rule's real cost -- "fired 41,000 times in the last
 	// day" -- beside its tick-box before any logging is switched on.
+	//
+	// disabled and the counters are read with `get` by the rule's .id,
+	// the way raw-rule below reads them and for the same reason (#1409):
+	// on a real CHR, 7.18.2 and 7.24.4 alike, `print as-value` leaves
+	// packets and bytes out of every row, so ($v->"packets") sent null on
+	// every push, and on 7.18.2 it leaves disabled out too, so a disabled
+	// rule arrived enabled.
 	"filter-rule": {
 		varName: "rule",
 		source:  "/ip/firewall/filter",
 		record: `{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ` +
 			`"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ` +
 			`"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ` +
-			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ` +
-			`"disabled"=($v->"disabled"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}`,
+			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "inInterfaceList"=($v->"in-interface-list"); "outInterface"=($v->"out-interface"); ` +
+			`"disabled"=[/ip/firewall/filter get ($v->".id") disabled]; ` +
+			`"packets"=[/ip/firewall/filter get ($v->".id") packets]; "bytes"=[/ip/firewall/filter get ($v->".id") bytes]}`,
 	},
+	// The where is #1360's: the blocklist builder's lists (mv-bl-*) run
+	// to 15,000 entries, which would overflow /tool fetch's ~64 KiB POST
+	// body and stop this whole page arriving. They reach MikroView as a
+	// count instead -- the address-list-count block below.
+	//
+	// dynamic is read with `get` by the entry's .id (#1409): on 7.18.2
+	// `print as-value` leaves it out of every row, so a timed or
+	// rule-added entry arrived as if the operator had written it.
 	"address-list": {
 		varName: "al",
 		source:  "/ip/firewall/address-list",
-		record:  `{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}`,
+		where:   `!(list~"^` + blocklistListPrefix + `")`,
+		record:  `{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=[/ip/firewall/address-list get ($v->".id") dynamic]}`,
+	},
+	// raw-rule is #1360's: the blocklist builder's drop rules sit in raw
+	// prerouting (owner, answer 11a), on both families, and their
+	// packets/bytes counters are what the ledger's "fired N today" reads.
+	// The same field names as filter-rule's, plus the destination list a
+	// "to" rule matches on.
+	//
+	// disabled and the counters are read with `get` by the row's .id,
+	// not off $v. On a real CHR (7.18.2 and 7.24.4) `print as-value`
+	// leaves packets and bytes out of every row, and `print stats
+	// as-value` has them but drops src-address-list, log and log-prefix
+	// -- neither print alone carries both halves. And on 7.18.2 `print
+	// as-value` leaves disabled out even for a disabled rule, so ($v->
+	// "disabled") would report it enabled; 7.24.4 includes it. `get`
+	// answers all three on both (docs/routeros-setup.md, 4c-iii).
+	"raw-rule": {
+		varName: "raw",
+		families: []familySource{
+			{family: "ip", source: "/ip/firewall/raw"},
+			{family: "ipv6", source: "/ipv6/firewall/raw"},
+		},
+		record: `"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ` +
+			`"srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); ` +
+			`"log"=($v->"log"); "disabled"=[` + familyMenu + ` get ($v->".id") disabled]; ` +
+			`"packets"=[` + familyMenu + ` get ($v->".id") packets]; "bytes"=[` + familyMenu + ` get ($v->".id") bytes]}`,
 	},
 	"dhcp-lease": {
 		varName: "lease",
@@ -378,6 +517,37 @@ var blockSpecs = map[string]blockSpec{
 		source:  "/ip/address",
 		record:  `{"address"=($v->"address"); "network"=($v->"network"); "interface"=($v->"interface"); "comment"=($v->"comment")}`,
 	},
+	// ip-service is issue #1329: the router's own management services
+	// (telnet, ftp, www, www-ssl, ssh, api, api-ssl, winbox), so an
+	// operator sees what's actually listening rather than mikroview
+	// inferring it from traffic. Field names are RouterOS 7's documented
+	// /ip/service properties -- see internal/ingest.IPServiceEntry's own
+	// doc comment for whether they were confirmed against a live router.
+	//
+	// dynamic was added by #1405: a real router's /ip/service table also
+	// returns four rows RouterOS runs itself (dhcpclient, btest,
+	// discover, reverse-proxy), and this is what lets mikroview tell
+	// those apart from the eight above -- see
+	// internal/ingest.IPServiceEntry.IsDynamic.
+	//
+	// disabled is read with `get` by the row's .id (#1410): on 7.18.2
+	// `print as-value` leaves it out even for a disabled service, so a
+	// disabled telnet arrived enabled -- the fault #1409 fixed in the
+	// filter-rule block.
+	//
+	// availableFrom is #1411's: 7.24 renamed the address restriction
+	// from address to available-from, so ($v->"address") arrives null
+	// there. Both are read off $v, and the server takes whichever the
+	// router has (internal/ingest.IPServiceEntry). Not with `get`, as
+	// disabled is: `get` on a property the release does not have is an
+	// error that stops the script on 7.18.2 through 7.23.3, and print
+	// as-value carries whichever name the release uses on every version
+	// checked (docs/routeros-verification-logs/<version>-push-ip-service-address.log).
+	"ip-service": {
+		varName: "svc",
+		source:  "/ip/service",
+		record:  `{"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "availableFrom"=($v->"available-from"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}`,
+	},
 }
 
 // PushBlock renders one table's push block: fetch every record, rewrite
@@ -388,18 +558,43 @@ func PushBlock(address, token, kind, dialect string) string {
 	if kind == string(loggingKind) {
 		return loggingPushBlock(address, token, dialect)
 	}
+	if kind == addressListCountKind {
+		return addressListCountBlock(address, token)
+	}
 	spec, ok := blockSpecs[kind]
 	if !ok {
 		return ""
 	}
 	recs := spec.varName + "Recs"
-	payload := spec.varName + "Payload"
-	return strings.Join([]string{
-		fmt.Sprintf(`:local %s [:toarray ""]`, recs),
-		fmt.Sprintf(`:foreach i,v in=[%s print as-value] do={`, spec.source),
-		fmt.Sprintf(`  :local rec %s`, spec.record),
-		fmt.Sprintf(`  :set %s ($%s, {$rec})`, recs, recs),
-		`}`,
+	lines := []string{fmt.Sprintf(`:local %s [:toarray ""]`, recs)}
+	loop := func(source, record string) {
+		cmd := source + " print as-value"
+		if spec.where != "" {
+			cmd += " where " + spec.where
+		}
+		lines = append(lines,
+			fmt.Sprintf(`:foreach i,v in=[%s] do={`, cmd),
+			fmt.Sprintf(`  :local rec %s`, record),
+			fmt.Sprintf(`  :set %s ($%s, {$rec})`, recs, recs),
+			`}`,
+		)
+	}
+	if len(spec.families) == 0 {
+		loop(spec.source, spec.record)
+	}
+	for _, f := range spec.families {
+		record := strings.ReplaceAll(spec.record, familyMenu, f.source)
+		loop(f.source, fmt.Sprintf(`{"family"="%s"; %s`, f.family, record))
+	}
+	return strings.Join(append(lines, pushEnvelope(address, token, kind, spec.varName)...), "\n")
+}
+
+// pushEnvelope is the two lines that close every table block: serialize
+// the records into the ingest envelope, and POST it.
+func pushEnvelope(address, token, kind, varName string) []string {
+	recs := varName + "Recs"
+	payload := varName + "Payload"
+	return []string{
 		// routerosVersion and wizardVersion ride the payload rather than a
 		// record: both describe the router's own setup, not a row of any
 		// table (#408 carrying #436's derived version source; #1241 the
@@ -414,7 +609,61 @@ func PushBlock(address, token, kind, dialect string) string {
 		// string well-formed, because that validator lives in a
 		// different package and this function has no way to see it.
 		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, quote(token)),
-	}, "\n")
+	}
+}
+
+// addressListCountKind is #1360's second kind: how many entries each of
+// the blocklist builder's address lists holds, rather than the entries
+// themselves. Spelled here for the same reason loggingKind is.
+const addressListCountKind = "address-list-count"
+
+// blocklistListPrefix is what every address list the blocklist builder
+// writes is named under: mv-bl-<key>, and mv-bl-spamhaus6 for IPv6
+// (blcatalogue.ListName; TestBlocklistPrefixCoversEveryCatalogueName
+// holds the two together).
+const blocklistListPrefix = "mv-bl-"
+
+// addressListCountBlock renders #1360's count page: for each blocklist
+// name and each family, one record {list, family, count, loadedAt}. The
+// entries themselves never travel -- 15,000 of them would overflow the
+// ~64 KiB body /tool fetch can POST (the address-list block leaves them
+// out for the same reason).
+//
+// loadedAt is the first entry's creation-time, which the loader's swap
+// (`set [find list=...-next] list=...`) keeps -- checked on a real CHR
+// (docs/routeros-setup.md, 4c-iii). It is "" for a list with no entries,
+// which is also what a router holding none of these lists sends for
+// every record.
+func addressListCountBlock(address, token string) string {
+	// Every list the catalogue can write, fixed rather than read off the
+	// router, so the block is the same text whichever lists a router has
+	// on: re-pasting the push changes nothing when a list is added or
+	// removed.
+	names := blcatalogue.ListNames()
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = `"` + n + `"`
+	}
+	const varName = "blc"
+	lines := []string{
+		fmt.Sprintf(`:local %sRecs [:toarray ""]`, varName),
+		fmt.Sprintf(`:foreach n in={%s} do={`, strings.Join(quoted, ";")),
+	}
+	// Each family's locals carry its own suffix: the two sit in the same
+	// do={} scope, where a second `:local c` would redeclare the first.
+	for _, f := range []struct{ family, source, v string }{
+		{"ip", "/ip/firewall/address-list", "4"},
+		{"ipv6", "/ipv6/firewall/address-list", "6"},
+	} {
+		lines = append(lines,
+			fmt.Sprintf(`  :local c%s [%s print count-only where list=$n]`, f.v, f.source),
+			fmt.Sprintf(`  :local t%s ""`, f.v),
+			fmt.Sprintf(`  :if ($c%s > 0) do={ :set t%s [%s get ([find where list=$n]->0) creation-time] }`, f.v, f.v, f.source),
+			fmt.Sprintf(`  :set %sRecs ($%sRecs, {{"list"=$n; "family"="%s"; "count"=$c%s; "loadedAt"=$t%s}})`, varName, varName, f.family, f.v, f.v),
+		)
+	}
+	lines = append(lines, `}`)
+	return strings.Join(append(lines, pushEnvelope(address, token, addressListCountKind, varName)...), "\n")
 }
 
 // PushScript builds the whole state-push script with the token and
@@ -448,10 +697,22 @@ func PushScript(address, token string, kinds []string, dialect string) string {
 // commands and has never imported the schema they feed.
 const loggingKind = "logging"
 
-// loggingPushBlock renders #1241's setup report: the mikroview logging
-// action and every /system logging rule pointing at it, in one page of
-// the same shape as the table blocks above, stamped with the wizard
-// version that wrote this script.
+// loggingPushBlock renders #1241's setup report, widened by #1373: every
+// /system logging action still pointed at this instance -- not only the
+// one named "mikroview" -- and every /system logging rule feeding one of
+// them, in one page of the same shape as the table blocks above, stamped
+// with the wizard version that wrote this script.
+//
+// "Pointed at this instance" is target=remote with remote equal to this
+// instance's own address (want.Remote below) -- the same test an
+// operator's eye would apply, and the only one this script can apply
+// without knowing any action's name in advance. That is deliberately
+// wider than "named mikroview": #1373 is exactly the case where an
+// earlier setup's action -- built-in (memory, remote, disk, echo) or a
+// leftover of its own -- was repointed at this instance and left
+// sending logs here under its old name after mikroview's own setup moved
+// on. A router with nothing else pointed here still reports one record,
+// the mikroview action itself.
 //
 // Both menus are printed whole and filtered in the script with :if,
 // rather than with a `print ... where` predicate. `print as-value` and
@@ -460,23 +721,35 @@ const loggingKind = "logging"
 // predicate that silently matched nothing would push an empty page,
 // which reads exactly like a router with no mikroview logging at all.
 //
-// Nothing else from /system logging is sent -- not the other actions,
-// not the rules feeding them. What the operator logs elsewhere is not
-// mikroview's business, and the only question this page answers is
-// whether the wizard's own setup is still what the wizard would write.
+// matchNames collects the name of every action the first loop matched,
+// wrapped in commas ("...,mikroview,memory,...") so the second loop's
+// `~` match cannot mistake "memory" for a substring of some other
+// action's longer name. The second loop then sends the rule for any
+// action this page already decided to report -- never a name it has not
+// seen -- so the two menus can never disagree about which actions this
+// report is about.
+//
+// Nothing else from /system logging is sent -- not another action this
+// instance is not the target of, not the rules feeding one. What the
+// operator logs elsewhere is not mikroview's business; the only
+// question this page answers is what is sending logs to this instance
+// and under what setup.
 func loggingPushBlock(address, token, dialect string) string {
+	want := WizardLogging(address, "", dialect)
 	return strings.Join([]string{
+		`:local matchNames ""`,
 		`:local logRecs [:toarray ""]`,
 		`:foreach i,v in=[/system/logging/action print as-value] do={`,
-		`  :if (($v->"name") = "mikroview") do={`,
+		fmt.Sprintf(`  :if (($v->"target") = "remote" and ($v->"remote") = "%s") do={`, want.Remote),
 		`    :local rec {"type"="action"; "name"=($v->"name"); "target"=($v->"target"); "remote"=($v->"remote"); ` +
 			`"remotePort"=($v->"remote-port"); "remoteProtocol"=($v->"remote-protocol"); ` +
-			`"remoteLogFormat"=($v->"remote-log-format"); "checkCertificate"=($v->"check-certificate")}`,
+			`"remoteLogFormat"=($v->"remote-log-format"); "checkCertificate"=($v->"check-certificate"); "srcAddress"=($v->"src-address")}`,
 		`    :set logRecs ($logRecs, {$rec})`,
+		`    :set matchNames ($matchNames . "," . ($v->"name") . ",")`,
 		`  }`,
 		`}`,
 		`:foreach i,v in=[/system/logging print as-value] do={`,
-		`  :if (($v->"action") = "mikroview") do={`,
+		`  :if ($matchNames ~ (",".($v->"action").",")) do={`,
 		`    :local rec {"type"="rule"; "topics"=($v->"topics"); "action"=($v->"action"); "disabled"=($v->"disabled")}`,
 		`    :set logRecs ($logRecs, {$rec})`,
 		`  }`,
@@ -487,6 +760,55 @@ func loggingPushBlock(address, token, dialect string) string {
 		// quote() rather than being relied on to already be well-formed.
 		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), quote(token)),
 	}, "\n")
+}
+
+// BuiltinLoggingActions are RouterOS's log actions that exist on every
+// router from the factory and cannot be removed, only reset (#1373).
+// A wizard, or an earlier MikroView setup, can repoint one of these at
+// this instance the same way it can any other action -- the fix for one
+// is different (reset it, never remove it) from the fix for an action
+// mikroview itself created, so a leftover check must be able to tell
+// the two apart by name.
+var BuiltinLoggingActions = map[string]bool{
+	"memory": true,
+	"remote": true,
+	"disk":   true,
+	"echo":   true,
+}
+
+// ResetBuiltinLoggingAction is the RouterOS command that returns a
+// built-in logging action to its factory target, for one an earlier
+// setup repointed at this instance (#1373). Built-ins are reset, not
+// removed -- RouterOS creates them at boot and refuses `action remove`
+// on one.
+//
+// Only "remote" carries the remote/src-address fields a repointing
+// could have changed, so only its reset line clears them back to the
+// RouterOS default (`remote=0.0.0.0 src-address=0.0.0.0`, the same
+// "let the router pick" reading src-address=0.0.0.0 already has
+// elsewhere in this package). "memory", "disk" and "echo" have no such
+// fields; their factory target is their own name, and resetting target
+// is the whole fix -- verified against docs; not confirmed on a live
+// router by this change, since mikroview never connects to one.
+func ResetBuiltinLoggingAction(name string) string {
+	if name == "remote" {
+		return `/system logging action set [find name=remote] remote=0.0.0.0 src-address=0.0.0.0`
+	}
+	return fmt.Sprintf(`/system logging action set [find name=%s] target=%s`, name, name)
+}
+
+// RemoveLoggingActionCommands is the fix for a non-built-in action still
+// sending logs to this instance (#1373): remove the rules that feed it
+// before removing the action itself, since RouterOS refuses to remove
+// an action a rule still references. `[find action=name]`/`[find
+// name=name]` match the router's own copy however many rules or none
+// point at it, the same guarded-lookup shape every other command in
+// this package uses rather than assuming a fixed id.
+func RemoveLoggingActionCommands(name string) []string {
+	return []string{
+		fmt.Sprintf(`/system logging remove [find action=%s]`, name),
+		fmt.Sprintf(`/system logging action remove [find name=%s]`, name),
+	}
 }
 
 // PushScriptPolicy is the policy mv-push is saved and scheduled under:
@@ -506,6 +828,16 @@ func ScheduleCommands(body, dialect string) string {
 		scriptAdd("mv-push", PushScriptPolicy, body),
 		SchedulerAdd("mv-push", fmt.Sprintf(`interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy)),
 		`/system script run mv-push`,
+	}, "\n")
+}
+
+// UndoScheduleCommands is the ledger's Undo for "Router state pushed"
+// (#1385): remove the scheduler entry and the script ScheduleCommands
+// saved. Embeds no address or token, so it renders unconditionally.
+func UndoScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		`/system scheduler remove [find name=mv-push]`,
+		`/system script remove [find name=mv-push]`,
 	}, "\n")
 }
 
@@ -598,6 +930,17 @@ func BackupScheduleCommands(dialect string) string {
 	}, "\n")
 }
 
+// UndoBackupScheduleCommands is the ledger's Undo for "Nightly backup"
+// (#1385) on the SFTP transport: remove the scheduler entry and the
+// script BackupScript/BackupScheduleCommands saved. Embeds no address or
+// token, so it renders unconditionally.
+func UndoBackupScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		`/system scheduler remove [find name=mv-backup]`,
+		`/system script remove [find name=mv-backup]`,
+	}, "\n")
+}
+
 // backupPushHTTPSBlock renders one local file's slice-push loop for
 // BackupPushScript: read the file's size, POST a "begin" declaring the
 // transfer, then loop /file read (RouterOS >=7.13, chunk-size capped at
@@ -631,7 +974,7 @@ func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
 	url := fmt.Sprintf(`https://%s/api/ingest/router-backup`, quote(address))
 	// token is quoted here even though PushBlock's identical Bearer
 	// header spot leaves it bare (relying on the handler's Token
-	// validation, #1095) -- AGENTS.md's rule that templated command text
+	// validation, #1095) -- the house rule that templated command text
 	// must be "validated and quoted, never interpolated raw" is easiest
 	// to just satisfy outright in a function being written fresh, rather
 	// than lean on a validator this package cannot see from here.
@@ -716,6 +1059,17 @@ func BackupPushScheduleCommands(body, dialect string) string {
 	}, "\n")
 }
 
+// UndoBackupPushScheduleCommands is the ledger's Undo for "Nightly
+// backup" (#1385) on the HTTPS transport (#955): remove the scheduler
+// entry and the script BackupPushScript/BackupPushScheduleCommands
+// saved. Embeds no address or token, so it renders unconditionally.
+func UndoBackupPushScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		`/system scheduler remove [find name=mv-backup-https]`,
+		`/system script remove [find name=mv-backup-https]`,
+	}, "\n")
+}
+
 // maxLogPrefixLen is docs/routeros-setup.md's own ceiling: RouterOS's log
 // formatter is known to corrupt or overwrite adjacent fields once a
 // log-prefix gets much past ~20 characters, so every prefix this package
@@ -729,10 +1083,8 @@ const maxLogPrefixLen = 15
 // distinct from every other one (shortened or not) LogPrefixForAction
 // can produce: see TestLogPrefixForActionFitsAndDoesNotCollide, which
 // checks both properties for every action this package is known to
-// meet. An action not in this table falls through to LogPrefixForAction's
-// own length-safe truncation instead -- this table is for the ones worth
-// a slug a human reading the router's own log can still recognise, not
-// an exhaustive list of every RouterOS action there is.
+// meet. An action not in this table keeps its own name as the slug; every
+// action in logPrefixCode fits maxLogPrefixLen that way.
 var logPrefixSlug = map[string]string{
 	"add-src-to-address-list": "add-src-list",
 	"add-dst-to-address-list": "add-dst-list",
@@ -741,46 +1093,47 @@ var logPrefixSlug = map[string]string{
 	"strip-ipv4-options":      "strip-ipv4",
 }
 
+// logPrefixCode is the first character of a log-prefix: the class the
+// decoder (internal/routeros/prefix.go actionFromCode) reads back for each
+// RouterOS action. A accept, D drop and R reject are the three filter
+// verdicts; L is a rule that logs without deciding the packet's fate; M a
+// mangle mark; N a NAT rewrite. An action not listed (tarpit, anything
+// unknown) has no code the decoder reads as what the rule does.
+var logPrefixCode = map[string]byte{
+	"accept": 'A', "drop": 'D', "reject": 'R',
+
+	"log": 'L', "jump": 'L', "return": 'L', "passthrough": 'L',
+	"add-src-to-address-list": 'L', "add-dst-to-address-list": 'L',
+	"fasttrack-connection": 'L', "notrack": 'L', "change-mss": 'L',
+	"change-ttl": 'L', "change-dscp": 'L', "clear-df": 'L',
+	"set-priority": 'L', "strip-ipv4-options": 'L', "route": 'L',
+	"sniff-pc": 'L', "sniff-tzsp": 'L',
+
+	"mark-connection": 'M', "mark-packet": 'M', "mark-routing": 'M',
+
+	"masquerade": 'N', "src-nat": 'N', "dst-nat": 'N', "redirect": 'N',
+	"netmap": 'N', "same": 'N',
+}
+
 // LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
 // bulk `[find action=...]` commands give a rule, applied to a single
-// action rather than to every rule of that action at once: D|drop|,
-// R|reject|, A|accept|, and <INITIAL>|<slug>| for everything else,
-// INITIAL being the action's own first letter, upper-cased, and slug
-// being the action name itself unless logPrefixSlug shortens it (S4 in
-// the v0.6.0 audit, #1304: several real RouterOS actions -- mangle's
-// mark-connection, both the filter and mangle add-*-to-address-list
-// actions -- render a prefix past maxLogPrefixLen with the action name
-// spelled out in full, which RouterOS's own log formatter can corrupt,
-// showing up on mikroview's side as an unrecognised prefix and an action
-// of "unknown" for every hit on that rule). #435's per-rule tune-logging
-// render step (POST /api/tune-logging/render) calls this so a rule
-// tagged individually gets the identical prefix bulk-tagging would have
-// given it, rather than a second convention that could drift from the
-// first. dialect is accepted for the same reason every other function in
-// this file takes one -- the seam a second dialect would use, not a
-// currently-live switch.
+// action: <code>|<slug>|, the code being the class the decoder reads back
+// (logPrefixCode) and the slug the action name unless logPrefixSlug
+// shortens it to stay within maxLogPrefixLen. It returns "" for an action
+// with no code (tarpit, anything unknown) rather than write a prefix that
+// decodes to the wrong verdict; callers must not tag such a rule. Note
+// accept/drop in nat/mangle/raw are not filter verdicts, but no caller
+// passes those tables. #435's per-rule tune-logging render calls this so a
+// rule tagged individually gets the prefix bulk-tagging would have given
+// it. dialect is the seam a second dialect would use, not a live switch.
 func LogPrefixForAction(action, dialect string) string {
-	if action == "" {
+	code, ok := logPrefixCode[action]
+	if !ok {
 		return ""
 	}
 	slug := action
 	if short, ok := logPrefixSlug[action]; ok {
 		slug = short
 	}
-	initial := strings.ToUpper(action[:1])
-	prefix := initial + "|" + slug + "|"
-	if len(prefix) > maxLogPrefixLen {
-		// An action neither short enough on its own nor named in
-		// logPrefixSlug above -- keep as much of it as fits rather than
-		// hand RouterOS a prefix its own log formatter can corrupt.
-		keep := maxLogPrefixLen - len(initial) - 2 // both '|' delimiters
-		if keep < 0 {
-			keep = 0
-		}
-		if keep > len(slug) {
-			keep = len(slug)
-		}
-		prefix = initial + "|" + slug[:keep] + "|"
-	}
-	return prefix
+	return string(code) + "|" + slug + "|"
 }

@@ -58,7 +58,7 @@ func newExpectationHarness(t *testing.T, members AddressListMembership, capacity
 	if err != nil {
 		t.Fatalf("OpenDefinitionsStore: %v", err)
 	}
-	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), capacity)
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), capacity, matchLogTestKey(t))
 	if err != nil {
 		t.Fatalf("matchlog.Open: %v", err)
 	}

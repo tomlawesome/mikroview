@@ -46,6 +46,7 @@
     routerBackupDownloadUrl,
     setRouterBackupComment,
     setRouterBackupPassphrase,
+    setRouterBackupSwitch,
     unlockRouterBackupVault,
   } from '../lib/api'
   import { authState } from '../lib/auth.svelte'
@@ -62,12 +63,18 @@
   } from '../lib/backups'
   import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
-  import { portOf } from '../lib/setupsteps'
+  import { listenPort } from '../lib/format'
+  import { saveSetupBackupTransport } from '../lib/api'
+  import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
   import type {
     RouterBackupDiffLine,
     RouterBackupGeneration,
     RouterBackupRouter,
     RouterBackupsResponse,
+    RouterBackupSwitchState,
+    BackupTransport,
     VaultLock,
   } from '../lib/types'
 
@@ -75,6 +82,8 @@
     resp,
     fetchedAt,
     onopenlost,
+    onswitchchanged,
+    ontransportchanged,
   }: {
     resp: RouterBackupsResponse
     /** When the request behind `resp` was issued (EngineRoom's own
@@ -84,6 +93,14 @@
     /** Round 44's "is it gone?" link: opens the wizard's step 6 in its
      * lost-router shape (round 45), reached only from here. */
     onopenlost: (device: string) => void
+    /** The drop box's own switch (#1361) answered: EngineRoom folds the
+     * new open/port into its own copy of `resp` and refreshes the admin
+     * banner (configProblemsState), which this component has no access
+     * to on its own. */
+    onswitchchanged?: (state: RouterBackupSwitchState) => void
+    /** The "deliver by" row (#1494) saved a new transport: EngineRoom
+     * folds it into its own copy of `resp`. */
+    ontransportchanged?: (transport: BackupTransport) => void
   } = $props()
 
   // A keep/release/comment control answers with the router's whole
@@ -206,6 +223,80 @@
 
   const gated = $derived(vaultGated(lock))
 
+  // --- the drop box's own switch (#1361) -----------------------------
+  //
+  // Independent of the passphrase forms below (openKind/FormKind):
+  // resp.enabled there is the vault *key*'s state, gating the whole
+  // right-hand column, while the switch row must show and work whether
+  // or not a key is mounted -- an admin can open the port with no key
+  // yet configured, same as backup.listen already lived in config.yaml
+  // whether or not backup.enabled did.
+  //
+  // open/port read straight off resp.port -- a live read of main's
+  // backupRuntime (SetupInstance.BackupPortNow), not a separate fetch --
+  // so there is nothing here to poll: EngineRoom's own refresh, and the
+  // optimistic onswitchchanged below, are what keep it current.
+  //
+  // Opening is RouterBackupOpenDialog's -- the password, the caveat and
+  // the call live there once, shared with the wizard's Back up nightly
+  // choice (StepRouter.svelte) as the ratified design asks.
+  const dropBoxOpen = $derived(!!resp.port)
+
+  let switchAsking = $state(false)
+  let switchSubmitting = $state(false)
+  let switchError = $state<string | null>(null)
+
+  function openSwitchDialog() {
+    switchAsking = true
+    switchError = null
+  }
+
+  function cancelSwitchDialog() {
+    switchAsking = false
+  }
+
+  function dropBoxOpened(state: RouterBackupSwitchState) {
+    switchAsking = false
+    onswitchchanged?.(state)
+  }
+
+  // Closing is the safe direction (owner's ruling 3a): no password, no
+  // dialog -- one click, same as history's own "turn off".
+  async function closeDropBox() {
+    if (switchSubmitting) return
+    switchSubmitting = true
+    switchError = null
+    const result = await setRouterBackupSwitch(false)
+    switchSubmitting = false
+    if (typeof result === 'string') {
+      switchError = couldNot('close', 'the drop box', result)
+      return
+    }
+    onswitchchanged?.(result)
+  }
+
+  // The "deliver by" row (#1494): the transport is a property of the
+  // deployment (#955), chosen here in one click -- no password, since
+  // switching opens no port and grants nothing; it only changes what the
+  // wizard prints from now on.
+  const httpsTransport = $derived(resp.transport === 'https')
+  let transportSubmitting = $state(false)
+  let transportError = $state<string | null>(null)
+
+  async function switchTransport() {
+    if (transportSubmitting) return
+    transportSubmitting = true
+    transportError = null
+    const next: BackupTransport = httpsTransport ? 'sftp' : 'https'
+    const err = await saveSetupBackupTransport(next)
+    transportSubmitting = false
+    if (err) {
+      transportError = couldNot('switch', 'the backup transport', err)
+      return
+    }
+    ontransportchanged?.(next)
+  }
+
   // 'keep' and 'edit' are the same one-field form (#1126): keeping a
   // backup and rewriting why it is kept are the same sentence, typed
   // in the same place.
@@ -248,18 +339,18 @@
   async function submitSet() {
     formError = null
     if (runeCount(newPassphrase) < lock.minPassphraseLength) {
-      formError = `the vault passphrase must be at least ${lock.minPassphraseLength} characters`
+      formError = `The vault passphrase must be at least ${lock.minPassphraseLength} characters.`
       return
     }
     if (newPassphrase !== confirmPassphrase) {
-      formError = "the two don't match"
+      formError = "The two do not match."
       return
     }
     submitting = true
     const result = await setRouterBackupPassphrase(newPassphrase)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('set', 'the vault passphrase', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -269,15 +360,15 @@
   async function submitChange() {
     formError = null
     if (!currentPassphrase) {
-      formError = 'enter the current vault passphrase'
+      formError = "Enter the current vault passphrase."
       return
     }
     if (runeCount(newPassphrase) < lock.minPassphraseLength) {
-      formError = `the vault passphrase must be at least ${lock.minPassphraseLength} characters`
+      formError = `The vault passphrase must be at least ${lock.minPassphraseLength} characters.`
       return
     }
     if (newPassphrase !== confirmPassphrase) {
-      formError = "the two don't match"
+      formError = "The two do not match."
       return
     }
     submitting = true
@@ -289,7 +380,7 @@
     const result = await changeRouterBackupPassphrase(currentPassphrase, newPassphrase)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('change', 'the vault passphrase', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -303,7 +394,7 @@
     const result = await removeRouterBackupPassphrase(removePassphraseText)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('remove', 'the vault passphrase', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -317,7 +408,7 @@
     const result = await unlockRouterBackupVault(unlockPassphraseText)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('unlock', 'the vault', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -339,11 +430,11 @@
     if (!keepTarget) return
     const comment = keepComment.trim()
     if (comment.length === 0) {
-      formError = 'say why you are keeping it'
+      formError = "Say why you are keeping it."
       return
     }
     if (runeCount(comment) > MAX_KEEP_COMMENT) {
-      formError = `at most ${MAX_KEEP_COMMENT} characters`
+      formError = `At most ${MAX_KEEP_COMMENT} characters.`
       return
     }
     submitting = true
@@ -353,7 +444,7 @@
         : await keepRouterBackup(keepTarget.device, keepTarget.generation, comment)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('keep', 'this backup', result)
       return
     }
     applyRow(result)
@@ -366,7 +457,7 @@
     const result = await releaseRouterBackup(device, generation)
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('release', 'this backup', result)
       return
     }
     applyRow(result)
@@ -379,7 +470,7 @@
     const result = await lockRouterBackupVault()
     submitting = false
     if (typeof result === 'string') {
-      formError = result
+      formError = couldNot('lock', 'the vault', result)
       return
     }
     lockOverride = { lock: result, at: Date.now() }
@@ -419,14 +510,14 @@
       await refreshLock(() => {
         downloadError = {
           device,
-          message: "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+          message: "Could not download this file: it was refused, and mikroview couldn't refresh the lock status. Try again.",
         }
       })
     } else if (outcome === 'failed') {
       // The button used to do nothing and say nothing on anything but a
       // 403 -- a dropped connection or a 5xx looked identical to a
       // click that never happened.
-      downloadError = { device, message: 'The download failed. Try again.' }
+      downloadError = { device, message: 'Could not download this file: the download failed. Try again.' }
     }
   }
 
@@ -495,7 +586,7 @@
     const result = await fetchRouterBackupText(device, g.id)
     if (!stillOpen(seq) || !viewer) return
     if (typeof result === 'string') {
-      viewer = { ...viewer, loading: false, error: result }
+      viewer = { ...viewer, loading: false, error: couldNot('read', 'this export', result) }
       await refreshLock()
       return
     }
@@ -507,7 +598,7 @@
     const result = await fetchRouterBackupDiff(device, prev.id, g.id)
     if (!stillOpen(seq) || !viewer) return
     if (typeof result === 'string') {
-      viewer = { ...viewer, loading: false, error: result }
+      viewer = { ...viewer, loading: false, error: couldNot('compare', 'these exports', result) }
       await refreshLock()
       return
     }
@@ -525,6 +616,45 @@
       </button>
     {/if}
   {/if}
+{/snippet}
+
+{#snippet dropBoxRow()}
+  <div class="orow">
+    <span>drop box</span>
+    <span class="ov">
+      {#if dropBoxOpen}
+        open on port {listenPort(resp.port ?? '')}
+        · <button type="button" class="olink" disabled={switchSubmitting} onclick={closeDropBox}>close</button>
+      {:else}
+        closed
+        · <button type="button" class="olink" onclick={openSwitchDialog}>open…</button>
+      {/if}
+    </span>
+  </div>
+  <!-- Only a *close* failure shows here -- an open failure shows inside
+       the dialog below instead, which stays open on a refusal so it is
+       never shown in both places at once. -->
+  {#if switchError && !switchAsking}<div class="oghint"><FailureLine text={switchError} /></div>{/if}
+{/snippet}
+
+{#snippet deliverByRow()}
+  <div class="orow">
+    <span>deliver by</span>
+    <span class="ov">
+      {#if httpsTransport}
+        HTTPS through the ingest channel — no second port
+        · <button type="button" class="olink" disabled={transportSubmitting} onclick={switchTransport}>switch to SFTP…</button>
+      {:else}
+        SFTP to the drop box
+        · <button type="button" class="olink" disabled={transportSubmitting} onclick={switchTransport}>switch to HTTPS…</button>
+      {/if}
+    </span>
+  </div>
+  {#if transportError}<div class="oghint"><FailureLine text={transportError} /></div>{/if}
+  <p class="oghint">
+    Changes what the wizard prints from now on; a router already set up keeps its script. Pick HTTPS only when the
+    SFTP port cannot be opened — it sends the backup in many pieces.
+  </p>
 {/snippet}
 
 {#snippet passphraseRow()}
@@ -547,6 +677,8 @@
 
 {#if !resp.enabled}
   <div class="wrows">
+    {@render dropBoxRow()}
+    {@render deliverByRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov dim">nothing</span>
@@ -569,6 +701,8 @@
   </div>
 {:else if resp.routers.length === 0}
   <div class="wrows">
+    {@render dropBoxRow()}
+    {@render deliverByRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov dim">nothing — no router has pushed one yet · the wizard's step 6 prints the script</span>
@@ -576,7 +710,13 @@
     {#if resp.port}
       <div class="orow">
         <span>arrive by</span>
-        <span class="ov dim">SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of</span>
+        <span class="ov dim">
+          {#if httpsTransport}
+            HTTPS to the ingest channel — the drop box's port is not used
+          {:else}
+            SFTP on port {listenPort(resp.port)} · a drop box the router writes into and nothing reads out of
+          {/if}
+        </span>
       </div>
     {/if}
     {@render passphraseRow()}
@@ -599,7 +739,7 @@
           <span class:brwarn={receipt.amber}>{receipt.text}</span>
         </div>
         {#if downloadError && downloadError.device === router.device}
-          <p class="oghint err" role="alert">{downloadError.message}</p>
+          <div class="oghint"><FailureLine text={downloadError.message} /></div>
         {/if}
         <svg
           class="brstrip"
@@ -736,8 +876,8 @@
                 <button type="button" class="olink" disabled={submitting} onclick={() => (releasing = null)}>
                   cancel
                 </button>
-                {#if formError}<span class="oghint err" role="alert">{formError}</span>{/if}
               </p>
+              {#if formError}<div class="oghint"><FailureLine text={formError} /></div>{/if}
             {/if}
           {/each}
         {/if}
@@ -749,7 +889,7 @@
               <button type="button" class="olink" onclick={closeViewer}>close</button>
             </p>
             {#if viewer.error}
-              <p class="oghint err" role="alert">{viewer.error}</p>
+              <div class="oghint"><FailureLine text={viewer.error} /></div>
             {:else if viewer.loading}
               <p class="oghint">opening the vault…</p>
             {:else if viewer.mode === 'text'}
@@ -791,6 +931,8 @@
   </div>
 
   <div class="wrows">
+    {@render dropBoxRow()}
+    {@render deliverByRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov">
@@ -802,7 +944,13 @@
     {#if resp.port}
       <div class="orow">
         <span>arrive by</span>
-        <span class="ov dim">SFTP on port {portOf(resp.port)} · a drop box the router writes into and nothing reads out of</span>
+        <span class="ov dim">
+          {#if httpsTransport}
+            HTTPS to the ingest channel — the drop box's port is not used
+          {:else}
+            SFTP on port {listenPort(resp.port)} · a drop box the router writes into and nothing reads out of
+          {/if}
+        </span>
       </div>
     {/if}
     <div class="orow">
@@ -867,7 +1015,7 @@
         />
       </label>
     {/if}
-    {#if formError}<p class="oghint err" role="alert">{formError}</p>{/if}
+    {#if formError}<div class="oghint"><FailureLine text={formError} /></div>{/if}
     <span class="acts">
       <button type="button" class="olink" disabled={submitting} onclick={closeForm}>cancel</button>
       {#if openKind === 'set'}
@@ -891,6 +1039,15 @@
       {/if}
     </span>
   </div>
+{/if}
+
+{#if switchAsking}
+  <!-- Opening the drop box (#1361): the shared dialog -- password,
+       caveat, HTTPS alternative -- in Settings' own form grammar. Its
+       own block, not folded into the pform above: that one is gated on
+       resp.enabled (the vault *key*'s state), and this control has to
+       work with no key mounted at all. -->
+  <RouterBackupOpenDialog look="settings" onopened={dropBoxOpened} oncancel={cancelSwitchDialog} />
 {/if}
 
 <style>
@@ -1056,11 +1213,6 @@
     font-size: 11.5px;
     font-style: italic;
     color: var(--fg-dim);
-  }
-
-  .oghint.err {
-    color: var(--reject);
-    font-style: normal;
   }
 
   .orow {

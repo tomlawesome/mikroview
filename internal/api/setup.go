@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
@@ -72,6 +74,20 @@ type setupInstance struct {
 	// certificate covers localhost/127.0.0.1 only, which is the single
 	// most common reason a router's first fetch fails.
 	Hosts []string `json:"hosts"`
+	// EffectiveHosts is the list the certificate is actually issued for:
+	// Hosts, or the generated defaults when Hosts is empty (#1507).
+	EffectiveHosts []string `json:"effectiveHosts"`
+	// CertificateCoversAddress is Go's answer (#1507, decision #1437) to
+	// "does the certificate cover the address the wizard is using":
+	// names compare case-insensitively, a bare IPv6 literal is not cut at
+	// its last colon, and it is true when there is no address yet or when
+	// neither HTTP TLS nor syslog TLS is on (no certificate is in play,
+	// #374).
+	CertificateCoversAddress bool `json:"certificateCoversAddress"`
+	// AddressHost is the stored setup address with any port removed
+	// (routeros.Hostname), empty when there is no address (#1507). The
+	// front end never splits an address itself.
+	AddressHost string `json:"addressHost"`
 	// SyslogPort is the port routers should send syslog to, taken from
 	// the running configuration rather than assumed to be 6514.
 	SyslogPort string `json:"syslogPort"`
@@ -215,15 +231,30 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		address = s.Setup.Address()
 		backupTransport = s.Setup.BackupTransport()
 	}
+	// The coverage fields judge the address being typed when the wizard
+	// sends one (?address=), else the stored one. An address
+	// validSetupAddress refuses is treated like none (#1507).
+	judged := address
+	if typed := r.URL.Query().Get("address"); typed != "" && validSetupAddress(typed) {
+		judged = typed
+	}
+	addressHost := ""
+	if judged != "" {
+		addressHost = routeros.Hostname(judged)
+	}
+	effectiveHosts := servertls.EffectiveHosts(s.SetupInstance.Hosts)
 	writeJSON(w, http.StatusOK, setupStatus{
 		Instance: setupInstance{
-			TLSEnabled:        s.SetupInstance.TLSEnabled,
-			Hosts:             nonNilStrings(s.SetupInstance.Hosts),
-			SyslogPort:        s.SetupInstance.SyslogPort,
-			SyslogEnabled:     s.SetupInstance.SyslogPort != "",
-			Address:           address,
-			AddressCandidates: nonNilStrings(s.SetupInstance.Candidates),
-			BackupTransport:   backupTransport,
+			TLSEnabled:               s.SetupInstance.TLSEnabled,
+			Hosts:                    nonNilStrings(s.SetupInstance.Hosts),
+			EffectiveHosts:           effectiveHosts,
+			AddressHost:              addressHost,
+			CertificateCoversAddress: certificateCovers(s.SetupInstance, effectiveHosts, judged),
+			SyslogPort:               s.SetupInstance.SyslogPort,
+			SyslogEnabled:            s.SetupInstance.SyslogPort != "",
+			Address:                  address,
+			AddressCandidates:        nonNilStrings(s.SetupInstance.Candidates),
+			BackupTransport:          backupTransport,
 		},
 		Sources:   sources,
 		Devices:   devices,
@@ -231,6 +262,22 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Marks:     marks,
 		Witnesses: witnesses,
 	})
+}
+
+// certificateCovers reports whether the certificate claims the address the
+// wizard is using (#1507). With no address yet there is nothing to check,
+// and with neither HTTP TLS nor syslog TLS on no certificate is in play.
+func certificateCovers(si SetupInstance, effective []string, address string) bool {
+	if address == "" || (!si.TLSEnabled && si.SyslogPort == "") {
+		return true
+	}
+	host := routeros.Hostname(address)
+	for _, h := range effective {
+		if strings.EqualFold(h, host) {
+			return true
+		}
+	}
+	return false
 }
 
 // caSatisfied and its three siblings below decide, from the same data
@@ -438,7 +485,7 @@ func (s *Server) handleSetupAddress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Audit.Record(auditActor(r), "setup.address_set", req.Address, "")
-	writeJSON(w, http.StatusOK, setupAddressResponse{Address: req.Address})
+	writeJSON(w, http.StatusOK, setupAddressResponse(req))
 }
 
 // setupBackupTransportRequest is step 6's one choice (#955): "sftp" or
@@ -498,7 +545,7 @@ func (s *Server) handleSetupBackupTransport(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.Audit.Record(auditActor(r), "setup.backup_transport_set", req.Transport, "")
-	writeJSON(w, http.StatusOK, setupBackupTransportResponse{Transport: req.Transport})
+	writeJSON(w, http.StatusOK, setupBackupTransportResponse(req))
 }
 
 // SetupInstance is the running configuration the wizard needs to write
@@ -508,10 +555,13 @@ type SetupInstance struct {
 	Hosts      []string
 	SyslogPort string
 	// BackupPort is the router-backup SFTP drop box's own port (#394,
-	// config's backup.listen) -- separate from SyslogPort, since it is
-	// a different listener entirely. Empty when backup.enabled is
-	// false: step 6 has no address to render a script for.
-	BackupPort string
+	// config's backup.listen) -- separate from SyslogPort, since it is a
+	// different listener entirely. A live read (#1361), not a value fixed
+	// at startup like the others here: the drop box is now switched on
+	// and off from Settings with no restart, so this asks main's
+	// backupRuntime what is actually listening right now. "" while the
+	// drop box is closed: step 6 has no address to render a script for.
+	BackupPort func() string
 	// BackupKeyUnreadable is #1264 finding 5: true when history.keyFile
 	// names a file that could not be read (missing, truncated, wrong --
 	// anything other than simply being unset), set once at startup by
@@ -538,6 +588,16 @@ type SetupInstance struct {
 	Candidates []string
 }
 
+// BackupPortNow is the nil-safe read of BackupPort: a Server built with
+// no backupRuntime wired up (most tests, and any build that omits the
+// feature) reads as closed rather than panicking on a nil func.
+func (si SetupInstance) BackupPortNow() string {
+	if si.BackupPort == nil {
+		return ""
+	}
+	return si.BackupPort()
+}
+
 func nonNilStrings(v []string) []string {
 	if v == nil {
 		return []string{}
@@ -555,4 +615,5 @@ var ingestKindNames = []string{
 	string(ingest.KindDHCPLease),
 	string(ingest.KindARP),
 	string(ingest.KindIPAddress),
+	string(ingest.KindIPService),
 }

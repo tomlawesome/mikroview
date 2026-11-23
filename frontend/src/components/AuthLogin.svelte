@@ -2,6 +2,7 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import { authState } from '../lib/auth.svelte'
   import AuthScreen from './AuthScreen.svelte'
+  import { wizardJourney } from '../lib/wizardJourney.svelte'
   import { passkeysUsableAt } from '../lib/passkeys.svelte'
 
   // The way out (#645, round 5): a sign-out plays the door's beat in
@@ -10,6 +11,18 @@
   // plain page load (never signed out) never replays it. Read once at
   // mount, matching AuthState's other consume-once URL flags.
   const reverseBeat = authState.consumeJustSignedOut()
+
+  // Enter at the door starts the way in (#1386) -- for an admin, and
+  // only if the wizard turns out to be launching; the journey decides
+  // once the shell has loaded, and otherwise just lets the door down.
+  // Every step that can finish signing in goes through here, not only
+  // the password: an account holding a factor is signed in by the
+  // factor step, and arming on the password alone never played it.
+  async function armed(step: Promise<string | null>): Promise<string | null> {
+    const result = await step
+    if (result === null) wizardJourney.signedIn()
+    return result
+  }
 
   // #1251: after signing in with the one-time code an administrator read
   // out, the door does not open -- it asks for a password of your own
@@ -62,15 +75,15 @@
     subtitle={factorSubtitle}
     submitLabel="Continue"
     factorOnly
-    onSubmitFactor={(code) => authState.submitFactor(code)}
-    onLoginWithPasskey={() => authState.loginWithPasskey()}
+    onSubmitFactor={(code) => armed(authState.submitFactor(code))}
+    onLoginWithPasskey={() => armed(authState.loginWithPasskey())}
   />
 {:else}
   <!-- No title: on the door the framed wordmark is the title, and the
        submit is the scene's own "Enter" (round-29 door, #645). -->
   <AuthScreen
     submitLabel="Enter"
-    onsubmit={(username, password) => authState.login(username, password)}
+    onsubmit={(username, password) => armed(authState.login(username, password))}
     ssoAvailable={authState.ssoAvailable}
     {reverseBeat}
   />

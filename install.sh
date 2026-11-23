@@ -4,11 +4,15 @@
 # The one-line pastable install (#1242):
 #   curl -fsSL https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh | sh
 #
-# It runs exactly one `docker run`, and shows it first -- the whole
-# effect fits on one screen, which is the trust story: no checksum step,
-# because the script is short enough to read instead. Not a Compose
-# writer: docs/install.md's "no-script form" is this same line, for
-# anyone who would rather paste it by hand.
+# It runs one `docker run` for mikroview itself, and shows it first --
+# the whole effect fits on one screen, which is the trust story: no
+# checksum step, because the script is short enough to read instead. Not
+# a Compose writer: docs/install.md's "no-script form" is this same
+# line, for anyone who would rather paste it by hand.
+#
+# Two more, throwaway `docker run`s (#1357) come before it on a fresh
+# install, to give on-disk event history -- on by default since #1357 --
+# a key to encrypt under. See the comment above that step.
 #
 # MIKROVIEW_IMAGE and MIKROVIEW_CONTAINER are deliberately undocumented
 # for users -- they exist only for scripts/install.test.sh and the CI
@@ -23,6 +27,13 @@ data_vol="${name}-data"
 etc_vol="${name}-etc"
 https_port="${MIKROVIEW_HTTPS_PORT:-443}"
 syslog_port="${MIKROVIEW_SYSLOG_PORT:-6514}"
+# The router-backup drop box's port (#1361): always published, same as
+# deploy/docker-compose.yml, since the switch that actually opens the
+# listener lives in Settings now and moves at runtime with no restart --
+# a container's own port mapping cannot follow that. Undocumented for
+# users deliberately: change backup.listen in config.yaml first if you
+# need a different port, and change this to match.
+backup_port="${MIKROVIEW_BACKUP_PORT:-47022}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "install.sh: docker is not installed. Get it from https://docs.docker.com/engine/install/ and run this again." >&2
@@ -63,26 +74,68 @@ if docker container inspect "$name" >/dev/null 2>&1; then
   removed_existing=1
 fi
 
+# MikroView seals the accounts, API tokens, recovery keys, sign-in
+# history and the on-disk event history (on by default, #1357) under one
+# key mounted at keys/history.key in the app folder volume, and refuses
+# to start without it (CFG-0083, docs/configuration.md) -- there is no
+# unencrypted mode.
+# Give a fresh install one, the same way docs/configuration.md tells an
+# operator to make one by hand, but generated inside a throwaway helper
+# container rather than on this shell: the key material then never
+# exists on the command line, in this script's own output, or on the
+# host running it, only inside the volume. Never overwrites one already
+# there, so an upgrade (this is also the upgrade line, above) leaves
+# whatever key it is already encrypted under alone.
+#
+# One docker run, not two. An earlier version checked in one container
+# and created in a second, reading the check's exit code as "does it
+# exist" -- but docker run also exits non-zero for its own failures
+# (daemon error, failed pull, mount error), and that read as "no key"
+# and sent the create run over an existing one. The helper now decides
+# inside the one container that holds the volume: a key already there
+# ends it with exit 3 before anything is written, and the write itself
+# runs under noclobber (set -C), so it cannot replace a file even if it
+# were reached. Nothing printed has to be parsed: 0 made a key, 3 found
+# one, anything else (docker's own 125-127 included) changed nothing.
+key_rc=0
+key_err="$(docker run --rm -v "${etc_vol}:/etc/mikroview" alpine:3.24 sh -c '
+    set -e
+    [ ! -e /etc/mikroview/keys/history.key ] || exit 3
+    mkdir -p /etc/mikroview/keys
+    set -C
+    head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key
+    chown 1000:1000 /etc/mikroview/keys/history.key
+    chmod 600 /etc/mikroview/keys/history.key
+  ' 2>&1 >/dev/null)" || key_rc=$?
+case "$key_rc" in
+  0) echo "install.sh: a key now lives in the ${etc_vol} volume at keys/history.key. MikroView seals the accounts, API tokens, recovery keys, sign-in history and the on-disk event history under it, and will not start without it. Back it up somewhere apart from the data volume (a password manager, or an encrypted backup): losing it locks you out of this instance for good -- the accounts become unreadable, no recovery key can help, and there is no way to recover a lost key. docs/install.md shows how to copy it out of the volume." ;;
+  3) : ;; # already there -- told about it on an earlier run, and left alone
+  *) echo "install.sh: could not check for or create a history encryption key in ${etc_vol} (docker run exited ${key_rc}${key_err:+: $key_err}) -- nothing in the volume was changed, so a key already there is untouched; mikroview will refuse to start until one is mounted, since it keeps accounts and tokens sealed under it (see docs/install.md)" >&2 ;;
+esac
+
 # Two named volumes: the data store, and the app folder #1243 taught the
 # binary to read config, GeoIP and a certificate pair from -- see
 # docs/install.md for putting a file there once you want one. Not with
 # docker cp: the same folder is mounted :ro below, and Docker refuses a
 # copy into it with "mounted volume is marked read-only". A helper
-# container writing to the volume, or a bind-mount swap, is the way.
+# container writing to the volume, or a bind-mount swap, is the way --
+# the history key above just did exactly that.
 #
 # Hardening (#1286): the same flags deploy/docker-compose.yml's hardening
 # block applies, kept in sync by scripts/check-release-surfaces.sh so the
 # two can't drift apart again. The app folder is mounted read-only, as
 # Compose has always mounted it and as internal/config/appfolder.go
 # describes it ("a folder an operator mounts read-only... nothing else
-# writes to it"): config, the GeoIP database, the history key and the
-# certificate are put there by the operator, never by mikroview. No memory or CPU cap here on purpose --
+# writes to it"): config and the certificate are put there by
+# the operator; the history key above is the one exception,
+# made by this script rather than by hand, so a fresh install needs no
+# separate setup step for it. No memory or CPU cap here on purpose --
 # both depend on the host this runs on, a wrong one is a silent outage on
 # a small box, and Compose (where an operator already sets the rest of
 # their deployment) is the right place to choose one.
 set -- run -d --name "$name" --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
-  -p "${syslog_port}:6514" -p "${https_port}:8080" \
+  -p "${syslog_port}:6514" -p "${https_port}:8080" -p "${backup_port}:47022" \
   -v "${data_vol}:/var/lib/mikroview" -v "${etc_vol}:/etc/mikroview:ro" \
   "$image"
 echo "docker $*"
@@ -124,6 +177,7 @@ addr="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "$addr" ] || addr="localhost"
 port_suffix=""
 [ "$https_port" = "443" ] || port_suffix=":${https_port}"
-echo "install.sh: open https://${addr}${port_suffix} and create the admin account -- the setup wizard then writes the router commands for you."
-echo "install.sh: both ports are open to every network this host is on, and until that first account exists anyone who reaches the page can create it -- do it now, and firewall ${https_port} and ${syslog_port} to the router and your own machines."
+echo "install.sh: open https://${addr}${port_suffix} and create the admin account with the setup code from MikroView's log (docker logs ${name} | grep 'setup code') -- the setup wizard then writes the router commands for you."
+echo "install.sh: both ports are open to every network this host is on -- firewall ${https_port} and ${syslog_port} to the router and your own machines."
+echo "install.sh: the router-backup drop box's port (${backup_port}) is published too, but nothing answers on it until an admin opens the drop box from Settings -- see docs/configuration.md."
 echo "install.sh: data lives in the ${data_vol} and ${etc_vol} named volumes."

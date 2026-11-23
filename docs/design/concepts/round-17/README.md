@@ -27,7 +27,7 @@ question from the atlas drop: operate group is Settings, Run setup…,
 Fleet, Entities.
 
 Data story unchanged: 6 flags (UNPLANNED iot→lan tcp/445 14×, port
-scan 198.51.100.77, cam-porch outbound + repeated drops, drop surge,
+scan 203.0.113.77, cam-porch outbound + repeated drops, drop surge,
 new talker), 7 watchers with cam-porch's ring broken.
 
 ## Owner verdicts

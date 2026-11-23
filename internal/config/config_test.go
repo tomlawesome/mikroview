@@ -74,14 +74,14 @@ devices:
 	})
 
 	t.Run("geoip and reputation env vars", func(t *testing.T) {
-		t.Setenv("MIKROVIEW_GEOIP_DB_PATH", "/data/GeoLite2-Country.mmdb")
+		t.Setenv("MIKROVIEW_GEOIP_CACHE_PATH", "/data/geoip")
 		t.Setenv("MIKROVIEW_ABUSEIPDB_KEY", "test-key")
 		cfg, err := Load("", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.GeoIP.DBPath != "/data/GeoLite2-Country.mmdb" {
-			t.Errorf("GeoIP.DBPath = %q, want the env value", cfg.GeoIP.DBPath)
+		if cfg.GeoIP.CachePath != "/data/geoip" {
+			t.Errorf("GeoIP.CachePath = %q, want the env value", cfg.GeoIP.CachePath)
 		}
 		if cfg.Reputation.AbuseIPDBKey != "test-key" {
 			t.Errorf("Reputation.AbuseIPDBKey = %q, want the env value", cfg.Reputation.AbuseIPDBKey)
@@ -811,12 +811,12 @@ deviceMac:
 	}
 }
 
-func TestBlocklistDefaultsToSpamhausDrop(t *testing.T) {
+func TestBlocklistDefaultsToSpamhausDropAndEmergingThreats(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"spamhaus_drop"}
+	want := []string{"spamhaus_drop", "emerging_threats_compromised"}
 	if len(cfg.Blocklist.Sources) != len(want) {
 		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
 	}
@@ -824,6 +824,32 @@ func TestBlocklistDefaultsToSpamhausDrop(t *testing.T) {
 		if cfg.Blocklist.Sources[i] != s {
 			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
 		}
+	}
+}
+
+// An operator who sets sources explicitly keeps exactly what they
+// wrote -- the default (both feeds, see above) must never widen a list
+// the operator gave, even a one-feed list that the default itself grew
+// past on #1359.
+func TestBlocklistSourcesYAMLExplicitListIsNotWidened(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+blocklist:
+  sources:
+    - spamhaus_drop
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop"}
+	if !reflect.DeepEqual(cfg.Blocklist.Sources, want) {
+		t.Errorf("Blocklist.Sources = %v, want %v -- an explicit list must not gain emerging_threats_compromised from the default", cfg.Blocklist.Sources, want)
 	}
 }
 
@@ -1090,6 +1116,18 @@ func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
 	}
 	if cfg.OUI.CachePath != "/var/lib/mikroview/oui-registry.json" {
 		t.Errorf("OUI.CachePath = %q, want it under the data directory", cfg.OUI.CachePath)
+	}
+}
+
+// #1352: country data is fetched and cached like the OUI registry, under
+// the data directory, with no setting needed.
+func TestGeoIPCacheDefaultsUnderTheDataDirectory(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GeoIP.CachePath != "/var/lib/mikroview/geoip" {
+		t.Errorf("GeoIP.CachePath = %q, want it under the data directory", cfg.GeoIP.CachePath)
 	}
 }
 

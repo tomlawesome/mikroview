@@ -3,6 +3,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from './types'
 
+// #1362: holds whatever auth.svelte.ts registers via api.ts's
+// onForcedAuthGate -- vi.hoisted because the vi.mock factory below runs
+// before an ordinary module-scope `let` would be initialised.
+const { getCapturedForcedAuthGateHandler, setCapturedForcedAuthGateHandler } = vi.hoisted(() => {
+  let handler: ((gate: string, session: AuthSession) => void) | null = null
+  return {
+    getCapturedForcedAuthGateHandler: () => handler,
+    setCapturedForcedAuthGateHandler: (h: (gate: string, session: AuthSession) => void) => {
+      handler = h
+    },
+  }
+})
+
 // auth.svelte.ts talks to the backend exclusively through these
 // lib/api.ts functions -- mock the whole module so tests exercise only
 // AuthState's own state-transition logic, never a real fetch().
@@ -10,6 +23,13 @@ vi.mock('./api', () => ({
   fetchAuthSession: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  // #1362: auth.svelte.ts registers its forced-auth-gate handler at
+  // module load -- capturing it here (rather than a bare vi.fn()) is
+  // what lets the tests below invoke it directly, the same way api.ts's
+  // shared fetch wrapper would once it detects the gate header.
+  onForcedAuthGate: vi.fn((handler: (gate: string, session: AuthSession) => void) => {
+    setCapturedForcedAuthGateHandler(handler)
+  }),
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
@@ -50,11 +70,12 @@ import {
   saveMyPreferences,
 } from './api'
 import { loginWithPasskey } from './passkeys.svelte'
-import { authState, pageReload } from './auth.svelte'
+import { authState, pageReload, wireForcedAuthGate } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
 import { wizardState } from './wizard.svelte'
+import { wizardRun } from './wizardRun.svelte'
 import { logEveryRuleWorkState } from './logEveryRuleWork.svelte'
 import { tokensState } from './tokens.svelte'
 import { usersState } from './users.svelte'
@@ -64,6 +85,12 @@ import { configProblemsState } from './configProblems.svelte'
 import { configUpgradeState } from './configUpgrade.svelte'
 import { preferencesState } from './preferences.svelte'
 import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
+
+// #1362: App.svelte is what calls this in real use -- called once here,
+// directly, so the tests further down can drive the handler it
+// registers (captured by the mocked onForcedAuthGate above) the same
+// way api.ts's shared fetch wrapper would.
+wireForcedAuthGate()
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -106,6 +133,7 @@ beforeEach(() => {
   // a test that doesn't care about preferences at all isn't left with
   // an unhandled rejection from an unmocked resolution.
   preferencesState.reset()
+  wizardRun.reset()
   vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
   vi.mocked(saveMyPreferences).mockResolvedValue(null)
 })
@@ -224,13 +252,13 @@ describe('AuthState wires preferencesState to sign-in (#1283)', () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(
       session({ authenticated: true, username: 'alex', role: 'admin' }),
     )
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'pulse' } })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { demoPref: 'pulse' } })
 
     await authState.check()
     await preferencesState.ensureLoaded()
 
     expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
-    expect(preferencesState.get('colorway')).toBe('pulse')
+    expect(preferencesState.get('demoPref')).toBe('pulse')
   })
 
   it('does not load preferences for a forced password change -- that session cannot reach the app', async () => {
@@ -253,6 +281,53 @@ describe('AuthState wires preferencesState to sign-in (#1283)', () => {
     await preferencesState.ensureLoaded()
 
     expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1362: an open tab across an upgrade (or a warm-started session) can
+// hold a real session that internal/api/auth.go's requireAuth now
+// refuses on every route but a few. api.ts's shared fetch wrapper
+// detects that 403 and calls whatever auth.svelte.ts registered via
+// onForcedAuthGate -- these drive that registered handler directly, the
+// same call api.ts would make, to pin what AuthState does with it.
+describe('AuthState wires onForcedAuthGate to apply() (#1362)', () => {
+  it('moves an authenticated session to must-enrol-factor', () => {
+    authState.state = 'authenticated'
+    authState.username = 'bilbo'
+    authState.role = 'user'
+
+    const handler = getCapturedForcedAuthGateHandler()
+    expect(handler).not.toBeNull()
+    handler?.('must-enrol-factor', session({ authenticated: true, username: 'bilbo', role: 'user', mustEnrolSecondFactor: true }))
+
+    expect(authState.state).toBe('must-enrol-factor')
+    expect(authState.mustEnrolSecondFactor).toBe(true)
+  })
+
+  it('moves an authenticated session to must-change-password', () => {
+    authState.state = 'authenticated'
+    authState.username = 'bilbo'
+    authState.role = 'user'
+
+    const handler = getCapturedForcedAuthGateHandler()
+    handler?.('must-change-password', session({ authenticated: true, username: 'bilbo', role: 'user', mustChangePassword: true }))
+
+    expect(authState.state).toBe('must-change-password')
+    expect(authState.mustChangePassword).toBe(true)
+  })
+
+  it('trusts the fresh session over the gate name -- a factor enrolled from another tab during the recheck wins', () => {
+    authState.state = 'authenticated'
+    authState.username = 'bilbo'
+    authState.role = 'user'
+
+    const handler = getCapturedForcedAuthGateHandler()
+    // The 403 that triggered this said must-enrol-factor, but by the
+    // time the recheck came back the account had already enrolled one
+    // elsewhere -- apply() reads the fresh session, not the gate name.
+    handler?.('must-enrol-factor', session({ authenticated: true, username: 'bilbo', role: 'user', mustEnrolSecondFactor: false }))
+
+    expect(authState.state).toBe('authenticated')
   })
 })
 
@@ -454,17 +529,17 @@ describe('AuthState.register', () => {
     vi.mocked(register).mockResolvedValue(null)
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'admin', role: 'admin' }))
 
-    const result = await authState.register('admin', 'hunter2')
+    const result = await authState.register('admin', 'hunter2', 'abcd-efgh-jkmn-pqrs')
 
     expect(result).toBeNull()
-    expect(register).toHaveBeenCalledWith('admin', 'hunter2')
+    expect(register).toHaveBeenCalledWith('admin', 'hunter2', 'abcd-efgh-jkmn-pqrs')
     expect(authState.state).toBe('authenticated')
   })
 
   it('returns the error without re-checking on failure', async () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 
-    const result = await authState.register('admin', 'hunter2')
+    const result = await authState.register('admin', 'hunter2', 'abcd-efgh-jkmn-pqrs')
 
     expect(result).toBe('username already taken')
     expect(fetchAuthSession).not.toHaveBeenCalled()
@@ -499,7 +574,7 @@ describe('AuthState.logout', () => {
     authState.state = 'authenticated'
     vi.mocked(logout).mockResolvedValue(null)
     preferencesState.seedForTest({})
-    preferencesState.set('colorway', 'nebula')
+    preferencesState.set('demoPref', 'nebula')
 
     const order: string[] = []
     vi.mocked(saveMyPreferences).mockImplementation(async () => {
@@ -545,7 +620,7 @@ describe('AuthState.signOutAfterFactorRemoved', () => {
   it('flushes any pending preference write first, the same as logout()', async () => {
     authState.state = 'authenticated'
     preferencesState.seedForTest({})
-    preferencesState.set('colorway', 'nebula')
+    preferencesState.set('demoPref', 'nebula')
     vi.mocked(saveMyPreferences).mockResolvedValue(null)
 
     await authState.signOutAfterFactorRemoved()
@@ -782,6 +857,21 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     watchlistState.loaded = true
   })
 
+  it('clears the admin password typed into the wizard\'s Mint step (A2-S3)', async () => {
+    wizardRun.pass = 'correct horse'
+    await authState.logout()
+    expect(wizardRun.pass).toBe('')
+  })
+
+  it('clears it when the server logout failed and the page stays up (A2-S3)', async () => {
+    vi.mocked(logout).mockResolvedValue('network down')
+    wizardRun.pass = 'correct horse'
+    const err = await authState.logout()
+    expect(err).toBe('network down')
+    expect(pageReload.now).not.toHaveBeenCalled()
+    expect(wizardRun.pass).toBe('')
+  })
+
   it('resets appState to its initial values', async () => {
     await authState.logout()
 
@@ -1005,17 +1095,17 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
   // must call ensureLoaded() again rather than see the previous
   // account's cached record.
   it('drops preferencesState from memory and re-fetches on the next ensureLoaded()', async () => {
-    preferencesState.seedForTest({ colorway: 'nebula' })
-    expect(preferencesState.get('colorway')).toBe('nebula')
+    preferencesState.seedForTest({ demoPref: 'nebula' })
+    expect(preferencesState.get('demoPref')).toBe('nebula')
 
     await authState.logout()
 
-    expect(preferencesState.get('colorway')).toBeUndefined()
+    expect(preferencesState.get('demoPref')).toBeUndefined()
 
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'frequency' } })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { demoPref: 'frequency' } })
     await preferencesState.ensureLoaded()
     expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
-    expect(preferencesState.get('colorway')).toBe('frequency')
+    expect(preferencesState.get('demoPref')).toBe('frequency')
   })
 })
 
@@ -1030,7 +1120,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     watchlistState.loaded = true
     tokensState.list = [fixtureApiToken()]
     tokensState.justCreated = fixtureApiToken()
-    preferencesState.seedForTest({ colorway: 'nebula' })
+    preferencesState.seedForTest({ demoPref: 'nebula' })
 
     authState.handleUnauthorized()
 
@@ -1042,7 +1132,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     expect(watchlistState.loaded).toBe(false)
     expect(tokensState.list).toEqual([])
     expect(tokensState.justCreated).toBeNull()
-    expect(preferencesState.get('colorway')).toBeUndefined()
+    expect(preferencesState.get('demoPref')).toBeUndefined()
   })
 
   it('leaves every store untouched when the session was not authenticated', () => {
@@ -1067,7 +1157,7 @@ describe('AuthState.consumeSSOErrorFromURL', () => {
 
     authState.consumeSSOErrorFromURL()
 
-    expect(authState.ssoError).toBe('SSO sign-in failed -- try again, or sign in with your password below.')
+    expect(authState.ssoError).toBe('SSO sign-in failed — try again, or sign in with your password below.')
     expect(location.search).toBe('?foo=bar')
   })
 

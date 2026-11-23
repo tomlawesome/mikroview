@@ -5,7 +5,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 // Same approach as AuthLogin.svelte.test.ts: only the network boundary is
 // faked, so this exercises the real AuthState logic, the real AuthScreen
-// gate/form markup, and the real journeyState transition together.
+// gate/form markup, and the real way-in arming together.
 vi.mock('../lib/api', () => ({
   createUser: vi.fn(),
   fetchAuthSession: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock('../lib/api', () => ({
 
 import { fetchAuthSession, register, startSSOLink } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
-import { journeyState } from '../lib/journey.svelte'
+import { wizardJourney } from '../lib/wizardJourney.svelte'
 import AuthSetup from './AuthSetup.svelte'
 
 // The SSO route ends in a real top-level navigation, which jsdom cannot
@@ -29,16 +29,21 @@ beforeEach(() => {
   authState.username = ''
   authState.role = ''
   authState.ssoAvailable = false
-  journeyState.phase = 'idle'
+  wizardJourney.end()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// The three fields and the button, in the order somebody fills them in.
+// A setup code in the shape the server prints (#1415); fake, like every
+// value here.
+const CODE = 'abcd-efgh-jkmn-pqrs'
+
+// The four fields and the button, in the order somebody fills them in.
 async function createTheAdmin() {
   await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+  await fireEvent.input(screen.getByLabelText('setup code'), { target: { value: CODE } })
   await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'alex' } })
   await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
   await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
@@ -61,9 +66,11 @@ describe('AuthSetup', () => {
     expect(screen.getByRole('button', { name: /create account/i })).toBeTruthy()
   })
 
-  // #646's trigger: a successful register() -- and only that -- starts
-  // the journey at its Attach beat.
-  it('starts the journey once the admin account is actually created', async () => {
+  // #1386, owner 2026-09-30 ("1a"): on a brand-new install the way in
+  // plays straight after the admin account is made -- armed when the
+  // confirmation's Continue opens the app -- and #646's pre-wizard walk
+  // (attach, connecting, the glass) no longer starts.
+  it('starts the way in once the admin account is made', async () => {
     vi.mocked(register).mockResolvedValue(null)
     vi.mocked(fetchAuthSession).mockResolvedValue({
       setupRequired: false,
@@ -74,18 +81,10 @@ describe('AuthSetup', () => {
     })
 
     render(AuthSetup)
-    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
-    await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'alex' } })
-    await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
-    await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
-    await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+    await createTheAdmin()
+    await fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
 
-    // Three sequential awaits sit between the click and the journey
-    // starting (authState.register -> its own check() -> fetchAuthSession),
-    // one more hop than a plain login -- waitFor rather than assuming a
-    // single fireEvent tick flushes all of them.
-    await waitFor(() => expect(register).toHaveBeenCalledWith('alex', 'hunter2222'))
-    await waitFor(() => expect(journeyState.phase).toBe('attach'))
+    await waitFor(() => expect(wizardJourney.pending).toBe(true))
   })
 
   // #1252, owner's ruling: first run always creates a local admin, so
@@ -100,14 +99,12 @@ describe('AuthSetup', () => {
 
     expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
     expect(screen.getByRole('button', { name: /create account/i })).toBeTruthy()
-    expect(screen.getByText(/then you sign in with SSO to connect it/i)).toBeTruthy()
+    expect(screen.getByText(/connect SSO from the account menu/i)).toBeTruthy()
   })
 
-  // Route one out of creation: OIDC is configured, so the browser that
-  // made the account carries straight on to the provider, and the
-  // identity that comes back is linked to it. Session continuity is the
-  // proof it is the same person -- nothing compares an email.
-  it('hands over to the identity provider when OIDC is configured', async () => {
+  // A1-F2: the session register() just issued has no second factor, so the
+  // gate would refuse the provider hand-off; creation ends on the confirmation.
+  it('with OIDC configured, creation ends on the confirmation naming the second step and the account menu, never at the provider', async () => {
     vi.mocked(register).mockResolvedValue(null)
     vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
     authState.ssoAvailable = true
@@ -115,8 +112,37 @@ describe('AuthSetup', () => {
     render(AuthSetup)
     await createTheAdmin()
 
-    await waitFor(() => expect(startSSOLink).toHaveBeenCalledOnce())
-    await waitFor(() => expect(location.href).toBe('https://idp.example/authorize'))
+    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
+    expect(screen.getByText(/add a second step/i)).toBeTruthy()
+    expect(screen.getByText(/Use single sign-on/)).toBeTruthy()
+    expect(startSSOLink).not.toHaveBeenCalled()
+    expect(location.href).toBe('')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(new XMLSerializer().serializeToString(document.body)).not.toContain('hunter2222')
+  })
+
+  it('Continue after creation with OIDC configured re-reads the session and lands on the second-step door, not the app', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'alex',
+      role: 'admin',
+      ssoAvailable: true,
+      mustEnrolSecondFactor: true,
+    })
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await createTheAdmin()
+    await screen.findByText(/admin account created/i)
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
+    expect(authState.state).toBe('must-enrol-factor')
+    expect(wizardJourney.pending).toBe(false)
+    expect(startSSOLink).not.toHaveBeenCalled()
   })
 
   // Route two: no OIDC details, so there is nowhere to forward to. The
@@ -141,57 +167,82 @@ describe('AuthSetup', () => {
     await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
   })
 
-  // The account exists by the time the hand-off can fail, so the
-  // failure belongs on the confirmation -- not on a creation form that
-  // would invite creating it again.
-  it('still confirms the account when the hand-off to SSO fails', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockResolvedValue('this account already signs in through your identity provider')
-    authState.ssoAvailable = true
-
-    render(AuthSetup)
-    await createTheAdmin()
-
-    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
-    expect(screen.getByText(/already signs in through your identity provider/i)).toBeTruthy()
-    expect(location.href).toBe('')
-  })
-
-  // #1218 audit finding 7: startSSOLink() can throw outright (a dropped
-  // connection, same as any other fetch), not just answer with an error
-  // string -- and unlike that answered-string case above, an uncaught
-  // throw here used to skip both the redirect and `created = true`,
-  // leaving AuthScreen's handleSubmit stuck mid-await and its submit
-  // button on "Please wait…" forever. The account already exists by
-  // then (register() above succeeded), so there is no form to retry
-  // against -- the operator needs the confirmation screen's working
-  // Continue button, the same as any other hand-off failure.
-  it('still confirms the account, with a working way in, when the hand-off to SSO throws outright', async () => {
-    vi.mocked(register).mockResolvedValue(null)
-    vi.mocked(startSSOLink).mockRejectedValue(new Error('network unreachable'))
-    authState.ssoAvailable = true
-
-    render(AuthSetup)
-    await createTheAdmin()
-
-    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
-    expect(location.href).toBe('')
-
-    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
-  })
-
-  it('never starts the journey when registration fails', async () => {
+  it('never arms the way in when registration fails', async () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 
     render(AuthSetup)
-    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
-    await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'alex' } })
-    await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
-    await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
-    await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+    await createTheAdmin()
 
     expect(await screen.findByText('username already taken')).toBeTruthy()
-    expect(journeyState.phase).toBe('idle')
+    expect(wizardJourney.pending).toBe(false)
+  })
+
+  // #1415 (docs/design/screens/setup-code/DESIGN.md): the first admin
+  // needs the one-time code from the server's log. The field comes
+  // first, above account, with the note saying where to find it above
+  // the field.
+  it('asks for the setup code first, with a note saying where it is', async () => {
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+
+    const code = screen.getByRole('textbox', { name: 'setup code' })
+    const account = screen.getByRole('textbox', { name: 'account' })
+    expect(code.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const note = screen.getByText(/It's in MikroView's log from when it last started/)
+    expect(note.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      "It's in MikroView's log from when it last started (docker compose logs mikroview), on the line " +
+        'that says “create the first admin with setup code”. Lost it? Restart MikroView and it prints a new one.',
+    )
+    expect(note.compareDocumentPosition(code) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    expect(
+      screen.getByText('No account exists yet. Whoever completes this form, with the setup code from ' + "MikroView's log, becomes the admin."),
+    ).toBeTruthy()
+  })
+
+  it('names the setup code in the SSO variant of the subtitle too', async () => {
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+
+    expect(
+      screen.getByText(
+        "No account exists yet. Whoever completes this form, with the setup code from MikroView's log, becomes the " +
+          'admin — then you add a second step and connect SSO from the account menu. This password stays as ' +
+          'your way in if your provider is ever unreachable.',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('refuses an empty setup code before anything else, without calling register', async () => {
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+
+    expect(await screen.findByText("Enter the setup code from MikroView's log.")).toBeTruthy()
+    expect(register).not.toHaveBeenCalled()
+  })
+
+  it('sends the setup code to register', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    await waitFor(() => expect(register).toHaveBeenCalledWith('alex', 'hunter2222', CODE))
+  })
+
+  it("shows the server's refusal and keeps the typed code so a typo can be fixed", async () => {
+    const refusal = "that setup code didn't match -- the current one is in MikroView's log; restart MikroView for a new one"
+    vi.mocked(register).mockResolvedValue(refusal)
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    const error = await screen.findByText(refusal)
+    expect(error.classList.contains('error')).toBe(true)
+    expect((screen.getByRole('textbox', { name: 'setup code' }) as HTMLInputElement).value).toBe(CODE)
   })
 })

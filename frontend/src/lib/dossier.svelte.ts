@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { fetchHostDossier } from './api'
+import { plainWords } from './plainWords'
 import type { HostDossier } from './types'
 
 // Drives the single HostDossier sheet mounted at the app root (see
@@ -57,9 +58,9 @@ class DossierState {
         this.data = d
         this.loading = false
       },
-      () => {
+      (err) => {
         if (id !== this.requestId || this.ip !== ip) return
-        this.error = 'Could not assemble the dossier'
+        this.error = plainWords(err)
         this.loading = false
       },
     )

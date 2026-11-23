@@ -1,14 +1,14 @@
 {
  "description": "The RouterOS console menus mikroview drives, and the properties it sets on each. Only what mikroview uses -- not a copy of MikroTik's reference, and not their whole command list. scripts/routerosreference checks every path here still exists in MikroTik's published CLI Reference.",
  "checkedAgainst": "https://manual.mikrotik.com/docs/cli-reference/",
- "checkedOn": "2026-09-04",
+ "checkedOn": "2026-10-01",
  "menus": [
   {
    "path": "tool/fetch",
    "console": "/tool fetch",
-   "usedFor": "step 1 -- pulling mikroview's CA certificate onto the router",
-   "properties": ["url", "check-certificate", "dst-path"],
-   "verified": "parsed on CHR 7.23.3 and 7.24.2, 2026-09-04. The fetch itself fails in the exercise because the address is a placeholder with nothing listening; that is a runtime failure, not a syntax one."
+   "usedFor": "step 1 -- pulling mikroview's CA certificate onto the router; the push step's POST to /api/ingest/routeros; #1360's blocklist loaders fetching each list from its source",
+   "properties": ["url", "check-certificate", "dst-path", "http-method", "http-data", "http-header-field", "http-max-redirect-count"],
+   "verified": "parsed on CHR 7.23.3 and 7.24.2, 2026-09-04. The fetch itself fails in the exercise because the address is a placeholder with nothing listening; that is a runtime failure, not a syntax one. http-method, http-data and http-header-field are the push's POST; that line is unchanged by #1360 and was not re-run against a live mikroview for it. #1360's loaders ran it against the seven lists' own sources on CHR 7.18.2 (with http-max-redirect-count=2), 7.22.3 and 7.24.4 (with check-certificate=yes against the built-in root store), 2026-10-01 (docs/routeros-verification-logs/<version>-blocklist.log)."
   },
   {
    "path": "certificate/import",
@@ -43,14 +43,14 @@
    "console": "/system script add",
    "usedFor": "the optional push step -- storing the script that posts the router's own tables to mikroview",
    "properties": ["name", "policy", "source"],
-   "verified": "documented by MikroTik's CLI Reference, 2026-09-04. Not yet exercised: the CHR job runs the starting commands only, so nothing has run the push step on a real router."
+   "verified": "documented by MikroTik's CLI Reference, 2026-09-04. #1360's loaders and the push re-set were added, set and run on CHR 7.18.2, 7.22.3 and 7.24.4, 2026-10-01 (docs/routeros-verification-logs/<version>-blocklist.log), one console line each: before 7.19 a source pasted across several lines loses its line breaks."
   },
   {
    "path": "system/scheduler",
    "console": "/system scheduler add",
-   "usedFor": "the optional push step -- running that script on an interval",
-   "properties": ["name", "interval", "policy", "on-event"],
-   "verified": "documented by MikroTik's CLI Reference, 2026-09-04. Not yet exercised, for the same reason as system/script."
+   "usedFor": "the optional push step -- running that script on an interval; #1360's blocklist refresh schedules, each at its own start-time",
+   "properties": ["name", "interval", "policy", "on-event", "start-time", "days"],
+   "verified": "documented by MikroTik's CLI Reference, 2026-09-04. #1360's schedules, with start-time, were added and re-set on CHR 7.18.2, 7.22.3 and 7.24.4, 2026-10-01 (docs/routeros-verification-logs/<version>-blocklist.log). days (7.24): with interval=0s it fires once on each listed day, checked on 7.24.4 by moving the clock; with interval=1d it works but carries RouterOS's own warning, and days=\"\" means never, so leaving weekdays unsets days."
   },
   {
    "path": "log",
@@ -58,6 +58,41 @@
    "usedFor": "issue #1281 -- step 2's enrolment line, a one-shot informational log entry carrying the enrolment token the listener gate matches",
    "properties": ["message"],
    "verified": "documented by MikroTik's CLI Reference, 2026-09-19. Not yet exercised on a real CHR."
+  },
+  {
+   "path": "ip/firewall/address-list",
+   "console": "/ip/firewall/address-list print",
+   "usedFor": "the push step -- the address-list block (leaving out mv-bl-*) and #1360's address-list-count block (print count-only, get creation-time); #1360's blocklist loaders",
+   "properties": ["list", "address", "comment", "dynamic", "creation-time"],
+   "verified": "run on CHR 7.18.2 and 7.24.4, 2026-10-01, by #1360's push blocks (docs/routeros-verification-logs/<version>-push-blocklist.log). print as-value where !(list~\"^mv-bl-\") filters as written; set list= on a swap keeps each entry's creation-time. #1360's loaders added, renamed (set list=) and removed entries on CHR 7.18.2, 7.22.3 and 7.24.4, 2026-10-01 (docs/routeros-verification-logs/<version>-blocklist.log)."
+  },
+  {
+   "path": "ipv6/firewall/address-list",
+   "console": "/ipv6/firewall/address-list print",
+   "usedFor": "#1360's address-list-count block, and the Spamhaus IPv6 loader's mv-bl-spamhaus6",
+   "properties": ["list", "address", "comment", "creation-time"],
+   "verified": "run on CHR 7.18.2 and 7.24.4, 2026-10-01, by #1360's push blocks (docs/routeros-verification-logs/<version>-push-blocklist.log). The Spamhaus IPv6 loader filled mv-bl-spamhaus6 on 7.18.2, 7.22.3 and 7.24.4 (docs/routeros-verification-logs/<version>-blocklist.log)."
+  },
+  {
+   "path": "ip/firewall/raw",
+   "console": "/ip/firewall/raw print",
+   "usedFor": "#1360's raw-rule push block; the blocklist builder's drop rules (raw prerouting, placed first)",
+   "properties": ["chain", "action", "src-address-list", "dst-address-list", "log", "log-prefix", "comment", "disabled", "packets", "bytes", "place-before"],
+   "verified": "run on CHR 7.18.2 and 7.24.4, 2026-10-01, by #1360's push blocks (docs/routeros-verification-logs/<version>-push-blocklist.log). print as-value carries no packets or bytes on either release, and no disabled on 7.18.2, so the block reads those three with get by .id. place-before=0 on an empty raw table is refused with 'no such item' on both, so the builder's rules add without it there; both branches, and the set branch's disabled=no, ran on 7.18.2, 7.22.3 and 7.24.4 (docs/routeros-verification-logs/<version>-blocklist.log)."
+  },
+  {
+   "path": "ipv6/firewall/raw",
+   "console": "/ipv6/firewall/raw print",
+   "usedFor": "#1360's raw-rule push block; the Spamhaus IPv6 drop rules",
+   "properties": ["chain", "action", "src-address-list", "dst-address-list", "log", "log-prefix", "comment", "disabled", "packets", "bytes"],
+   "verified": "run on CHR 7.18.2 and 7.24.4, 2026-10-01, by #1360's push blocks (docs/routeros-verification-logs/<version>-push-blocklist.log), the same as ip/firewall/raw. The Spamhaus IPv6 rule went into an empty IPv6 raw table on 7.18.2, 7.22.3 and 7.24.4 (docs/routeros-verification-logs/<version>-blocklist.log)."
+  },
+  {
+   "path": "file",
+   "console": "/file read",
+   "usedFor": "#1360's blocklist loaders -- reading a fetched list in 32 KiB chunks, and removing it after a load",
+   "properties": ["read", "get", "remove"],
+   "verified": "#1360's loaders read each fetched list with /file read (chunk-size tops out at 32768) and removed it, on CHR 7.18.2, 7.22.3 and 7.24.4, 2026-10-01 (docs/routeros-verification-logs/<version>-blocklist.log)."
   }
  ]
 }

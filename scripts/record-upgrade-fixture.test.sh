@@ -50,9 +50,12 @@ check() {
 #     what was staged after the real one is gone (the script's own
 #     cleanup trap removes it on exit).
 #   - on any `docker run`, consumes stdin (the real script pipes
-#     session.py in over it) and prints a fixed manifest, standing in
+#     session.py in over it), writes the MV_SETUP_CODE it was given to
+#     <capture-dir>.setup-code, and prints a fixed manifest, standing in
 #     for upgrade-fixture-session.py's real output.
-#   - anything else (rm, volume, network, create, start, stop, logs)
+#   - on `docker logs`, prints the two auth lines a #1415 release logs
+#     at startup on an empty store, the setup code among them (a fake).
+#   - anything else (rm, volume, network, create, start, stop)
 #     just succeeds, the way an idle throwaway container would.
 stub_docker() {
   local dir="$1" log="$2" capture="$3"
@@ -72,12 +75,47 @@ case "\$1" in
     esac
     exit 0
     ;;
+  logs)
+    echo "12:00:00 WARN  auth        │ no account exists yet -- create the first admin with setup code abcd-efgh-jkmn-pqrs (valid until an account exists or this process restarts)"
+    echo "12:00:00 INFO  auth        │ no account yet -- MikroView is showing the create-account screen, which asks for the setup code logged above (see docs/configuration.md)"
+    exit 0
+    ;;
   run)
     cat >/dev/null
+    printf '%s' "\${MV_SETUP_CODE:-}" > "\$CAPTURE.setup-code"
     cat <<'JSON'
 {"version":"v0.6.0","recordedAt":"2026-01-01T00:00:00Z","adminUsername":"upgrade-fixture-admin","viewerUsername":"upgrade-fixture-viewer","apiTokenName":"upgrade-fixture-token","entity":{"type":"host","key":"172.20.30.40","label":"upgrade-fixture-host"},"watchlist":{"name":"upgrade-fixture-watch","ports":[443]},"declaredRouter":{"id":"upgrade-fixture-router","sourceIp":"127.0.0.1"},"flag":{"type":"new_device","target":"aa:bb:cc:00:ff:10"},"coverage":{"key":"upgrade-fixture-boundary","reason":"upgrade-fixture-coverage-reason"},"hostMark":{"key":"ether1|172.20.30.40","kind":"intended","reason":"upgrade-fixture-host-reason"}}
 JSON
     exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "$dir/docker"
+}
+
+# stub_docker_failing_session <dir> <log-file> -- same as stub_docker
+# above except `docker run` (the scripted session) exits 1 with no
+# stdout, standing in for a broken session -- e.g. #1358's "this account
+# has no second factor" -- so --check's job is to fail the pipeline, not
+# print a manifest.
+stub_docker_failing_session() {
+  local dir="$1" log="$2"
+  mkdir -p "$dir"
+  cat > "$dir/docker" <<EOF
+#!/bin/sh
+LOG="$log"
+{ for a in "\$@"; do printf '%s\t' "\$a"; done; printf '\n'; } >> "\$LOG"
+case "\$1" in
+  logs)
+    echo "12:00:00 INFO  auth        │ 1 account(s) registered -- authentication is active"
+    exit 0
+    ;;
+  run)
+    cat >/dev/null
+    exit 1
     ;;
   *)
     exit 0
@@ -95,7 +133,10 @@ SCRATCH="$TMP/scratch"
 mkdir -p "$SCRATCH/scripts"
 cp "$HERE/record-upgrade-fixture.sh" "$SCRATCH/scripts/"
 cp "$HERE/upgrade-fixture-session.py" "$SCRATCH/scripts/"
+cp "$HERE/setup-code.sh" "$SCRATCH/scripts/"
 chmod +x "$SCRATCH/scripts/record-upgrade-fixture.sh"
+# --check reads this instead of taking a version argument (#1358 item 3).
+echo "0.6.1" > "$SCRATCH/VERSION"
 
 BIN="$TMP/bin"
 LOG="$TMP/docker.log"
@@ -158,6 +199,81 @@ check "$(grep -q 'tls yes' "$LOG" && echo true || echo false)" \
 
 check "$([ -s "$SCRATCH/testdata/upgrade/v0.6.0/manifest.json" ] && echo true || echo false)" \
   "wrote a manifest for the recorded version"
+
+# #1415: the setup code the container logged reaches the scripted
+# session through its environment -- `-e MV_SETUP_CODE` with no value
+# on the docker command line, so the code itself is in no argv.
+check "$([ "$(cat "$CAPTURE.setup-code" 2>/dev/null)" = "abcd-efgh-jkmn-pqrs" ] && echo true || echo false)" \
+  "the scripted session was handed the setup code from the container's log"
+check "$(awk -F'\t' '$1 == "run"' "$LOG" | grep -q "$(printf '\t')-e$(printf '\t')MV_SETUP_CODE$(printf '\t')" && echo true || echo false)" \
+  "the scripted session's docker run passes MV_SETUP_CODE by name"
+check "$(grep -q 'abcd-efgh-jkmn-pqrs' "$LOG" && echo false || echo true)" \
+  "the setup code appears in no docker command line"
+check "$(grep -rq 'abcd-efgh-jkmn-pqrs' "$SCRATCH/testdata" && echo false || echo true)" \
+  "the setup code is nowhere in the recorded manifest"
+
+# --- --check (#1358 item 3): runs against a local image reference
+# instead of pulling ghcr.io/tomlawesome/mikroview:<version>, derives its
+# feature-generation version from the tree's own VERSION file, and never
+# uploads -- exercised here without $MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD
+# set at all, so a passing run proves --check enforces that itself
+# rather than relying on the caller to remember the env var. ------------
+run_check() { # run_check <docker-bin-dir>
+  local bindir="$1"
+  : > "$LOG"
+  rm -rf "$CAPTURE"
+  set +e
+  out="$(cd "$SCRATCH" && env -u CI_JOB_TOKEN -u CI_API_V4_URL -u CI_PROJECT_ID -u MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD \
+    PATH="$bindir:$PATH" \
+    bash scripts/record-upgrade-fixture.sh --check local-test-image:rc < /dev/null 2>&1)"
+  rc=$?
+  set -e
+}
+
+rm -rf "$SCRATCH/testdata"
+run_check "$BIN"
+if [ "$rc" -ne 0 ]; then
+  printf '    %s\n' "${out//$'\n'/$'\n    '}"
+fi
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "--check records against a local image reference (rc=$rc)"
+
+check "$(echo "$out" | grep -q 'PUT\|packages/generic' && echo false || echo true)" \
+  "--check never mentions an upload, even with MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD unset"
+
+check "$([ -s "$SCRATCH/testdata/upgrade/v0.6.1-check/manifest.json" ] && echo true || echo false)" \
+  "--check writes its manifest under a -check-suffixed directory, never the real version's"
+
+check "$([ ! -e "$SCRATCH/testdata/upgrade/v0.6.1/manifest.json" ] && echo true || echo false)" \
+  "--check does not touch the real v0.6.1 manifest directory"
+
+# --check refuses --postgres and refuses an explicit version -- both are
+# usage mistakes, not something to silently reinterpret.
+set +e
+bad_out="$(cd "$SCRATCH" && bash scripts/record-upgrade-fixture.sh --check local-test-image:rc --postgres 2>&1)"
+bad_rc=$?
+set -e
+if [ "$bad_rc" -eq 0 ]; then printf '    %s\n' "${bad_out//$'\n'/$'\n    '}"; fi
+check "$([ "$bad_rc" -ne 0 ] && echo true || echo false)" "--check --postgres is refused"
+
+set +e
+bad_out="$(cd "$SCRATCH" && bash scripts/record-upgrade-fixture.sh --check local-test-image:rc v0.6.1 2>&1)"
+bad_rc=$?
+set -e
+if [ "$bad_rc" -eq 0 ]; then printf '    %s\n' "${bad_out//$'\n'/$'\n    '}"; fi
+check "$([ "$bad_rc" -ne 0 ] && echo true || echo false)" "--check with an explicit version argument is refused"
+
+# --- --check fails the pipeline on a broken session, the same as a real
+# tag-time recording would (#1358's actual incident) -- and writes no
+# manifest, so a red job cannot be mistaken for a recorded check. -------
+FAILBIN="$TMP/bin-failing"
+FAILLOG="$TMP/docker-failing.log"
+stub_docker_failing_session "$FAILBIN" "$FAILLOG"
+
+rm -rf "$SCRATCH/testdata"
+run_check "$FAILBIN"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "--check fails the job when the scripted session fails (rc=$rc)"
+check "$([ ! -e "$SCRATCH/testdata/upgrade/v0.6.1-check/manifest.json" ] && echo true || echo false)" \
+  "--check writes no manifest when the session failed"
 
 echo
 if [ "$fails" -ne 0 ]; then

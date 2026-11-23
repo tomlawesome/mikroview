@@ -16,8 +16,9 @@ import (
 // that doesn't, which is why nothing here hardcodes a vendor.
 const defaultClientIPHeader = "X-Forwarded-For"
 
-// clientIP returns the address that login rate limiting is keyed on (see
-// handleAuthLogin's ipKey).
+// clientIP returns the address that login rate limiting is keyed on --
+// gauntlet's gate.Config.ClientIP, every sign-in limiter bucket and
+// audit record (#1202).
 //
 // Getting this wrong is a denial-of-service either way, in opposite
 // directions, which is why the header is consulted conditionally rather
@@ -30,7 +31,7 @@ const defaultClientIPHeader = "X-Forwarded-For"
 //   - Never consulting it means every request behind a reverse proxy
 //     carries the proxy's own address, so all users share one bucket and
 //     a single attacker's failures lock out everybody. (The per-username
-//     limiter still protects individual accounts -- see handleAuthLogin --
+//     limiter still protects individual accounts -- gauntlet's lockout --
 //     but the shared IP bucket denies the whole deployment.)
 //
 // So the header is honoured only when the immediate peer is one of the

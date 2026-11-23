@@ -8,11 +8,12 @@
 // capture-engine-room-screenshots.mjs, which it borrows its login
 // mechanics from.
 //
-// Produces three of docs/authenticator-app.md's own `> Screenshot: ...`
-// placeholders (#1249's page); see the update note below for why the
-// fourth, the account-menu "nothing set up yet" shot, is no longer one
-// of them:
+// Produces four of docs/authenticator-app.md's own screenshots (#1249's
+// page), the account-menu shot included -- see the update note below
+// for how that one is reached now:
 //
+//  - docs/screenshots/authenticator-menu-dark.png: the account menu open,
+//    with no authenticator app set up (a passkey stands in).
 //  - docs/screenshots/authenticator-enrol-dark.png: the enrolment
 //    screen -- QR code, the text secret beside it, the code box beneath.
 //  - docs/screenshots/authenticator-recovery-codes-dark.png: the ten
@@ -59,7 +60,7 @@
 // Since #1253/m19 (second factors, every local account), live-env.sh's
 // own `up` step now enrols a factor for this admin before handing back
 // -- requireAuth's forced-enrolment door refuses an account without one
-// everything but the four enrolment routes, and without that this
+// access to everything but the four enrolment routes, and without that this
 // script's own plain-password login would never reach #main-content.
 // completeSecondFactor (live-browser.mjs) finishes that login step with
 // MV_TOTP_SECRET, the same helper every live-*.mjs scenario's session()
@@ -84,9 +85,11 @@
 // door (AuthEnrolFactor.svelte), a different component from the one
 // docs/authenticator-app.md's account-menu flow depicts. So:
 //
-//  - The account-menu "no factor yet" screenshot is no longer reachable
-//    from a signed-in session and is not recaptured here (it also isn't
-//    stale -- AccountMenu.svelte hasn't changed).
+//  - The account-menu "no authenticator yet" screenshot is not reachable
+//    with no factor at all, but is with a passkey standing in: once the
+//    throwaway passkey below is registered and TOTP turned off, the menu
+//    is captured open (authenticator-menu-dark.png), showing the
+//    "Authenticator app" row with no "· on" tag ("Passkeys · 1" beside it).
 //  - A throwaway passkey is registered first (below) purely so the
 //    admin's TOTP factor is never the *last* one when it's turned off --
 //    ClearTOTP then keeps the account signed in with the ordinary
@@ -253,6 +256,10 @@ await page.waitForTimeout(1000)
   // secondFactorEnrolPaths refuses everything else).
   await door.waitForSelector('main.door', { timeout: 15000 })
   await door.click('button.key:has-text("Authenticator app")')
+  // #1418/#1422: starting enrolment now needs the account's own password
+  // first, on its own stage before the secret is minted.
+  await door.fill('#enrol-totp-password', doorPass)
+  await door.click('form[aria-label="Confirm your password"] button.enter')
   await door.waitForSelector('[data-testid="totp-secret"]', { timeout: 10000 })
   // groupSecret() (AuthEnrolFactor.svelte) renders the secret in space-
   // separated groups of four, for reading while typing it in by hand --
@@ -303,6 +310,9 @@ await page.waitForTimeout(1000)
   await modal().locator('button:has-text("Add passkey")').waitFor({ timeout: 10000 })
   await modal().locator('button:has-text("Add passkey")').click()
   await modal().locator('input[placeholder="this laptop"]').fill('capture-script throwaway')
+  // #1418/#1422: adding now also asks for the current password, in the
+  // same form, before the browser prompt fires.
+  await modal().locator('input[autocomplete="current-password"]').fill(PASS)
   await modal().locator('button:has-text("Continue")').click()
   // The admin's TOTP factor (live-env.sh's own) already minted recovery
   // codes, so registering a second factor always takes the "already
@@ -329,18 +339,29 @@ await modal().locator('.actions button.danger:text-is("Turn off authenticator ap
 await modal().locator('.actions button.confirm:text-is("Close")').click()
 await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 })
 
-// --- 1. The enrolment screen: QR code, text secret, code box -------------
+// --- 0b. The account menu with no authenticator app set up ---------------
 //
-// The account-menu "nothing set up yet" screenshot (previously captured
-// here) is skipped -- see the update note above: with the throwaway
-// passkey present the menu now reads "Passkeys · 1", not the bare row
-// the docs depict, and that image isn't stale (AccountMenu.svelte
-// hasn't changed) so nothing needs it recaptured.
+// Passkey registered, TOTP just turned off: the menu's "Authenticator
+// app" row carries no "· on" tag. Full-viewport shot, menu left open.
+
+await page.click(`${ACTIVE} .account button.chip`)
+await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
+await page.waitForTimeout(500)
+await page.screenshot({ path: path.join(outDir, 'authenticator-menu-dark.png') })
+console.log('captured authenticator-menu-dark.png')
+await page.keyboard.press('Escape')
+await page.waitForSelector(`${ACTIVE} .account .menu`, { state: 'detached', timeout: 5000 }).catch(() => {})
+
+// --- 1. The enrolment screen: QR code, text secret, code box -------------
 
 await page.click(`${ACTIVE} .account button.chip`)
 await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
 await page.click(`${ACTIVE} .account .menu button.row:text-is("Authenticator app")`)
 await modal().locator('.actions button.confirm:text-is("Set up authenticator app")').click()
+// #1418/#1422: starting enrolment now needs the password confirmed on
+// its own step before the secret is minted.
+await modal().locator('input[autocomplete="current-password"]').fill(PASS)
+await modal().locator('.actions button.confirm:text-is("Continue")').click()
 await modal().locator('[data-testid="totp-secret"]').waitFor({ timeout: 10000 })
 // QRCode.toCanvas (lib/qrcode.ts) draws asynchronously -- give it a
 // moment so the screenshot doesn't catch a blank canvas.
@@ -371,10 +392,10 @@ await modal().locator('.actions button.confirm:text-is("Confirm")').click()
 await Promise.race([
   modal().locator('[data-testid="recovery-codes"]').waitFor({ timeout: 10000 }),
   modal().locator('text=Authenticator app turned on').waitFor({ timeout: 10000 }),
-  modal().locator('.error').waitFor({ timeout: 10000 }),
+  modal().locator('.error:not(:empty)').waitFor({ timeout: 10000 }),
 ])
-if ((await modal().locator('.error').count()) > 0) {
-  console.error(`confirming the TOTP code failed: ${await modal().locator('.error').textContent()}`)
+if ((await modal().locator('.error:not(:empty)').count()) > 0) {
+  console.error(`confirming the TOTP code failed: ${await modal().locator('.error:not(:empty)').textContent()}`)
   process.exit(1)
 }
 if ((await modal().locator('[data-testid="recovery-codes"]').count()) > 0) {

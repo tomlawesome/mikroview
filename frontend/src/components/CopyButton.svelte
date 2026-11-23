@@ -16,7 +16,7 @@
   // sheet, which has no hover at all) gets an always-visible button for
   // free rather than having to override a default-hidden state back to
   // shown.
-  import { toastState } from '../lib/toast.svelte'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   // The secure-context fallback lives in lib/clipboard.ts, shared with
   // the metrics Table's own copy control (#488) so there is one answer
   // to "what happens with TLS terminated upstream", not two.
@@ -24,30 +24,34 @@
 
   let { value, label }: { value: string; label: string } = $props()
 
+  const flash = new CopyFlash()
+  const flipped = $derived(flash.label('copy', ''))
+
   async function copy(e: Event) {
     // Stop this reaching the row -- purely defensive, since this button
     // is always a sibling of the filter target, never nested inside it,
     // so the row's own mousedown/mouseup click-vs-drag handlers are
     // never attached to this element's ancestors either way.
     e.stopPropagation()
-    toastState.show((await copyToClipboard(value)) ? 'Copied' : 'Copy failed')
+    await flash.run('copy', () => copyToClipboard(value))
   }
 </script>
 
 <button
   type="button"
   class="copy-btn"
+  class:flipped={flipped !== ''}
   onclick={copy}
   title="Copy {label}"
-  aria-label="Copy {label}: {value}"
+  aria-label={flipped || `Copy ${label}: ${value}`}
 >
-  ⧉
+  {flipped || '⧉'}
 </button>
 
 <style>
   .copy-btn {
     flex: none;
-    width: 17px;
+    min-width: 17px;
     height: 17px;
     display: inline-flex;
     align-items: center;
@@ -60,6 +64,12 @@
     border: 1px solid transparent;
     border-radius: 4px;
     cursor: pointer;
+  }
+
+  .copy-btn.flipped {
+    padding: 0 4px;
+    white-space: nowrap;
+    color: var(--accent);
   }
 
   .copy-btn:hover {

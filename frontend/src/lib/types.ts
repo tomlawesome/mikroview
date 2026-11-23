@@ -132,20 +132,36 @@ export interface Device {
   // minted and waiting to be used, and when it lapses. Absent on a
   // router nobody is currently enrolling.
   enrolment?: DeviceEnrolment
-  // registeredAt (#1291) is when the operator confirmed this router on
-  // the device itself -- the ledger's final Register step. Absent until
-  // they do, and independent of acceptedIp: registering records intent
-  // and grants nothing, so a router can be registered without being
-  // enrolled, or enrolled without being registered. The pair is how the
-  // fleet tells a finished setup from one someone walked away from part
-  // way through.
+  // registeredAt is when the router was accepted: since #1493 it is set
+  // together with acceptedIp and enrolledAt, and always equals
+  // enrolledAt. No longer independent of acceptedIp -- the old Register
+  // step (#1291) folded into acceptance of the enrol line.
   registeredAt?: string
+  // loggingLeftovers (#1373) is what else this router last reported
+  // sending logs to MikroView from -- another action, or a RouterOS
+  // built-in (memory, remote, disk, echo) repointed here -- left running
+  // by a setup MikroView's own wizard has since moved past. Empty or
+  // absent means nothing was found; setup above answers a different
+  // question ("is mikroview's own action current"), so a router can
+  // carry a leftover here while setup reads "current".
+  loggingLeftovers?: LoggingLeftover[]
+}
+
+// Mirrors internal/setup.LoggingLeftover (#1373): one action still
+// sending logs to this instance from an earlier setup, and the exact
+// RouterOS commands that fix it -- reset for one of RouterOS's four
+// built-ins, remove (rules first) for anything else.
+export interface LoggingLeftover {
+  name: string
+  builtin: boolean
+  description: string
+  commands: string[]
 }
 
 // DeviceEnrolment is the enrolment token's standing as GET /api/devices
 // reports it (#1281). Never the token itself: that is shown once, by
 // the response that minted it, and the server keeps only its hash.
-export interface DeviceEnrolment {
+interface DeviceEnrolment {
   pending: boolean
   expiresAt?: string
 }
@@ -168,13 +184,18 @@ export interface RefusedSender {
   firstSeen: string
   lastSeen: string
   lines: number
+  // note (#1373) is set only when this address belongs to an enrolled
+  // router -- it appears in that router's own pushed /ip/address table
+  // -- so the card can say whose other address this is rather than
+  // leave it as an unexplained "refused".
+  note?: string
 }
 
 // Mirrors internal/setup.RouterSetup (#1241). scriptVersion is what the
 // router's own script reported (0 when it never has); currentVersion is
 // routeros.WizardVersion, so a reader can say "script v3, current v5"
 // without asking a second question.
-export interface RouterSetupReport {
+interface RouterSetupReport {
   standing: 'current' | 'behind' | 'never reported'
   scriptVersion: number
   currentVersion: number
@@ -259,6 +280,15 @@ export interface Healthz {
   // is what lets the country filter and the Settings > ingest card tell
   // the two apart instead of both just staying quiet.
   geoip: boolean
+  // geoSource (#1352): which of the three country sources is live, or
+  // null when none has loaded yet. Every signed-in user needs it, not
+  // only admins: the fall's foot credits DB-IP only while it is the one
+  // in use.
+  geoSource?: GeoSourceName | null
+  // mode (#1347): "setup-only" when the config file was refused at
+  // start-up and the server is serving only sign-in and the config
+  // editor. Absent on a normal start (and on an older server).
+  mode?: 'setup-only' | string
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -352,6 +382,47 @@ export interface HistorySettings {
   bytesPerDay: number
 }
 
+// The three country sources (#1352). Precedence is fixed server-side,
+// never chosen here: IPinfo beats MaxMind beats DB-IP.
+export type GeoSourceName = 'dbip' | 'ipinfo' | 'maxmind'
+
+// One source's download state, as GET /api/settings/geo reports it.
+// Timestamps are ISO strings or null; lastError is the server's own
+// words, already stripped of any key.
+export interface GeoSourceStatus {
+  loaded: boolean
+  fetchedAt: string | null
+  nextRefresh: string | null
+  lastError: string | null
+}
+
+// A source that needs a key: whether one is stored, and who stored it
+// when. The key itself never comes back.
+export interface GeoKeyedSourceStatus extends GeoSourceStatus {
+  keySet: boolean
+  setAt: string | null
+  setBy: string | null
+}
+
+// GET /api/settings/geo (admin), and the answer to every PUT/DELETE
+// under it.
+export interface GeoSettings {
+  source: GeoSourceName | null
+  sources: {
+    dbip: GeoSourceStatus
+    ipinfo: GeoKeyedSourceStatus
+    maxmind: GeoKeyedSourceStatus
+  }
+}
+
+// GET /api/geo/lookup?ip= (any signed-in user): an address's country
+// and network owner, each null when the loaded source does not know.
+export interface GeoLookup {
+  country: string | null
+  asn: number | null
+  asName: string | null
+}
+
 export interface HistoryHeld {
   // How many day files are on disk.
   days: number
@@ -416,7 +487,7 @@ export interface SyslogListenerStats {
 // computed when the request is served (now - lastAt <= window), so the
 // frontend never computes a rate of its own. `lastAt` is null when the
 // counter has never moved.
-export interface IngestLossCounter {
+interface IngestLossCounter {
   recent: number
   lastAt: string | null
   active: boolean
@@ -425,7 +496,7 @@ export interface IngestLossCounter {
 // rejectedConfigured's hosts gain a lastAt each server-side, but the
 // top-level list keeps its existing shape and bound of 8 -- only the
 // most-recent-first ordering is sent here, unchanged.
-export interface IngestLossHostsCounter extends IngestLossCounter {
+interface IngestLossHostsCounter extends IngestLossCounter {
   hosts: string[]
 }
 
@@ -509,6 +580,14 @@ export interface AuthSession {
   // an older server, read as false -- same reasoning as
   // mustChangePassword above.
   mustEnrolSecondFactor?: boolean
+  // #1202, gauntlet's session body. mustEnrolPasskey: an admin held at the
+  // passkey door until one is registered; adminPasskeyRequired: the admin
+  // passkey rule is in force on this deployment; resumable: a timed-out
+  // session could be resumed with the password alone (not used in
+  // v0.7.0). Gauntlet omits them when false; absent reads as false.
+  mustEnrolPasskey?: boolean
+  adminPasskeyRequired?: boolean
+  resumable?: boolean
   ssoAvailable: boolean
   // This session's own start (#677's sessions row: "signed in 4 d") --
   // when this login happened, not when the account was created. Absent
@@ -534,6 +613,8 @@ export interface AuthSession {
     count: number
     status: 'ready' | 'unset' | 'ip' | 'insecure'
     origin?: string
+    // #1202: whether passkey-alone sign-in is on (off in v0.7.0, #1443).
+    signIn?: boolean
   }
 }
 
@@ -559,6 +640,9 @@ export interface UserSummary {
   // server, read as 0 -- same reasoning as hasTOTP above. Never nonzero
   // for an SSO account, same reasoning too.
   passkeyCount?: number
+  // #1202: an admin with no passkey yet, held at the passkey door under
+  // the admin passkey rule. Gauntlet omits it when false; absent reads as false.
+  heldForPasskey?: boolean
 }
 
 // Mirrors internal/api/auth.go's totp enrol response (#1249): the
@@ -612,6 +696,9 @@ export interface ApiToken {
   device?: string
   createdAt: string
   lastUsedAt?: string
+  // #1202: when the token stops working (RFC 3339). Absent on a token
+  // that never expires.
+  expiresAt?: string
   value?: string
 }
 
@@ -638,7 +725,7 @@ export interface ReputationResult {
   netClass?: NetClass
 }
 
-export interface NetClass {
+interface NetClass {
   category: string
   source: string
   label: string
@@ -699,7 +786,7 @@ export type FlagType =
 // is not in this union still renders -- from the server's own name and
 // description -- so the station can never silently omit something that
 // is actually evaluating. See EngineRoomWatchers.svelte.
-export type DetectorName =
+type DetectorName =
   | 'port_scan'
   | 'activity_spike'
   | 'critical_port'
@@ -784,9 +871,9 @@ export interface DetectorSettings {
 // evaluate it, how far its params are from the shipped defaults, whether
 // it can answer a replay question, and -- for an expectation -- whether
 // anything can actually feed it).
-export type DefinitionIntent = 'detection' | 'expectation'
-export type DefinitionKind = 'declarative' | 'programmatic'
-export type DefinitionOrigin = 'shipped' | 'custom'
+type DefinitionIntent = 'detection' | 'expectation'
+type DefinitionKind = 'declarative' | 'programmatic'
+type DefinitionOrigin = 'shipped' | 'custom'
 
 // One param's declared type/bounds/description, so a tuning control is
 // rendered from the server's declaration rather than from a second copy
@@ -804,7 +891,7 @@ export interface DefinitionParamSchema {
   enumValues?: string[]
 }
 
-export interface DefinitionProvenance {
+interface DefinitionProvenance {
   origin: DefinitionOrigin
   shippedParams?: Record<string, unknown>
 }
@@ -814,7 +901,7 @@ export interface DefinitionProvenance {
 // Kept as three fields rather than collapsed into one, because "cannot
 // build" and "can never answer" are different facts and showing the
 // second for the first would state a property nobody established.
-export interface DefinitionReplayability {
+interface DefinitionReplayability {
   known: boolean
   capable: boolean
   reason?: string
@@ -825,7 +912,7 @@ export interface DefinitionReplayability {
 // was counted over is the overclaim #403's contract exists to rule out.
 // duration is a Go duration string ("4h12m0s") -- read it with
 // parseGoDurationSeconds, the same way a duration param is read.
-export interface ReplayWindow {
+interface ReplayWindow {
   start: string
   end: string
   duration: string
@@ -834,7 +921,7 @@ export interface ReplayWindow {
 
 // One emission a replay would have produced (internal/api's sampleView),
 // bounded server-side -- see ReplayReceipt.sampleTruncated.
-export interface ReplaySample {
+interface ReplaySample {
   at: string
   target: string
   detail: string
@@ -864,7 +951,7 @@ export interface ReplayReceipt {
 // declineView, engine.Decline): the corpus held less traffic than the
 // definition's window needs. corpusSpan and definitionWindow are Go
 // duration strings, like ReplayWindow.duration.
-export interface ReplayDecline {
+interface ReplayDecline {
   reason: string
   corpusSpan: string
   definitionWindow: string
@@ -952,7 +1039,7 @@ export interface LearningFloor {
 
 // Mirrors internal/engine.LearningProgress's JSON shape -- how far the
 // single furthest-along not-yet-ready key has gotten.
-export interface LearningProgress {
+interface LearningProgress {
   observedForSeconds: number
   samples: number
 }
@@ -994,7 +1081,7 @@ export interface DefinitionDetection {
 // engine's dispatch index nothing to narrow on, so it is evaluated
 // against every event rather than only the ones that could match. Such a
 // detector is accepted rather than refused -- reason says what it costs.
-export interface DefinitionDispatch {
+interface DefinitionDispatch {
   alwaysConsulted: boolean
   reason?: string
 }
@@ -1037,7 +1124,7 @@ export interface Entity {
 // says which pushed table holds the winning name and `router` says on
 // which device, because "change it on the router" is not actionable
 // without both.
-export type NameSource =
+type NameSource =
   | 'none'
   | 'entity'
   | 'config'
@@ -1103,7 +1190,7 @@ export interface RuleUsage {
 }
 
 // Mirrors internal/flags.NATInfo's JSON tags.
-export interface NATInfo {
+interface NATInfo {
   ip?: string
   port?: number
   raw?: string
@@ -1125,7 +1212,7 @@ export interface HostPort {
 // detail beyond a flag's free-text `detail` string. Which fields a given
 // flag actually has depends on its type; see internal/detect.Scope's
 // doc comment (or docs/configuration.md) for exactly which.
-export interface Evidence {
+interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
@@ -1300,7 +1387,7 @@ export interface WatchlistPermittedDest {
 // Mirrors internal/watchlist.ObservedDest's JSON tags -- one candidate
 // destination/port pair seen while an inverted entry was Observing, not
 // yet promoted or dismissed.
-export interface WatchlistObservedDest {
+interface WatchlistObservedDest {
   destIp: string
   port: number
   firstSeen: string
@@ -1334,7 +1421,7 @@ export interface WatchWindow {
 // where no rule was logging the pathway. It must never be rendered as
 // "empty" -- that would present an absence of ours as a fact about the
 // network.
-export type WatchNightState = 'kept' | 'empty' | 'not observed'
+type WatchNightState = 'kept' | 'empty' | 'not observed'
 
 // Mirrors internal/watchlist.Night's JSON tags -- one occurrence of the
 // window and what happened in it. first/count carry `omitzero`/`omitempty`
@@ -1352,7 +1439,7 @@ export interface WatchNight {
 // in the current run. The coverage-derived break (no rule logs this
 // pathway) is a different kind of broken and is not this: it comes from
 // live router state and arrives on the definition's own `coverage`.
-export interface WatchRing {
+interface WatchRing {
   broken?: boolean
   since?: string
   reason?: string
@@ -1431,7 +1518,7 @@ export interface WatchlistEntry {
 // actually recorded under: the matching event's own resolved identity
 // (never the entry's, possibly-unscoped, Source), the destination it
 // reached, and the port.
-export interface WatchlistMatchTuple {
+interface WatchlistMatchTuple {
   source: WatchlistIdentity
   destIp: string
   port: number
@@ -1458,7 +1545,7 @@ export interface WatchlistMatch {
 // becomes if accepted. addressList is defined server-side but never
 // actually generated yet (see that Kind's own Go doc comment), so it
 // should never appear here in practice.
-export type SuggestionKind = 'device' | 'port' | 'addressList'
+type SuggestionKind = 'device' | 'port' | 'addressList'
 
 // Mirrors internal/suggest.Status -- see internal/suggest's package doc
 // comment for what each value means and how it's reached. 'off' is the
@@ -1502,7 +1589,7 @@ export type Scope = '' | 'internal' | 'external'
 // for how the two sides (plus their scope and country) swap together.
 // srcCountry/dstCountry are the owner-ratified country section of that
 // issue -- see lib/countryMatch.ts. Per the project's dev-stage norm
-// (AGENTS.md "Removals are wholesale"), the retired `ip` field is not
+// (docs/development.md, "Removals are wholesale"), the retired `ip` field is not
 // migrated: a saved preset or bookmarked URL that still carries it simply
 // stops applying that half of its filter.
 export interface Filters {
@@ -1638,15 +1725,28 @@ export interface RouterBackupsResponse {
   totalGenerations: number
   totalRouters: number
   totalBytes: number
-  // The SFTP drop box's own listening port ("arrive by"), absent when
-  // backup.enabled is false.
+  // The SFTP drop box's own listening port ("arrive by"), a live read
+  // (#1361): absent while the drop box is closed, present the moment an
+  // admin opens it from Settings, with no reload needed.
   port?: string
+  // The "deliver by" row (#1494): how the wizard's script delivers.
+  transport: BackupTransport
   lock: VaultLock
   // True while the vault's own filesystem is nearly full (#1125): every
   // arrival now replaces the oldest generation instead of adding one.
   // Nothing is refused while it is true -- releasing a kept backup is
   // the one thing an admin can do here to free space (#1126).
   lowSpace?: boolean
+}
+
+// RouterBackupSwitchState is PUT /api/settings/router-backups' answer
+// (#1361): the drop box's on/off control. Read back from the server's
+// own state rather than from which call was made -- the same rule every
+// other settings write in this file follows.
+export interface RouterBackupSwitchState {
+  open: boolean
+  /** The port it is listening on, "" while closed. */
+  port?: string
 }
 
 // One router's block (round 44's per-router strip). IntervalSeconds/
@@ -1741,7 +1841,7 @@ export interface DroplistEntry {
 // address-list snapshot it pushed -- held/total let a mismatch (the
 // router dropped some, or has more than mikroview knows about) read at
 // a glance rather than as a bare count.
-export interface DroplistRouterHold {
+interface DroplistRouterHold {
   device: string
   held: number
   total: number
@@ -1751,7 +1851,7 @@ export interface DroplistRouterHold {
 // The pull key's state -- present says whether the router can fetch the
 // list at all; the rest is provenance for the key row, all absent until
 // one is minted.
-export interface DroplistKeyInfo {
+interface DroplistKeyInfo {
   present: boolean
   createdAt?: string
   createdBy?: string
@@ -1762,7 +1862,7 @@ export interface DroplistKeyInfo {
 // only ever copied and pasted onto the router by hand. scheduler carries
 // the `<DROP-LIST-KEY>` placeholder here; POST /api/droplist/key's own
 // response carries the same line with the real key filled in.
-export interface DroplistSetup {
+interface DroplistSetup {
   scheduler: string
   rule: string
   disableRule: string
@@ -1799,6 +1899,15 @@ export interface SetupStatus {
     // covers localhost/127.0.0.1 only, which is the most common reason
     // a router's first fetch fails.
     hosts: string[]
+    // The list the certificate is actually issued for: hosts, or the
+    // generated defaults when hosts is empty (#1507).
+    effectiveHosts?: string[]
+    // The server's answer to "does the certificate cover the address":
+    // case-insensitive, and true when no certificate is in play. The
+    // front end reads it and never compares names itself.
+    certificateCoversAddress?: boolean
+    // The stored address with any port removed; empty when none is set.
+    addressHost?: string
     syslogPort: string
     syslogEnabled: boolean
     // The operator's own answer (#1213) to "what address can your
@@ -1892,12 +2001,12 @@ export interface SetupWitness {
 // covered range. 'unknown' is a version the table cannot speak to, and
 // never appears for a row, picked or router entry the caller can render
 // a name against without evidence.
-export type RouterosStanding = 'unknown' | 'below-minimum' | 'reviewed' | 'ahead-of-review'
+type RouterosStanding = 'unknown' | 'below-minimum' | 'reviewed' | 'ahead-of-review'
 
 // RouterosRow is one entry of the dialect table -- a version range this
 // dialect's commands are the same across, how that row was verified, and
 // any per-version note (e.g. 7.24.0's find-lookup bug).
-export interface RouterosRow {
+interface RouterosRow {
   from: string
   to: string
   dialect: string
@@ -1905,30 +2014,47 @@ export interface RouterosRow {
   note: string
 }
 
-export interface RouterosTable {
+// RouterosUpgrade is one "from version X onward, this affects Y" warning
+// (#1344): a RouterOS change that persists from a release onward,
+// whatever dialect row that release falls in. Separate axis from
+// RouterosRow -- a row is a version range that renders the same
+// commands, an upgrade is a change routers at or past From all carry.
+export interface RouterosUpgrade {
+  id: string
+  from: string
+  steps: string[]
+  heading: string
+  body: string
+}
+
+interface RouterosTable {
   minimum: string
   newest: string
   rows: RouterosRow[]
+  upgrades: RouterosUpgrade[]
 }
 
 // PickedVersion is the operator's version pick echoed back with its
 // standing, once the server has matched it against a row -- null when no
-// version was sent (routeros.picked in the contract).
-export interface PickedVersion {
+// version was sent (routeros.picked in the contract). upgrades is the
+// IDs from RouterosUpgrade that apply to this version (#1344).
+interface PickedVersion {
   version: string
   standing: RouterosStanding
   dialect: string
+  upgrades: string[]
 }
 
 // RouterosWarningRouter is one router the response carries a version for
 // (only those the server knows a version for at all), what it reports,
-// and how that compares to the table.
+// how that compares to the table, and which upgrade warnings (#1344)
+// apply to it.
 export interface RouterosWarningRouter {
   id: string
   name: string
   routerosVersion: string
   standing: RouterosStanding
-  note: string
+  upgrades: string[]
 }
 
 // CommandStep is one rendered block: the commands themselves, and any
@@ -1944,7 +2070,7 @@ export interface RouterosWarningRouter {
 // no-retention-key's "none configured at all"). Undefined/empty means
 // either the block is not blank, or it is blank for a reason not covered
 // here (push and schedule's own token-and-kinds gate).
-export interface CommandStep {
+interface CommandStep {
   commands: string
   note: string
   blocked?: string[]
@@ -1968,6 +2094,20 @@ export interface SetupCommandsResponse {
     // the same convention every other step's blank block already uses.
     backup: CommandStep
     backupSchedule: CommandStep
+    // undo is the ledger's own Undo per row (#1385, "✓ · Where setup
+    // stands"): the RouterOS lines that remove what caTrust/syslog/
+    // schedule/backup(Schedule) above set up, read from the server's own
+    // builders (internal/routeros/commands.go's Undo* functions) rather
+    // than hand-written here. Unlike every block above, none of these
+    // embed the address or a token, so they render unconditionally --
+    // optional only so a test fixture built before #1385 still
+    // typechecks; a real response always carries it.
+    undo?: {
+      caTrust: string
+      syslog: string
+      schedule: string
+      backup: string
+    }
   }
 }
 
@@ -2007,7 +2147,7 @@ export interface SetupCommandsRequest {
 // TuneLoggingObserving is how long mikroview has been watching this
 // device -- present whether or not that is yet a full day (§2 of the
 // contract: "advise, never lock, compute nothing early").
-export interface TuneLoggingObserving {
+interface TuneLoggingObserving {
   since: string
   hours: number
 }
@@ -2016,7 +2156,7 @@ export interface TuneLoggingObserving {
 // same way #436's dialect table reads a device's reported version --
 // reused RouterosStanding rather than a second enum for the same
 // answer.
-export interface TuneLoggingRouterInfo {
+interface TuneLoggingRouterInfo {
   version: string
   standing: RouterosStanding
   dialect: string
@@ -2053,7 +2193,7 @@ export interface TuneLoggingRule {
 // TuneLoggingRejection is why the parser would not proceed -- key
 // material detected, meaning the upload was not `export hide-sensitive`
 // (§5 of the contract).
-export interface TuneLoggingRejection {
+interface TuneLoggingRejection {
   reason: string
 }
 
@@ -2093,7 +2233,7 @@ export interface TuneLoggingRenderResponse {
 // card's honesty list, naming in plain words everything the dossier
 // could not answer.
 
-export interface DossierVendor {
+interface DossierVendor {
   known: boolean
   name?: string
   oui?: string
@@ -2103,7 +2243,7 @@ export interface DossierVendor {
   reason?: string
 }
 
-export interface DossierRegistryStatus {
+interface DossierRegistryStatus {
   source?: string
   loaded: boolean
   entries: number
@@ -2113,7 +2253,7 @@ export interface DossierRegistryStatus {
   note?: string
 }
 
-export interface DossierSeen {
+interface DossierSeen {
   known: boolean
   firstSeen?: string
   firstSeenSource?: string
@@ -2124,7 +2264,7 @@ export interface DossierSeen {
   note?: string
 }
 
-export interface DossierNames {
+interface DossierNames {
   known: boolean
   name?: string
   source?: string
@@ -2133,7 +2273,7 @@ export interface DossierNames {
   note?: string
 }
 
-export interface DossierMac {
+interface DossierMac {
   known: boolean
   address?: string
   source?: string
@@ -2147,7 +2287,7 @@ export interface DossierMac {
   note?: string
 }
 
-export interface DossierAddress {
+interface DossierAddress {
   assignment: string
   note: string
   device?: string
@@ -2167,7 +2307,7 @@ export interface DossierPeer {
   lastSeen: string
 }
 
-export interface DossierPortUse {
+interface DossierPortUse {
   port: number
   protocol?: string
   name?: string
@@ -2177,7 +2317,7 @@ export interface DossierPortUse {
   lastSeen: string
 }
 
-export interface DossierCadence {
+interface DossierCadence {
   known: boolean
   spanSeconds?: number
   meanGapSeconds?: number
@@ -2186,7 +2326,7 @@ export interface DossierCadence {
   note?: string
 }
 
-export interface DossierTraffic {
+interface DossierTraffic {
   known: boolean
   destinations?: DossierPeer[]
   talkers?: DossierPeer[]
@@ -2198,7 +2338,7 @@ export interface DossierTraffic {
   note?: string
 }
 
-export interface DossierRuleMatch {
+interface DossierRuleMatch {
   label: string
   name?: string
   chain?: string
@@ -2210,14 +2350,14 @@ export interface DossierRuleMatch {
   lastSeen: string
 }
 
-export interface DossierFirewall {
+interface DossierFirewall {
   known: boolean
   rules?: DossierRuleMatch[]
   more?: number
   note?: string
 }
 
-export interface DossierEvidence {
+interface DossierEvidence {
   signal: string
   detail: string
 }
@@ -2225,7 +2365,7 @@ export interface DossierEvidence {
 // Confidence is the backend's own word -- 'weak', 'fair' or 'strong'.
 // It is rendered as that word and never as a number or a colour: the
 // card narrows, it does not score.
-export interface DossierIdentity {
+interface DossierIdentity {
   suggested: boolean
   profile?: string
   label?: string
@@ -2238,7 +2378,7 @@ export interface DossierIdentity {
 
 // A command for the operator to run. mikroview prints it and never
 // runs it -- see internal/dossier.Probe for why that line exists.
-export interface DossierProbe {
+interface DossierProbe {
   command?: string
   url?: string
   note: string
@@ -2272,7 +2412,7 @@ export interface HostDossier {
 // 'draining' is a watch that has seen traffic and is counting its window
 // again from the last line; the map paints it with 'broken', because to
 // the operator both mean "this range is still talking".
-export type DecommissionState = 'holding' | 'draining' | 'broken' | 'retired'
+type DecommissionState = 'holding' | 'draining' | 'broken' | 'retired'
 
 // The ghost's ink is its watch state, and the map needs one state the
 // watch does not have: 'none' is a segment that has left the router and
@@ -2286,7 +2426,7 @@ export type GhostState = 'none' | 'holding' | 'broken'
 // lease and ARP tables for a retired range drain away over the pushes
 // that follow, so a name looked up later would be missing exactly when
 // it is wanted. No entry means no name, never a guessed one.
-export interface DecommissionKnownHost {
+interface DecommissionKnownHost {
   address: string
   name?: string
   source?: string
@@ -2316,7 +2456,7 @@ export interface DecommissionReceipt {
 
 // Shown instead of a receipt when there is nothing to replay against --
 // an honest refusal rather than a flattering zero.
-export interface DecommissionDecline {
+interface DecommissionDecline {
   reason: string
 }
 
@@ -2404,7 +2544,7 @@ export interface DecommissionResponse {
 // #1283: the one per-user preferences record, GET/PATCH at /api/me/preferences.
 // The server stores prefs whole and never looks inside it -- lib/preferences.svelte.ts
 // owns the keys within it (one per preference module: presets, topTalkers,
-// colorway, altitudeStop, columns, groupMode, retention, metrics, deckOrder).
+// altitudeStop, columns, groupMode, retention, metrics, deckOrder).
 // A missing record reads as version 1 with an empty prefs object, never a
 // 404. A PATCH's prefs carries only the keys that changed, not the whole
 // record (the server merges them in).
@@ -2416,4 +2556,96 @@ export interface PreferencesRecord {
   version: number
   prefs: Record<string, unknown>
   userId?: string
+}
+
+// #1347: the config editor's API (internal/api, admin-only throughout).
+// Field names follow the contract on the issue exactly.
+
+/** The four-line header block at the top of a config MikroView wrote. */
+interface ConfigHeader {
+  schema: number
+  writtenBy: string
+  layout: number
+}
+
+/** POST /api/config/editor/open's answer. `text` is masked: each secret
+ *  value is a `<<secret:key>>` placeholder. */
+export interface ConfigEditorOpen {
+  text: string
+  path: string
+  changedSinceStart: boolean
+  /** null for a file written before headers existed (before v0.7). */
+  header: ConfigHeader | null
+  /** The schema the server guessed from the keys a headerless file uses. */
+  schemaGuess: number
+  runningVersion: string
+  runningSchema: number
+}
+
+/** GET /api/config/editor/summary's answer -- the same file facts as
+ *  ConfigEditorOpen, minus the text, plus the snapshot count. No
+ *  password and no unlock: this is what the Config card shows before
+ *  the editor has ever been opened. */
+export interface ConfigEditorSummary {
+  path: string
+  header: ConfigHeader | null
+  schemaGuess: number
+  runningVersion: string
+  runningSchema: number
+  snapshotCount: number
+  changedSinceStart: boolean
+}
+
+/** One line the validator has something to say about. Named apart from
+ *  configProblems.svelte.ts's ConfigProblem, which is the start-up
+ *  banner's different shape. */
+export interface ConfigEditorProblem {
+  line: number
+  key: string
+  severity: 'fatal' | 'warning'
+  message: string
+}
+
+export interface ConfigValidateResult {
+  problems: ConfigEditorProblem[]
+}
+
+/** One thing Carry forward did to the text. */
+export interface ConfigChange {
+  kind: string
+  key: string
+  to: string
+  line: number
+  note: string
+}
+
+export interface ConfigCarryForwardResult {
+  text: string
+  changes: ConfigChange[]
+  problems: ConfigEditorProblem[]
+}
+
+/** A kept copy of the config text, as GET /api/config/snapshots lists it. */
+export interface ConfigSnapshotSummary {
+  id: string
+  when: string
+  by: string
+  schema: number
+  /** The release its header named it for, "" for a headerless snapshot. */
+  version: string
+  /** 'manual' or 'before-carry-forward'. */
+  why: string
+  note?: string
+}
+
+/** GET /api/config/snapshots/{id}: the summary plus the text itself. */
+export interface ConfigSnapshot extends ConfigSnapshotSummary {
+  text: string
+}
+
+/** GET /api/config/snapshots' envelope: the list plus how many of them
+ *  MikroView keeps. */
+export interface ConfigSnapshotsList {
+  keep: number
+  snapshots: ConfigSnapshotSummary[]
 }

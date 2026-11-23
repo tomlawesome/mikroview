@@ -205,7 +205,7 @@ type Definition struct {
 	// identity: cloning is #404's job, but whatever does it must call
 	// NewDefinition (or equivalent) for the clone's ID rather than
 	// reusing the original's, the same way any other entity in this
-	// codebase with a generated ID works (internal/auth.newID,
+	// codebase with a generated ID works (gauntlet's newID,
 	// internal/api's own watchlist entry ID).
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -250,7 +250,7 @@ type Definition struct {
 }
 
 // newDefinitionID returns a random 32-character hex string. Mirrors
-// internal/auth's own newID() and internal/api's own
+// gauntlet's own newID() and internal/api's own
 // newWatchlistEntryID() -- each package keeps a small private copy of
 // this rather than sharing one, the existing precedent in this
 // codebase for an ID with no natural operator-chosen key.

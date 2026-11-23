@@ -43,27 +43,21 @@ const { page, consoleErrors } = await session()
 feedSyslog(20, 'live-log-every-rule')
 await waitForStreamRows(page, 20)
 
-// --- Reach the page the way the wizard's finish screen offers it ------
-// (#435 decision 2's other way in is a dark boundary's own card on the
-// map -- round 49 made coverage always-on material rather than a lens,
-// so `rules ▸` on that card is the other door. The wizard's link is
-// used here because it needs no particular boundary state set up
-// first).
-await goTo(page, 'Run setup…')
-const modal = page.locator('.setup-wizard')
-await modal.waitFor({ state: 'visible' })
-
-// The finish row ("Where setup stands") is named, not counted. It was
-// nth-child(6), then nth-child(7) when #394 added "Back up the router",
-// then nth-child(8) when #1291 added "Register". Each insertion broke
-// this line silently -- the click landed on whichever step had taken
-// that position. .finish-row is what the row has always been called.
-await page.locator('.setup-wizard .steps .step-row.finish-row').click()
-const pageLink = page.locator('.setup-wizard button.link:text-is("Log every rule…")')
-await pageLink.waitFor({ state: 'visible' })
-await pageLink.click()
-await modal.waitFor({ state: 'detached' })
-
+// --- Reach the page directly, via the deck's own roll rail (#1134) -----
+// This used to go by way of the wizard's finish screen (SetupWizard.svelte's
+// own readback link), because the page was not otherwise reachable
+// without first setting up a dark boundary (#435 decision 2's other
+// door -- round 49 made coverage always-on material rather than a lens,
+// so `rules ▸` on that card is the alternative). #1134 made this page a
+// deck card with a roll-rail entry of its own -- "the app's own
+// navigation on it", checked below -- which needs neither: the same
+// direct route this scenario already relies on at the end, to prove
+// "the way off really works", reaches it just as well to begin with.
+// The full-screen wizard's own "Where setup stands" step (StepStand.svelte)
+// is still a stub (#1374/#1382) and DESIGN.md draws no such link on it,
+// so there is nothing to route through there even if this scenario
+// still wanted to.
+await goTo(page, 'Log every rule')
 await page.waitForSelector('.og h3:has-text("log every rule")')
 
 // --- The page has the app's own navigation on it (#1134, fault 1) -----

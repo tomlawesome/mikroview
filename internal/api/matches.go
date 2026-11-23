@@ -57,7 +57,7 @@ func newDefinitionEntryID() string {
 // Both modes are bounded by matchlog's own clamp (0 -> 100, above 5000 ->
 // 5000); limit is passed through, never trusted. Both carry the same
 // gate: any signed-in user, and a read-only API token (see
-// readOnlyRoutes in auth.go), the same tier as
+// readOnlyRoutes in gauntlet.go), the same tier as
 // /api/events/flags/stats/devices. That is not a widening by accident --
 // it is stated on this route's row in the authorization matrix. This is a
 // read over evidence already collected, not a mutation, and a token that

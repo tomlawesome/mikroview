@@ -6,9 +6,11 @@
   // renders above LiveTable's scrolling body instead of getting clipped
   // by that container's overflow, which an absolutely-positioned popover
   // anchored inside the table would be.
+  import { restoreFocus } from '../lib/focusTrap'
   import { ipLookupState } from '../lib/ipLookup.svelte'
   import { dossierState } from '../lib/dossier.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
+  import FailureLine from './FailureLine.svelte'
 
   const POPOVER_WIDTH = 260
 
@@ -54,6 +56,7 @@
     {style}
     role="dialog"
     aria-label="IP investigation: {ipLookupState.anchor.ip}"
+    use:restoreFocus
   >
     <div class="header">
       <span class="ip">{ipLookupState.anchor.ip}</span>
@@ -81,9 +84,9 @@
     {#if ipLookupState.loading}
       <div class="status">Looking up…</div>
     {:else if ipLookupState.error}
-      <div class="status error">{ipLookupState.error}</div>
+      <FailureLine verb="look up" thing="this address" said={ipLookupState.error} />
     {:else if ipLookupState.result}
-      <ReputationDetails result={ipLookupState.result} />
+      <ReputationDetails result={ipLookupState.result} owner={ipLookupState.owner} />
     {/if}
   </div>
 {/if}
@@ -153,9 +156,5 @@
   .status {
     color: var(--fg-dim);
     padding: 4px 0;
-  }
-
-  .status.error {
-    color: var(--reject);
   }
 </style>

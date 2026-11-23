@@ -64,6 +64,7 @@ func (s *Server) handleCoveragePut(w http.ResponseWriter, r *http.Request) {
 		// Anything else reaching here is a failed write (Store.Put's
 		// tryPersistLocked branch), whose text can carry the backend's
 		// own path or detail and has no business leaving this process.
+		apiLog.Error("saving a coverage declaration failed: " + err.Error())
 		http.Error(w, "could not save that declaration", http.StatusInternalServerError)
 		return
 	}
@@ -88,6 +89,7 @@ func (s *Server) handleCoverageDelete(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	deleted, err := s.Coverage.Delete(key)
 	if err != nil {
+		apiLog.Error("deleting a coverage declaration failed: " + err.Error())
 		http.Error(w, "could not delete that declaration", http.StatusInternalServerError)
 		return
 	}

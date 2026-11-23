@@ -15,6 +15,7 @@
   import EventCardMobile from './EventCardMobile.svelte'
   import EventDetailSheet from './EventDetailSheet.svelte'
   import GhostRows from './GhostRows.svelte'
+  import FailureLine from './FailureLine.svelte'
   import { wizardState } from '../lib/wizard.svelte'
 
   // Both optional -- default to the live view's own state, so the
@@ -242,10 +243,10 @@
   // refetch that failed leaves the pre-refetch buffer in place -- see
   // refetchWithFilters' own comment) as well as an empty one, and it
   // always outranks every other reading once true.
-  const emptyState = $derived.by((): { kind: 'ghost' } | { kind: 'text'; text: string } => {
+  const emptyState = $derived.by((): { kind: 'ghost' } | { kind: 'text'; text: string } | { kind: 'failed'; text: string } => {
     if (emptyMessage) return { kind: 'text', text: emptyMessage }
     if (appState.fetchFailed) {
-      return { kind: 'text', text: 'Could not load events from the server — this is not a confirmed empty result.' }
+      return { kind: 'failed', text: 'Could not load events from the server — this is not a confirmed empty result.' }
     }
     // A real, non-empty buffer that the *current filter* happens to
     // exclude -- nothing to do with loading or first run, checked ahead
@@ -281,7 +282,7 @@
     if (appState.devices.length === 0) {
       const base =
         authState.role === 'admin'
-          ? 'No devices have sent anything yet — your account menu ▸ Run setup… to point a RouterOS device at MikroView.'
+          ? 'No devices have sent anything yet — your account menu ▸ Run setup… to point a router at MikroView.'
           : 'No devices have sent anything yet. Ask an administrator to run setup.'
       // #487's "the record is the feature": where a setup step was
       // skipped or forced past, this silence has a recorded cause, and
@@ -433,6 +434,8 @@
       {#if rendered.length === 0}
         {#if emptyState.kind === 'ghost'}
           <GhostRows label="Loading events…" rows={4} />
+        {:else if emptyState.kind === 'failed'}
+          <FailureLine text={emptyState.text} />
         {:else}
           <div class="empty">{emptyState.text}</div>
         {/if}
@@ -552,6 +555,8 @@
       {#if rendered.length === 0}
         {#if emptyState.kind === 'ghost'}
           <GhostRows label="Loading events…" rows={6} />
+        {:else if emptyState.kind === 'failed'}
+          <FailureLine text={emptyState.text} />
         {:else}
           <div class="empty">{emptyState.text}</div>
         {/if}

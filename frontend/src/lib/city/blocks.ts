@@ -36,7 +36,7 @@ export interface BuildingSymbol {
 const lp = (u: number, v: number, z = 0) => R2(u * LU) + ' ' + R2(v * LV - z * LZ)
 
 /** A box's three visible faces in local px (the mockup's lbox). */
-export function lbox(A: number, B: number, z0: number, h: number): { top: string; right: string; left: string } {
+function lbox(A: number, B: number, z0: number, h: number): { top: string; right: string; left: string } {
   const p = boxPts(0, 0, A, B)
   const zt = z0 + h
   const P = (k: keyof typeof p, z: number) => lp(p[k][0], p[k][1], z)
@@ -48,7 +48,7 @@ export function lbox(A: number, B: number, z0: number, h: number): { top: string
 }
 
 /** The mockup's lfaces: void backing, then the three lit faces. */
-export function lfaces(b: { top: string; right: string; left: string }, o: { l?: number; r?: number; t?: number } = {}): SymbolPath[] {
+function lfaces(b: { top: string; right: string; left: string }, o: { l?: number; r?: number; t?: number } = {}): SymbolPath[] {
   return [
     { d: b.left, fill: 'void' },
     { d: b.right, fill: 'void' },

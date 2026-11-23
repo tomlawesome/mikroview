@@ -167,7 +167,7 @@ def member(r, c):
 
 campaign = ('        <tr class="frow camp ft-unplanned" data-c="c1" aria-label="Campaign: three flags from cam-porch inside one 30-minute window">'
             '<td class="fmark"><i class="cm">⁂</i> CAMPAIGN<span class="cn">3 flags</span></td>'
-            '<td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.14</td>'
+            '<td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.78</td>'
             '<td class="ev"><span class="tchip ft-unplanned">unplanned</span><span class="tchip ft-outbound">outbound</span><span class="tchip ft-repeat">repeated drops</span><span class="cspan">13:28 → still arriving</span></td>'
             '<td class="num">26×</td><td class="t">24 m</td>' + TRIO + '</tr>\n'
             '        <tr class="crule in-c1 ft-unplanned" hidden><td colspan="6">one source, three flags, each inside 30 minutes of the last — <b>one campaign</b>. cam-porch\'s ACTIVITY SPIKE at 11:10 is two hours from these, so it keeps its own row.</td></tr>\n')
@@ -182,7 +182,7 @@ assert d5.count('71') == 4, d5.count('71')
 
 # the seventh flag: cam-porch's activity spike, two hours before its campaign
 d7 = ('        <tr class="frow ft-surge" data-d="d7"><td class="fmark">▲ ACTIVITY SPIKE<span class="conf" title="scored 72 of 100 by the detector">72</span></td>'
-      '<td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.14</td><td>4.2× its usual hour, 11:10 → 11:50</td>'
+      '<td class="k"><a class="wl" href="#s3" onclick="descend()">cam-porch</a> · 198.51.100.78</td><td>4.2× its usual hour, 11:10 → 11:50</td>'
       '<td class="num">—</td><td class="t">2 h 40 m</td>' + TRIO + '</tr>\n'
       '        <tr class="drawer ft-surge" id="d7"><td colspan="6"><div class="dwr"><div class="dwr-in">\n'
       '          <div class="story"><b>cam-porch was 4.2× busier than its usual late morning.</b> Between 11:10 and 11:50 the camera sent four times what it sends in that hour on an ordinary day, all of it accepted, most of it to its own cloud. It settled by noon; the campaign above began at 13:28, two hours later.'

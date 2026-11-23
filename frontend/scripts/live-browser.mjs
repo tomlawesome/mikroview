@@ -31,6 +31,59 @@ const PASS = process.env.MV_PASS
 // re-enter their password at that moment, so a scenario driving the
 // real ledger has to type it into the wizard as an operator would.
 export const adminPassword = PASS
+
+/**
+ * tokenMint shapes the body of POST /api/tokens for the gauntlet-era
+ * contract (#1202): token creation re-checks the admin's own password,
+ * so every body carries it, and an ingest token says `expiresAt:
+ * "never"` (a router's pushes should not stop on a calendar date).
+ * An API token sends no expiry, so the server's one-year default
+ * applies. Wrap the body of every direct mint in this rather than
+ * writing the two fields out by hand.
+ */
+export function tokenMint(body) {
+  return {
+    ...body,
+    password: PASS,
+    ...(body.kind === 'ingest' && body.expiresAt === undefined ? { expiresAt: 'never' } : {}),
+  }
+}
+/**
+ * removePerson removes a person from Settings -> people the way an
+ * operator does since #1202 U8: the first click on "remove" opens a
+ * password prompt under the row (it does not arm the button), the
+ * admin's own password goes in, and the confirm button then acts. Waits
+ * for the row to leave the page. The caller is already on Settings.
+ */
+export async function removePerson(page, name) {
+  const people = '#people'
+  await page.locator(`${people} .prow:has-text("${name}") .remove`).click()
+  const prompt = page.locator(`${people} input[aria-label="your password"]`)
+  await prompt.waitFor({ state: 'visible', timeout: 5000 })
+  await prompt.fill(PASS)
+  await page
+    .locator(`${people} button:has-text("confirm — signs them out, revokes their keys")`)
+    .click()
+  await page.waitForSelector(`${people} .prow:has-text("${name}")`, { state: 'detached' })
+}
+
+/**
+ * mintBlocklistKey answers the blocklist builder's key prompt (#1202):
+ * opening the builder no longer mints an ingest key on its own. Until
+ * one exists the block comes without its push part and the builder shows
+ * "The push needs a key", asking for the admin's password. Types it,
+ * presses "Mint key", and waits for the prompt to go (it leaves once the
+ * key exists and the block is drawn again with the push). Works for the
+ * page and the wizard's tail stage alike: both render the same body.
+ */
+export async function mintBlocklistKey(page) {
+  const field = page.locator('#bl-key-password')
+  await field.waitFor({ state: 'visible', timeout: 10000 })
+  await field.fill(PASS)
+  await page.locator('button.keymint').click()
+  await field.waitFor({ state: 'detached', timeout: 10000 })
+}
+
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
@@ -176,6 +229,22 @@ export function feedSyslog(n, label = 'live-test-rule') {
   execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
     stdio: 'ignore',
     cwd: REPO,
+  })
+}
+
+/**
+ * upgradeServer rebuilds and restarts the running instance in place --
+ * same data, same config, same admin session -- with a new VERSION
+ * baked into both the Go binary and the frontend bundle it stamps
+ * (live-env.sh's `upgrade`). #1363's own case: an already-open tab
+ * whose server changed out from under it, which a fresh `up` cannot
+ * exercise since nothing has a tab open on it yet.
+ */
+export function upgradeServer() {
+  execFileSync(ENV_SCRIPT, ['upgrade'], {
+    stdio: 'ignore',
+    cwd: REPO,
+    timeout: 120_000,
   })
 }
 
@@ -372,34 +441,44 @@ function isResizeObserverLoopNotice(text) {
 }
 
 /**
- * dismissSetupWizard closes the setup modal if a fresh instance
- * auto-launched it (#487).
+ * dismissSetupWizard guards against the setup wizard auto-launching over
+ * a fresh instance and blocking every other scenario's first click.
  *
- * The modal opens on first admin sign-in with no router sending, which
- * is exactly the state a freshly stood-up harness is in before any
- * scenario has fed anything. It is a real focus trap over a real veil,
- * so leaving it up makes every other scenario's first click fail an
- * actionability check for a reason that has nothing to do with what it
- * is testing.
+ * It used to close the modal (#487) with Escape -- SetupWizard.svelte
+ * owned that key while open. The full-screen wizard that replaced it
+ * (#1381, Wizard.svelte) has no ✕ and does not bind Escape: DESIGN.md
+ * ("Superseded: the wizard as a modal") retired "explicit close only"
+ * along with the modal itself, because the new wizard is a claim ledger
+ * meant to be walked to Finish, not dismissed, and nothing in it reaches
+ * Finish before the router has actually answered (wizardRun.ts's
+ * footSpec offers Finish only at the 'done' stage). There is now nothing
+ * for this helper to click.
  *
- * Gated on the server's own device list rather than a blind wait: with a
- * device already known the modal cannot auto-launch, so there is nothing
- * to wait for and no seconds to spend waiting for it. `waitFor` rather
- * than `isVisible`, because isVisible answers immediately about a modal
- * that is still one paint away.
+ * That is fine in practice: wizardState.maybeAutoLaunch only fires with
+ * zero devices, and scripts/live-env.sh's loopback config always
+ * declares one (`live-router`) before the harness serves its first
+ * request, so every ordinary scenario's first sign-in already has a
+ * device on record and the wizard never opens. So this stays a guard,
+ * not a workaround -- it fails loudly rather than trying to paper over
+ * an un-dismissable-by-design screen with a stale keypress. A scenario
+ * that genuinely wants the wizard (Run setup…, Add a router) opens it on
+ * purpose and does not call this first.
  */
 export async function dismissSetupWizard(page) {
   // The answer is `{ devices: [...] }`, not a bare array: reading it as
   // one made the guard never fire, so every scenario paid the full
-  // ten-second wait for a modal that could not open (#1060).
+  // ten-second wait for a wizard that could not open (#1060).
   const body = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
   const devices = Array.isArray(body) ? body : body?.devices
   if (Array.isArray(devices) && devices.length > 0) return
-  const modal = page.locator('.setup-wizard')
-  await modal.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
-  if (await modal.count()) {
-    await page.keyboard.press('Escape')
-    await modal.waitFor({ state: 'detached', timeout: 5000 })
+  const wizard = page.locator('.page.wiz')
+  await wizard.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
+  if (await wizard.count()) {
+    throw new Error(
+      'the setup wizard auto-launched with no devices declared, and the full-screen wizard has no way to dismiss it ' +
+        '(DESIGN.md, "Superseded: the wizard as a modal") -- declare a device (scripts/live-env.sh\'s DEVICES_BLOCK) ' +
+        'rather than trying to close it here',
+    )
   }
 }
 
@@ -670,17 +749,6 @@ async function resetInstance(page) {
  */
 export const DESKTOP_VIEWPORT = { width: 1920, height: 1080 }
 
-/**
- * session launches a browser and signs in, returning a live page.
- *
- * Its own landing default is 'stream' (#616 retired #544's interim --
- * the fall is the real landing page now, not Stream) so that every
- * scenario written against the old landing keeps working unmodified:
- * session() signs in, then navigates to Stream itself before returning,
- * exactly where those scenarios already assume they start. Pass
- * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
- * instead of being moved off it.
- */
 // ---- The second step at sign-in (#1253) ----------------------------------
 //
 // Every local account must now hold a second factor, so the right
@@ -747,21 +815,112 @@ function totpCode(secret, counter) {
 // confirming enrolment.
 const COUNTER_FILE = process.env.MV_DIR ? path.join(process.env.MV_DIR, 'totp-last-counter') : null
 
-async function freshTotpCode(secret) {
+// The server's clock, as this harness knows it (#1202). Under the gauntlet
+// library the clock POST /api/test/clock moves (Server.now) also decides
+// sign-in: the authenticator-code window, session age, lockouts. So a
+// scenario that advances it makes every later code worked out from the
+// local Date.now() one the server refuses, for the rest of the instance's
+// life. The offset is not readable before signing in (the hook is admin
+// only), so whoever moves the clock -- advanceTestClock below -- writes the
+// offset it got back to $MV_DIR, which `live-env.sh up` recreates empty for
+// each instance. No file (hooks off, or the clock never moved) means zero,
+// which is plain Date.now().
+const CLOCK_OFFSET_FILE = process.env.MV_DIR ? path.join(process.env.MV_DIR, 'test-clock-offset-ms') : null
+let clockOffsetMs = 0
+
+function readClockOffsetMs() {
+  if (!CLOCK_OFFSET_FILE) return clockOffsetMs
+  try {
+    const n = Number.parseInt(fs.readFileSync(CLOCK_OFFSET_FILE, 'utf8').trim(), 10)
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+/** serverNowMs is the server's idea of now, in epoch milliseconds. */
+export function serverNowMs() {
+  return Date.now() + readClockOffsetMs()
+}
+
+/**
+ * advanceTestClock moves the server's test clock forward by a Go duration
+ * ("3m"; "0s" only reads it) through POST /api/test/clock and remembers
+ * how far ahead of this machine the server now is, so freshTotpCode keeps
+ * producing codes the server accepts. Returns { status, now }: now is the
+ * server's time as a Date, or null when the hook refused (it is absent
+ * unless the instance runs with MV_TEST_HOOKS=1) -- the offset is then
+ * left as it was. `request` is an APIRequestContext that is signed in as
+ * the admin, e.g. page.request.
+ */
+export async function advanceTestClock(request, advance) {
+  const res = await request.fetch(`${URL_BASE}/api/test/clock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    data: { advance },
+  })
+  if (res.status() !== 200) return { status: res.status(), now: null }
+  const now = new Date((await res.json()).now)
+  // The reply is stamped as the request was served, a few milliseconds
+  // before it is read here: the error is far below a 30-second step.
+  const offset = now.getTime() - Date.now()
+  clockOffsetMs = offset
+  if (CLOCK_OFFSET_FILE) fs.writeFileSync(CLOCK_OFFSET_FILE, String(offset))
+  return { status: 200, now }
+}
+
+// The read-check-write of COUNTER_FILE runs under a mkdir lock
+// (`totp-last-counter.lock`, #1466), the same scheme as fresh_totp_code in
+// scripts/seed-demo.py, so the two exclude each other. A lock older than
+// 30 s by its mtime is stale and removed; the value goes in through a temp
+// file and a rename, so a reader never sees half a number.
+async function claimStepLocked(secret) {
+  const lock = `${COUNTER_FILE}.lock`
   for (;;) {
-    const counter = Math.floor(Date.now() / 1000 / 30)
+    try {
+      fs.mkdirSync(lock)
+      break
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 30000) {
+          try { fs.rmdirSync(lock) } catch { /* someone else removed it */ }
+          continue
+        }
+      } catch {
+        continue // released between mkdir and stat
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+  try {
+    const counter = Math.floor(serverNowMs() / 1000 / 30)
     let spent = -1
     try {
       spent = Number.parseInt(fs.readFileSync(COUNTER_FILE, 'utf8').trim(), 10)
     } catch {
       spent = -1
     }
-    if (!Number.isFinite(spent) || counter > spent) {
-      if (COUNTER_FILE) fs.writeFileSync(COUNTER_FILE, String(counter))
-      return totpCode(secret, counter)
+    if (Number.isFinite(spent) && counter <= spent) return null
+    const tmp = `${COUNTER_FILE}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+    fs.writeFileSync(tmp, String(counter))
+    fs.renameSync(tmp, COUNTER_FILE)
+    return totpCode(secret, counter)
+  } finally {
+    try { fs.rmdirSync(lock) } catch { /* already gone */ }
+  }
+}
+
+async function freshTotpCode(secret) {
+  for (;;) {
+    if (COUNTER_FILE) {
+      const code = await claimStepLocked(secret)
+      if (code !== null) return code
+    } else {
+      return totpCode(secret, Math.floor(serverNowMs() / 1000 / 30))
     }
     // +1s so the server's clock has certainly crossed the boundary too.
-    await new Promise((r) => setTimeout(r, 30000 - (Date.now() % 30000) + 1000))
+    await new Promise((r) => setTimeout(r, 30000 - (serverNowMs() % 30000) + 1000))
   }
 }
 
@@ -899,11 +1058,17 @@ export async function completeSecondFactor(page) {
  * only place it exists, so it is threaded straight into freshTotpCode as
  * a plain local value rather than read from the admin's env var.
  *
+ * password is the account's own sign-in password, just typed into the
+ * form this helper is called right after -- #1418/#1422 gate
+ * totp/enrol on it the same way handleAuthPasskeyDelete already gated
+ * removal, so a session cookie alone is no longer enough to mint this
+ * account's first factor.
+ *
  * Not retried, for the reason freshTotpCode's own comment gives: a
  * refused code is a spent login attempt against the same five-per-five-
  * minutes budget every other sign-in shares.
  */
-export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
+export async function enrolFactorAndSignIn(page, password, urlBase = URL_BASE) {
   const call = (path, data) =>
     page.request.fetch(`${urlBase}${path}`, {
       method: 'POST',
@@ -921,7 +1086,7 @@ export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
   // cookie is certainly already set by the time the fetch below sends it.
   await page.waitForSelector('main.door', { timeout: 15000 })
 
-  const enrolRes = await call('/api/auth/totp/enrol')
+  const enrolRes = await call('/api/auth/totp/enrol', { password })
   if (enrolRes.status() !== 200) {
     throw new Error(`POST /api/auth/totp/enrol answered ${enrolRes.status()} -- cannot enrol a factor for this account`)
   }
@@ -930,6 +1095,18 @@ export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
   const confirmRes = await call('/api/auth/totp/confirm', { code: await freshTotpCode(secret) })
   if (confirmRes.status() !== 200) {
     throw new Error(`POST /api/auth/totp/confirm answered ${confirmRes.status()} -- the fresh code was refused`)
+  }
+  // gauntlet holds the first factor until the person says the recovery
+  // codes are saved (#1202): the confirm answer carries
+  // pendingConfirmation: true, and the door stays shut until
+  // POST /api/auth/recovery-codes/confirm. The codes themselves are not
+  // needed here. An older backend leaves the field out and the door is
+  // already open.
+  if ((await confirmRes.json().catch(() => ({}))).pendingConfirmation === true) {
+    const codesRes = await call('/api/auth/recovery-codes/confirm', {})
+    if (codesRes.status() !== 200) {
+      throw new Error(`POST /api/auth/recovery-codes/confirm answered ${codesRes.status()} -- the recovery codes were not confirmed`)
+    }
   }
 
   // The two fetches above changed the session's own state, not anything
@@ -941,6 +1118,23 @@ export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
   await page.waitForSelector('#main-content', { timeout: 15000 })
 }
 
+/**
+ * session launches a browser and signs in, returning a live page.
+ *
+ * Its own landing default is 'stream' (#616 retired #544's interim --
+ * the fall is the real landing page now, not Stream) so that every
+ * scenario written against the old landing keeps working unmodified:
+ * session() signs in, then navigates to Stream itself before returning,
+ * exactly where those scenarios already assume they start. Pass
+ * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
+ * instead of being moved off it.
+ *
+ * `routes` is [pattern, handler] pairs for page.route, registered before
+ * the first load: the app reads some endpoints once at sign-in and keeps
+ * what it got (wizardState.refresh() for /api/setup/status is the worked
+ * example), so a mock registered after session() returns is too late for
+ * that read. Pair it with `mocksApi` so the service worker stays out.
+ */
 export async function session({
   dismissSetup = true,
   landing = 'stream',
@@ -948,6 +1142,7 @@ export async function session({
   keep = false,
   viewport = undefined,
   mocksApi = false,
+  routes = [],
 } = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
@@ -970,8 +1165,9 @@ export async function session({
   // page.route: once the app's service worker controls the page, an
   // /api request is fetched by the worker, and only Chromium lets
   // Playwright's routes see a worker's fetches -- under WebKit the mock
-  // never fires and the real server answers (live-setup-wizard-source-
-  // split saw the real router where it had mocked a split one). Keeping
+  // never fires and the real server answers (the wizard's own
+  // source-split scenario saw the real router where it had mocked a
+  // split one). Keeping
   // the worker out of that scenario's context is what makes the mock
   // hold on every engine; the app runs the same without one.
   const page = await browser.newPage({
@@ -1000,6 +1196,8 @@ export async function session({
   page.on('console', (m) => {
     if (m.type() === 'error') record(m.text())
   })
+
+  for (const [pattern, handler] of routes) await page.route(pattern, handler)
 
   await page.goto(URL_BASE, { waitUntil: 'networkidle' })
   await page.fill('input[autocomplete="username"]', USER)

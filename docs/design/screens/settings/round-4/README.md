@@ -39,8 +39,8 @@ dark and light into `shots/`.
 | s3 | A copy of a code detector written from nothing; one line wrong; tried |
 | s4 | The viewer's row as prose; the pocket bench |
 
-Data story: round 55's garage — the retired 203.0.113.0/24 range's
-stragglers (garage-cam .14, ev-charger .31), watched a second way.
+Data story: round 55's garage — the retired 198.51.100.224/27 range's
+stragglers (garage-cam .238, ev-charger .225), watched a second way.
 
 ## For the build
 

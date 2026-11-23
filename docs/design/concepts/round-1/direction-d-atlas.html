@@ -324,7 +324,7 @@
       <g transform="translate(700 78)">
         <rect class="isl" x="-105" y="-32" width="210" height="64" rx="18" stroke="var(--edge-2)"/>
         <text x="-86" y="-4" class="n-name">Internet</text>
-        <text x="-86" y="15" class="n-cidr">ether1 · 203.0.113.7</text>
+        <text x="-86" y="15" class="n-cidr">ether1 · 192.0.2.7</text>
         <text x="52" y="-8" class="cov-l">LOGGED</text>
         <text x="52" y="5" class="n-sub">in / out</text>
       </g>
@@ -340,7 +340,7 @@
       <g transform="translate(1140 148)">
         <rect class="isl" x="-88" y="-30" width="192" height="60" rx="16" stroke="var(--edge-2)"/>
         <text x="-70" y="-3" class="n-name" style="font-size:14px">WireGuard</text>
-        <text x="-70" y="15" class="n-cidr">wg0 · 203.0.113.0/24</text>
+        <text x="-70" y="15" class="n-cidr">wg0 · 198.51.100.128/27</text>
         <text x="56" y="-8" class="cov-q">QUIET</text>
         <text x="56" y="5" class="n-sub">by choice</text>
       </g>
@@ -349,7 +349,7 @@
       <g transform="translate(278 552)">
         <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--lan)" stroke-opacity="0.55"/>
         <circle cx="-96" cy="24" r="4.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan))"/>
-        <text x="-84" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">203.0.113.0/24</text>
+        <text x="-84" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">198.51.100.0/27</text>
         <text x="-96" y="56" class="n-member">alex-desktop · phone-alex · laptop-anna</text>
         <text x="-96" y="74" class="n-sub">+9 quiet hosts</text>
         <text x="-96" y="108" class="cov-l">LOGGED BOTH WAYS</text>
@@ -357,14 +357,14 @@
       <g transform="translate(572 552)">
         <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--srv)" stroke-opacity="0.55"/>
         <circle cx="-96" cy="24" r="4.5" fill="var(--srv)" style="filter:drop-shadow(0 0 5px var(--srv))"/>
-        <text x="-84" y="29" class="n-name">Servers</text><text x="26" y="29" class="n-cidr">198.51.100.0/24</text>
+        <text x="-84" y="29" class="n-name">Servers</text><text x="26" y="29" class="n-cidr">198.51.100.32/27</text>
         <text x="-96" y="56" class="n-member">nas · pihole · unifi</text>
         <text x="-96" y="108" class="cov-l">LOGGED BOTH WAYS</text>
       </g>
       <g transform="translate(852 552)">
         <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--iot)" stroke-opacity="0.55"/>
         <circle cx="-96" cy="24" r="4.5" fill="var(--iot)" style="filter:drop-shadow(0 0 5px var(--iot))"/>
-        <text x="-84" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">198.51.100.0/24</text>
+        <text x="-84" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">198.51.100.64/27</text>
         <text x="-96" y="56" class="n-member">cam-porch · hue-bridge · thermostat</text>
         <text x="-96" y="74" class="n-sub">+4 quiet hosts</text>
         <text x="-96" y="108" class="cov-l">LOGGED BOTH WAYS</text>
@@ -374,7 +374,7 @@
       <g transform="translate(1122 552)">
         <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--guest)" stroke-opacity="0.55"/>
         <circle cx="-96" cy="24" r="4.5" fill="var(--guest)" style="filter:drop-shadow(0 0 5px var(--guest))"/>
-        <text x="-84" y="29" class="n-name">Guest</text><text x="26" y="29" class="n-cidr">192.0.2.0/24</text>
+        <text x="-84" y="29" class="n-name">Guest</text><text x="26" y="29" class="n-cidr">198.51.100.96/27</text>
         <text x="-96" y="56" class="n-member">guest-e8b2 · +2 quiet</text>
         <text x="-96" y="92" class="cov-d">DARK TOWARD WAN</text>
         <text x="-96" y="108" class="n-sub">no log rule on this boundary</text>
@@ -444,13 +444,13 @@
       <g class="keep" transform="translate(278 398)">
         <rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--lan)" stroke-opacity="0.8"/>
         <circle cx="-96" cy="24" r="4.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan))"/>
-        <text x="-84" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">203.0.113.0/24</text>
+        <text x="-84" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">198.51.100.0/27</text>
       </g>
       <g transform="translate(572 398)"><rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--srv)" stroke-opacity="0.5"/><text x="-96" y="29" class="n-name" style="font-size:13px">Servers</text></g>
       <g class="keep" transform="translate(852 398)">
         <rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--iot)" stroke-opacity="0.8"/>
         <circle cx="-96" cy="24" r="4.5" fill="var(--iot)" style="filter:drop-shadow(0 0 5px var(--iot))"/>
-        <text x="-84" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">198.51.100.0/24</text>
+        <text x="-84" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">198.51.100.64/27</text>
       </g>
       <g transform="translate(1122 398)"><rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--guest)" stroke-opacity="0.5"/><text x="-96" y="29" class="n-name" style="font-size:13px">Guest</text></g>
     </svg>
@@ -469,25 +469,25 @@
       <tbody>
         <tr>
           <td class="t">14:02:11.482</td><td><span class="act drop">DROP</span></td>
-          <td class="anchor"><span class="host">cam-porch</span><span class="ip">198.51.100.31</span>
-            <span class="tools"><span class="g" title="Copy raw value">⧉</span><span class="g" title="Edit name for 198.51.100.31">✎</span></span>
+          <td class="anchor"><span class="host">cam-porch</span><span class="ip">198.51.100.65</span>
+            <span class="tools"><span class="g" title="Copy raw value">⧉</span><span class="g" title="Edit name for 198.51.100.65">✎</span></span>
             <div class="editor" role="dialog" aria-label="Name this host">
               <h3>Name this host</h3>
-              <div class="ident"><b>198.51.100.31</b> — currently “cam-porch”, from a DHCP lease</div>
+              <div class="ident"><b>198.51.100.65</b> — currently “cam-porch”, from a DHCP lease</div>
               <input type="text" value="Porch camera" aria-label="Display name">
-              <p class="scope">Applies everywhere 198.51.100.31 appears — including this map.</p>
+              <p class="scope">Applies everywhere 198.51.100.65 appears — including this map.</p>
               <p class="note">Display only. Filters, groups and copies keep using the raw value.</p>
               <div class="row"><button class="cancel">Cancel</button><button class="save">Save</button></div>
             </div>
           </td>
           <td class="arrow">→</td>
-          <td><span class="host">nas</span><span class="ip">198.51.100.10</span></td>
+          <td><span class="host">nas</span><span class="ip">198.51.100.42</span></td>
           <td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td>
         </tr>
-        <tr><td class="t">14:01:58.104</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">198.51.100.10</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
-        <tr><td class="t">14:01:43.771</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td><td><span class="host">alex-desktop</span><span class="ip">203.0.113.21</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
-        <tr><td class="t">14:01:29.310</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">198.51.100.10</span></td><td>tcp/139 <span class="t">netbios</span></td><td class="t">iot-to-lan-drop</td></tr>
-        <tr><td class="t">14:01:12.089</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.31</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">198.51.100.10</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:58.104</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">198.51.100.42</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:43.771</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td><td class="arrow">→</td><td><span class="host">alex-desktop</span><span class="ip">198.51.100.21</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:29.310</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">198.51.100.42</span></td><td>tcp/139 <span class="t">netbios</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:12.089</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">198.51.100.65</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">198.51.100.42</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
       </tbody>
     </table>
   </div>
@@ -544,7 +544,7 @@
       <g transform="translate(700 78)">
         <rect class="isl" x="-105" y="-32" width="210" height="64" rx="18" stroke="var(--edge-2)"/>
         <text x="-86" y="-4" class="n-name">Internet</text>
-        <text x="-86" y="15" class="n-cidr">ether1 · 203.0.113.7</text>
+        <text x="-86" y="15" class="n-cidr">ether1 · 192.0.2.7</text>
         <text x="52" y="-2" class="cov-l">LOGGED</text>
       </g>
       <g transform="translate(700 300)">
@@ -555,30 +555,30 @@
       <g transform="translate(1140 148)">
         <rect class="isl" x="-88" y="-30" width="192" height="60" rx="16" stroke="var(--edge-2)"/>
         <text x="-70" y="-3" class="n-name" style="font-size:14px">WireGuard</text>
-        <text x="-70" y="15" class="n-cidr">wg0 · 203.0.113.0/24</text>
+        <text x="-70" y="15" class="n-cidr">wg0 · 198.51.100.128/27</text>
         <text x="56" y="-2" class="cov-q">QUIET</text>
       </g>
       <g transform="translate(278 552)">
         <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--lan)" stroke-opacity="0.4"/>
-        <text x="-96" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">203.0.113.0/24</text>
+        <text x="-96" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">198.51.100.0/27</text>
         <text x="-96" y="58" class="cov-l">LOGGED BOTH WAYS</text>
         <text x="-96" y="76" class="n-sub">1,940 ev/min at the playhead</text>
       </g>
       <g transform="translate(572 552)">
         <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--srv)" stroke-opacity="0.4"/>
-        <text x="-96" y="29" class="n-name">Servers</text><text x="26" y="29" class="n-cidr">198.51.100.0/24</text>
+        <text x="-96" y="29" class="n-name">Servers</text><text x="26" y="29" class="n-cidr">198.51.100.32/27</text>
         <text x="-96" y="58" class="cov-l">LOGGED BOTH WAYS</text>
         <text x="-96" y="76" class="n-sub">1,210 ev/min</text>
       </g>
       <g transform="translate(852 552)">
         <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--iot)" stroke-opacity="0.4"/>
-        <text x="-96" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">198.51.100.0/24</text>
+        <text x="-96" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">198.51.100.64/27</text>
         <text x="-96" y="58" class="cov-l">LOGGED BOTH WAYS</text>
         <text x="-96" y="76" class="n-sub">640 ev/min</text>
       </g>
       <g transform="translate(1122 552)">
         <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--guest)" stroke-opacity="0.7"/>
-        <text x="-96" y="29" class="n-name">Guest</text><text x="26" y="29" class="n-cidr">192.0.2.0/24</text>
+        <text x="-96" y="29" class="n-name">Guest</text><text x="26" y="29" class="n-cidr">198.51.100.96/27</text>
         <text x="-96" y="58" class="cov-d">DARK TOWARD WAN</text>
         <text x="-96" y="76" class="n-sub">88 ev/min seen — the rest unknowable</text>
       </g>

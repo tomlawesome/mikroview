@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity, Flag, FlagType, RefusedSender, RuleUsage, UnattributedSource } from '../lib/types'
+import type { Device, Entity, Flag, FlagType, RefusedSender, RuleUsage, UnattributedSource } from '../lib/types'
 import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
@@ -40,11 +40,19 @@ const fetchUnattributedSources = vi.fn(async (): Promise<UnattributedSource[]> =
 // deck answers the fleet view with this card and never draws that one
 // (deckCards.ts, #785), and the endpoint behind it is admin-only.
 const fetchRefusedSenders = vi.fn(async (): Promise<RefusedSender[]> => [])
+// #1369: Remove…'s DELETE call and the refresh it triggers on success
+// (appState.refreshDevicesAndStats -- fetchDevices/fetchStats).
+const deleteDevice = vi.fn(async (_id: string): Promise<string | null> => null)
+const fetchDevices = vi.fn(async (): Promise<Device[]> => [])
+const fetchStats = vi.fn(async () => ({ total: 0, byAction: {}, topRules: [], timeline: [] }) as unknown)
 
 vi.mock('../lib/api', () => ({
   fetchEntities: () => fetchEntities(),
   upsertEntity: (e: Entity) => upsertEntity(e),
   deleteEntity: vi.fn(),
+  deleteDevice: (id: string) => deleteDevice(id),
+  fetchDevices: () => fetchDevices(),
+  fetchStats: () => fetchStats(),
   fetchDeviceMACs: vi.fn(async () => []),
   fetchRouterRules: () => fetchRouterRules(),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
@@ -120,6 +128,9 @@ beforeEach(() => {
   fetchRules.mockResolvedValue([])
   fetchRouterRules.mockResolvedValue({ available: false, rules: [] })
   fetchUnattributedSources.mockResolvedValue([])
+  deleteDevice.mockResolvedValue(null)
+  fetchDevices.mockResolvedValue([])
+  fetchStats.mockResolvedValue({ total: 0, byAction: {}, topRules: [], timeline: [] } as unknown)
   appState.devices = []
   appState.events = []
   appState.initialLoadDone = true
@@ -259,16 +270,11 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  // #1291: registering (the ledger's final Register step) and enrolling
-  // (a router's logs being accepted) are independent, so a card has to
-  // say plainly when only one of the two ever happened.
-  // configured: false throughout -- every router the wizard adds is
-  // drawn on the unregistered cards, and a config.yaml-declared one can
-  // never carry a registeredAt at all (the server refuses to register
-  // one, since config.yaml rebuilds it on every boot). A test written
-  // against the declared cards would be asserting about a state that
-  // cannot happen.
-  it('reads an enrolled-but-never-registered router as an unfinished setup, not the finished state', async () => {
+  // #1493: registration is acceptance of the enrol line, so the card no
+  // longer reports an unfinished Register step nor offers to finish one.
+  // configured: false throughout -- the wizard's routers draw on the
+  // unregistered cards.
+  it('says nothing of a Register step for an accepted router with no registeredAt', async () => {
     appState.devices = [
       {
         id: 'rb5009',
@@ -284,16 +290,11 @@ describe('Entities router cards (#675)', () => {
     const { container } = render(Entities)
     await settle()
 
-    const card = container.querySelector('.fcard.unreg')
-    expect(card?.textContent).toContain(
-      'its logs are accepted, but the Register step was never finished',
-    )
+    expect(container.querySelector('.fcard.unreg')).not.toBeNull()
+    expect(container.textContent).not.toContain('Register step')
   })
 
-  // #1291's other unmet checklist item: this router only needs the
-  // Register step, not a whole re-enrolment, so it gets a direct way to
-  // resume there -- keeping its device and history, minting nothing.
-  it('offers to finish registering an enrolled-but-unregistered router, landing on Register with no token minted', async () => {
+  it('offers no Finish registering control for an accepted router with no registeredAt', async () => {
     appState.devices = [
       {
         id: 'rb5009',
@@ -306,23 +307,14 @@ describe('Entities router cards (#675)', () => {
         acceptedIp: '10.0.0.1',
       },
     ] as unknown as (typeof appState)['devices']
-    const { getByLabelText } = render(Entities)
+    const { container, queryByLabelText } = render(Entities)
     await settle()
 
-    getByLabelText(/Finish registering rb5009/).click()
-    flushSync()
-
-    expect(wizardState.open).toBe(true)
-    expect(wizardState.steps).toEqual(ROUTER_STEPS)
-    expect(wizardState.ledgerDevice).toBe('rb5009')
-    // Register is the last step of the router ledger.
-    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
-    expect(wizardState.enrolment).toBeNull()
+    expect(container.querySelector('.fcard.unreg')).not.toBeNull()
+    expect(queryByLabelText(/Finish registering/)).toBeNull()
+    expect(container.textContent).not.toContain('Finish registering')
   })
 
-  // A registered-but-not-yet-enrolled router has nothing left for
-  // Register to finish -- the gap is the token, which only Re-enrol…
-  // mints -- so the Finish registering… control must not appear there.
   it('does not offer Finish registering… once the router is already registered', async () => {
     appState.devices = [
       {
@@ -343,7 +335,7 @@ describe('Entities router cards (#675)', () => {
     expect(queryByText('Finish registering…')).toBeNull()
   })
 
-  it('reads a registered-but-not-yet-enrolled router as a normal wait, not an error', async () => {
+  it('says nothing of a Register step for a not-yet-enrolled router', async () => {
     appState.devices = [
       {
         id: 'rb5009',
@@ -359,9 +351,7 @@ describe('Entities router cards (#675)', () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.textContent).toContain(
-      'the Register step is done; still waiting for its enrolment token to arrive',
-    )
+    expect(container.textContent).not.toContain('Register step')
   })
 
   it('shows neither unfinished-setup nor waiting-for-token copy once both registered and enrolled', async () => {
@@ -383,6 +373,179 @@ describe('Entities router cards (#675)', () => {
 
     expect(container.textContent).not.toContain('the Register step was never finished')
     expect(container.textContent).not.toContain('still waiting for its enrolment token to arrive')
+  })
+
+  // #1372: the address line under a router card's name -- acceptedIp
+  // when enrolled, else sourceIp, else an honest "no address yet".
+  describe('the address under the name (#1372)', () => {
+    it('shows acceptedIp on a registered card when the router has enrolled', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: 'rb5009',
+          configured: true,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '192.168.1.1',
+          acceptedIp: '192.168.1.5',
+          eventCount: 3,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      const card = container.querySelector('.fcard')
+      expect(card?.textContent).toContain('192.168.1.5')
+      expect(card?.textContent).not.toContain('192.168.1.1')
+    })
+
+    it('falls back to sourceIp on a registered card when nothing has enrolled', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: 'rb5009',
+          configured: true,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '192.168.1.1',
+          eventCount: 3,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('192.168.1.1')
+    })
+
+    it('says "no address yet" on a registered card when neither is known', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: 'rb5009',
+          configured: true,
+          status: 'never_seen',
+          lastSeen: '',
+          sourceIp: '',
+          eventCount: 0,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('no address yet')
+    })
+
+    it('carries the same address line on an unregistered, pushing-only card', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: '',
+          configured: false,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '10.0.0.1',
+          acceptedIp: '10.0.0.1',
+          eventCount: 3,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      expect(container.querySelector('.fcard.unreg')?.textContent).toContain('10.0.0.1')
+    })
+  })
+
+  // #1369: Remove… (DELETE /api/devices/{id}). Offered admin-only, only
+  // on a card whose device the server will actually let go -- a
+  // config.yaml-declared device gets the note instead, since the server
+  // refuses that delete (ErrDeviceConfigured).
+  describe('Remove… (#1369)', () => {
+    function unregisteredDevice(overrides: Partial<Device> = {}): Device {
+      return {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        firstSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        ...overrides,
+      } as Device
+    }
+
+    it('offers Remove… to an admin on a router that is not declared in config.yaml', async () => {
+      appState.devices = [unregisteredDevice()]
+      const { getByLabelText } = render(Entities)
+      await settle()
+
+      expect(getByLabelText(/Remove rb5009/)).toBeTruthy()
+    })
+
+    it('does not offer Remove… to a non-admin', async () => {
+      authState.role = 'user'
+      appState.devices = [unregisteredDevice()]
+      const { queryByText } = render(Entities)
+      await settle()
+
+      expect(queryByText('Remove…')).toBeNull()
+    })
+
+    it('shows the config.yaml note instead of Remove… on a declared device', async () => {
+      appState.devices = [
+        {
+          id: 'core',
+          name: 'core',
+          configured: true,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '192.168.1.1',
+          eventCount: 3,
+        } as Device,
+      ]
+      const { container, queryByText } = render(Entities)
+      await settle()
+
+      expect(container.textContent).toContain('declared in config.yaml — remove it there')
+      expect(queryByText('Remove…')).toBeNull()
+    })
+
+    it('opens a confirm step naming what goes and what stays, then calls deleteDevice and refreshes on success', async () => {
+      appState.devices = [unregisteredDevice({ acceptedIp: '10.0.0.1', enrolment: { pending: true } })]
+      const { getByLabelText, getByText, container } = render(Entities)
+      await settle()
+
+      getByLabelText(/Remove rb5009/).click()
+      flushSync()
+
+      expect(container.textContent).toContain('its enrolled address 10.0.0.1')
+      expect(container.textContent).toContain('its pending enrolment')
+      expect(container.textContent).toContain('Its events stay')
+
+      getByText('Remove it').click()
+      await settle()
+
+      expect(deleteDevice).toHaveBeenCalledTimes(1)
+      expect(deleteDevice).toHaveBeenCalledWith('rb5009')
+      // The list refresh (#1369's "on success refresh the device list").
+      expect(fetchDevices).toHaveBeenCalled()
+      expect(container.textContent).not.toContain('Remove it')
+    })
+
+    it('shows the server’s error and stays in the confirm step on failure', async () => {
+      deleteDevice.mockResolvedValue('device: this device is declared in config.yaml; remove it there instead')
+      appState.devices = [unregisteredDevice()]
+      const { getByLabelText, getByText, container } = render(Entities)
+      await settle()
+
+      getByLabelText(/Remove rb5009/).click()
+      flushSync()
+      getByText('Remove it').click()
+      await settle()
+
+      expect(container.textContent).toContain('declared in config.yaml; remove it there instead')
+      expect(getByText('Remove it')).toBeTruthy()
+    })
   })
 
   it('draws the empty berth as one more card at the end of the router row, saying what it does (#718, #1168)', async () => {
@@ -485,6 +648,53 @@ describe('Entities router cards (#675)', () => {
   })
 })
 
+// #1373: another action, or a built-in RouterOS action, still sending
+// logs here from a setup this instance's wizard has moved past. The
+// description shows to anyone; the paste-ready fix is admin-only.
+describe('Entities logging leftovers (#1373)', () => {
+  const leftover = {
+    name: 'memory',
+    builtin: true,
+    description: 'The built-in `memory` action was repointed here.',
+    commands: ['/system logging action set [find name=memory] target=memory'],
+  }
+
+  function routerWithLeftovers() {
+    return {
+      id: 'rb5009',
+      name: 'rb5009',
+      configured: true,
+      status: 'live',
+      lastSeen: new Date().toISOString(),
+      sourceIp: '10.0.0.1',
+      eventCount: 3,
+      loggingLeftovers: [leftover],
+    } as unknown as Device
+  }
+
+  it('gives an admin the paste-ready commands on a registered router card', async () => {
+    appState.devices = [routerWithLeftovers()]
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).toContain('The built-in `memory` action was repointed here.')
+    expect(container.querySelector('pre')?.textContent).toBe(
+      '/system logging action set [find name=memory] target=memory',
+    )
+    expect(container.textContent).toContain("Paste into the router's terminal")
+  })
+
+  it('names the leftover but offers a read-only viewer no fix commands', async () => {
+    authState.role = 'viewer'
+    appState.devices = [routerWithLeftovers()]
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).toContain('The built-in `memory` action was repointed here.')
+    expect(container.querySelector('pre')).toBeNull()
+  })
+})
+
 describe('Entities named-things table (#675)', () => {
   it('renders name · zone · address · mac · first seen · last seen · marks', async () => {
     const { container } = render(Entities)
@@ -570,7 +780,7 @@ describe('Entities named-things table (#675)', () => {
   })
 
   // #1158: an unknown MAC reads as the table's own em dash. It used to
-  // say "private", which on a row for a public address (1.1.1.1) read as
+  // say "private", which on a row for a public address (192.0.2.2) read as
   // a claim about the address rather than a value nothing here knows.
   it('elides a known MAC and falls back to the unknown-value dash', async () => {
     const { fetchDeviceMACs } = await import('../lib/api')
@@ -602,11 +812,11 @@ describe('Entities named-things table (#675)', () => {
     await settle()
     const input = container.querySelector('.rename-input') as HTMLInputElement
     expect(input).toBeTruthy()
-    await fireEvent.input(input, { target: { value: 'alexs-desktop' } })
+    await fireEvent.input(input, { target: { value: 'kais-desktop' } })
     await fireEvent.keyDown(input, { key: 'Enter' })
     await settle()
 
-    expect(upsertEntity).toHaveBeenCalledWith({ type: 'host', key: '10.0.10.2', label: 'alexs-desktop', tags: ['trusted'] })
+    expect(upsertEntity).toHaveBeenCalledWith({ type: 'host', key: '10.0.10.2', label: 'kais-desktop', tags: ['trusted'] })
   })
 
   it('Esc cancels a rename without saving', async () => {
@@ -633,7 +843,7 @@ describe('Entities named-things table (#675)', () => {
     await fireEvent.click(getByText('alex-desktop'))
     await settle()
     let input = container.querySelector('.rename-input') as HTMLInputElement
-    await fireEvent.input(input, { target: { value: 'alexs-desktop' } })
+    await fireEvent.input(input, { target: { value: 'kais-desktop' } })
     await fireEvent.blur(input)
     await settle()
     expect(upsertEntity).toHaveBeenCalledTimes(1)
@@ -694,7 +904,7 @@ describe('Entities named-things table (#675)', () => {
     // B's own editor is still the one open, and A's refusal never
     // resurfaced over it.
     expect(container.querySelectorAll('.rename-input')).toHaveLength(1)
-    expect(container.querySelector('.rename-error')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(getByText('router-a')).toBeTruthy()
   })
 
@@ -890,9 +1100,34 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     const card = container.querySelector('.fcard.unreg')
     expect(card).not.toBeNull()
     expect(card?.querySelector('.fhead b')?.textContent).toBe('10.0.50.1')
-    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNREGISTERED')
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · UNDECLARED')
     expect(card?.textContent).toContain('RouterOS 7.19.4')
-    expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
+    expect(card?.textContent).toContain(
+      'its lines are kept; it has no name until it is enrolled or declared in config.yaml',
+    )
+    expect(card?.textContent).not.toContain('UNREGISTERED')
+    expect(card?.textContent).not.toContain('until it is registered')
+  })
+
+  it('calls a router the wizard enrolled enrolled, not unregistered', async () => {
+    appState.devices = [
+      {
+        ...unregistered[0],
+        id: 'enrolled-1',
+        acceptedIp: '192.0.2.7',
+        enrolledAt: new Date().toISOString(),
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.unreg')
+    expect(card).not.toBeNull()
+    expect(card?.querySelector('.fstate')?.textContent).toContain('PUSHING · ENROLLED')
+    expect(card?.textContent).toContain('enrolled by the wizard; not declared in config.yaml')
+    expect(card?.textContent).not.toContain('UNREGISTERED')
+    expect(card?.textContent).not.toContain('until it is registered')
   })
 
   // #1241: the setup line Fleet.svelte shows on every card was missing
@@ -1454,5 +1689,55 @@ describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
     expect(container.querySelector('.fcard.refused')).toBeNull()
     expect(container.querySelector('.row-action')).toBeNull()
     expect(container.querySelector('.berth-trigger')).toBeNull()
+  })
+})
+
+// #1540 (C4): a refused rename and a refused router removal go through the
+// shared failure line, with a "Could not <verb> <thing>:" lead-in.
+describe('rename and delete failures use the shared failure line (#1540 C4)', () => {
+  it('a refused rename', async () => {
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '192.0.2.2', label: 'router-a', tags: [] }])
+    vi.mocked(upsertEntity).mockResolvedValue('a name is already taken')
+    const { container, getByText, getByRole } = render(Entities)
+    await settle()
+
+    await fireEvent.click(getByText('router-a'))
+    await settle()
+    const input = container.querySelector('.rename-input') as HTMLInputElement
+    await fireEvent.input(input, { target: { value: 'router-b' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await settle()
+
+    const line = getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: a name is already taken$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
+  })
+
+  it('a refused router removal', async () => {
+    deleteDevice.mockResolvedValue('device: this device is declared in config.yaml; remove it there instead')
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        firstSeen: new Date().toISOString(),
+        sourceIp: '192.0.2.1',
+        eventCount: 3,
+      } as Device,
+    ]
+    const { getByLabelText, getByText, getByRole } = render(Entities)
+    await settle()
+    getByLabelText(/Remove rb5009/).click()
+    flushSync()
+    getByText('Remove it').click()
+    await settle()
+
+    const line = getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(
+      /^Could not [a-z]+ .+: device: this device is declared in config.yaml; remove it there instead$/,
+    )
+    expect(line.classList.contains('failure-line')).toBe(true)
   })
 })

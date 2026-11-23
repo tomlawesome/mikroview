@@ -45,6 +45,9 @@ class WatchlistState {
   // distinction; a viewer role that never calls refresh() stays honestly
   // "not loaded" rather than silently "nothing watched").
   loaded = $state(false)
+  // Why the last refresh() failed, or null. Kept apart from `loaded` so a
+  // failed fetch never reads as "loaded, nothing watched" (#1540).
+  loadError = $state<string | null>(null)
 
   // #546's broken ring, widened by #1156 to isWatchBroken's full
   // precedence (coverage 'no-logging' OR a recorded e.ring.broken, both
@@ -70,10 +73,16 @@ class WatchlistState {
   heldCount = $derived.by(() => this.entries.filter((e) => e.enabled && !isWatchBroken(e, this.coverage)).length)
 
   async refresh() {
-    const { entries, coverage } = await fetchWatchlistEntries()
-    this.entries = entries
-    this.coverage = coverage
-    this.loaded = true
+    try {
+      const { entries, coverage } = await fetchWatchlistEntries()
+      this.entries = entries
+      this.coverage = coverage
+      this.loaded = true
+      this.loadError = null
+    } catch (err) {
+      this.loadError = err instanceof Error ? err.message : String(err)
+      throw err
+    }
   }
 
   async create(req: WatchlistEntryRequest): Promise<string | null> {
@@ -138,6 +147,7 @@ class WatchlistState {
   // constructor's initial values is the whole of it -- there is no
   // connection-level field on this class to leave alone.
   reset() {
+    this.loadError = null
     this.entries = []
     this.coverage = {}
     this.loaded = false

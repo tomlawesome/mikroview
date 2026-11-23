@@ -72,7 +72,7 @@ export function bezRange(s: Seg, a: number, b: number): Seg {
 export const dm = (p: Pt, q: Pt): number => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1])
 
 /** The road's own point at t (0..1 along the whole road). */
-export function roadPoint(pts: Pt[], t: number): Pt {
+function roadPoint(pts: Pt[], t: number): Pt {
   const segs = segsOf(pts)
   const x = Math.min(0.999, Math.max(0, t)) * segs.length
   return bezAt(segs[Math.floor(x)], x - Math.floor(x))

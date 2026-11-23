@@ -149,6 +149,7 @@ check((await saved.textContent())?.trim() === 'saved ▾', 'reading "saved ▾"'
 await saved.click()
 const menu = page.locator(`${CARD} .fpmenu`)
 await menu.waitFor({ state: 'visible', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'clicking it opens the list')
 check((await saved.getAttribute('aria-expanded')) === 'true', 'and says so')
 
@@ -165,6 +166,7 @@ check(
 
 await page.keyboard.press('Escape')
 await menu.waitFor({ state: 'detached', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Escape closes it')
 
 // Set a filter, and the save entry appears. The name comes from a
@@ -193,7 +195,12 @@ check(
 )
 check((await rows.first().locator('.fpx').count()) === 1, 'with an × to forget it')
 
-await rows.first().locator('.fpx').click()
+// The × is arm-then-confirm (#1539): the first click arms it, the
+// second forgets.
+const fpx = rows.first().locator('.fpx')
+await fpx.click()
+check(((await fpx.textContent()) ?? '').trim() === 'confirm — the filter is forgotten', 'the first click on × arms it, naming the consequence')
+await fpx.click()
 await rows.first().waitFor({ state: 'detached', timeout: 5000 })
 check((await menu.locator('.fprow').count()) === 0, 'and the × forgets it')
 check(await menu.isVisible(), 'without closing the list out from under the hand')

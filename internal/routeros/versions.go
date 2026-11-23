@@ -39,8 +39,11 @@ const (
 	//
 	// Which were exercised and which only read: 7.23.3 and 7.24.2 were
 	// run against a real CHR on 2026-09-04 by the exercise job (#894),
-	// and 7.24.4 on 2026-09-22 by the same job; 7.24, 7.24.1 and 7.24.3
-	// have only ever been read from release notes. See dialects.go's
+	// 7.24.4 on 2026-09-22, and 7.24.5, 7.25 and 7.25.1 on 2026-10-05,
+	// 2026-10-26 and 2026-11-09, by the same job; 7.24.1 and 7.24.3
+	// have only ever been read from release notes. 7.24.5, 7.25 and
+	// 7.25.1 notes were read on 2026-11-13: nothing in them moved a
+	// command or path used here. See dialects.go's
 	// Rows for which, when, and what each found.
 	//
 	// "Exercised" means the commands were pasted into a booted CHR and
@@ -62,7 +65,7 @@ const (
 	// releases tolerated them silently. Nothing mikroview emits relies
 	// on a bad parameter being tolerated, but it raises the cost of any
 	// command that turns out to have one.
-	ReviewedVersion = "7.24.4"
+	ReviewedVersion = "7.25.1"
 )
 
 // Standing is where a router's reported version sits relative to what

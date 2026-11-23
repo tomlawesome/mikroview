@@ -1,9 +1,13 @@
 name: pages
 
 # Publishes site/ as the project's public marketing page on GitHub
-# Pages. Only fires on main -- the site represents the released state
-# of the project, same reasoning as docker.yml only ever publishing
-# from preview/main, never dev.
+# Pages. The site represents the released state of the project, so run
+# it by hand after a release reaches main.
+#
+# Dispatch only, under the mirror rule (#1464). GitLab has no Pages job
+# yet, so this manual run is the only way the site is published:
+#   build  -> none (no GitLab Pages job yet; dispatch by hand)
+#   deploy -> none (no GitLab Pages job yet; dispatch by hand)
 #
 # site/ itself doesn't carry its own copies of the screenshots/logo --
 # those already live in docs/screenshots/ and brand/ as the single
@@ -11,15 +15,6 @@ name: pages
 # This workflow assembles them into the deployed artifact at build
 # time, so there's no duplicated binary content to keep in sync in git.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'site/**'
-      - 'docs/screenshots/fall-dark.png'
-      - 'docs/screenshots/topography-map-dark.png'
-      - 'docs/screenshots/stream-dark.png'
-      - 'brand/logo-mark.svg'
-      - '.github/workflows/pages.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -34,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Assemble the deploy artifact
         run: |
@@ -59,4 +56,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

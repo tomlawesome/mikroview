@@ -17,6 +17,8 @@
   import Flags from './Flags.svelte'
   import Watchlist from './Watchlist.svelte'
   import AuditLog from './AuditLog.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
 
   const isAdmin = $derived(authState.role === 'admin')
   // #653: watchlist and clearing flags are user-tier; the audit log
@@ -61,7 +63,7 @@
     try {
       await flagsState.clearAll()
     } catch (err) {
-      error = err instanceof Error ? `Could not clear all flags: ${err.message}` : 'Could not clear all flags'
+      error = couldNot('clear', 'all flags', err)
     } finally {
       busy = false
     }
@@ -72,7 +74,7 @@
   }
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onclick={onWindowClick} onkeydown={(e) => e.key === 'Escape' && onWindowClick()} />
 
 <div class="docket">
   <!-- The tabs moved to the scene bar (#700): round 30 rides them where
@@ -116,7 +118,7 @@
         + watch
       </button>
     {/if}
-    {#if error}<span class="err" role="alert">{error}</span>{/if}
+    {#if error}<span class="err-slot"><FailureLine text={error} /></span>{/if}
   </div>
 
   <div class="pane">
@@ -230,10 +232,9 @@
     cursor: default;
   }
 
-  .err {
+  .err-slot {
     margin-left: 10px;
     font-size: 12px;
-    color: var(--alarm);
   }
 
   @media (prefers-reduced-motion: reduce) {

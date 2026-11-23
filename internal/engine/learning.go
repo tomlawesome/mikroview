@@ -155,7 +155,6 @@ func floorProgress(floor BaselineFloor, observedFor time.Duration, samples int) 
 		if !set || r < frac {
 			frac = r
 		}
-		set = true
 	}
 	return frac
 }

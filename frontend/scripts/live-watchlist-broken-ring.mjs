@@ -59,7 +59,7 @@
 // nothing but this binary's shipped catalogue and the count below starts
 // from zero by construction rather than by cleanup.
 
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -73,7 +73,8 @@ async function api(method, path_, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // A 204 (every DELETE since #1538) carries no body to parse.
+  return { status: res.status(), body: res.status() < 400 && res.status() !== 204 ? await res.json() : null }
 }
 
 async function coverageFor(id) {
@@ -100,7 +101,7 @@ check(strays.length === 0, `the instance starts with no watches from earlier sce
 const device = ((await api('GET', '/api/devices')).body?.devices ?? []).find((d) => d.id === 'live-router')?.id
 check(!!device, `the harness's own router is in the registry (${device})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: 'broken-ring', kind: 'ingest', device })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: 'broken-ring', kind: 'ingest', device }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 const token = tokenRes.body?.value
 
@@ -218,6 +219,7 @@ await page.waitForFunction(
   null,
   { timeout: 10000 },
 )
+// safe: waitForFunction above throws on timeout
 check(true, 'clicking the ring rolls the docket to centre, on its watchlist tab')
 
 // Back to Stream, so the small-screen leg and the clearing below stay
