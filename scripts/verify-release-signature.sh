@@ -71,11 +71,21 @@ except ValueError:
     sys.exit(1)
 if not isinstance(data, list):
     sys.exit(1)
-print(len(data))
+# Only signature entries count: since #1472 the SBOM attestation on the
+# same digest verifies too and is listed beside the signature (#1557).
+SIGNATURE_TYPES = {"https://sigstore.dev/cosign/sign/v1", "cosign container image signature"}
+print(sum(1 for e in data
+          if isinstance(e, dict) and isinstance(e.get("critical"), dict)
+          and e["critical"].get("type") in SIGNATURE_TYPES))
 ' <<< "$output")"; then
   echo "::error::could not read cosign's verification output for ${target} -- refusing"
   echo "$output" >&2
   echo "$errors" >&2
+  exit 1
+fi
+if [ "$count" -eq 0 ]; then
+  echo "::error::no key-based signature found for ${target} -- refusing (absence)"
+  echo "$output" >&2
   exit 1
 fi
 if [ "$count" -ne 1 ]; then
