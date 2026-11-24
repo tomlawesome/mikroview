@@ -1016,7 +1016,11 @@ test:frontend:
     - npm ci
     # #1333: --coverage turns on vitest.config.ts's coverage.thresholds,
     # so a regression below the measured ratchet fails this job.
-    - npm test -- --coverage
+    # #1555: on a busy shared runner this job runs at half speed, and random
+    # tests crossed vitest's 5 s hang guard with every assertion passing.
+    # 20 s, the value City/CityHosts/DeclareFooter tests already set, keeps
+    # it a hang guard; #1555 stays open for why the runner slows.
+    - npm test -- --coverage --testTimeout=20000
 
 # The checks that need the frontend actually built, moved here from GitHub's
 # ci.yml `test` job (#935 step 7). Each one's reason is in the script it
@@ -1905,6 +1909,7 @@ gate:scripts:
     - scripts/ensure-cosign.test.sh
     - scripts/sign-release-digest.test.sh
     - scripts/verify-release-signature.test.sh
+    - scripts/govulncheck-gate.test.sh
     # #1358: these four existed but nothing ran them, so the recorder's
     # scripted session broke on v0.6.1 with every test still green.
     - scripts/record-upgrade-fixture.test.sh
@@ -2255,11 +2260,10 @@ security:govulncheck:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
     - govulncheck -format=json ./... > govulncheck.json
     # The JSON run above exits 0 whatever it finds -- that is how -format
-    # json behaves -- so on its own this job could only ever pass. The
-    # plain run is the gate: it exits non-zero on a reachable
-    # vulnerability, as GitHub's ci.yml did before #935 step 7 moved that
-    # check here.
-    - govulncheck ./...
+    # json behaves. The gate fails on a reachable vulnerability unless the
+    # reviewed list records it as not affected, with its reason and issue
+    # (#1558; govulncheck itself cannot accept a finding).
+    - python3 scripts/govulncheck-gate.py govulncheck.json security/govulncheck-not-affected.json
   artifacts:
     when: always
     paths:
