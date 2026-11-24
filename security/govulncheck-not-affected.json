@@ -1,0 +1,7 @@
+[
+  {
+    "id": "GO-2026-6278",
+    "reason": "Only a WebSocket client generates frame mask keys (RFC 6455 section 5.1: a server must not mask). MikroView only accepts connections (internal/api/ws.go, websocket.Upgrader); no shipped code dials out.",
+    "issue": "#1559"
+  }
+]
