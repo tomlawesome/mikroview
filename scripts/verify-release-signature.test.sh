@@ -24,6 +24,7 @@ check() {
   fi
 }
 
+SIG='{"critical":{"type":"https://sigstore.dev/cosign/sign/v1"}}'
 TARGET="ghcr.io/tomlawesome/mikroview@sha256:$(printf 'a%.0s' $(seq 1 64))"
 
 # The cosign stub: prints whatever the test asks for on stdout/stderr and
@@ -43,7 +44,7 @@ run() {  # run <name>=<value>... -- runs the script against $TARGET
 }
 
 # 1. Happy path: cosign exits 0 with exactly one verified signature.
-out1="$(run STUB_STDOUT='[{"critical":{}}]' 2>&1)"; rc=$?
+out1="$(run STUB_STDOUT='[{"critical":{"type":"https://sigstore.dev/cosign/sign/v1"}}]' 2>&1)"; rc=$?
 check "$rc" "0" "happy path exits 0"
 grep -q "Verified exactly one" <<< "$out1" && echo "ok - happy path reports success" || { echo "FAIL - happy path reports success: $out1"; fail=1; }
 
@@ -71,7 +72,7 @@ grep -q "refusing (mismatch)" <<< "$out4" && echo "ok - mismatch classified corr
 
 # 5. Ambiguous: cosign verifies successfully but returns more than one
 # matching signature -- never fall through to signing.
-out5="$(run STUB_STDOUT='[{"critical":{}},{"critical":{}}]' 2>&1)"; rc=$?
+out5="$(run STUB_STDOUT='[{"critical":{"type":"https://sigstore.dev/cosign/sign/v1"}},{"critical":{"type":"https://sigstore.dev/cosign/sign/v1"}}]' 2>&1)"; rc=$?
 check "$rc" "1" "ambiguous (2 signatures) refuses"
 grep -q "2 verified key-based signatures" <<< "$out5" && echo "ok - ambiguous count is named" || { echo "FAIL - ambiguous count is named: $out5"; fail=1; }
 
@@ -80,5 +81,28 @@ grep -q "2 verified key-based signatures" <<< "$out5" && echo "ok - ambiguous co
 out6="$(run STUB_STDOUT='not json' 2>&1)"; rc=$?
 check "$rc" "1" "malformed output refuses"
 grep -q "could not read cosign's verification output" <<< "$out6" && echo "ok - malformed output is refused" || { echo "FAIL - malformed output is refused: $out6"; fail=1; }
+
+# 7. An SBOM attestation (spdx) alongside one signature is not a second
+# signature (#1557): only critical.type sign/v1 or the legacy
+# "cosign container image signature" counts.
+SPDX='{"critical":{"type":"https://spdx.dev/Document"}}'
+out7="$(run STUB_STDOUT="[$SIG,$SPDX]" 2>&1)"; rc=$?
+check "$rc" "0" "signature plus SBOM attestation exits 0"
+grep -q "Verified exactly one" <<< "$out7" && echo "ok - signature plus SBOM reports success" || { echo "FAIL - signature plus SBOM reports success: $out7"; fail=1; }
+
+# 8. One legacy-typed signature counts as a signature.
+out8="$(run STUB_STDOUT='[{"critical":{"type":"cosign container image signature"}}]' 2>&1)"; rc=$?
+check "$rc" "0" "legacy signature type exits 0"
+grep -q "Verified exactly one" <<< "$out8" && echo "ok - legacy signature type reports success" || { echo "FAIL - legacy signature type reports success: $out8"; fail=1; }
+
+# 9. Only an SBOM attestation, no signature: absence.
+out9="$(run STUB_STDOUT="[$SPDX]" 2>&1)"; rc=$?
+check "$rc" "1" "SBOM-only output refuses"
+grep -q "no key-based signature found" <<< "$out9" && echo "ok - SBOM-only classified as absence" || { echo "FAIL - SBOM-only classified as absence: $out9"; fail=1; }
+
+# 10. Two signatures plus an SBOM attestation: ambiguous.
+out10="$(run STUB_STDOUT="[$SIG,$SPDX,$SIG]" 2>&1)"; rc=$?
+check "$rc" "1" "two signatures plus SBOM refuses"
+grep -qi "ambiguous" <<< "$out10" && echo "ok - two signatures plus SBOM is ambiguous" || { echo "FAIL - two signatures plus SBOM is ambiguous: $out10"; fail=1; }
 
 exit "$fail"
