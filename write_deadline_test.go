@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,5 +99,45 @@ func TestWriteDeadline_ProductionServerHandlerIsWrapped(t *testing.T) {
 	re := regexp.MustCompile(`(?s)&http\.Server\{.*?Handler:[^\n]*slowAuthWriteDeadline\(`)
 	if !re.Match(src) {
 		t.Error("main.go: the http.Server Handler is not wrapped by slowAuthWriteDeadline")
+	}
+}
+
+// #1561: setup-only mode (configeditor.go) builds its own http.Server
+// that also serves /api/auth/, and it was left on the short server-wide
+// WriteTimeout. Every file that builds such a server must wrap it, and
+// every &http.Server{ literal in the file must wrap its Handler -- except
+// the plain-HTTP redirect listener, whose Handler is an inline
+// http.HandlerFunc that only bounces to HTTPS and serves no /api/auth/.
+func TestWriteDeadline_EveryServerBuilderIsWrapped(t *testing.T) {
+	t.Parallel()
+	handlerRe := regexp.MustCompile(`(?m)^\s*Handler:[^\n]*`)
+	for _, file := range []string{"main.go", "configeditor.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks := strings.Split(string(src), "&http.Server{")[1:]
+		if len(chunks) == 0 {
+			t.Errorf("%s: no &http.Server{ literal found", file)
+			continue
+		}
+		wrapped := 0
+		for i, c := range chunks {
+			line := handlerRe.FindString(c)
+			switch {
+			case strings.Contains(line, "slowAuthWriteDeadline("):
+				wrapped++
+			case strings.Contains(line, "http.HandlerFunc("):
+				// redirect-only listener; serves no /api/auth/
+			default:
+				t.Errorf("%s: http.Server literal #%d Handler is not wrapped by slowAuthWriteDeadline (got %q)", file, i+1, strings.TrimSpace(line))
+			}
+		}
+		if wrapped == 0 {
+			t.Errorf("%s: no http.Server Handler is wrapped by slowAuthWriteDeadline", file)
+		}
+		if !strings.Contains(string(src), "60*time.Second") && !strings.Contains(string(src), "60 * time.Second") {
+			t.Errorf("%s: no 60*time.Second deadline passed to slowAuthWriteDeadline", file)
+		}
 	}
 }
