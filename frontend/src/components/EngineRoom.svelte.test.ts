@@ -10,7 +10,7 @@
 // Round 32 (#767): keys (under ingest) and people (under account) are
 // mounted directly in the card, in its own row grammar, replacing the
 // retired EngineRoomDoors.svelte and its USERS_DOOR_ENABLED/
-// TOKENS_DOOR_ENABLED flags outright -- no shim, per AGENTS.md's
+// TOKENS_DOOR_ENABLED flags outright -- no shim, per docs/development.md's
 // "removals are wholesale". Both groups are gated on isAdmin: GET
 // /api/tokens and GET /api/auth/users are both admin-only server-side
 // (#657), so a `user` or `viewer` session gets neither group at all, not
@@ -21,6 +21,7 @@ import { cleanup, render, screen, fireEvent, within } from '@testing-library/sve
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
+  saveSetupBackupTransport: vi.fn(async () => null),
   fetchSetupStatus: vi.fn(async () => ({
     instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true },
     sources: [],
@@ -110,6 +111,18 @@ vi.mock('../lib/api', () => ({
     setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
   })),
   fetchConfigUpgrade: vi.fn(async () => ({ version: 'v1.2.3', settings: [] })),
+  fetchGeoSettings: vi.fn(async () => ({
+    source: 'dbip',
+    sources: {
+      dbip: { loaded: true, fetchedAt: '2026-09-27T00:00:00Z', nextRefresh: null, lastError: null },
+      ipinfo: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+      maxmind: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+    },
+  })),
+  setGeoIpinfoToken: vi.fn(),
+  removeGeoIpinfoToken: vi.fn(),
+  setGeoMaxmindKey: vi.fn(),
+  removeGeoMaxmindKey: vi.fn(),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -136,14 +149,16 @@ import {
   fetchRouterBackups as fetchRouterBackupsReal,
   fetchDroplist as fetchDroplistReal,
   fetchConfigUpgrade as fetchConfigUpgradeReal,
+  fetchGeoSettings as fetchGeoSettingsReal,
 } from '../lib/api'
-import type { RouterBackupsResponse, Stats } from '../lib/types'
+import type { DroplistResponse, HistorySettings, RouterBackupsResponse, Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
 const fetchRouterBackups = vi.mocked(fetchRouterBackupsReal)
 const fetchDroplist = vi.mocked(fetchDroplistReal)
 const fetchConfigUpgrade = vi.mocked(fetchConfigUpgradeReal)
+const fetchGeoSettings = vi.mocked(fetchGeoSettingsReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -167,6 +182,7 @@ function backupsWith(device: string): RouterBackupsResponse {
   return {
     enabled: true,
     keyUnreadable: false,
+    transport: 'sftp',
     routers: [
       { device, generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 },
     ],
@@ -177,10 +193,45 @@ function backupsWith(device: string): RouterBackupsResponse {
   }
 }
 
+// One drop-list answer naming a single entry -- the whole of what the
+// out-of-order poll test below needs to tell two answers apart.
+function droplistWith(cidr: string): DroplistResponse {
+  return {
+    listName: 'mikroview-drops',
+    entries: [{ cidr, addedBy: 'alex', addedAt: '2026-09-14T00:00:00Z', reason: 'ssh brute force' }],
+    key: { present: false },
+    ownRangesKnown: true,
+    setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+  }
+}
+
+// One history answer naming a single days-held figure -- restartRow's
+// own text (lib/history.ts) is what the out-of-order poll test below
+// reads to tell two answers apart.
+function historyWith(days: number): HistorySettings {
+  return {
+    keyed: true,
+    enabled: true,
+    days: 30,
+    maxBytes: 1024 * 1024 * 1024,
+    held: { days, oldest: '2026-09-01', newest: '2026-09-01', bytes: 1024 },
+    capped: false,
+    bytesPerDay: 0,
+  }
+}
+
 async function settle() {
   await Promise.resolve()
   await Promise.resolve()
   flushSync()
+}
+
+// #1202 U8: the people verbs ask for the admin's own password; this types
+// one into the prompt and presses its confirm button (named by `confirm`).
+async function answerPasswordPrompt(confirm: string, password = 'hunter2') {
+  await fireEvent.input(screen.getByLabelText('your password'), { target: { value: password } })
+  await fireEvent.click(screen.getByRole('button', { name: confirm }))
+  await settle()
 }
 
 beforeEach(() => {
@@ -421,10 +472,11 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
     await settle()
     await fireEvent.input(screen.getByLabelText('key name'), { target: { value: 'nas-read' } })
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
-    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
+    expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined, 'hunter2')
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
     expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // A read-only key gets no RouterOS lines.
@@ -471,10 +523,11 @@ describe('The settings shelf (#633)', () => {
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
-    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009')
+    expect(createToken).toHaveBeenCalledWith('', 'ingest', 'rb5009', 'hunter2')
     expect(screen.getByText('mv1_ingestsecret')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
   })
@@ -517,6 +570,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
     await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
     await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
     await settle()
 
@@ -524,7 +578,7 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'copy for RouterOS' }))
     await settle()
 
-    expect(screen.getByText('setup is locked while a restore is in progress')).toBeTruthy()
+    expect(screen.getByText('Could not copy the router commands: setup is locked while a restore is in progress')).toBeTruthy()
     expect(screen.queryByText('copied for RouterOS')).toBeNull()
   })
 
@@ -572,7 +626,7 @@ describe('The settings shelf (#633)', () => {
     expect(createUser).toHaveBeenCalledWith('mia', 'first-password', 'viewer')
   })
 
-  it("remove arms before it acts, same gesture as revoke", async () => {
+  it("remove asks for the admin's password before it acts", async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
@@ -584,16 +638,16 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(remove)
     await settle()
     expect(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' })).toBeTruthy()
+    expect(deleteUser).not.toHaveBeenCalled()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' }))
-    await settle()
-    expect(deleteUser).toHaveBeenCalledWith('u2')
+    await answerPasswordPrompt('confirm — signs them out, revokes their keys')
+    expect(deleteUser).toHaveBeenCalledWith('u2', 'hunter2')
   })
 
   // #1251. The verb kills somebody's password outright, so it arms
   // before it acts like remove and revoke beside it, and what it mints
   // is shown exactly once.
-  it('reset password arms before it acts, then shows the code once', async () => {
+  it('reset password asks for the admin\'s password before it acts, then shows the code once', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     const { resetUserPassword } = await import('../lib/api')
@@ -609,12 +663,9 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(resetUserPassword).not.toHaveBeenCalled()
 
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — their password stops working now' }),
-    )
-    await settle()
+    await answerPasswordPrompt('confirm — their password stops working now')
 
-    expect(resetUserPassword).toHaveBeenCalledWith('u2')
+    expect(resetUserPassword).toHaveBeenCalledWith('u2', 'hunter2')
     expect(screen.getByTestId('reset-code').textContent).toBe('ABCD-EFGH-JKLM-NPQR')
 
     // Closing it is the end of the code: nothing holds it afterwards.
@@ -661,7 +712,7 @@ describe('The settings shelf (#633)', () => {
 
   // #1249's lost-phone path: arm-then-confirm like reset password and
   // remove beside it, and only offered when there is a factor to clear.
-  it('clear authenticator app arms before it acts, and only appears when there is one to clear', async () => {
+  it('clear authenticator app asks for the admin\'s password before it acts, and only appears when there is one to clear', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     const { fetchUsers, clearUserTOTP } = await import('../lib/api')
@@ -677,11 +728,10 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(clearUserTOTP).not.toHaveBeenCalled()
 
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
-    )
-    await settle()
-    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
+    // X9-F1: kai has no passkeys either, so clearing the authenticator
+    // app also takes the recovery codes -- the confirm says so.
+    await answerPasswordPrompt('confirm — turns their authenticator app off; their recovery codes go too')
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2', 'hunter2')
   })
 
   // usersState.clearFactor() refreshes the list on success -- if that
@@ -702,13 +752,10 @@ describe('The settings shelf (#633)', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
     await settle()
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
-    )
-    await settle()
+    await answerPasswordPrompt('confirm — turns their authenticator app off; their recovery codes go too')
 
-    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
-    expect(screen.queryByText('clearing…')).toBeNull()
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2', 'hunter2')
+    expect(screen.queryByText('working…')).toBeNull()
     expect(screen.getByRole('button', { name: 'clear authenticator app' })).toBeTruthy()
     expect(screen.getByText(/could not refresh the list/i)).toBeTruthy()
   })
@@ -753,9 +800,11 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('passkeys · 2')).toBeTruthy()
+    // alex has none: no pill at all, not one reading "passkeys · 0".
+    expect(screen.getAllByText(/^passkeys ·/)).toHaveLength(1)
   })
 
-  it('clear passkeys arms before it acts, and only appears when there is one to clear', async () => {
+  it('clear passkeys asks for the admin\'s password before it acts, and only appears when there is one to clear', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     const { fetchUsers, clearUserPasskeys } = await import('../lib/api')
@@ -771,9 +820,51 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(clearUserPasskeys).not.toHaveBeenCalled()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys' }))
+    // X9-F1: kai has no authenticator app either, so clearing passkeys
+    // also takes the recovery codes -- the confirm says so.
+    await answerPasswordPrompt('confirm — removes their passkeys; their recovery codes go too')
+    expect(clearUserPasskeys).toHaveBeenCalledWith('u2', 'hunter2')
+  })
+
+  // X9-F1: the recovery-codes warning is said only when clearing this
+  // factor would actually take them -- kai keeps the authenticator app
+  // here, so the codes stay too and the confirm names neither.
+  it('clearing passkeys keeps the short confirm when the authenticator app still stands', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'alex', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 1, hasTOTP: true },
+    ])
+    render(EngineRoom)
     await settle()
-    expect(clearUserPasskeys).toHaveBeenCalledWith('u2')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear passkeys' }))
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'confirm — removes their passkeys' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /recovery codes go too/i })).toBeNull()
+  })
+
+  // X9-F1's other button, same reasoning: kai keeps a passkey here, so
+  // clearing the authenticator app leaves the codes covered too.
+  it('clearing the authenticator app keeps the short confirm when a passkey still stands', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'alex', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true, passkeyCount: 1 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'confirm — turns their authenticator app off' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /recovery codes go too/i })).toBeNull()
   })
 
   it('offers no clear-passkeys verb on the admin row, even when the admin has passkeys', async () => {
@@ -918,7 +1009,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('on restart')).toBeTruthy()
-    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeTruthy()
+    expect(screen.getByText('the buffer clears — the 27 days on disk stay; trying a detector reads them')).toBeTruthy()
     expect(screen.queryByText('persistence')).toBeNull()
     expect(screen.queryByText(/memory-only/)).toBeNull()
 
@@ -994,6 +1085,41 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
   })
 
+  // #1275, same guard as router backups above (refreshHistory's own use
+  // of overtaken()): an older answer would flip the days-held row back
+  // to what it was before the operator's own change, racing
+  // historyChanged's stamp -- a poll that answers after a newer one has
+  // already landed must be ignored rather than applied.
+  it('ignores a history poll that answers after a newer one (#1275)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((h: HistorySettings) => void)[] = []
+      const held = () => new Promise<HistorySettings>((resolve) => answer.push(resolve))
+      fetchHistorySettings.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      // The mount poll is out; the tick a minute later sends a second.
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The newer request answers first, then the older one comes back.
+      answer[1](historyWith(5))
+      await settle()
+      answer[0](historyWith(27))
+      await settle()
+      await settle()
+
+      expect(screen.getByText('the buffer clears — the 5 days on disk stay; trying a detector reads them')).toBeTruthy()
+      expect(screen.queryByText('the buffer clears — the 27 days on disk stay; trying a detector reads them')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('router backups stacks its rows until there is a strip to draw beside them (#1153)', async () => {
     // The left column holds the generation strips; with none drawn the
     // rows used to sit alone in column two, starting 600px in with the
@@ -1012,6 +1138,7 @@ describe('The settings shelf (#633)', () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       port: ':2222',
       routers: [
         {
@@ -1089,8 +1216,11 @@ describe('The settings shelf (#633)', () => {
     const { signOutEverywhere } = await import('../lib/api')
     await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
     await settle()
+    await fireEvent.input(screen.getByLabelText(/your password/i), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm/ }))
+    await settle()
 
-    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(signOutEverywhere).toHaveBeenCalledWith('hunter2')
     expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 
@@ -1443,6 +1573,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
       keyUnreadable: false,
+      transport: 'sftp',
       port: ':2222',
       routers: [{ device: 'rb5009', generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 }],
       totalGenerations: 1,
@@ -1458,7 +1589,9 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     const backups = document.getElementById('bakg')
     expect(backups).toBeTruthy()
     expect(backups?.querySelector('h3')?.textContent).toBe('router backups')
-    expect(disk?.nextElementSibling?.id).toBe('bakg')
+    // #1352's country group sits beside disk, so backups follows it.
+    expect(disk?.nextElementSibling?.id).toBe('engineroom-geo')
+    expect(disk?.nextElementSibling?.nextElementSibling?.id).toBe('bakg')
     // RouterBackups really is the thing mounted here, wired to the
     // fetched resp -- not an empty shell.
     expect(within(backups as HTMLElement).getByText('rb5009')).toBeTruthy()
@@ -1503,6 +1636,44 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     }
   })
 
+  // #1494: the same stale-poll rule for the "deliver by" save. A poll
+  // issued before the save and answered after it carries the old
+  // transport; it must not flip the row back.
+  it('a router-backups poll issued before a deliver-by save does not undo it (#1494)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: RouterBackupsResponse) => void)[] = []
+      const held = () => new Promise<RouterBackupsResponse>((resolve) => answer.push(resolve))
+      fetchRouterBackups.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The first poll lands, the operator switches, then the second
+      // (issued before the save) answers with the old transport.
+      answer[0](backupsWith('rb1'))
+      await settle()
+      const backups = document.getElementById('bakg') as HTMLElement
+      vi.advanceTimersByTime(5)
+      await fireEvent.click(within(backups).getByRole('button', { name: 'switch to HTTPS…' }))
+      await settle()
+      expect(within(backups).getByText(/HTTPS through the ingest channel/)).toBeTruthy()
+
+      answer[1](backupsWith('rb1'))
+      await settle()
+      await settle()
+      expect(within(backups).getByText(/HTTPS through the ingest channel/)).toBeTruthy()
+      expect(within(backups).queryByText(/SFTP to the drop box/)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('"router backups" answers unknown, with a working ask again, when the server does not', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -1518,6 +1689,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: false,
       keyUnreadable: false,
+      transport: 'sftp',
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,
@@ -1648,6 +1820,41 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     expect(document.getElementById('engineroom-droplist')?.classList.contains('dfail')).toBe(false)
   })
 
+  // #1275, same guard as router backups above (refreshDroplist's own
+  // use of overtaken()): an older answer would put back the entry the
+  // operator just removed or minted, so a poll that answers after a
+  // newer one has already landed must be ignored rather than applied.
+  it('ignores a drop-list poll that answers after a newer one (#1275)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: DroplistResponse) => void)[] = []
+      const held = () => new Promise<DroplistResponse>((resolve) => answer.push(resolve))
+      fetchDroplist.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      // The mount poll is out; the tick a minute later sends a second.
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The newer request answers first, then the older one comes back.
+      answer[1](droplistWith('203.0.113.99/32'))
+      await settle()
+      answer[0](droplistWith('198.51.100.1/32'))
+      await settle()
+      await settle()
+
+      const droplist = document.getElementById('engineroom-droplist') as HTMLElement
+      expect(within(droplist).getByText('203.0.113.99/32')).toBeTruthy()
+      expect(within(droplist).queryByText('198.51.100.1/32')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a viewer sees no "drop list" group at all', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
@@ -1656,5 +1863,78 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
 
     expect(document.getElementById('engineroom-droplist')).toBeNull()
     expect(screen.queryByText('drop list')).toBeNull()
+  })
+})
+
+// #1352: the "country and network owner" group. GeoSources.svelte has
+// its own component tests; what belongs here is the integration layer:
+// mounted under its heading beside disk, admin-gated, and the same dfail
+// "the server did not answer" shape the neighbouring groups draw.
+describe('the country and network owner group (#1352)', () => {
+  it('mounts right after disk for an admin, reading the source in use', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const geo = document.getElementById('engineroom-geo')
+    expect(geo).toBeTruthy()
+    expect(geo?.querySelector('h3')?.textContent).toBe('country and network owner')
+    expect(document.getElementById('diskg')?.nextElementSibling?.id).toBe('engineroom-geo')
+    expect(within(geo as HTMLElement).getByText('Flags from DB-IP Lite')).toBeTruthy()
+    expect(geoipState.source).toBe('dbip')
+  })
+
+  it('answers unknown, with a working ask again, when the server does not', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchGeoSettings.mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const geo = document.getElementById('engineroom-geo')
+    expect(geo?.classList.contains('dfail')).toBe(true)
+    expect(within(geo as HTMLElement).getByText(/unknown — the server did not answer/)).toBeTruthy()
+
+    await fireEvent.click(within(geo as HTMLElement).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+    expect(document.getElementById('engineroom-geo')?.classList.contains('dfail')).toBe(false)
+  })
+
+  it('a viewer sees no country group at all, and it is never fetched', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('engineroom-geo')).toBeNull()
+    expect(screen.queryByText('country and network owner')).toBeNull()
+    expect(fetchGeoSettings).not.toHaveBeenCalled()
+  })
+})
+
+// #1540 (C4): a refused port-scan window save goes through the shared
+// failure line.
+describe('a refused port-scan window save uses the shared failure line (#1540 C4)', () => {
+  it('shows role="alert" "Could not <verb> <thing>: <server words>" as the shared line', async () => {
+    const { updateDefinition } = await import('../lib/api')
+    vi.mocked(updateDefinition).mockResolvedValueOnce('threshold must be at least 2' as never)
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: '15 ports / 60 s' }))
+    await settle()
+    await fireEvent.input(screen.getByLabelText('distinct ports'), { target: { value: '1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(/^Could not [a-z]+ .+: threshold must be at least 2$/)
+    expect(line.classList.contains('failure-line')).toBe(true)
   })
 })

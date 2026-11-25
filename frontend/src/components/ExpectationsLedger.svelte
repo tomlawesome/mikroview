@@ -16,6 +16,7 @@
   // count is how many firings it has suppressed, so an expectation
   // that has absorbed nothing in months is visibly not earning its
   // place and can be forgotten from here.
+  import FailureLine from './FailureLine.svelte'
   import { fetchExpectations, forgetExpectation } from '../lib/api'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { formatDayMonth } from '../lib/format'
@@ -58,6 +59,21 @@
     void load()
   })
 
+  // Round 28's arm-then-confirm gesture (#1539 C1): the first click arms
+  // the row's Forget, the second acts, a click elsewhere or Escape
+  // disarms. One row armed at a time.
+  let armedId = $state<string | null>(null)
+
+  function onForgetClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedId === id) {
+      armedId = null
+      void forget(id)
+      return
+    }
+    armedId = id
+  }
+
   async function forget(id: string) {
     forgetting[id] = true
     const failure = await forgetExpectation(id)
@@ -88,11 +104,18 @@
   }
 </script>
 
+<svelte:window
+  onclick={() => (armedId = null)}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') armedId = null
+  }}
+/>
+
 <section class="expectations">
   <h3>What it has been told to expect</h3>
 
   {#if loadError}
-    <p class="error">{loadError}</p>
+    <FailureLine verb="load" thing="the expectations" said={loadError} />
   {:else if rows.length === 0}
     <p class="empty">Nothing yet — every Expected verdict on the docket's flags tab records one here.</p>
   {:else}
@@ -115,16 +138,17 @@
               <button
                 type="button"
                 class="forget"
+                class:armed={armedId === e.id}
                 disabled={forgetting[e.id]}
                 aria-label="Forget the expectation for {e.target}"
-                onclick={() => forget(e.id)}
+                onclick={(ev) => onForgetClick(ev, e.id)}
               >
-                {forgetting[e.id] ? 'forgetting…' : 'Forget'}
+                {forgetting[e.id] ? 'forgetting…' : armedId === e.id ? 'confirm — it stops being expected' : 'forget'}
               </button>
             {/if}
           </span>
           {#if rowError[e.id]}
-            <p class="error">{rowError[e.id]}</p>
+            <FailureLine verb="forget" thing="this expectation" said={rowError[e.id]} />
           {/if}
         </li>
       {/each}
@@ -204,14 +228,14 @@
     color: var(--accent);
   }
 
+  .forget.armed,
+  .forget.armed:hover:not(:disabled) {
+    color: var(--alarm);
+  }
+
   .forget:disabled {
     opacity: 0.6;
     cursor: default;
   }
 
-  .error {
-    margin: 4px 0 0;
-    color: var(--reject);
-    font-size: 11.5px;
-  }
 </style>

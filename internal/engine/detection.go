@@ -79,7 +79,7 @@ func (s *DetectionSpec) Validate() error {
 	if s == nil {
 		return fmt.Errorf("engine: a custom detection requires a detection block")
 	}
-	if _, err := compileConditions(s.Conditions); err != nil {
+	if _, err := compileConditions(s.Conditions, nil); err != nil {
 		return err
 	}
 	if err := validateKeyMode(s.Key); err != nil {

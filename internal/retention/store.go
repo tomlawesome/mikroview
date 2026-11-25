@@ -187,7 +187,9 @@ func (s *Store) run(interval time.Duration) {
 				logger.Error("final flush failed", "err", err)
 			}
 			s.mu.Lock()
-			s.current.Close()
+			if err := s.current.Close(); err != nil {
+				logger.Error("closing retained day file", "err", err)
+			}
 			s.current = nil
 			s.mu.Unlock()
 			return
@@ -248,7 +250,9 @@ func (s *Store) appendToDay(day string, batch []record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil || s.current.day != day {
-		s.current.Close()
+		if err := s.current.Close(); err != nil {
+			logger.Error("closing retained day file", "err", err)
+		}
 		d, err := openDayFile(s.dir, day, s.key)
 		if err != nil {
 			s.current = nil
@@ -425,7 +429,7 @@ func (s *Store) Capped() bool {
 func (s *Store) Purge() error {
 	s.mu.Lock()
 	s.pending = nil
-	s.current.Close()
+	_ = s.current.Close()
 	s.current = nil
 	s.mu.Unlock()
 

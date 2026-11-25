@@ -29,7 +29,7 @@
 // Every line and address below is synthetic, using documentation address
 // space (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
-import { session, check, done, feedRaw, feedSyslog, unfoldStreamFilter } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedSyslog, unfoldStreamFilter, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -84,7 +84,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-nat-popup', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-nat-popup', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value
@@ -355,6 +355,7 @@ await openRowSheet(UNLOGGED_SRC)
   const out = page.locator('.sheet .entry.out')
   check((await out.count()) === 5, `all five ruled-out rules are still rendered (${await out.count()})`)
   await out.first().waitFor({ state: 'visible', timeout: 5000 })
+  // safe: waitFor above throws on timeout
   check(true, 'ruled-out entries stay visible and readable rather than being dropped')
 
   // The row itself carries no rule decoration: a guess must never sit on
@@ -433,6 +434,7 @@ await page.locator(`.grid .row:has-text("${HOLD_SLUG}")`).first().waitFor({
   state: 'visible',
   timeout: 20000,
 })
+// safe: waitFor above throws on timeout
 check(true, 'closing the popup releases the hold and the held events appear')
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)

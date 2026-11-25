@@ -5,7 +5,8 @@
 // bar for what is held and a track for what is allowed; the disk group
 // is the same two things one storey down, and every change that would
 // delete something is a proposal until a link that names the deletion
-// is taken.
+// is taken. Turning off deletes nothing (#1354): the files stay until an
+// admin deletes them, behind a second click and their password.
 //
 // The arithmetic and the sentences live here rather than in
 // DiskControl.svelte so the wording can be asserted without standing up
@@ -35,7 +36,7 @@ export function daysAtX(x: number): number {
   return clampDays(Math.round(Math.pow(DAYS_MAX, fraction)))
 }
 
-export function clampDays(days: number): number {
+function clampDays(days: number): number {
   if (!Number.isFinite(days)) return DAYS_MIN
   return Math.min(DAYS_MAX, Math.max(DAYS_MIN, Math.round(days)))
 }
@@ -65,7 +66,7 @@ export function capDays(maxBytes: number, bytesPerDay: number): number | null {
 }
 
 /** bytesForDays is what a number of days needs at today's rate. */
-export function bytesForDays(days: number, bytesPerDay: number): number {
+function bytesForDays(days: number, bytesPerDay: number): number {
   return Math.max(0, days) * Math.max(0, bytesPerDay)
 }
 
@@ -127,11 +128,37 @@ function nDays(n: number): string {
  */
 export function heldRow(s: HistorySettings, locale?: string): string | null {
   if (!s.held) return null
+  if (!s.enabled) return keptRow(s.held, locale)
   const parts = `${nDays(s.held.days)} · since ${dayLabel(s.held.oldest, locale)} · ${formatSize(s.held.bytes)}`
   return parts + heldSuffix(s)
 }
 
-export function heldSuffix(s: HistorySettings): string {
+/**
+ * keptRow is the "on disk" row while history is off and files are still
+ * there (#1354): "27 days · 7 Aug – 2 Sep · 812 MiB — kept on disk; turn
+ * history on with the same key to use them". Both ends of the range,
+ * because nothing is being added at the newest end any more.
+ */
+function keptRow(held: HistoryHeld, locale?: string): string {
+  const range =
+    held.oldest === held.newest
+      ? dayLabel(held.oldest, locale)
+      : `${dayLabel(held.oldest, locale)} – ${dayLabel(held.newest, locale)}`
+  return `${nDays(held.days)} · ${range} · ${formatSize(held.bytes)} — kept on disk; turn history on with the same key to use them`
+}
+
+/** The delete action's three faces (#1354): at rest, armed, and asking for the password. */
+export const DELETE_FILES_LABEL = 'Delete history files'
+
+export function deleteArmedLabel(days: number): string {
+  return `confirm — delete ${nDays(days)}`
+}
+
+export function deletePasswordLabel(days: number): string {
+  return `Your password, to delete ${nDays(days)} of history`
+}
+
+function heldSuffix(s: HistorySettings): string {
   if (!s.held) return ''
   if (s.capped) return ' — full'
   if (s.held.days < s.days) return ' — filling'
@@ -152,10 +179,10 @@ export function capMark(maxBytes: number, bytesPerDay: number): { days: number; 
  * plus round 43's `dfail` -- the settings GET did not answer, so the
  * group is one row saying so rather than absent.
  */
-export type DiskPhase = 'rest' | 'dshrink' | 'dgrow' | 'dcap' | 'doff' | 'dcapped' | 'dstopped' | 'dnokey' | 'dfail'
+export type DiskPhase = 'rest' | 'dshrink' | 'dgrow' | 'dcap' | 'dcapped' | 'dstopped' | 'dnokey' | 'dfail'
 
 /** Which of those a proposal puts the group in. */
-export type ProposalKind = 'dshrink' | 'dgrow' | 'dcap' | 'doff'
+type ProposalKind = 'dshrink' | 'dgrow' | 'dcap'
 
 export interface DiskProposal {
   kind: ProposalKind
@@ -167,7 +194,7 @@ export interface DiskProposal {
   sentence: string
   /** The link that takes it: "delete 13 days", or "apply" when nothing would go. */
   applyLabel: string
-  /** The link that does not: "keep all 27", "keep 30 days", "keep 1 GiB", "keep them". */
+  /** The link that does not: "keep all 27", "keep 30 days", "keep 1 GiB". */
   keepLabel: string
   /**
    * How many held days the bar dims, oldest first, or null when nothing
@@ -343,33 +370,6 @@ export function proposeCap(s: HistorySettings, maxBytes: number, opts: ProposalO
 }
 
 /**
- * proposeOff is `turn off`'s sentence: "off deletes all 27 days on disk,
- * back to 7 Aug, and keeps nothing after — delete 27 days · keep them".
- * Null when nothing is held, since off then deletes nothing and is not
- * a proposal at all -- the same rule that makes turning on immediate.
- */
-export function proposeOff(s: HistorySettings, opts: ProposalOptions = {}): DiskProposal | null {
-  if (!s.held || s.held.days <= 0) return null
-  const n = s.held.days
-  const back = dayLabel(s.held.oldest, opts.locale)
-  return {
-    kind: 'doff',
-    enabled: false,
-    days: s.days,
-    maxBytes: s.maxBytes,
-    sentence:
-      n === 1
-        ? `off deletes the one day on disk, ${back}, and keeps nothing after`
-        : `off deletes all ${n} days on disk, back to ${back}, and keeps nothing after`,
-    applyLabel: `delete ${nDays(n)}`,
-    keepLabel: 'keep them',
-    cut: n,
-    newOldest: null,
-    cutLabel: n === 1 ? 'the one day would let go' : `all ${n} days would let go`,
-  }
-}
-
-/**
  * barLabel is the bar's line at rest: "7 Aug — the oldest day on disk",
  * or, when the cap is what decides, "9 Aug — the oldest the 768 MiB cap
  * keeps".
@@ -383,12 +383,16 @@ export function barLabel(s: HistorySettings, locale?: string): string | null {
 /**
  * memoryHint is the stopped state's line under where the bar would be:
  * "nothing on disk — events live in memory only, ~9 h of them at today's
- * rate; on keeps those and every day after". The span is the ring's
- * real reach, oldestHeld to now, or left off when there is none.
+ * rate; on keeps those and every day after", or "nothing new is kept on
+ * disk — …" while files from before are still there. The span is the
+ * ring's real reach, oldestHeld to now, or left off when there is none.
  */
-export function memoryHint(reachHours: number | null): string {
+export function memoryHint(reachHours: number | null, heldOnDisk = false): string {
   const span = reachHours !== null && reachHours > 0 ? `, ~${formatHours(reachHours)} of them at today's rate` : ''
-  return `nothing on disk — events live in memory only${span}; on keeps those and every day after`
+  // With files kept from before the switch went off (#1354) the disk is
+  // not empty -- it is just not being written or read.
+  const lead = heldOnDisk ? 'nothing new is kept on disk' : 'nothing on disk'
+  return `${lead} — events live in memory only${span}; on keeps those and every day after`
 }
 
 /**
@@ -415,9 +419,9 @@ export function restartRow(s: HistorySettings | null): string {
   if (!s.keyed) return `${clears} — nothing outlives it`
   if (!s.enabled) return `${clears} — nothing outlives it; days can be kept on disk below`
   const n = s.held?.days ?? 0
-  if (n === 1) return `${clears} — the 1 day on disk stays; trying a watcher reads it`
-  if (n > 1) return `${clears} — the ${n} days on disk stay; trying a watcher reads them`
-  return `${clears} — what is on disk stays; trying a watcher reads it`
+  if (n === 1) return `${clears} — the 1 day on disk stays; trying a detector reads it`
+  if (n > 1) return `${clears} — the ${n} days on disk stay; trying a detector reads them`
+  return `${clears} — what is on disk stays; trying a detector reads it`
 }
 
 /**
@@ -444,19 +448,19 @@ export function stateRow(info: PersistenceInfo | null): string | null {
 
 /** The link to the setup guide's own section on mounting a key. */
 export const HOW_TO_MOUNT_URL =
-  'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-optional-off-by-default'
+  'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-on-by-default'
 
 /** Where the wizard tells the operator to write the key, on the host:
  *  the app folder's own keys/ (#1209, #1243). Beside data/, never inside
  *  it -- the rule is that the key must not live in the data store, which
  *  is what a backup of data/ alone carries. */
-export const KEY_DIR = 'mikroview/keys'
-export const KEY_FILE_PATH = `${KEY_DIR}/history.key`
+const KEY_DIR = 'mikroview/keys'
+const KEY_FILE_PATH = `${KEY_DIR}/history.key`
 
 /** The same file seen from inside the container, where the app folder is
  *  mounted read-only. MikroView reads this path with nothing set, so the
  *  wizard only quotes it to say what `history.keyFile` would name. */
-export const KEY_FILE_CONTAINER_PATH = '/etc/mikroview/keys/history.key'
+const KEY_FILE_CONTAINER_PATH = '/etc/mikroview/keys/history.key'
 
 /**
  * newHistoryKey mints a `history.keyFile` value in the browser: 32

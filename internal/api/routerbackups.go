@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backupvault"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 // routerBackupGeneration is one kept generation -- the shape round 44's
@@ -79,10 +80,15 @@ type routerBackupsResponse struct {
 	// present so the group can render "locked" without a second call.
 	Lock vaultLockStatusResponse `json:"lock"`
 	// Port is the SFTP drop box's own listening port (round 44's "arrive
-	// by" row), empty when backup.enabled is false -- the same
-	// SetupInstance.BackupPort the wizard's step 6 already reads, not a
-	// second copy of the configured value.
+	// by" row, and the Settings row's "drop box: closed / open on port
+	// N", #1361), empty while the drop box is closed -- a live read of
+	// the same SetupInstance.BackupPortNow() the wizard's step 6 already
+	// reads, not a second copy of anything.
 	Port string `json:"port,omitempty"`
+	// Transport is the "deliver by" row (#1494): a live read of the same
+	// store handleSetupCommands renders from, so the group needs no second
+	// fetch.
+	Transport string `json:"transport"`
 }
 
 func toRouterBackupGeneration(g backupvault.Generation) routerBackupGeneration {
@@ -138,7 +144,7 @@ func toRouterBackupGenerations(gens []backupvault.Generation) []routerBackupGene
 // never sees this group at all.
 func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 
@@ -146,8 +152,12 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 		Enabled:       s.Vault.Enabled(),
 		KeyUnreadable: s.SetupInstance.BackupKeyUnreadable,
 		Routers:       []routerBackupRouter{},
-		Port:          s.SetupInstance.BackupPort,
+		Port:          s.SetupInstance.BackupPortNow(),
+		Transport:     setup.BackupTransportSFTP,
 		LowSpace:      s.Vault.LowSpace(),
+	}
+	if s.Setup != nil {
+		resp.Transport = s.Setup.BackupTransport()
 	}
 	resp.Lock = s.vaultLockStatus(r, time.Now())
 	if !s.Vault.Enabled() {
@@ -175,7 +185,7 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 // gets to invent).
 func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	device := r.PathValue("device")
@@ -216,7 +226,7 @@ func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, device, ext))
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // The keep controls (#1126, owner ruling 2026-09-11). An admin marks a
@@ -244,7 +254,7 @@ func (s *Server) handleRouterBackupProtect(w http.ResponseWriter, r *http.Reques
 	}
 	var req routerBackupKeepRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	now := time.Now()
@@ -283,7 +293,7 @@ func (s *Server) handleRouterBackupComment(w http.ResponseWriter, r *http.Reques
 	}
 	var req routerBackupKeepRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if err := s.Vault.SetComment(device, generation, req.Comment); err != nil {
@@ -297,13 +307,13 @@ func (s *Server) handleRouterBackupComment(w http.ResponseWriter, r *http.Reques
 // keepRequest is the gate and the path values the three share.
 func (s *Server) keepRequest(w http.ResponseWriter, r *http.Request) (device, generation string, ok bool) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return "", "", false
 	}
 	device = r.PathValue("device")
 	generation = r.PathValue("generation")
 	if device == "" || generation == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "invalid request path", http.StatusBadRequest)
 		return "", "", false
 	}
 	return device, generation, true

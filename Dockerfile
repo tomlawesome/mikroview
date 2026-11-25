@@ -1,15 +1,29 @@
 # --- frontend build -------------------------------------------------------
 FROM node:26-alpine AS frontend
 WORKDIR /src/frontend
+# VERSION (#1363): the same short commit SHA/tag passed to the backend
+# stage below, redeclared here because a Docker ARG only reaches the
+# stage that declares it. Exported as an env var so vite.config.ts's
+# `define` (a plain Node process, not a build-arg-aware tool) can read
+# it via process.env.VERSION and bake it into the bundle -- see
+# frontend/src/lib/freshness.svelte.ts, which needs a fixed build-time
+# baseline to compare against /api/healthz.
+ARG VERSION=dev:local
+ENV VERSION=${VERSION}
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
 # --- backend build ----------------------------------------------------------
-FROM golang:1.27.1-alpine AS backend
+FROM golang:1.27.4-alpine AS backend
 WORKDIR /src
+# #1202: fetch gauntlet straight from GitHub, never via the public Go proxy
+# or checksum database (that would publish the version permanently).
+ENV GOPRIVATE=github.com/tomlawesome/gauntlet
 COPY go.mod go.sum ./
+# git: with GOPRIVATE set, Go fetches gauntlet from GitHub using the git binary, which the alpine image lacks.
+RUN apk add --no-cache git
 RUN go mod download
 COPY . .
 COPY --from=frontend /src/frontend/dist ./web/dist

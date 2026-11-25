@@ -159,13 +159,13 @@ screenshot_sources() {
     docs/screenshots/engine-room-people-door.png)
       echo "frontend/src/components/EngineRoom.svelte frontend/src/components/ResetCodeOverlay.svelte" ;;
     docs/screenshots/setup-wizard-ledger.png)
-      echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
+      echo "frontend/src/components/wizard/Wizard.svelte frontend/src/components/wizard/StepRouter.svelte frontend/src/lib/wizard.svelte.ts" ;;
     docs/screenshots/entities-add-a-router.png)
       echo "frontend/src/components/Entities.svelte" ;;
     docs/screenshots/entities-refused-sender.png)
       echo "frontend/src/components/Entities.svelte" ;;
     docs/screenshots/setup-wizard-send-logs.png)
-      echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
+      echo "frontend/src/components/wizard/StepPaste.svelte frontend/src/lib/wizardRun.svelte.ts frontend/src/lib/wizard.svelte.ts" ;;
     docs/screenshots/authenticator-menu-dark.png)
       echo "frontend/src/components/AccountMenu.svelte" ;;
     docs/screenshots/authenticator-enrol-dark.png)
@@ -179,8 +179,15 @@ screenshot_sources() {
   esac
 }
 
-grep -ohE '(docs/)?screenshots/[A-Za-z0-9_.-]+\.png' README.md docs/*.md .github/workflows/pages.yml 2>/dev/null \
-  | sed -E 's#^screenshots/#docs/screenshots/#' | sort -u >"$tmpd/screens"
+{
+  grep -ohE '(docs/)?screenshots/[A-Za-z0-9_.-]+\.png' README.md docs/*.md .github/workflows/pages.yml 2>/dev/null \
+    | sed -E 's#^screenshots/#docs/screenshots/#'
+  # site/index.html shows img/<name>.png, which the Pages job copies from
+  # docs/screenshots/<name>.png (#1456) -- map it back so those are
+  # checked against the same sources, not only the ones README names.
+  grep -ohE 'src="img/[A-Za-z0-9_.-]+\.png"' site/index.html 2>/dev/null \
+    | sed -E 's#^src="img/#docs/screenshots/#; s#"$##'
+} | sort -u >"$tmpd/screens"
 while IFS= read -r png; do
   [ -n "$png" ] || continue
   last=$(git log -1 --format=%H -- "$png" 2>/dev/null || true)
@@ -313,7 +320,12 @@ fi
 shot_fails=0
 for f in README.md docs/*.md .github/workflows/pages.yml; do
   [ -f "$f" ] || continue
-  grep -noE '<!-- shot:.*-->' "$f" 2>/dev/null >"$tmpd/shot-hits" || true
+  # [^>]* rather than .*: the greedy .* would span two markers sharing
+  # one line, from the first marker's opening comment to the second's
+  # closing -->, and report them as one garbled failure. Excluding '>'
+  # stops the match at the first marker's own -->, since that is the
+  # first '>' either marker's text can contain.
+  grep -noE '<!-- shot:[^>]*-->' "$f" 2>/dev/null >"$tmpd/shot-hits" || true
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     lineno=${hit%%:*}
@@ -325,6 +337,26 @@ for f in README.md docs/*.md .github/workflows/pages.yml; do
 done
 if [ "$shot_fails" -eq 0 ]; then
   ok "no unrealized shot markers"
+fi
+
+# ---------------------------------------------------------------------
+# 10. release smoke test mounts a key: from v0.7.0 the server exits with
+#     CFG-0083 before listening when no key is mounted (#1202 ruling 2),
+#     so the release job's smoke test in .github/workflows/docker.yml
+#     must make a history.key and mount it read-only at the app folder,
+#     or healthz never answers and `latest` can never move (D-F1).
+# ---------------------------------------------------------------------
+if [ -f .github/workflows/docker.yml ]; then
+  sed -n '/- name: Smoke-test the image that will become latest/,/- name:/p' \
+    .github/workflows/docker.yml >"$tmpd/smoke-step"
+  if grep -qF -- 'history.key' "$tmpd/smoke-step" &&
+     grep -qF -- ':/etc/mikroview:ro' "$tmpd/smoke-step"; then
+    ok "release smoke test makes a history.key and mounts it at /etc/mikroview:ro"
+  else
+    fail "release smoke test starts the image with no key mounted -- from v0.7.0 it exits with CFG-0083 before healthz answers, so latest can never move; mount a key as .gitlab-ci.yml's test:container does"
+  fi
+else
+  echo "skip: release smoke test key mount (.github/workflows/docker.yml not present)"
 fi
 
 echo

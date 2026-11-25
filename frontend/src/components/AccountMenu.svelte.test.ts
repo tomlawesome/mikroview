@@ -4,7 +4,8 @@
 // Entities left for cards of their own on the deck (Fleet folded into
 // Entities' own card), and Audit log has lived on the docket's tab since
 // rounds 17-19 -- so the menu carries no page links at all now, only
-// Run setup… (admin-gated), the account actions, and About & licence.
+// Run setup… (admin-gated), Take the tour (#1386, every role), the
+// account actions, and About & licence.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
@@ -20,25 +21,9 @@ vi.mock('../lib/api', () => ({
   fetchHealthz: vi.fn(async () => ({ version: '0.9', uptimeSeconds: 12 * 86_400 + 4 * 3600 })),
 }))
 
+import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
-
-// jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
-// pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
-// matchMedia at module-load time, so this has to land before the
-// dynamic import below (same fix Flags.svelte.test.ts already needed).
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList
-}
+import { tourState } from '../lib/tour.svelte'
 
 const { default: AccountMenu } = await import('./AccountMenu.svelte')
 
@@ -48,6 +33,8 @@ async function openMenu() {
 }
 
 beforeEach(() => {
+  tourState.reset()
+  appState.view = 'metrics'
   authState.username = 'alex'
   authState.hasLocalPassword = true
   authState.ssoConnected = false
@@ -184,6 +171,65 @@ describe('the Passkeys row (#1250)', () => {
   })
 })
 
+// #1331: the row only makes sense once there's a factor for the codes
+// to stand behind -- the server refuses the route otherwise (recovery
+// codes are a spare key, not a substitute for one).
+describe('the New recovery codes… row (#1331)', () => {
+  it('is absent while the account has neither factor', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = false
+    authState.passkeyCount = 0
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /new recovery codes/i })).toBeNull()
+  })
+
+  it('is offered once the account has an authenticator app', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = true
+    authState.passkeyCount = 0
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.getByRole('menuitem', { name: /new recovery codes/i })).toBeTruthy()
+  })
+
+  it('is offered once the account has a passkey', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = false
+    authState.passkeyCount = 1
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.getByRole('menuitem', { name: /new recovery codes/i })).toBeTruthy()
+  })
+
+  it('is absent for an SSO-only account, same gate as the two factor rows', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = false
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /new recovery codes/i })).toBeNull()
+  })
+
+  it('opens RecoveryCodesOverlay on click', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('dialog', { name: /new recovery codes/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /new recovery codes/i }))
+    expect(screen.getByRole('dialog', { name: /new recovery codes/i })).toBeTruthy()
+  })
+})
+
 // #1332: AuthenticatorOverlay used to open off authState.showAuthenticator,
 // a single flag shared by every mounted copy -- so the deck keeping
 // several cards (and several AccountMenus) mounted at once meant one
@@ -204,6 +250,25 @@ describe('two mounted account menus do not share the authenticator dialog (#1332
     flushSync()
 
     expect(screen.getAllByRole('dialog', { name: /authenticator app/i })).toHaveLength(1)
+  })
+
+  // Same bug, same fix, different overlay -- PasskeysOverlay used to be
+  // gated the same way AuthenticatorOverlay was, so it is worth showing
+  // the fix holds there too rather than assuming one overlay stands for
+  // both.
+  it('opens the passkeys dialog in the clicked menu only, not in an unrelated mounted copy', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    render(AccountMenu)
+
+    const chips = screen.getAllByTitle('Account and operate pages')
+    await fireEvent.click(chips[0])
+    flushSync()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /^passkeys/i }))
+    flushSync()
+
+    expect(screen.getAllByRole('dialog', { name: /^passkeys$/i })).toHaveLength(1)
   })
 })
 
@@ -297,5 +362,37 @@ describe("the menu's foot carries the build line (#804)", () => {
     flushSync()
 
     expect(container.querySelector('.ver')?.textContent?.trim()).toBe('0.9 · AGPL-3.0 · up 12 d 4 h')
+  })
+})
+
+// #1386, owner decision 2026-09-30: the deck tour is "always available
+// from" this menu, for every signed-in role -- the tour walks whatever
+// deck the tier can see, so there is no tier it makes no sense for.
+describe('the Take the tour row (#1386)', () => {
+  it('starts the tour on the deck\'s first card and closes the menu', async () => {
+    authState.role = 'admin'
+    render(AccountMenu)
+    await openMenu()
+
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Take the tour' }))
+    flushSync()
+
+    expect(tourState.active).toBe(true)
+    expect(tourState.cardIndex).toBe(0)
+    expect(appState.view).toBe('fall')
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('is offered to a viewer, whose tour is their own six cards', async () => {
+    authState.role = 'viewer'
+    render(AccountMenu)
+    await openMenu()
+
+    // Run setup… is the admin's alone; the tour is not.
+    expect(screen.queryByRole('menuitem', { name: /run setup/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Take the tour' }))
+
+    expect(tourState.active).toBe(true)
+    expect(tourState.cards.length).toBe(6)
   })
 })

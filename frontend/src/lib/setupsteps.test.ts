@@ -8,15 +8,12 @@ import {
   backupStep,
   buildLedger,
   caStep,
-  certificateCovers,
   finishHeadline,
   firstOpenStep,
   forcedPastRecord,
-  hostname,
   nameReceipt,
   nameStep,
   notObserved,
-  portOf,
   refusedSince,
   refusedWarning,
   registerReceipt,
@@ -29,9 +26,9 @@ import {
   sourceSplitReceipt,
   sourceSplitShortfall,
   sourceSplits,
-  srcAddressCommand,
   syslogReceipt,
   syslogStep,
+  tlsHostsBlock,
   tokenExpired,
   tokenLine,
 } from './setupsteps'
@@ -41,6 +38,7 @@ function backups(over: Partial<RouterBackupsResponse> = {}): RouterBackupsRespon
   return {
     enabled: true,
     keyUnreadable: false,
+    transport: 'sftp',
     routers: [],
     totalGenerations: 0,
     totalRouters: 0,
@@ -55,6 +53,9 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
     instance: {
       tlsEnabled: true,
       hosts: ['192.0.2.10'],
+      effectiveHosts: ['192.0.2.10'],
+      certificateCoversAddress: true,
+      addressHost: '',
       syslogPort: ':6514',
       syslogEnabled: true,
       address: '',
@@ -70,83 +71,91 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
   }
 }
 
-describe('address handling', () => {
-  it('strips ports, including from IPv6 literals', () => {
-    expect(hostname('192.0.2.10:8080')).toBe('192.0.2.10')
-    expect(hostname('192.0.2.10')).toBe('192.0.2.10')
-    expect(hostname('[2001:db8::1]:8080')).toBe('2001:db8::1')
-  })
-
-  it('takes the port off a listen address', () => {
-    expect(portOf(':6514')).toBe('6514')
-    expect(portOf('0.0.0.0:6514')).toBe('6514')
-  })
-})
-
-describe('certificate cover check', () => {
-  it('accepts an address the certificate names', () => {
-    expect(certificateCovers(status(), '192.0.2.10:8080')).toBe(true)
-  })
-
-  // The failure the owner actually hit: reaching MikroView by an address
-  // tls.hosts does not list. It surfaces three steps later as
-  // "name verification failed", pointing at the router.
-  it('rejects an address the certificate does not name', () => {
-    expect(certificateCovers(status(), '192.0.2.99:8080')).toBe(false)
-  })
-
-  it('falls back to localhost/127.0.0.1 when tls.hosts is unset', () => {
-    const s = status({
-      instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [], backupTransport: 'sftp' },
-    })
-    expect(certificateCovers(s, '127.0.0.1:8080')).toBe(true)
-    expect(certificateCovers(s, '192.168.1.5:8080')).toBe(false)
-  })
-
-  it('is not a question when both HTTP TLS and syslog are off', () => {
-    const s = status({
-      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
-    })
-    expect(certificateCovers(s, 'anything:8080')).toBe(true)
-  })
-
-  // #374: tls.enabled=false only turns off HTTPS on the API port. When
-  // syslog TLS is on (main.go loads/generates the certificate whenever
-  // cfg.TLS.Enabled || cfg.Listen.SyslogTLS != ""), the router still
-  // gets a certificate whose SANs come from tls.hosts, and a mismatch
-  // still fails the router's handshake exactly as it would with HTTP
-  // TLS on. The short-circuit must key off syslogEnabled too, not just
-  // tlsEnabled.
-  it('still checks the host when HTTP TLS is off but syslog TLS is on', () => {
-    const s = status({
-      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [], backupTransport: 'sftp' },
-    })
-    expect(certificateCovers(s, '192.0.2.30:18084')).toBe(false)
-  })
-
-  it('accepts a covered host when HTTP TLS is off but syslog TLS is on', () => {
-    const s = status({
-      instance: {
-        tlsEnabled: false,
-        hosts: ['192.0.2.30'],
-        syslogPort: ':6514',
-        syslogEnabled: true,
-        address: '',
-        addressCandidates: [],
-        backupTransport: 'sftp',
-      },
-    })
-    expect(certificateCovers(s, '192.0.2.30:18084')).toBe(true)
-  })
-})
-
 describe('step status', () => {
   it('blocks the CA step when the certificate cannot cover the address', () => {
-    const s = caStep(status(), '192.0.2.99:8080')
+    const s = caStep(
+      status({ instance: { ...status().instance, certificateCoversAddress: false, addressHost: '192.0.2.99' } }),
+      '192.0.2.99:8080',
+    )
     expect(s.state).toBe('blocked')
     expect(s.detail).toContain('tls.hosts')
   })
 
+  // #1365: the owner asked "how? what should the syntax be?" -- naming
+  // tls.hosts is not enough, the blocked step has to hand over the
+  // exact line to paste, keeping the address(es) already configured.
+  it('gives the blocked CA step a pasteBlock with the whole resulting hosts list', () => {
+    const s = caStep(status({
+        instance: {
+          ...status().instance,
+          hosts: ['192.0.2.10'],
+          effectiveHosts: ['192.0.2.10'],
+          certificateCoversAddress: false,
+          addressHost: '192.0.2.99',
+        },
+      }),
+      '192.0.2.99:8080',
+    )
+    expect(s.state).toBe('blocked')
+    expect(s.pasteBlock).toBe('hosts: ["192.0.2.10", "192.0.2.99"]')
+  })
+})
+
+// #1507 (decision #1437): Go owns the certificate-coverage answer. The
+// step reads instance.certificateCoversAddress and instance.effectiveHosts
+// as served; it never splits the address or compares names itself. The
+// fixtures below make the served verdict disagree with what a local
+// comparison of hosts would say, so only reading the verdict passes.
+describe('CA step reads the served certificate verdict', () => {
+  function served(over: Record<string, unknown>): SetupStatus {
+    const base = status()
+    return { ...base, instance: { ...base.instance, ...over } } as SetupStatus
+  }
+
+  it('blocks when the server says the certificate does not cover the address', () => {
+    const s = caStep(served({ hosts: ['192.0.2.10'], effectiveHosts: ['192.0.2.10'], certificateCoversAddress: false }), '192.0.2.10:8080')
+    expect(s.state).toBe('blocked')
+  })
+
+  it('does not block when the server says it covers, whatever the local list holds', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['ROUTER.example.net'], certificateCoversAddress: true }), 'router.example.net:8080')
+    expect(s.state).not.toBe('blocked')
+  })
+
+  it('names the whole address, not a port-cut fragment, for a bare IPv6 literal', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: false }), '2001:db8::10')
+    expect(s.state).toBe('blocked')
+    expect(s.detail).toContain('2001:db8::10')
+    expect(s.detail).not.toContain('2001:db8: ')
+  })
+
+  it('builds the paste block from the served effective hosts', () => {
+    const s = caStep(served({ hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: false }), '2001:db8::10')
+    expect(s.pasteBlock).toBe('hosts: ["localhost", "127.0.0.1", "2001:db8::10"]')
+  })
+})
+
+describe('tlsHostsBlock', () => {
+  it('keeps hosts already configured, adding the missing one', () => {
+    expect(tlsHostsBlock(['192.0.2.10', 'localhost'], '192.0.2.99')).toBe(
+      'hosts: ["192.0.2.10", "localhost", "192.0.2.99"]',
+    )
+  })
+
+  it('handles an empty existing list', () => {
+    expect(tlsHostsBlock([], '192.0.2.99')).toBe('hosts: ["192.0.2.99"]')
+  })
+
+  it('handles an IPv6 address', () => {
+    expect(tlsHostsBlock(['192.0.2.10'], '2001:db8::1')).toBe('hosts: ["192.0.2.10", "2001:db8::1"]')
+  })
+
+  it('does not duplicate a host already present', () => {
+    expect(tlsHostsBlock(['192.0.2.10', '192.0.2.99'], '192.0.2.99')).toBe('hosts: ["192.0.2.10", "192.0.2.99"]')
+  })
+})
+
+describe('step status', () => {
   // #1213: an empty address is "not answered yet", not a wrong answer --
   // reporting it as a certificate mismatch would send the operator to
   // edit tls.hosts for a problem that is really the header field above
@@ -164,7 +173,7 @@ describe('step status', () => {
   it('blocks the syslog step when the listener is switched off', () => {
     const s = syslogStep(
       status({
-        instance: { tlsEnabled: true, hosts: [], syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
+        instance: { tlsEnabled: true, hosts: [], effectiveHosts: ['localhost', '127.0.0.1'], certificateCoversAddress: true, addressHost: '', syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
       }),
     )
     expect(s.state).toBe('blocked')
@@ -175,7 +184,7 @@ describe('step status', () => {
   // same as "cannot reach me", which is why the connection is observed
   // separately from events.
   it('separates connected-but-no-events from no connection', () => {
-    const connected = status({ sources: [{ source: '1.2.3.4', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
+    const connected = status({ sources: [{ source: '192.0.2.4', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
     expect(syslogStep(connected).state).toBe('done')
     expect(rulesStep(connected).state).toBe('waiting')
     expect(rulesStep(connected).detail).toContain('log=yes')
@@ -185,7 +194,7 @@ describe('step status', () => {
   // other measure. This is the state the wizard exists to name.
   it('flags events arriving with no decoded action', () => {
     const s = rulesStep(
-      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 40, decodedActions: 0 }] }),
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 40, decodedActions: 0 }] }),
     )
     expect(s.state).toBe('partial')
     expect(s.detail).toBe('Events are arriving.')
@@ -194,7 +203,7 @@ describe('step status', () => {
 
   it('reports partial tagging honestly', () => {
     const s = rulesStep(
-      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 4 }] }),
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 10, decodedActions: 4 }] }),
     )
     expect(s.state).toBe('partial')
     expect(s.detail).toBe('4 of 10 events carry an action.')
@@ -208,7 +217,7 @@ describe('step status', () => {
           {
             device: 'r',
             configured: true,
-            sourceIp: '1.2.3.4',
+            sourceIp: '192.0.2.4',
             events: 1,
             decodedActions: 1,
             pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z' },
@@ -238,7 +247,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
           {
             device: 'r',
             configured: true,
-            sourceIp: '1.2.3.4',
+            sourceIp: '192.0.2.4',
             events: 1,
             decodedActions: 1,
             pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z', arp: '2026-08-13T00:00:00Z' },
@@ -261,7 +270,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
         {
           device: 'r',
           configured: true,
-          sourceIp: '1.2.3.4',
+          sourceIp: '192.0.2.4',
           events: 4,
           decodedActions: 4,
           pushedKinds: {
@@ -288,7 +297,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
         {
           device: 'r',
           configured: true,
-          sourceIp: '1.2.3.4',
+          sourceIp: '192.0.2.4',
           events: 1,
           decodedActions: 1,
           pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z' },
@@ -384,12 +393,6 @@ describe('the source-address split', () => {
     expect(sourceSplitReceipt(splits)).toBe('syslog from 10.0.20.1, 10.0.30.1 · declared 192.168.88.1 silent')
   })
 
-  // The remedy keeps the declared address: the command needs only that
-  // one value, and it is printed, never run.
-  it('prints the src-address command with the declared address filled in', () => {
-    expect(srcAddressCommand('192.168.88.1')).toBe('/system logging action set mikroview src-address=192.168.88.1')
-  })
-
   // Only a declared device with a pairing is a split. An undeclared
   // device never is, whatever the server sent alongside it.
   it('ignores undeclared devices and declared ones with no pairing', () => {
@@ -405,7 +408,7 @@ describe('the claim ledger', () => {
   // router ledger is those five on their own.
   it('always has exactly seven steps on first-run setup', () => {
     expect(buildLedger(status(), [], 'h').length).toBe(7)
-    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(7)
+    expect(buildLedger(status({ sources: [{ source: '192.0.2.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(7)
   })
 
   // The router ledger is embedded, not copied: the same five steps in
@@ -506,7 +509,7 @@ describe('the claim ledger', () => {
 
   it('reads a partially tagged rule set as counting, not as half-failed', () => {
     const ledger = buildLedger(
-      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 4 }] }),
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 10, decodedActions: 4 }] }),
       [],
       '192.0.2.10',
     )
@@ -520,7 +523,11 @@ describe('the claim ledger', () => {
   // not one of the four observation flavours: nothing is being waited
   // for, because nothing router-side can work yet.
   it('never dresses a mikroview-side problem up as patient waiting', () => {
-    const ledger = buildLedger(status(), [], '192.0.2.99:8080')
+    const ledger = buildLedger(
+      status({ instance: { ...status().instance, certificateCoversAddress: false, addressHost: '192.0.2.99' } }),
+      [],
+      '192.0.2.99:8080',
+    )
     expect(ledger[0].status.state).toBe('blocked')
     expect(ledger[0].flavour).toBe('attention')
   })
@@ -693,7 +700,7 @@ describe('reopening the ledger', () => {
   it('lands on the first step still waiting', () => {
     const ledger = buildLedger(
       status({
-        sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }],
+        sources: [{ source: '192.0.2.4', caFetchedAt: '2026-08-23T09:00:00Z' }],
         // The server's own numbers: 5 is Name your router and 2 is Send
         // logs, whichever position each is walked in.
         marks: [mark(5, 'skipped'), mark(2, 'skipped')],
@@ -800,7 +807,11 @@ describe('the forced-past record', () => {
   })
 
   it('says the check could not run when the problem is on mikroview’s side', () => {
-    const ledger = buildLedger(status(), [], '192.0.2.99:8080')
+    const ledger = buildLedger(
+      status({ instance: { ...status().instance, certificateCoversAddress: false, addressHost: '192.0.2.99' } }),
+      [],
+      '192.0.2.99:8080',
+    )
     expect(notObserved(ledger[0])).toContain('could not run')
   })
 })
@@ -810,9 +821,9 @@ describe('the finish', () => {
     const ledger = buildLedger(
       status({
         sources: [
-          { source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z', syslogFirstSeenAt: '2026-08-23T09:00:00Z' },
+          { source: '192.0.2.4', caFetchedAt: '2026-08-23T09:00:00Z', syslogFirstSeenAt: '2026-08-23T09:00:00Z' },
         ],
-        devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 10 }],
+        devices: [{ device: 'r', configured: true, sourceIp: '192.0.2.4', events: 10, decodedActions: 10 }],
         marks: [mark(5, 'skipped')],
       }),
       [],

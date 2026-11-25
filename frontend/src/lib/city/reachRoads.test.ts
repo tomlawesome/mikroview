@@ -29,7 +29,7 @@ const NAS = lane('lane:nas', '10.0.20.10')
 describe('rollUpLanes: brightness for the reach’s own lanes (#1016)', () => {
   it('lands a line on the lane of each host it names, and on no other', () => {
     const got = rollUpLanes(off([line({ key: 'a' })]), [ALEX, NAS, lane('lane:pihole', '10.0.10.5')])
-    expect([...got.keys()].sort()).toEqual(['lane:nas', 'lane:alex-desktop'])
+    expect([...got.keys()].sort()).toEqual(['lane:alex-desktop', 'lane:nas'])
     expect(got.get('lane:alex-desktop')?.lines.map((l) => l.key)).toEqual(['a'])
   })
 

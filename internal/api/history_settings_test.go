@@ -26,6 +26,7 @@ type fakeHistoryControl struct {
 	state   HistorySettings
 	applied []appliedHistory
 	err     error
+	deletes int
 }
 
 type appliedHistory struct {
@@ -51,11 +52,31 @@ func (f *fakeHistoryControl) ApplyHistory(enabled bool, days int, maxBytes int64
 	f.state.Days = days
 	f.state.MaxBytes = maxBytes
 	if !enabled {
-		// Off purges, so nothing is held afterwards.
-		f.state.Held = nil
+		// Off keeps the files (#1354): Held is left as it was.
 		f.state.Capped = false
 	}
 	return nil
+}
+
+func (f *fakeHistoryControl) DeleteHistoryFiles() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state.Enabled {
+		return ErrHistoryOn
+	}
+	if f.err != nil {
+		return f.err
+	}
+	f.deletes++
+	f.state.Held = nil
+	f.state.BytesPerDay = 0
+	return nil
+}
+
+func (f *fakeHistoryControl) deleteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deletes
 }
 
 func (f *fakeHistoryControl) calls() []appliedHistory {
@@ -167,9 +188,10 @@ func TestHistorySettingsTurnsItOn(t *testing.T) {
 	}
 }
 
-// Off is the destructive half: the purge has to have happened before
-// the response is written, not been scheduled behind it.
-func TestHistorySettingsTurnsItOffAndReportsNothingHeld(t *testing.T) {
+// Off stops the writer and keeps what is on disk (#1354): the response
+// still reports the held window, which is what the card offers to
+// delete, and the PUT never reaches the delete.
+func TestHistorySettingsTurnsItOffAndKeepsWhatIsHeld(t *testing.T) {
 	s, _ := newTestServer(t)
 	ctl := keyedHistory()
 	s.HistoryControl = ctl
@@ -186,12 +208,15 @@ func TestHistorySettingsTurnsItOffAndReportsNothingHeld(t *testing.T) {
 	if got.Enabled {
 		t.Error("the response says the history is still on after turning it off")
 	}
-	if got.Held != nil {
-		t.Errorf("the response still reports %+v held after turning it off -- off has to mean the events are gone", *got.Held)
+	if got.Held == nil || got.Held.Days != 27 {
+		t.Errorf("the response reports %+v held after turning it off, want the 27 days kept", got.Held)
 	}
 	calls := ctl.calls()
 	if len(calls) != 1 || calls[0].enabled {
 		t.Errorf("the control was asked for %+v, want one call turning it off", calls)
+	}
+	if n := ctl.deleteCount(); n != 0 {
+		t.Errorf("turning it off deleted the files %d time(s), want never", n)
 	}
 }
 

@@ -4,7 +4,7 @@
 // configuration backups into (#394).
 //
 // Login: username is the device name, password is that device's ingest
-// token, checked against the same hash internal/auth's token store
+// token, checked against the same hash the token store (gauntlet's)
 // already keeps -- RouterOS's fetch has no key-based auth option
 // (measured, #394 note 10510). A login can write only inside its own
 // device's area, and can do nothing else: no listing, reading, deleting,
@@ -21,15 +21,18 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/logging"
 )
@@ -39,13 +42,112 @@ import (
 // so this package never decides where key material lives on disk.
 type Server struct {
 	Vault   *backupvault.Vault
-	Tokens  *auth.TokenStore
+	Tokens  *gauntlet.TokenStore
 	HostKey ssh.Signer
 	log     *slog.Logger
 }
 
+// maxConnections bounds concurrent drop-box connections. Without it a
+// scan of the LAN, or a misbehaving client, could open connections
+// without limit, each holding a goroutine and a socket open indefinitely
+// -- the hazard internal/syslog's maxTCPConnections names. 128 covers a
+// fleet whose routers all run their nightly push at the same minute (one
+// connection per /tool fetch, two fetches per run).
+//
+// atomic.Int64 rather than a plain int so a test can shrink it while
+// Serve's accept loop may still be reading it, without a data race (the
+// same reasoning as internal/syslog's maxTCPConnections). Read through
+// maxConns().
+var maxConnections atomic.Int64
+
+// maxConnectionsPerSource caps how many of the maxConnections slots any
+// one source address may hold, so a single host cannot exhaust the
+// global cap and lock out every real router. 8 is the project's existing
+// per-source figure: RouterOS opens one connection; a few extra covers
+// reconnect churn and NAT'd multi-device sites. Atomic for the same
+// reason as maxConnections; read through perSourceLimit().
+var maxConnectionsPerSource atomic.Int64
+
+// idleTimeoutNS closes a connection that has gone this long without a
+// read or a write succeeding -- including one that never finishes the
+// SSH handshake -- so it cannot hold its slot for ever. An idle timeout
+// re-armed on every Read and Write (see idleConn), not a connection
+// lifetime, so a slow upload is never cut off while bytes still arrive.
+// Nanoseconds in an atomic for the same reason as maxConnections; read
+// through idleTimeout().
+var idleTimeoutNS atomic.Int64
+
+// limitRejectGate rate-limits the refusal log lines to one a minute, so a
+// flood of refused connections cannot itself flood the log.
+var limitRejectGate = logging.NewLimiter(time.Minute)
+
+func init() {
+	maxConnections.Store(128)
+	maxConnectionsPerSource.Store(8)
+	idleTimeoutNS.Store(int64(2 * time.Minute))
+}
+
+// maxConns reads the current connection ceiling. See maxConnections.
+func maxConns() int {
+	return int(maxConnections.Load())
+}
+
+// perSourceLimit reads the current per-source ceiling. See
+// maxConnectionsPerSource.
+func perSourceLimit() int {
+	return int(maxConnectionsPerSource.Load())
+}
+
+// idleTimeout reads the current idle timeout. See idleTimeoutNS.
+func idleTimeout() time.Duration {
+	return time.Duration(idleTimeoutNS.Load())
+}
+
+// idleConn arms a fresh idleTimeout deadline before every Read and Write.
+// ssh.NewServerConn and the channel mux read and write through this conn,
+// so the deadline covers the version exchange, key exchange, auth and
+// every later packet, with no reach into x/crypto/ssh: a client that
+// stops sending (or stops reading, with a full window) is dropped after
+// idleTimeout of silence, and any Read or Write of a legitimate transfer
+// re-arms it.
+type idleConn struct{ net.Conn }
+
+func (c idleConn) Read(p []byte) (int, error) {
+	_ = c.SetReadDeadline(time.Now().Add(idleTimeout()))
+	return c.Conn.Read(p)
+}
+
+func (c idleConn) Write(p []byte) (int, error) {
+	_ = c.SetWriteDeadline(time.Now().Add(idleTimeout()))
+	return c.Conn.Write(p)
+}
+
+// remoteHost extracts the address part of nc's remote endpoint, so
+// per-source accounting keys on the host rather than host:port (every
+// connection has a distinct source port, which would defeat the cap),
+// with an IPv4-mapped IPv6 form counted as the same source. A copy of
+// internal/syslog's unexported remoteHost.
+func remoteHost(nc net.Conn) string {
+	addr := nc.RemoteAddr().String()
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return normaliseHost(host)
+	}
+	return normaliseHost(addr)
+}
+
+// normaliseHost puts an address into one form, so "::ffff:192.0.2.1" from
+// a dual-stack listener and "192.0.2.1" are the same source. A copy of
+// internal/syslog's unexported normaliseHost.
+func normaliseHost(host string) string {
+	host = strings.TrimSpace(host)
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().String()
+	}
+	return host
+}
+
 // New builds a Server. It does not listen until ListenAndServe is called.
-func New(vault *backupvault.Vault, tokens *auth.TokenStore, hostKey ssh.Signer) *Server {
+func New(vault *backupvault.Vault, tokens *gauntlet.TokenStore, hostKey ssh.Signer) *Server {
 	return &Server{Vault: vault, Tokens: tokens, HostKey: hostKey, log: logging.New("backupsftp")}
 }
 
@@ -75,7 +177,7 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, password []byte) (*ssh.Perm
 		s.log.Warn(fmt.Sprintf("refused an SFTP login from %s: no retention key configured -- the drop box is closed", conn.RemoteAddr()))
 		return nil, fmt.Errorf("backups are not accepted on this deployment")
 	}
-	tok, ok := s.Tokens.Authenticate(string(password), auth.TokenKindIngest, time.Now())
+	tok, ok := s.Tokens.Authenticate(string(password), gauntlet.TokenKindIngest, time.Now())
 	if !ok || tok.Device == "" || tok.Device != device {
 		s.log.Warn(fmt.Sprintf("refused an SFTP login for %q from %s: not a valid ingest token for that device", device, conn.RemoteAddr()))
 		return nil, fmt.Errorf("authentication failed")
@@ -83,22 +185,44 @@ func (s *Server) authenticate(conn ssh.ConnMetadata, password []byte) (*ssh.Perm
 	return &ssh.Permissions{Extensions: map[string]string{"device": device}}, nil
 }
 
-// ListenAndServe accepts connections on addr until ctx is done, same
-// shutdown contract as main.go's other listeners (see syslog.ListenTLS):
-// it returns nil on a clean context cancellation and a real error
-// otherwise.
+// ListenAndServe binds addr and serves it; see Serve for the shutdown
+// contract and for why a caller that needs to know synchronously whether
+// the bind itself succeeded calls net.Listen itself instead.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("backupsftp: listening on %s: %w", addr, err)
 	}
+	return s.Serve(ctx, ln)
+}
+
+// Serve accepts connections on an already-bound listener until ctx is
+// done or the listener closes, whichever comes first -- the same
+// shutdown contract as main.go's other listeners (see syslog.ListenTLS):
+// it returns nil on a clean context cancellation and a real error
+// otherwise.
+//
+// Factored out of ListenAndServe (#1361) so main's backupRuntime can call
+// net.Listen itself, synchronously, before this ever starts: a caller
+// turning the drop box on from the admin UI needs "the port is already in
+// use" to come back as an answer to that one request (a 409), not as a
+// log line from a goroutine nobody is waiting on.
+//
+// Connections are capped globally and per source, and idle ones are
+// closed (see maxConnections, maxConnectionsPerSource and idleTimeoutNS);
+// a cancelled ctx closes every connection already accepted, not only the
+// listener.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		_ = ln.Close()
 	}()
 
-	s.log.Info(fmt.Sprintf("router backup drop box listening on %s", addr))
+	s.log.Info(fmt.Sprintf("router backup drop box listening on %s", ln.Addr()))
 	cfg := s.config()
+	slots := make(chan struct{}, maxConns())
+	var perSourceMu sync.Mutex
+	perSource := make(map[string]int)
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
@@ -107,28 +231,85 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 			}
 			return fmt.Errorf("backupsftp: accept: %w", err)
 		}
-		go s.handleConn(nc, cfg)
+
+		host := remoteHost(nc)
+		perSourceMu.Lock()
+		atCap := perSource[host] >= perSourceLimit()
+		if !atCap {
+			perSource[host]++
+		}
+		perSourceMu.Unlock()
+		if atCap {
+			if total, ok := limitRejectGate.Allow(); ok {
+				s.log.Warn(fmt.Sprintf("per-source SFTP connection limit (%d) reached -- refusing %s (%d such refusals since start)", perSourceLimit(), host, total))
+			}
+			_ = nc.Close()
+			continue
+		}
+		release := func() {
+			perSourceMu.Lock()
+			perSource[host]--
+			if perSource[host] <= 0 {
+				delete(perSource, host)
+			}
+			perSourceMu.Unlock()
+		}
+
+		// Refuse immediately rather than block: the accept loop must
+		// never wait for a slot, or one full server stops answering
+		// everything.
+		select {
+		case slots <- struct{}{}:
+			go func() {
+				defer func() { <-slots }()
+				defer release()
+				s.handleConn(ctx, nc, cfg)
+			}()
+		default:
+			release()
+			if total, ok := limitRejectGate.Allow(); ok {
+				s.log.Warn(fmt.Sprintf("SFTP connection limit (%d) reached -- refusing %s (%d such refusals since start)", maxConns(), nc.RemoteAddr(), total))
+			}
+			_ = nc.Close()
+		}
 	}
 }
 
 // handleConn negotiates one SSH connection and dispatches its channels.
 // Never more than one device per connection: the device is fixed at
 // authenticate and carried in sconn.Permissions for the life of the
-// connection.
-func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
-	defer nc.Close()
+// connection. The connection is closed after idleTimeout of silence, or
+// when ctx ends.
+func (s *Server) handleConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig) {
+	defer func() { _ = nc.Close() }()
 	// Covers this goroutine's own code (the handshake and the channel
 	// dispatch loop below); it does not reach into pkg/sftp's own
 	// request-worker goroutines started inside handleSession -- see
 	// recoverAndClose's doc comment for why those need their own
 	// recover instead.
 	defer logging.Recover(s.log)
-	sconn, chans, reqs, err := ssh.NewServerConn(nc, cfg)
+
+	// done, closed when this function returns, lets the watcher below
+	// exit as soon as *this* connection ends -- not only when ctx does.
+	// Without it the watcher would leak on every ordinary disconnect,
+	// since ctx (the drop box's lifetime) outlives every connection.
+	// Same shape as internal/syslog's handleTCPConn.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = nc.Close()
+		case <-done:
+		}
+	}()
+
+	sconn, chans, reqs, err := ssh.NewServerConn(idleConn{Conn: nc}, cfg)
 	if err != nil {
 		s.log.Warn(fmt.Sprintf("SFTP handshake from %s failed: %v", nc.RemoteAddr(), err))
 		return
 	}
-	defer sconn.Close()
+	defer func() { _ = sconn.Close() }()
 	device := sconn.Permissions.Extensions["device"]
 
 	// Global requests (e.g. keepalives) get a blanket "no" -- there is
@@ -143,7 +324,7 @@ func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 		// #394 requires no forwarding, and refusing the channel type is
 		// what makes that true structurally rather than by convention.
 		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "only an SFTP session is accepted")
+			_ = newChan.Reject(ssh.UnknownChannelType, "only an SFTP session is accepted")
 			continue
 		}
 		ch, chReqs, err := newChan.Accept()
@@ -165,11 +346,11 @@ func (s *Server) handleConn(nc net.Conn, cfg *ssh.ServerConfig) {
 // else a client might ask a session channel to do -- is refused, which
 // is what makes "no shell or exec" true rather than merely unused.
 func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, device string) {
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 	for req := range reqs {
 		ok := isSFTPSubsystemRequest(req)
 		if req.WantReply {
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 		}
 		if !ok {
 			continue
@@ -182,7 +363,7 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, device 
 		}
 		server := sftp.NewRequestServer(ch, handlers)
 		_ = server.Serve()
-		server.Close()
+		_ = server.Close()
 		return
 	}
 }
@@ -343,7 +524,7 @@ func recoverAndClose(log *slog.Logger, device, op string, closeConn func() error
 		log.Error(fmt.Sprintf("recovered from a panic in %s for %s -- closing the connection: %v\n%s", op, device, r, debug.Stack()))
 		*errp = fmt.Errorf("backupsftp: internal error")
 		if closeConn != nil {
-			closeConn()
+			_ = closeConn()
 		}
 	}
 }

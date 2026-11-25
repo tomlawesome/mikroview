@@ -51,6 +51,13 @@ stub_bin() {
 exit 0
 EOF
   chmod +x "$dir/sleep"
+  # A no-op chown: the key helper's script chowns to uid 1000, which the
+  # sandbox below (a plain directory, not a volume) cannot do unprivileged.
+  cat >"$dir/chown" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "$dir/chown"
   # A fake curl that answers healthz on the first try unless
   # STUB_CURL_RC says otherwise -- nothing in this suite ever really
   # listens on the ports install.sh prints, so the real curl would sit
@@ -66,6 +73,10 @@ EOF
   # STUB_RUN_ERR is what `docker run` prints to stderr when it fails, so
   # a test can exercise install.sh's port-conflict-hint pattern match
   # against real-looking daemon text instead of an empty message.
+  #
+  # #1357/#1426: history.key runs act on a fake volume ($STUB_ETC, empty
+  # by default, so the default across every test below is a fresh
+  # install); see the run) branch for STUB_KEY_RC / STUB_KEY_CHECK_RC.
   cat >"$dir/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$DOCKER_LOG"
@@ -76,6 +87,26 @@ case "$1" in
   container) [ "$2" = "inspect" ] && { [ "${STUB_EXISTS:-0}" = "1" ] && exit 0 || exit 1; }; exit 0 ;;
   stop|rm) exit 0 ;;
   run)
+    # Any run naming history.key is a fake volume: STUB_KEY_RC is a
+    # docker-level failure (nothing executed); the old separate
+    # `test -e` check answers STUB_KEY_CHECK_RC or the sandbox; any other
+    # helper script is run for real against $STUB_ETC standing in for
+    # /etc/mikroview.
+    case "$*" in
+      *history.key*)
+        PATH="${0%/*}:/usr/bin:/bin"
+        [ -z "${STUB_KEY_RC:-}" ] || exit "$STUB_KEY_RC"
+        case "$*" in
+          *"test -e /etc/mikroview/keys/history.key"*)
+            [ -z "${STUB_KEY_CHECK_RC:-}" ] || exit "$STUB_KEY_CHECK_RC"
+            test -e "$STUB_ETC/keys/history.key"; exit $? ;;
+        esac
+        eval "script=\${$#}"
+        script="$(printf '%s' "$script" | sed "s#/etc/mikroview#$STUB_ETC#g")"
+        sh -c "$script"
+        exit $?
+        ;;
+    esac
     rc="${STUB_RUN_RC:-0}"
     [ "$rc" = "0" ] || { [ -z "${STUB_RUN_ERR:-}" ] || echo "${STUB_RUN_ERR}" >&2; }
     exit "$rc"
@@ -94,8 +125,10 @@ run() {
   stub_bin "$dir" "${WITH_DOCKER:-true}"
   DOCKER_LOG="$dir/docker-calls.log"
   : >"$DOCKER_LOG"
+  STUB_ETC="$dir/etc"
+  mkdir -p "$STUB_ETC"
   set +e
-  out="$(env -i PATH="$dir" DOCKER_LOG="$DOCKER_LOG" "${ENV_VARS[@]}" "$(command -v sh)" "$INSTALL" "${ARGS[@]}" 2>&1)"
+  out="$(env -i PATH="$dir" DOCKER_LOG="$DOCKER_LOG" STUB_ETC="$STUB_ETC" "${ENV_VARS[@]}" "$(command -v sh)" "$INSTALL" "${ARGS[@]}" 2>&1)"
   rc=$?
   set -e
   calls="$(cat "$DOCKER_LOG" 2>/dev/null || true)"
@@ -105,8 +138,8 @@ run() {
 ARGS=(); ENV_VARS=(); WITH_DOCKER=true
 run default
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "default run exits 0 (rc=$rc, out: $out)"
-check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
-  "default run line: latest, mikroview name, both named volumes, 6514/443"
+check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -p 47022:47022 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
+  "default run line: latest, mikroview name, both named volumes, 6514/443/47022"
 check "$(case "$out" in *"SECURITY.md"*) echo false;; *) echo true;; esac)" \
   "#1282: no resolvable digest (stub inspect prints nothing) means no SECURITY.md line"
 
@@ -147,6 +180,20 @@ ARGS=(); ENV_VARS=(MIKROVIEW_HTTPS_PORT=8443 MIKROVIEW_SYSLOG_PORT=16514); WITH_
 run port-override
 check "$(case "$calls" in *"-p 16514:6514 -p 8443:8080"*) echo true;; *) echo false;; esac)" \
   "MIKROVIEW_HTTPS_PORT/MIKROVIEW_SYSLOG_PORT land in the run line"
+
+# --- #1361: the router-backup drop box's port is always published,
+# and MIKROVIEW_BACKUP_PORT can move it the same way the other two do ---
+ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+run backup-port-default
+check "$(case "$calls" in *"-p 47022:47022"*) echo true;; *) echo false;; esac)" \
+  "the router-backup drop box's port (47022) is published by default"
+check "$(case "$out" in *"nothing answers"*"Settings"*) echo true;; *) echo false;; esac)" \
+  "the final output warns that nothing answers on it until an admin opens the drop box"
+
+ARGS=(); ENV_VARS=(MIKROVIEW_BACKUP_PORT=17022); WITH_DOCKER=true
+run backup-port-override
+check "$(case "$calls" in *"-p 17022:47022"*) echo true;; *) echo false;; esac)" \
+  "MIKROVIEW_BACKUP_PORT lands in the run line"
 
 # --- an existing container is stopped/removed before re-creation -----------
 ARGS=(); ENV_VARS=(STUB_EXISTS=1); WITH_DOCKER=true
@@ -218,6 +265,97 @@ run healthz-never-answers
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a healthz that never answers is a warning, not a failure (rc=$rc)"
 check "$(case "$out" in *"healthz did not answer within 30s"*) echo true;; *) echo false;; esac)" \
   "and says so, pointing at docker logs"
+
+# --- #1357: a fresh install gets a history key before mikroview starts -----
+ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+run fresh-history-key
+KEYF="$TMP/fresh-history-key/etc/keys/history.key"
+check "$(case "$calls" in *"run --rm -v mikroview-etc:/etc/mikroview alpine:3.24 sh -c"*"history.key"*"set -C"*) echo true;; *) echo false;; esac)" \
+  "one writable helper container checks for and creates the key under noclobber (set -C)"
+check "$(case "$calls" in *":ro alpine:3.24 test -e"*) echo false;; *) echo true;; esac)" \
+  "no separate :ro key-exists check is made"
+check "$([ -f "$KEYF" ] && [ "$(wc -c <"$KEYF")" -eq 45 ] && echo true || echo false)" \
+  "a fresh install leaves a 44-char base64 key plus newline at keys/history.key"
+# history.key appears in the helper's own logged call; the position check
+# must be on the helper call, so look at the first line mentioning it.
+first_key_line="$(printf '%s\n' "$calls" | grep -n 'history.key' | head -n1 | cut -d: -f1)"
+run_d_line="$(printf '%s\n' "$calls" | grep -n 'run -d --name mikroview' | head -n1 | cut -d: -f1)"
+check "$([ -n "$first_key_line" ] && [ -n "$run_d_line" ] && [ "$first_key_line" -lt "$run_d_line" ] && echo true || echo false)" \
+  "the key helper runs before mikroview's own run -d line"
+check "$(case "$calls" in *"sh -c"*"history.key"*"run -d --name mikroview"*) echo true;; *) echo false;; esac)" \
+  "the create helper (sh -c script naming history.key) itself runs before run -d, not just a check"
+check "$(case "$out" in *"a key now lives"*"keys/history.key"*"Back it up"*) echo true;; *) echo false;; esac)" \
+  "the operator is told a key now lives, where, and to back it up"
+check "$(case "$out" in *"will not start without it"*) echo true;; *) echo false;; esac)" \
+  "the operator is told mikroview will not start without the key"
+check "$(case "$out" in *"locks you out"*"no way to recover a lost key"*) echo true;; *) echo false;; esac)" \
+  "the operator is told losing it locks them out and a lost key cannot be recovered"
+check "$(case "$out" in *"makes the retained history unreadable"*) echo false;; *) echo true;; esac)" \
+  "the old understated 'makes the retained history unreadable' wording is gone"
+check "$(case "$out" in *"accounts"*"API tokens"*"recovery keys"*"sign-in history"*"event history"*) echo true;; *) echo false;; esac)" \
+  "the message names what the key seals: accounts, API tokens, recovery keys, sign-in history, event history"
+
+# --- #1357: an already-mounted key is left alone and not re-announced ------
+mkdir -p "$TMP/existing-history-key/etc/keys"
+printf OLDKEY >"$TMP/existing-history-key/etc/keys/history.key"
+ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+run existing-history-key
+check "$([ "$(cat "$TMP/existing-history-key/etc/keys/history.key")" = "OLDKEY" ] && echo true || echo false)" \
+  "an existing key is left byte-for-byte unchanged"
+check "$(case "$out" in *"Back it up"*|*"locks you out"*|*"a key now lives"*) echo false;; *) echo true;; esac)" \
+  "and nothing is printed about it -- it was told on an earlier run"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "an upgrade run over an existing key exits 0 (rc=$rc)"
+
+# --- #1426: the key check failing at docker level never replaces the key ---
+mkdir -p "$TMP/key-check-fails/etc/keys"
+printf OLDKEY >"$TMP/key-check-fails/etc/keys/history.key"
+ARGS=(); ENV_VARS=(STUB_KEY_CHECK_RC=125); WITH_DOCKER=true
+run key-check-fails
+check "$([ "$(cat "$TMP/key-check-fails/etc/keys/history.key")" = "OLDKEY" ] && echo true || echo false)" \
+  "a failing key check (daemon error) does not replace the existing key"
+check "$(case "$out" in *"Back it up"*) echo false;; *) echo true;; esac)" \
+  "and no fresh-key announcement is printed"
+check "$(case "$out" in *"could not"*) echo false;; *) echo true;; esac)" \
+  "and no failure is reported, as the key was found"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "and the install exits 0 (rc=$rc)"
+
+# --- #1426: the single key helper failing at docker level is named ---------
+mkdir -p "$TMP/key-helper-docker-fails/etc/keys"
+printf OLDKEY >"$TMP/key-helper-docker-fails/etc/keys/history.key"
+ARGS=(); ENV_VARS=(STUB_KEY_RC=125); WITH_DOCKER=true
+run key-helper-docker-fails
+check "$([ "$(cat "$TMP/key-helper-docker-fails/etc/keys/history.key")" = "OLDKEY" ] && echo true || echo false)" \
+  "a key helper that fails at docker level leaves the existing key alone"
+check "$(case "$out" in *"could not check for or create a history encryption key in mikroview-etc"*"exited 125"*"nothing in the volume was changed"*) echo true;; *) echo false;; esac)" \
+  "and the failure names the exit code and says nothing in the volume was changed"
+check "$(case "$out" in *"Back it up"*) echo false;; *) echo true;; esac)" \
+  "and no fresh-key announcement is printed"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "and the install goes on to the run line (rc=$rc)"
+
+# --- #1426 O1-R4 break attempt: odd-but-present keys are never replaced ----
+# A key that is a dangling symlink (test -e is false for it), a zero-byte
+# file, a file nobody can read, or a key inside a directory nobody can
+# search must each come through an upgrade run with its bytes (or link)
+# exactly as they were -- "present" is not the same as "test -e passes".
+mkdir -p "$TMP/odd-dangling/etc/keys" "$TMP/odd-empty/etc/keys" "$TMP/odd-locked/etc/keys" "$TMP/odd-lockeddir/etc/keys"
+ln -s /nonexistent/elsewhere.key "$TMP/odd-dangling/etc/keys/history.key"
+: >"$TMP/odd-empty/etc/keys/history.key"
+printf OLDKEY >"$TMP/odd-locked/etc/keys/history.key"; chmod 000 "$TMP/odd-locked/etc/keys/history.key"
+printf OLDKEY >"$TMP/odd-lockeddir/etc/keys/history.key"; chmod 000 "$TMP/odd-lockeddir/etc/keys"
+for odd in odd-dangling odd-empty odd-locked odd-lockeddir; do
+  ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+  run "$odd"
+  chmod 700 "$TMP/$odd/etc/keys"; chmod 600 "$TMP/$odd/etc/keys/history.key" 2>/dev/null || true
+  K="$TMP/$odd/etc/keys/history.key"
+  case "$odd" in
+    odd-dangling) same="$([ -L "$K" ] && [ "$(readlink "$K")" = "/nonexistent/elsewhere.key" ] && echo true || echo false)" ;;
+    odd-empty) same="$([ -f "$K" ] && [ ! -s "$K" ] && echo true || echo false)" ;;
+    *) same="$([ "$(cat "$K")" = "OLDKEY" ] && echo true || echo false)" ;;
+  esac
+  check "$same" "$odd: the existing key is left exactly as it was by an upgrade run"
+  check "$(case "$out" in *"a key now lives"*) echo false;; *) echo true;; esac)" \
+    "$odd: and no fresh-key announcement is printed"
+done
 
 # --- missing docker refuses plainly with a non-zero exit -------------------
 ARGS=(); ENV_VARS=(); WITH_DOCKER=false

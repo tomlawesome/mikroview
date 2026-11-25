@@ -39,6 +39,11 @@
 # Usage:
 #   scripts/record-upgrade-fixture.sh v0.3.0
 #   scripts/record-upgrade-fixture.sh --postgres v0.3.0
+#   scripts/record-upgrade-fixture.sh --check <local-image>
+#
+# MV_IMAGE_REF overrides the released image a recording boots (see
+# where IMAGE is set below); record:upgrade-fixture passes the GitLab
+# registry digest its tag pipeline published.
 #
 # Requires docker. Uploading takes whichever credential the environment
 # offers:
@@ -56,24 +61,66 @@
 # Set MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD=1 to record and pack locally
 # without uploading (used by the "tiny file" upload test and by anyone who
 # wants to inspect a recording before it goes anywhere).
+#
+# --check <image> -- #1358 item 3: exercises the same scripted session
+# against an already-built local image instead of pulling a released one
+# from GHCR, so a dev -> preview merge request can catch a broken session
+# before a tag ever runs this script for real. Always the file backend
+# (postgres fixtures are proven per schema version, not per check run --
+# see the --postgres mode's own header above -- so --check refuses
+# --postgres rather than recording a throwaway dump nobody reads) and
+# always skips the upload, regardless of MIKROVIEW_UPGRADE_FIXTURE_SKIP_
+# UPLOAD -- a check run must never reach the package registry even if the
+# caller forgets to set that. The version used for feature-generation
+# detection (HAS_WATCHLIST etc. below) comes from this tree's own VERSION
+# file, not an argument: a check run is always testing what dev is about
+# to become, never a past release.
 set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The first admin needs the setup code from the server's log (#1415).
+. "$ROOT/scripts/setup-code.sh"
 
 MODE="file"
 VERSION=""
+CHECK=false
+CHECK_IMAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --postgres) MODE="postgres" ;;
+    --check)
+      CHECK=true
+      CHECK_IMAGE="${2:?record-upgrade-fixture: --check needs an image reference}"
+      shift
+      ;;
     --) ;;
     -*) echo "record-upgrade-fixture: unknown flag $1" >&2; exit 2 ;;
     *) VERSION="$1" ;;
   esac
   shift
 done
-: "${VERSION:?usage: scripts/record-upgrade-fixture.sh [--postgres] <version>, e.g. v0.3.0}"
+if $CHECK; then
+  [ "$MODE" != "postgres" ] || { echo "record-upgrade-fixture: --check does not support --postgres" >&2; exit 2; }
+  [ -z "$VERSION" ] || { echo "record-upgrade-fixture: --check derives its version from VERSION -- do not pass one" >&2; exit 2; }
+  VERSION="v$(cat "$ROOT/VERSION")-check"
+  MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD=1
+else
+  : "${VERSION:?usage: scripts/record-upgrade-fixture.sh [--postgres] <version>, e.g. v0.3.0}"
+fi
 VERSION_BARE="${VERSION#v}"
+VERSION_BARE="${VERSION_BARE%-check}"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="ghcr.io/tomlawesome/mikroview:${VERSION}"
+# MV_IMAGE_REF (#1472): the exact image to record, overriding the GHCR
+# tag. record:upgrade-fixture sets it to the digest its own tag pipeline
+# built, signed and published ($CI_REGISTRY_IMAGE@sha256:...), so the
+# recording boots those bytes rather than whatever a tag names; by hand
+# the default -- the released GHCR tag -- is unchanged. --check ignores
+# it: a check run names its local image explicitly.
+if $CHECK; then
+  IMAGE="$CHECK_IMAGE"
+else
+  IMAGE="${MV_IMAGE_REF:-ghcr.io/tomlawesome/mikroview:${VERSION}}"
+fi
 # Pinned like every other image this repository runs (#711). Not in
 # supply-chain/pins-policy.json: that file records the pins CI itself
 # declares in .gitlab-ci.yml and the Dockerfile, and these two are
@@ -319,6 +366,26 @@ if [ -n "$(ls -A "$WORKDIR/etc")" ]; then
 fi
 docker start "$CONTAINER_NAME" >/dev/null
 
+# #1415: from that release on, the first admin needs the one-time setup
+# code the server prints when it opens an empty accounts store. The
+# session container cannot read this container's log, so it is read
+# here. Every release since v0.1.0 logs one auth line once the store is
+# open -- "N account(s) registered" or "no account yet" -- and the code,
+# when there is one, comes before it; so wait for that line rather than
+# for a code an older release will never print. A timeout is not fatal
+# here: the session's own register call then fails and says why.
+log "waiting for the server to open its accounts store"
+SETUP_CODE=""
+for _ in $(seq 1 240); do
+  server_log="$(docker logs "$CONTAINER_NAME" 2>&1 || true)"
+  if printf '%s\n' "$server_log" | grep -qE 'account\(s\) registered|no account yet'; then
+    SETUP_CODE="$(printf '%s\n' "$server_log" | mv_setup_code_in)"
+    break
+  fi
+  sleep 0.25
+done
+unset server_log
+
 log "driving the scripted session"
 DECLARED_ROUTER_ARG=no
 $NEEDS_DEVICE_DECLARATION && DECLARED_ROUTER_ARG=yes
@@ -327,8 +394,10 @@ $NEEDS_DEVICE_DECLARATION && DECLARED_ROUTER_ARG=yes
 # so `cat` inside the helper sees exactly the file on this side
 # regardless of which host the daemon actually runs on. Its own stdout
 # stays the manifest JSON and nothing else, same contract as before.
+# The setup code goes in by name (`-e MV_SETUP_CODE`, the value taken
+# from this environment), so it is on no command line.
 set +e
-docker run -i --rm --network "container:${CONTAINER_NAME}" "$HELPER_IMAGE" \
+MV_SETUP_CODE="$SETUP_CODE" docker run -i --rm -e MV_SETUP_CODE --network "container:${CONTAINER_NAME}" "$HELPER_IMAGE" \
   sh -c "apk add --no-cache python3 >/dev/null && cat > /tmp/session.py && exec python3 /tmp/session.py \
     https://127.0.0.1:8080 127.0.0.1 ${SYSLOG_PORT} ${GENERATION} ${VERSION} ${SYSLOG_MODE} ${DECLARED_ROUTER_ARG}" \
   < "$ROOT/scripts/upgrade-fixture-session.py" \

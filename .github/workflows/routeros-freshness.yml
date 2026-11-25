@@ -19,15 +19,24 @@ on:
 permissions:
   contents: read
 
+# #1202/#1426: gauntlet is fetched straight from GitHub, never through the
+# public Go proxy or checksum database (resolving it there would publish
+# the version permanently), the same as .gitlab-ci.yml and the Dockerfile.
+# GOPRIVATE also sets GONOSUMDB.
+env:
+  GOPRIVATE: "github.com/tomlawesome/gauntlet"
+
 jobs:
   freshness:
     name: A RouterOS release nobody has reviewed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.4'
       # The script explains what to do on failure, and says plainly that
       # bumping the marker without reading the release notes is the one
       # wrong response.

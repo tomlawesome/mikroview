@@ -1,0 +1,10 @@
+-- #1202: accounts and tokens on gauntlet. A stamp, with no change to the
+-- database: the `auth` and `tokens` rows in store_blob keep the same
+-- table and the same columns, and the document inside each is rewritten
+-- by the store when it next saves, not here.
+--
+-- The number exists so that schema 4 means "written by a build that reads
+-- gauntlet's documents", and the downgrade guard (SchemaTooNewError) then
+-- refuses an older build before it opens a row it would read as an empty
+-- accounts store. See docs/decisions/gauntlet-adoption.md, decision 2,
+-- "Downgrade".

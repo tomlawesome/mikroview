@@ -1,0 +1,795 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+// The full-screen wizard's run (#1381): the answers this walk has given,
+// and the evidence the server holds, read into the shape wizardRun.ts's
+// pure functions take. wizardState (wizard.svelte.ts) stays the owner
+// of everything server-side -- the ledger, the devices, the minted
+// token, the refused senders, the backups -- and is what every door
+// (Run setup…, Add a router, Re-enrol…) already drives; this module is
+// the run's own memory on top of it, and is reset every time the
+// wizard opens.
+//
+// Nothing here connects to a router (the invariant in docs/decisions/observe-never-probe.md): every
+// field of `evidence` is a reading of what has arrived.
+
+import {
+  createToken,
+  deleteDevice,
+  fetchRouterRules,
+  markSetupStep,
+  type RouterFilterRule,
+  type RouterTable,
+} from './api'
+import { blocklistState } from './blocklist.svelte'
+import { hm as routerHm, hmLocal, num } from './blocklistBuild'
+import { appState } from './state.svelte'
+import { fallState, laneColors } from './fall.svelte'
+import { RECORD_NUMBERS, SETUP_STEPS, TITLES, caStep, type StepStatus } from './setupsteps'
+import { wizardState } from './wizard.svelte'
+import { wizardJourney } from './wizardJourney.svelte'
+import { tourState } from './tour.svelte'
+import {
+  addrProblem,
+  arrivedAll,
+  freshAnswers,
+  NO_TAIL,
+  latestArrivalHeadline,
+  ledgerRows,
+  refusedFixBlock,
+  routerDone,
+  STEPS,
+  trackStations,
+  undoOrder,
+  type Evidence,
+  type LatestArrival,
+  type LedgerRow,
+  type LedgerRowId,
+  type RunAnswers,
+  type Stage,
+  type Tail,
+  type TrackStation,
+} from './wizardRun'
+import { taggedInPush, type TuneRule } from './wizardTune'
+
+// blockSection is one numbered, titled part of the paste-once block
+// (DESIGN.md, "3 · Paste once"): a title from TITLES (the same
+// vocabulary the rail and the fleet ledger already use) and the
+// commands the server rendered for it. Built, never hand-written --
+// see WizardRun.blockSections' own comment.
+interface BlockSection {
+  id: 'ca' | 'push' | 'backup' | 'syslog'
+  title: string
+  commands: string
+}
+
+// The token's expiry as the paste step's line shows it (14:17).
+function hm(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit' })
+}
+
+// BLOCK_RECORD is the first-run tail's record (setupsteps.ts's
+// RECORD_NUMBERS.block, internal/setup.StepBlocklist).
+const BLOCK_RECORD = RECORD_NUMBERS.block
+
+class WizardRun {
+  stage = $state<Stage>('ask')
+  q = $state(0)
+  name = $state('')
+  addr = $state('')
+  // The password, held only between typing and Mint: wizardState takes
+  // it for the one call and clears its own copy either way, and this
+  // copy goes with it -- or with the walk, on Finish and on sign-out
+  // (clearSessionState).
+  pass = $state('')
+  push = $state<boolean | null>(null)
+  backup = $state<boolean | null>(null)
+  // true once Copy carried a block with no backup part although Back up
+  // nightly was Yes (the drop box was closed, #1361): set by markCopied.
+  backupLeftOut = $state(false)
+  copied = $state(false)
+  // copiedAt is the track's own "copied" station timestamp (#1383): a
+  // client-side moment, not a server receipt, because Copy itself is
+  // never something the server witnesses.
+  copiedAt = $state('')
+  tuneCopied = $state(false)
+  tuneSkipped = $state(false)
+  chosenCount = $state(0)
+  tunedAt = $state('')
+  // The rules the tagging block was copied for (#1384): what the rail's
+  // receipt counts, and what the ledger's Undo for tagged rules lists.
+  tuneChosen = $state<TuneRule[]>([])
+  // The router's pushed rule table, read when the walk begins (A2-F7): the
+  // push's own witness of tagged rules, for a ledger reopened after the run
+  // that tagged them has forgotten its Copy. pushedFor is the router it was
+  // read for, so a reopen on the same router keeps the last read until the
+  // fresh one lands instead of flashing "left dark".
+  pushed = $state<RouterTable<RouterFilterRule> | null>(null)
+  pushedFor = ''
+  undoOpen = $state<string | null>(null)
+  showUndoAll = $state(false)
+  // The first-run tail (#1360): offered is decided once, when the walk
+  // begins -- a launch walk whose record 8 holds no mark or witness --
+  // and tailSkipped is this walk's Not now.
+  tailOffered = $state(false)
+  tailSkipped = $state(false)
+
+  // decodedAtCopy is how many lines carried a decoded action when the
+  // tagging block was copied: the rules step counts upward from there,
+  // so "tagged" is the first new prefix landing, not the old ones.
+  private decodedAtCopy = 0
+
+  // The live rate on the bar's right ("live · 7/s"): lines per second
+  // between two polls, never a guess.
+  rate = $state(0)
+  private rateLines = -1
+  private rateAt = 0
+
+  get answers(): RunAnswers {
+    return {
+      stage: this.stage,
+      q: this.q,
+      name: this.name,
+      addr: this.addr,
+      pass: this.pass,
+      push: this.push,
+      backup: this.backup,
+      backupLeftOut: this.backupLeftOut,
+      copied: this.copied,
+      tuneCopied: this.tuneCopied,
+      tuneSkipped: this.tuneSkipped,
+      chosenCount: this.chosenCount,
+      tunedAt: this.tunedAt,
+    }
+  }
+
+  // placement is the run's answers as one comparable value: Wizard.svelte
+  // re-places the run on a fresh ledger read only while this still
+  // matches what begin() left (#1404).
+  get placement(): string {
+    return JSON.stringify(this.answers)
+  }
+
+  get addrProblem(): string {
+    return addrProblem(this.addr)
+  }
+
+  get routerDone(): boolean {
+    return routerDone(this.answers)
+  }
+
+  // decoded is the count the rules step reads: events whose action came
+  // from a log-prefix, across the router this run is about.
+  private get decoded(): number {
+    const st = wizardState.status
+    if (!st) return 0
+    const id = wizardState.ledgerDevice
+    if (!id && wizardState.addingRouter) return 0
+    return st.devices.filter((d) => !id || d.device === id).reduce((n, d) => n + d.decodedActions, 0)
+  }
+
+  get evidence(): Evidence {
+    const st = wizardState.status
+    const id = wizardState.ledgerDevice
+    const dev = id ? wizardState.devices.find((x) => x.id === id) : undefined
+    // The enrol line is this router's own arrival (#1281); a first-run
+    // walk that has no router record yet reads the fleet's first open
+    // syslog source, as the ledger always did. An add-a-router walk
+    // never does: another router's traffic is not this one's (#1397).
+    const fleetWide = !id && !wizardState.addingRouter
+    let enrol = dev?.acceptedIp ? (dev.enrolledAt ?? '') : ''
+    let from = dev?.acceptedIp ?? ''
+    if (!enrol && fleetWide && st) {
+      const seen = st.sources.find((s) => s.syslogFirstSeenAt)
+      if (seen) {
+        enrol = seen.syslogFirstSeenAt ?? ''
+        from = seen.source
+      }
+    }
+    const sources = st?.sources ?? []
+    // The certificate is fetched over plain HTTPS, so its source is
+    // whatever address the router's route to MikroView leaves from --
+    // not always the one it sends logs from (a second interface, NAT).
+    // An add-a-router walk takes a fetch from its own address, or any
+    // fetch since its token was minted: the block carrying the fetch is
+    // only pasted after that, so an older fetch is another router's
+    // (#1397) and a newer one is this paste's (#1400). The walk's first
+    // mint, not its latest: a re-mint does not re-fetch (#1401).
+    const mintedAt = wizardState.walkMintedAt ? Date.parse(wizardState.walkMintedAt) : NaN
+    const certSrc =
+      sources.find((s) => s.caFetchedAt && (s.source === from || s.source === this.addr)) ??
+      (fleetWide
+        ? sources.find((s) => s.caFetchedAt)
+        : Number.isNaN(mintedAt)
+          ? undefined
+          : sources.find((s) => s.caFetchedAt && Date.parse(s.caFetchedAt) >= mintedAt))
+    let push = ''
+    let lines = 0
+    for (const d of st?.devices ?? []) {
+      if (id ? d.device !== id : !fleetWide) continue
+      lines += d.events
+      for (const at of Object.values(d.pushedKinds ?? {})) if (at > push) push = at
+    }
+    let backup = ''
+    for (const r of wizardState.backups?.routers ?? []) {
+      if (id ? r.device !== id : !fleetWide) continue
+      const g = r.generations[r.generations.length - 1]
+      const at = r.lastArrival || g?.backupArrivedAt || g?.rscArrivedAt || ''
+      if (at > backup) backup = at
+    }
+    const lanes = laneColors(fallState.boundaries)
+    return {
+      cert: certSrc?.caFetchedAt ?? '',
+      enrol,
+      push,
+      backup,
+      from,
+      lines,
+      refused: wizardState.refusedForThisWalk[0]?.ip ?? '',
+      version: dev?.routerosVersion ?? '',
+      ahead: dev?.routerosStanding === 'ahead-of-review',
+      tagged: this.tuneCopied && this.decoded > this.decodedAtCopy,
+      taggedRules: taggedInPush(this.pushed?.rules ?? []).length,
+      taggedAt: this.pushed?.updatedAt ?? '',
+      tokenUntil: hm(wizardState.enrolment?.expiresAt ?? ''),
+      tail: this.tail,
+      boundaries: fallState.boundaries.map((b) => ({
+        lane: lanes.get(b.key) ?? '',
+        watched: b.coverage === 'observed',
+        dark: b.coverage === 'dark',
+      })),
+    }
+  }
+
+  // certificateProblem is caStep's 'blocked' reading (#1365) for the
+  // address the block tells the router to fetch /ca.crt from --
+  // wizardState.address, the same value refreshCommands renders into
+  // CaTrustCommands and refresh() asks the server to judge (#1507).
+  // Null when the certificate covers it, or no status has arrived.
+  // StepPaste renders it: the modal's ledger did, and the full-screen
+  // wizard (#1381) had no reader for it until now.
+  get certificateProblem(): StepStatus | null {
+    const st = wizardState.status
+    if (!st) return null
+    const s = caStep(st, wizardState.address)
+    return s.state === 'blocked' ? s : null
+  }
+
+  // tailDevice is the router the tail builds for: the walk's own, or on
+  // a bare Run setup… the instance's only router. With several and none
+  // named there is no one router to write a block for, and no tail.
+  get tailDevice(): string {
+    if (wizardState.ledgerDevice) return wizardState.ledgerDevice
+    return wizardState.devices.length === 1 ? wizardState.devices[0].id : ''
+  }
+
+  // rulesDevice is the router whose rule table the tagging is about: the
+  // walk's own, or on a bare Run setup… the first router whose push carried
+  // a rule table -- StepTune's own rule, so the Undo addresses the same
+  // table the tagging block did. An add-a-router walk with no record yet
+  // has no table of its own (#1397).
+  get rulesDevice(): string {
+    if (wizardState.ledgerDevice) return wizardState.ledgerDevice
+    if (wizardState.addingRouter) return ''
+    return wizardState.status?.devices.find((d) => d.pushedKinds && 'filter-rule' in d.pushedKinds)?.device ?? ''
+  }
+
+  private readPushed(device: string) {
+    fetchRouterRules(device)
+      .then((t) => {
+        if (this.pushedFor === device) this.pushed = t
+      })
+      .catch(() => {})
+  }
+
+  // tail is the first-run tail's standing, from the builder's own read of
+  // this router (GET /api/blocklist/builder): done once its push holds a
+  // list, with the receipts round 2's tail.html draws.
+  get tail(): Tail {
+    if (!this.tailOffered) return NO_TAIL
+    const data = blocklistState.data
+    const mine = data && data.device === this.tailDevice ? data : null
+    const flaggedFrom = (mine?.catalogue ?? [])
+      .filter((e) => e.flaggedByMikroView)
+      .map((e) => e.short)
+      .join(' and ')
+    const held = (mine?.lists ?? []).filter((l) => l.state === 'held')
+    if (mine && held.length > 0) {
+      const loaded = held.map((l) => l.loadedAt ?? '').filter(Boolean).sort()[0] ?? ''
+      const fired = held.reduce((n, l) => n + (l.firedToday ?? 0), 0)
+      const names = held.map((l) => `${mine.catalogue.find((e) => e.key === l.key)?.short ?? l.key} ${num(l.count)} held`)
+      const n = held.length
+      const confirmed = hmLocal(mine.reportedAt)
+      return {
+        state: 'done',
+        lists: n,
+        rail: `${n} ${n === 1 ? 'list' : 'lists'} · loaded ${routerHm(loaded)} · confirmed ${confirmed}`,
+        ledger: `${names.join(' · ')} · loaded ${routerHm(loaded)} · confirmed by the push ${confirmed} · rules fired ${num(fired)}`,
+        flaggedFrom,
+      }
+    }
+    return { ...NO_TAIL, state: this.tailSkipped ? 'skipped' : 'offer', flaggedFrom }
+  }
+
+  get arrivedAll(): boolean {
+    return arrivedAll(this.answers, this.evidence)
+  }
+
+  // blockSections is the paste-once block (DESIGN.md, "3 · Paste
+  // once"): the certificate, the push and the backup where they were
+  // said yes to, and the logging step last -- last because its own
+  // commands (SyslogCommands, internal/routeros/commands.go) are the
+  // ones ending in the enrol line, so keeping it last is what makes
+  // "the enrol line last" true without slicing the server's own text
+  // apart. push's section is the schedule step's commands, not push's
+  // own -- schedule has carried the whole hand-over (script, scheduler,
+  // one run now) as a single block since #1131; push stays the bare
+  // script body for the Engine Room's re-key affordance, which nothing
+  // here needs. backup's section joins backup and backupSchedule, the
+  // one place this build concatenates two of the server's blocks
+  // itself -- both are rendered text already, so this is not writing
+  // RouterOS, only laying two blocks under one heading.
+  //
+  // A section with no commands yet (still loading, or its own
+  // precondition unmet) is left out rather than shown half-formed,
+  // the same contract every blank CommandStep already keeps.
+  get blockSections(): BlockSection[] {
+    const steps = wizardState.commands?.steps
+    if (!steps) return []
+    const sections: BlockSection[] = [{ id: 'ca', title: TITLES.ca, commands: steps.caTrust.commands }]
+    if (this.push === true) sections.push({ id: 'push', title: TITLES.push, commands: steps.schedule.commands })
+    if (this.backup === true) {
+      const commands = [steps.backup.commands, steps.backupSchedule.commands].filter(Boolean).join('\n')
+      sections.push({ id: 'backup', title: TITLES.backup, commands })
+    }
+    sections.push({ id: 'syslog', title: TITLES.syslog, commands: steps.syslog.commands })
+    return sections.filter((s) => s.commands)
+  }
+
+  // backupLeftOutWhy is the Paste step's one sentence when Back up
+  // nightly was Yes but the server left the backup part blank
+  // (commandStep.blocked, #1217). Live: Back to The router and
+  // opening the drop box re-renders the block (dropBoxSwitched) and
+  // this reads '' again. '' when nothing is left out.
+  get backupLeftOutWhy(): string {
+    const step = wizardState.commands?.steps.backup
+    if (this.backup !== true || !step || step.commands) return ''
+    if (step.blocked?.includes('backups-off')) return 'the drop box is closed, so a backup would have nowhere to arrive'
+    return 'MikroView could not build it — check the server log'
+  }
+
+  // blockText is what Copy puts on the clipboard and the folded `pre`
+  // shows: every section numbered and titled, in order.
+  get blockText(): string {
+    return this.blockSections.map((s, i) => `# ${i + 1} · ${s.title}\n${s.commands}`).join('\n')
+  }
+
+  get trackStations(): TrackStation[] {
+    return trackStations(this.answers, this.evidence, this.copiedAt)
+  }
+
+  get latestArrival(): LatestArrival | null {
+    return latestArrivalHeadline(this.trackStations, this.evidence, this.name)
+  }
+
+  // reviewedVersion is the dialect table's own "last checked against"
+  // bound (SetupCommandsResponse.routeros.newest) -- the (a.b) the
+  // ahead-of-review caution box quotes.
+  get reviewedVersion(): string {
+    return wizardState.commands?.routeros.newest ?? ''
+  }
+
+  // refusedFixWithEnrol is the refused-sender box's copyable fix: the
+  // syslog step's own guarded action line plus the enrol line, read
+  // from whatever the server most recently rendered.
+  get refusedFixWithEnrol(): string {
+    return refusedFixBlock(wizardState.commands?.steps.syslog.commands ?? '')
+  }
+
+  // ledgerRows is ✓ · Where setup stands' own ledger (#1385): a row per
+  // thing, in the ink of what it records, with Undo where it stands.
+  get ledgerRows(): LedgerRow[] {
+    return ledgerRows(this.answers, this.evidence)
+  }
+
+  // undoTextFor is one row's Undo (DESIGN.md: "the lines to paste on the
+  // router"), sourced from POST /api/setup/commands' own Undo builders
+  // (internal/routeros/commands.go's Undo* functions) -- never
+  // hand-written here (docs/decisions/observe-never-probe.md). 'tune' is not answered from here: its
+  // lines depend on which rules this walk actually tagged, which needs
+  // the pushed rule table StepStand reads for itself the same way
+  // StepTune does (wizardTune.undoBlock), so that one row's text is
+  // built in the component and passed straight through by StepStand.
+  undoTextFor(id: Exclude<LedgerRowId, 'tune'>): string {
+    // The tail's row: everything the blocklist block made, the builder's
+    // own "undo everything" (internal/routeros.BlocklistUndoAll).
+    if (id === 'block') return blocklistState.data?.undoAll ?? ''
+    const undo = wizardState.commands?.steps.undo
+    if (!undo) return ''
+    return { cert: undo.caTrust, logs: undo.syslog, push: undo.schedule, backup: undo.backup }[id]
+  }
+
+  // undoOrder is "undo everything on the router first"'s own order: cert,
+  // logs, then whichever of push/backup/tune this run actually has.
+  get undoOrder(): LedgerRowId[] {
+    return undoOrder(this.ledgerRows)
+  }
+
+  // toggleUndo is a green row's own Undo/Hide (doneBody's data-act=
+  // "undo"): at most one row open at a time, the same single-flag shape
+  // the prototype's s.undoOpen has.
+  toggleUndo(id: LedgerRowId) {
+    this.undoOpen = this.undoOpen === id ? null : id
+  }
+
+  // toggleUndoAll is "undo everything on the router first" / "hide the
+  // undo lines" (doneBody's data-act="undo-all").
+  toggleUndoAll() {
+    this.showUndoAll = !this.showUndoAll
+  }
+
+  // forget is the ledger's "forget <name> on MikroView -- its token, its
+  // enrolment and its record" (DESIGN.md's "start again"): one call to
+  // the same DELETE /api/devices/{id} Entities' own Remove… uses
+  // (internal/api/devices.go's handleDeviceDelete, extended by #1385 to
+  // also revoke the device's ingest token) -- never a second endpoint.
+  // On success the wizard reopens at The router, the same door Add
+  // another router uses, since forgetting a router is exactly "start
+  // this router over from nothing." Returns an error string to show
+  // beside the button, or null once forgotten. A Run setup… walk that
+  // fleet-wide evidence placed here (begin(), #1404) names no
+  // ledgerDevice: the router is the record enrolled from the evidence's
+  // sending address, the chain fleet.ts's routerAddress reads.
+  private forgetting = false
+  async forget(): Promise<string | null> {
+    if (this.forgetting) return null
+    const from = this.evidence.from
+    const device =
+      wizardState.ledgerDevice ||
+      (from ? wizardState.devices.find((d) => d.acceptedIp === from || d.sourceIp === from)?.id : undefined) ||
+      ''
+    if (!device) return `MikroView holds no router record for ${this.name || 'this router'} — there is nothing to forget.`
+    this.forgetting = true
+    try {
+      const err = await deleteDevice(device)
+      if (err) return err
+      // Without this, openAddRouter()/begin() below would place the walk
+      // against wizardState's last poll, which still shows this router
+      // exactly as it stood before the delete just forgot it.
+      await wizardState.refresh()
+      wizardState.openAddRouter()
+      this.begin()
+      return null
+    } catch (e) {
+      // Same "a dropped connection arrives the same way" reasoning as
+      // wizardState.saveAddress: deleteDevice's own null-or-message
+      // contract does not cover a fetch that never returned at all.
+      return e instanceof Error ? e.message : String(e)
+    } finally {
+      this.forgetting = false
+    }
+  }
+
+  reset() {
+    Object.assign(this, freshAnswers())
+    this.copiedAt = ''
+    this.tailOffered = false
+    this.tailSkipped = false
+    this.tuneChosen = []
+    this.pushed = null
+    this.pushedFor = ''
+    this.undoOpen = null
+    this.showUndoAll = false
+    this.decodedAtCopy = 0
+    this.rate = 0
+    this.rateLines = -1
+    this.rateAt = 0
+  }
+
+  // begin is the run's start, every time the wizard opens: the answers
+  // go back to fresh, then what the server already holds is read in so
+  // reopening shows the ledger as it stands. A router the door named
+  // (Re-enrol…) fills the name and the address; a
+  // router already sending lands on the router's turn, or on the
+  // ledger once everything that stands has arrived -- unless the door
+  // was Re-enrol… (wizardState.reEnrolling), which lands on Mint the
+  // token instead (DESIGN.md, "Adding a router, re-enrolling"): that
+  // door exists precisely to mint a fresh token for a router whose logs
+  // already stand as evidence, so reading ev.enrol first would send it
+  // straight back to the ledger it was asked to leave.
+  begin() {
+    const rulesDevice = this.rulesDevice
+    const keep = rulesDevice && this.pushedFor === rulesDevice ? this.pushed : null
+    this.reset()
+    this.pushed = keep
+    this.pushedFor = rulesDevice
+    if (rulesDevice) void this.readPushed(rulesDevice)
+    // The tail is offered on the launch walk alone (owner, 2a): not on
+    // Add another router or Re-enrol…, and not once record 8 holds a mark
+    // or a witness -- Run setup… after either shows no sixth row.
+    const record8 =
+      wizardState.marks.some((m) => m.step === BLOCK_RECORD) ||
+      (wizardState.status?.witnesses ?? []).some((w) => w.step === BLOCK_RECORD)
+    // steps is a $state proxy, never the SETUP_STEPS array itself, so
+    // the first-run ledger is recognised by its contents.
+    const firstRun = wizardState.steps.length === SETUP_STEPS.length && SETUP_STEPS.every((k, i) => wizardState.steps[i] === k)
+    this.tailOffered = !wizardState.addingRouter && firstRun && !record8 && !!this.tailDevice
+    if (this.tailOffered) void blocklistState.peek(this.tailDevice)
+    const dev = wizardState.ledgerDevice
+      ? wizardState.devices.find((x) => x.id === wizardState.ledgerDevice)
+      : undefined
+    if (dev) {
+      this.name = dev.name || dev.id
+      this.addr = dev.acceptedIp ?? ''
+    }
+    const ev = this.evidence
+    if (wizardState.reEnrolling && dev) {
+      wizardState.reEnrolling = false
+      // What stood before still stands until a fresh paste says
+      // otherwise -- Re-enrol… only replaces the token, not the
+      // router's other answers.
+      this.push = !!ev.push
+      this.backup = !!ev.backup
+      this.q = 4
+      return
+    }
+    if (ev.enrol) {
+      // What stands is what was chosen: a push or a backup that never
+      // arrived is not waited for on a reopen.
+      this.push = !!ev.push
+      this.backup = !!ev.backup
+      this.copied = true
+      // No router record (fleet-wide evidence placed the walk here
+      // outright, #1404): name stays unset above, so Where setup stands
+      // would read " is sending." Fall back to the evidence's own
+      // sending address. Add a router and Re-enrol… always have a
+      // record of their own (the `if (dev)` block above, or the early
+      // return just above this one), so neither is touched.
+      if (!dev) this.name = ev.from
+      this.stage = this.arrivedAll ? 'done' : 'watch'
+      return
+    }
+    if (wizardState.enrolment) {
+      this.stage = 'paste'
+      return
+    }
+    if (this.routerDone) this.q = 4
+  }
+
+  // ---- the footer's acts, as wizard.js's click handler has them ----
+
+  routerNext() {
+    if (this.routerDone) this.q = 4
+  }
+
+  // An earlier completed row, while the run is still yours to change.
+  gotoStep(i: number) {
+    // From the tail's stage, Where setup stands is Back.
+    if (this.stage === 'block' && i === STEPS.findIndex((d) => d.id === 'stand')) return this.blockBack()
+    if (this.stage !== 'ask' && this.stage !== 'paste') return
+    this.stage = 'ask'
+    this.q = i === 0 ? 0 : 4
+    if (i === 2) this.stage = 'paste'
+  }
+
+  // Mint the token: the password is spent on the one call, whatever
+  // the answer (#1291: minting is what opens the port, so it asks
+  // every time). A token is minted for a named router, so a walk that
+  // has no router record yet makes one here first (POST /api/devices,
+  // as the retired modal's name step did); a walk opened for a router
+  // that exists (Re-enrol…) already has one. The record's refusal
+  // reads where the mint's would.
+  private minting = false
+  async mint() {
+    if (!this.pass || this.minting) return
+    this.minting = true
+    try {
+      if (!wizardState.ledgerDevice) {
+        const refused = await wizardState.createRouter(this.name.trim())
+        if (refused !== null) {
+          this.pass = ''
+          wizardState.enrolmentError = refused
+          return
+        }
+      }
+      wizardState.enrolExpectedAddress = this.addr
+      wizardState.enrolPassword = this.pass
+      // Kept for the ingest token below: wizardState clears its own copy
+      // once the enrolment call is made, and POST /api/tokens re-checks
+      // the same password (#1202).
+      const password = this.pass
+      this.pass = ''
+      await wizardState.mintEnrolmentToken()
+      if (wizardState.enrolment) {
+        await this.ensureIngestToken(password)
+        this.stage = 'paste'
+      }
+    } finally {
+      this.minting = false
+    }
+  }
+
+  // ensureIngestToken mints the persistent ingest token
+  // (internal/api/ingest.go's bearer, distinct from the one-shot
+  // enrolment marker mintEnrolmentToken makes) that the paste block's
+  // push and backup sections need to authenticate the router's own
+  // posts -- see routeros.PushScript/BackupScript, embedded in
+  // steps.schedule/steps.backup by POST /api/setup/commands.
+  //
+  // Called only from inside Mint and Reroll -- the password-checked
+  // act -- never from a form toggle on The router: an API credential
+  // must not be created by ticking Yes before the password step even
+  // runs. If push and backup were both No at the moment of minting and
+  // the operator later goes Back and answers one Yes, the rail lets
+  // The router be revisited until the paste lands (railRows' `can`),
+  // and reaching Mint again calls this again -- so no separate path is
+  // needed for that case, only that Back-and-forward keep landing on
+  // Mint rather than skipping it (StepMint's own Enter/click always
+  // call mint() afresh, whatever wizardState.enrolment already holds).
+  // A no-op once a token already stands for this device; POST
+  // /api/tokens writes its own audit line, so nothing else is recorded
+  // here. Best-effort: a failure here leaves the push/backup sections
+  // blank rather than failing the mint that already succeeded.
+  private async ensureIngestToken(password: string): Promise<void> {
+    if (this.push !== true && this.backup !== true) return
+    const device = wizardState.ledgerDevice
+    if (!device) return
+    if (wizardState.token && wizardState.tokenDevice === device) return
+    try {
+      const result = await createToken(`setup-${device}`, 'ingest', device, password)
+      if (typeof result === 'string' || !result.value) return
+      wizardState.token = result.value
+      wizardState.tokenDevice = device
+      await wizardState.refreshCommands({ device, token: result.value })
+    } catch {
+      // See the doc comment above: best-effort.
+    }
+  }
+
+  // Copy on the paste step: the router's turn begins.
+  markCopied() {
+    this.copied = true
+    this.copiedAt = new Date().toISOString()
+    // Snapshot at Copy on purpose: what went on the router is fixed from
+    // here; a later drop-box open does not put the backup script on it.
+    this.backupLeftOut = this.backup === true && !this.blockSections.some((s) => s.id === 'backup')
+    this.stage = 'watch'
+  }
+
+  // Reroll is Mint again for the same router and address (#1291: it
+  // asks for the password every time, because minting is what opens
+  // the port). Only reachable before Copy -- the paste step's own
+  // copyrow is what offers it -- so this never touches `stage`. Also
+  // ensures the ingest token, the same as Mint: a first attempt that
+  // failed or was skipped (push/backup answered after the fact is not
+  // reachable here, but a transient failure is) gets another chance.
+  async reroll(password: string): Promise<void> {
+    wizardState.enrolExpectedAddress = this.addr
+    wizardState.enrolPassword = password
+    await wizardState.mintEnrolmentToken()
+    if (wizardState.enrolment) await this.ensureIngestToken(password)
+  }
+
+  // "enrol at <other> instead" (DESIGN.md, "Refused sender"; #1370,
+  // #1373) is the same act as Mint and Reroll above, pointed at the
+  // address that actually sent -- not a new endpoint: mintEnrolment
+  // (POST /api/devices/{id}/enrolment) re-checks the password every
+  // time, writes the one audit line every mint does, and never sets an
+  // accepted address itself -- that still only happens when a router
+  // presents the fresh token it mints here. Once it succeeds,
+  // evidence.refused reads empty on its own: refusedSince keeps only
+  // addresses first seen after enrolmentMintedAt, which this call just
+  // moved to now.
+  async enrolAtOther(password: string): Promise<void> {
+    const other = this.evidence.refused
+    if (!other) return
+    wizardState.enrolExpectedAddress = other
+    wizardState.enrolPassword = password
+    await wizardState.mintEnrolmentToken()
+  }
+
+  // ---- the first-run tail (#1360) ----
+
+  // The tail's stage: the builder's body in the wizard's frame, for this
+  // walk's router. Reuses the walk's ingest token when it is for the
+  // same router (blocklistState.token).
+  toBlock() {
+    if (!this.tailOffered || !this.tailDevice) return
+    this.stage = 'block'
+    void blocklistState.load(this.tailDevice, true)
+  }
+
+  blockBack() {
+    if (this.stage === 'block') this.stage = 'done'
+  }
+
+  // Not now sets the tail aside under record 8; the ledger row reads
+  // "not now · Settings ▸ drop list" for the rest of this walk.
+  async blockNotNow() {
+    await markSetupStep(BLOCK_RECORD, 'skipped', 'not now · Settings ▸ drop list').catch(() => '')
+    this.tailSkipped = true
+    this.stage = 'done'
+  }
+
+  async blockCopy() {
+    await blocklistState.copy()
+  }
+
+  toTune() {
+    if (this.arrivedAll) this.stage = 'tune'
+  }
+
+  // Copy on the rules step: the count starts from here.
+  markTuneCopied(chosen: number) {
+    this.chosenCount = chosen
+    this.decodedAtCopy = this.decoded
+    this.tuneCopied = true
+  }
+
+  tuneSkip() {
+    this.tuneSkipped = true
+    this.stage = 'done'
+  }
+
+  toDone() {
+    if (this.evidence.tagged) this.stage = 'done'
+  }
+
+  // Add another router: the same wizard at The router, for a new one.
+  another() {
+    wizardState.openAddRouter()
+    this.begin()
+  }
+
+  // Finish leads out: to the fleet when the walk was opened from
+  // there, to the fall when it was opened from setup (the record's rule).
+  finish() {
+    // The way out (#1386): Finish plays the journey onto the fall, and
+    // the hand-over -- show the landing, close the wizard -- happens under
+    // its cover. Where it cannot play (reduced motion, no canvas), the
+    // hand-over happens outright.
+    //
+    // Once it has landed on the fall, the tour is offered (once per
+    // account; lib/tour.svelte.ts). A walk that lands on the fleet --
+    // adding a router -- is not a first run, and the tour's first stop
+    // is the fall it just left, so it gets no offer. Read once, up
+    // front: `after` runs seconds later, once the way out has landed,
+    // and finishTo by then belongs to whichever walk is open next.
+    // Finish leaves the walk, and whatever was typed into Mint and not
+    // spent goes with it: wizardState.close() below clears its own copy
+    // of the password, and this is the run's (v0.7.0 pre-release audit).
+    this.pass = ''
+    const toFall = wizardState.finishTo !== 'fleet'
+    const swap = () => {
+      appState.view = toFall ? 'fall' : 'fleet'
+      wizardState.close()
+    }
+    const after = () => {
+      if (toFall) tourState.offerAfterFinish()
+    }
+    if (!wizardJourney.wayOut(swap, after)) {
+      swap()
+      after()
+    }
+  }
+
+  // poll is the per-tick bookkeeping: the live rate, and the moment the
+  // first tagged line lands.
+  poll() {
+    if (this.tailOffered) void blocklistState.peek(this.tailDevice)
+    const ev = this.evidence
+    const now = Date.now()
+    if (this.rateLines >= 0 && now > this.rateAt) {
+      this.rate = Math.max(0, Math.round(((ev.lines - this.rateLines) * 1000) / (now - this.rateAt)))
+    }
+    this.rateLines = ev.lines
+    this.rateAt = now
+    if (ev.tagged && !this.tunedAt) {
+      this.tunedAt = new Date().toLocaleTimeString(undefined, { hour12: false })
+    }
+  }
+}
+
+export const wizardRun = new WizardRun()

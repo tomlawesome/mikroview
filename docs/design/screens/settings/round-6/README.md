@@ -50,8 +50,8 @@ and the settings bench's own dashed-underline click-to-edit value.
 | s3 | The same clause reopened at `field` with `dst` typed, the list down to two words |
 | s4 | Complete and tried — the receipt, save live; below it the same row read-only, and at 390 px |
 
-Data story unchanged from round 5: the garage range `203.0.113.0/24` and
-its two stragglers, `203.0.113.14 garage-cam` and `203.0.113.31 ev-charger`.
+Data story unchanged from round 5: the garage range `198.51.100.224/27` and
+its two stragglers, `198.51.100.238 garage-cam` and `198.51.100.225 ev-charger`.
 
 No data palette is used on this surface — the only inks are the app's
 own `--accent`, `--now` and `--accept` tokens — so the dataviz validator

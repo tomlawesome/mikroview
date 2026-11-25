@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView — Block known-bad addresses on rb5009 (#1360, round 1)</title>
+<style>
+/* Tokens: frontend/src/app.css (Atlas II), as the wizard's shell.css carries them. */
+:root {
+  --bg: #06080e; --bg-elevated: #0f1422; --bg-hover: rgba(160, 185, 230, 0.08);
+  --border: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+  --fg: #e9eefb; --fg-muted: #97a4c4; --fg-dim: #55628a; --accent: #9db8e8;
+  --alarm: #ff5470; --now: #e8b05a;
+  --accept: #3ecf7e; --drop: #f5a623; --reject: #ef4444; --log: #38bdf8;
+  --warn: #f28a1e; --caution: #e8e04d; --marked: #a78bfa; --natted: #2dd4bf;
+  --fall-nat: #9b3fc9; --lane-guest: #d76a9e;
+  --accent-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* one ink per list, kept everywhere it appears (wizard DESIGN.md, "One ink per thing") */
+  --ink-spamhaus: var(--drop); --ink-et: var(--marked); --ink-dshield: var(--natted); --ink-own: var(--log);
+  --ink-push: var(--fall-nat); --ink-off: var(--fg-dim);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.mono { font-family: var(--font-mono); }
+
+/* ---- the page frame: wizard.css's .page, .bar, .striprow, .rail, .main, .body, .foot ---- */
+.page { position: fixed; inset: 0; display: grid; grid-template-rows: 48px 14px 1fr; grid-template-columns: 236px 1fr; }
+.bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 20px; }
+.wm { font-weight: 700; letter-spacing: 0.08em; font-size: 13px; color: var(--fg); }
+.wm em { font-style: normal; color: var(--now); }
+.chips { display: flex; gap: 8px; margin-left: 18px; }
+.att { display: inline-flex; align-items: center; gap: 6px; font: 11.5px var(--font-mono); padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--fg-muted); }
+.att i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim); }
+.att.router { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); } .att.router i { background: var(--accent); }
+.att.push { color: var(--ink-push); border-color: color-mix(in srgb, var(--ink-push) 45%, transparent); } .att.push i { background: var(--ink-push); }
+.att.spamhaus { color: var(--ink-spamhaus); border-color: color-mix(in srgb, var(--ink-spamhaus) 40%, transparent); } .att.spamhaus i { background: var(--ink-spamhaus); }
+.att.own { color: var(--ink-own); border-color: color-mix(in srgb, var(--ink-own) 40%, transparent); } .att.own i { background: var(--ink-own); }
+.bar .right { margin-left: auto; display: flex; gap: 10px; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); }
+.bar .right .live { color: var(--accept); }
+.striprow { grid-column: 1 / -1; padding: 0 20px; display: flex; gap: 3px; align-items: center; }
+.striprow i { flex: 1; height: 3px; border-radius: 2px; background: var(--accept); opacity: 0.85; }
+.striprow i.dim { background: var(--fg-dim); opacity: 0.5; }
+
+.rail { grid-column: 1; grid-row: 3; border-right: 1px solid var(--border); padding: 14px 8px; overflow-y: auto; }
+.rail .h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); padding: 6px 10px 8px; }
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.step-row { width: 100%; display: flex; align-items: flex-start; gap: 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; color: var(--fg-muted); }
+.step-row:hover { background: var(--bg-hover); }
+.step-row.current { background: var(--bg-elevated); border-color: var(--border); color: var(--fg); }
+.step-n { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); font-size: 11px; color: var(--fg-muted); }
+.step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.step-title { font-size: 13px; }
+.step-receipt { font-size: 11px; line-height: 1.4; color: var(--fg-muted); }
+.step-row.done .step-n { border-color: var(--ink); color: var(--ink); }
+.step-row.done .step-receipt { color: var(--ink); }
+.step-row.chosen .step-n { border-color: var(--log); color: var(--log); }
+.step-row.chosen .step-receipt { color: var(--log); }
+.step-row.off .step-n { border-style: dashed; color: var(--fg-dim); }
+.step-row.off .step-receipt { color: var(--fg-dim); }
+.rail .foot-note { margin: 14px 10px 0; font-size: 11.5px; line-height: 1.5; color: var(--fg-dim); }
+
+.main { grid-column: 2; grid-row: 3; min-height: 0; display: grid; grid-template-rows: 1fr auto; }
+.body { min-height: 0; overflow: hidden; padding: 22px 32px 18px 36px; display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: 30px; row-gap: 12px; }
+.body .head { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.body h3 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.3; color: var(--fg); }
+.body h3 .sel { font-size: 15px; font-weight: 500; color: var(--accent); border-bottom: 1px dashed var(--hair-2); margin-left: 6px; }
+.body .hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--fg-muted); max-width: 900px; }
+.col { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.col.left { overflow: hidden; }
+.foot { display: flex; align-items: center; gap: 12px; padding: 12px 36px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.foot .fhint { margin-left: auto; font-size: 12.5px; color: var(--fg-muted); }
+.page button:not(.step-row):not(.seg button) { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+.page button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.page button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; }
+
+/* ---- the list cards ---- */
+.lcard { border: 1px solid var(--border); border-radius: 8px; background: transparent; padding: 11px 14px 12px; display: flex; flex-direction: column; gap: 7px; }
+.lcard.on { border-color: color-mix(in srgb, var(--ink) 45%, transparent); }
+.lcard.off { padding-bottom: 10px; }
+.lcard .top { display: flex; align-items: center; gap: 10px; }
+.lcard .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink); flex: none; }
+.lcard.off .dot { background: transparent; border: 1px dashed var(--ink-off); }
+.lcard h4 { margin: 0; font-size: 14.5px; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.lcard.off h4 { color: var(--fg-muted); font-weight: 500; }
+.lcard .facts { font: 11.5px var(--font-mono); color: var(--fg-dim); margin-left: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lcard .facts b { color: var(--fg-muted); font-weight: 500; }
+.lcard .top .seg { margin-left: auto; }
+.seg button { white-space: nowrap; }
+.page button { white-space: nowrap; }
+.page .step-row { white-space: normal; }
+.lcard .factsrow { font: 11.5px var(--font-mono); color: var(--fg-dim); margin-top: -3px; }
+.lcard .factsrow b { color: var(--fg-muted); font-weight: 500; }
+.lcard .guide { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); }
+.lcard .guide b { color: var(--fg); font-weight: 500; }
+.lcard.off .guide { color: var(--fg-dim); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
+.seg button { border: 0; border-radius: 0; padding: 5px 11px; background: transparent; color: var(--fg-muted); font-size: 12.5px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent-bg); color: var(--fg); }
+.seg button.on.no { background: transparent; color: var(--log); }
+.seg.sm button { padding: 3px 9px; font-size: 12px; }
+.choices { display: grid; grid-template-columns: 92px auto 1fr; gap: 6px 12px; align-items: center; padding-top: 8px; border-top: 1px solid var(--border); }
+.ch { display: contents; }
+.ch .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.ch small { font-size: 11.5px; line-height: 1.35; color: var(--fg-dim); min-width: 0; }
+.ch small b { color: var(--fg-muted); font-weight: 500; }
+.ch .seg { justify-self: start; }
+
+/* ---- the block, the observation, the ledger ---- */
+.blockhead { display: flex; align-items: baseline; gap: 10px; }
+.blockhead h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
+.blockhead .n { font-size: 12px; color: var(--fg-muted); }
+.blockhead .live { margin-left: auto; font: 11px var(--font-mono); color: var(--now); }
+.page pre { margin: 0; align-self: stretch; padding: 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); }
+.page pre.script { max-height: 186px; overflow-y: auto; flex-shrink: 0; }
+.col.right { gap: 8px; }
+.sec { color: var(--fg-dim); user-select: none; }
+.sec b { font-weight: 600; color: var(--ink, var(--fg-muted)); }
+pre .k { color: var(--log); }
+pre .fold { color: var(--fg-dim); font-style: italic; }
+.copyrow { display: flex; align-items: center; gap: 12px; }
+.copyrow .note { font-size: 12px; color: var(--fg-muted); }
+.obs { font-size: 12.5px; line-height: 1.5; padding: 8px 12px; border-left: 2px solid var(--fg-dim); color: var(--fg-muted); border-radius: 0 4px 4px 0; background: var(--bg-hover); }
+.obs.waiting { border-left-color: var(--now); }
+.obs b { color: var(--fg); font-weight: 500; }
+.cautionbox { font-size: 12px; line-height: 1.5; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--caution) 45%, transparent); border-radius: 6px; color: var(--fg-muted); }
+.cautionbox b { color: var(--caution); font-weight: 600; }
+.ledgerh { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
+.ledgerh h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
+.ledgerh span { font-size: 12px; color: var(--fg-muted); }
+.ledger { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px 10px; align-items: baseline; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 12.5px; }
+.ledger .row:first-child { border-top: 0; }
+.ledger .row .r { font-size: 11.5px; color: var(--fg-muted); }
+.ledger .row .step-n.done { border-color: var(--ink); color: var(--ink); }
+.ledger .row .r.done { color: var(--ink); }
+.ledger .row .step-n.wait { border-color: var(--now); color: var(--now); }
+.ledger .row .r.wait { color: var(--now); }
+.ledger .row .step-n.skip { border-style: dashed; color: var(--fg-dim); }
+.ledger .row .r.skip { color: var(--fg-dim); }
+.ledger .row .skip s { text-decoration-color: var(--fg-dim); }
+.ledger .undo { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+.ledger .undo pre { font-size: 11px; line-height: 1.5; }
+.ledger .undo .note { margin: 0; font-size: 11.5px; color: var(--fg-muted); }
+.ledger .undo .note b { color: var(--fg); font-weight: 500; }
+.stopall { font-size: 12px; color: var(--fg-muted); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <div class="chips" aria-label="Proofs so far">
+      <span class="att router"><i></i>rb5009</span>
+      <span class="att push"><i></i>push 14:32 · RouterOS 7.19.4</span>
+      <span class="att own"><i></i>drop list · 3 held</span>
+      <span class="att spamhaus"><i></i>Spamhaus DROP · 1,693 held</span>
+    </div>
+    <div class="right"><span class="live">● live · 6/s</span><span>184,211 lines</span></div>
+  </div>
+  <div class="striprow" aria-hidden="true"><i></i><i></i><i></i><i></i><i class="dim"></i><i></i></div>
+
+  <nav class="rail" aria-label="Lists on this router">
+    <div class="h">Lists on rb5009</div>
+    <ol>
+      <li><button type="button" class="step-row done" style="--ink: var(--ink-own)"><span class="step-n">✓</span><span class="step-text"><span class="step-title">Your drop list</span><span class="step-receipt">3 addresses · fetched 14:35 · from Settings</span></span></button></li>
+      <li><button type="button" class="step-row done current" style="--ink: var(--ink-spamhaus)"><span class="step-n">✓</span><span class="step-text"><span class="step-title">Spamhaus DROP</span><span class="step-receipt">1,693 held · refreshed 04:17 · fired 412 today</span></span></button></li>
+      <li><button type="button" class="step-row chosen" style="--ink: var(--ink-et)"><span class="step-n">2</span><span class="step-text"><span class="step-title">Emerging Threats compromised</span><span class="step-receipt">in the block · not on the router yet</span></span></button></li>
+      <li><button type="button" class="step-row off"><span class="step-n">–</span><span class="step-text"><span class="step-title">DShield top 20</span><span class="step-receipt">not now</span></span></button></li>
+    </ol>
+    <p class="foot-note">Each list is fetched by the router, from its source. MikroView reads what the router pushes back — it never serves a list and never connects.</p>
+  </nav>
+
+  <div class="main">
+    <div class="body">
+      <div class="head">
+        <h3>Block known-bad addresses on <span class="sel">rb5009 ▾</span></h3>
+        <p class="hint">Pick the lists; MikroView builds one block that makes the router fetch each list itself, straight from its source, and drop what is on it. Paste it once into the router's <b>terminal</b> (WinBox ▸ New Terminal, or ssh). Safe to paste again: it sets, never adds.</p>
+      </div>
+
+      <div class="col left">
+        <section class="lcard on" style="--ink: var(--ink-spamhaus)" aria-label="Spamhaus DROP">
+          <div class="top"><span class="dot"></span><h4>Spamhaus DROP</h4><div class="seg"><button type="button" class="on">Yes</button><button type="button">Not now</button></div></div>
+          <div class="factsrow"><b>1,693</b> ranges · 47 KB · changes slowly · false positives <b>rare</b> · from spamhaus.org</div>
+          <p class="guide">Whole netblocks Spamhaus says carry <b>no legitimate traffic</b> — hijacked space and criminal hosting. MikroView already flags from it, so what the router drops and what MikroView flags stay the same.</p>
+          <div class="choices">
+            <div class="ch"><span class="k">block</span><div class="seg sm"><button type="button" class="on">from them</button><button type="button">both ways</button></div><small>Inbound is enough — nothing on your LAN talks to hijacked space on purpose.</small></div>
+            <div class="ch"><span class="k">where</span><div class="seg sm"><button type="button" class="on">raw, first</button><button type="button">filter</button></div><small>Dropped before anything else, the router itself included; <b>filter</b> sits among your rules.</small></div>
+            <div class="ch"><span class="k">log the drops</span><div class="seg sm"><button type="button" class="on">yes</button><button type="button">no</button></div><small>Each drop reaches MikroView as a line naming the list; a home WAN sees a few an hour.</small></div>
+            <div class="ch"><span class="k">refresh</span><div class="seg sm"><button type="button">6 h</button><button type="button" class="on">daily</button><button type="button">weekly</button></div><small>Spamhaus asks for at least an hour apart; daily is plenty for a list that barely moves.</small></div>
+          </div>
+        </section>
+
+        <section class="lcard on" style="--ink: var(--ink-et)" aria-label="Emerging Threats compromised IPs">
+          <div class="top"><span class="dot"></span><h4>Emerging Threats compromised IPs</h4><div class="seg"><button type="button" class="on">Yes</button><button type="button">Not now</button></div></div>
+          <div class="factsrow"><b>633</b> addresses · 9 KB · changes daily · false positives <b>some</b> · from emergingthreats.net</div>
+          <p class="guide">Single hosts seen attacking in the last few days. Churns daily, and a cleaned-up host stays listed a while, so a <b>drop is occasionally an innocent server</b>. MikroView flags from it already.</p>
+          <div class="choices">
+            <div class="ch"><span class="k">block</span><div class="seg sm"><button type="button">from them</button><button type="button" class="on">both ways</button></div><small><b>Both ways</b> here: a LAN device talking <em>to</em> one of these is the finding.</small></div>
+            <div class="ch"><span class="k">where</span><div class="seg sm"><button type="button" class="on">raw, first</button><button type="button">filter</button></div><small>Same as above — one place for both lists keeps the rule table readable.</small></div>
+            <div class="ch"><span class="k">log the drops</span><div class="seg sm"><button type="button" class="on">yes</button><button type="button">no</button></div><small>Keep it on here: an outbound drop is the line you want to see.</small></div>
+            <div class="ch"><span class="k">refresh</span><div class="seg sm"><button type="button">6 h</button><button type="button" class="on">daily</button><button type="button">weekly</button></div><small>What Emerging Threats recommends; the list is rebuilt about once a day.</small></div>
+          </div>
+        </section>
+
+        <section class="lcard off" aria-label="DShield top 20">
+          <div class="top"><span class="dot"></span><h4>DShield top 20</h4><div class="seg"><button type="button">Yes</button><button type="button" class="on no">Not now</button></div></div>
+          <div class="factsrow"><b>20</b> /24 networks · 2 KB · changes hourly · false positives <b>likely</b> · from dshield.org · CC BY-NC-SA</div>
+          <p class="guide">The twenty /24s scanning the internet hardest over the last three days. Whole networks, high churn, and a non-commercial licence — fine for a home router, wrong for a business one. MikroView does not flag from it, so its drops would be known only by the rule's own tag.</p>
+        </section>
+      </div>
+
+      <div class="col right">
+        <div class="blockhead"><h5>The block</h5><span class="n">7 parts, in order — Spamhaus DROP, Emerging Threats, run now</span><span class="live">rebuilt as you click</span></div>
+        <pre class="script" aria-label="RouterOS block to paste"><span class="sec" style="--ink: var(--ink-spamhaus)"># 1 · <b>Spamhaus DROP</b> — the fetch-and-parse script (guarded: adds once, then sets)</span>
+:if ([:len [/system script find name=mv-bl-spamhaus]] = 0) do={ /system script add name=mv-bl-spamhaus policy=read,write,test source="<span class="k">…</span>" } else={ /system script set [find name=mv-bl-spamhaus] policy=read,write,test source="<span class="k">…</span>" }
+<span class="fold">   the source, 19 lines: fetch https://www.spamhaus.org/drop/drop.txt · read in 32 KB chunks · cut each line at "; SBL…" · refuse wider than /8 · build mv-bl-spamhaus-next, swap it in only if the fetch succeeded</span>
+<span class="sec" style="--ink: var(--ink-spamhaus)"># 2 · <b>Spamhaus DROP</b> — the schedule: daily, 04:17</span>
+:if ([:len [/system scheduler find name=mv-bl-spamhaus]] = 0) do={ /system scheduler add name=mv-bl-spamhaus interval=1d start-time=04:17:00 policy=read,write,test on-event="/system script run mv-bl-spamhaus" } else={ /system scheduler set [find name=mv-bl-spamhaus] interval=1d start-time=04:17:00 policy=read,write,test on-event="/system script run mv-bl-spamhaus" disabled=no }
+<span class="sec" style="--ink: var(--ink-spamhaus)"># 3 · <b>Spamhaus DROP</b> — the drop rule: raw, first, logged</span>
+:if ([:len [/ip firewall raw find comment="mikroview blocklist: spamhaus drop"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus action=drop log=yes log-prefix="D|drop|spamhaus" comment="mikroview blocklist: spamhaus drop" place-before=0 } else={ /ip firewall raw set [find comment="mikroview blocklist: spamhaus drop"] chain=prerouting src-address-list=mv-bl-spamhaus action=drop log=yes log-prefix="D|drop|spamhaus" disabled=no }
+<span class="sec" style="--ink: var(--ink-et)"># 4 · <b>Emerging Threats</b> — the fetch-and-parse script</span>
+:if ([:len [/system script find name=mv-bl-et]] = 0) do={ /system script add name=mv-bl-et policy=read,write,test source="<span class="k">…</span>" } else={ /system script set [find name=mv-bl-et] policy=read,write,test source="<span class="k">…</span>" }
+<span class="fold">   the source, 17 lines: fetch https://rules.emergingthreats.net/blockrules/compromised-ips.txt · one address per line, "#" lines skipped · the same staging swap</span>
+<span class="sec" style="--ink: var(--ink-et)"># 5 · <b>Emerging Threats</b> — the schedule: daily, 04:31</span>
+:if ([:len [/system scheduler find name=mv-bl-et]] = 0) do={ /system scheduler add name=mv-bl-et interval=1d start-time=04:31:00 policy=read,write,test on-event="/system script run mv-bl-et" } else={ /system scheduler set [find name=mv-bl-et] interval=1d start-time=04:31:00 policy=read,write,test on-event="/system script run mv-bl-et" disabled=no }
+<span class="sec" style="--ink: var(--ink-et)"># 6 · <b>Emerging Threats</b> — two drop rules: from them, and to them</span>
+:if ([:len [/ip firewall raw find comment="mikroview blocklist: et compromised (from)"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop log=yes log-prefix="D|drop|et" comment="mikroview blocklist: et compromised (from)" place-before=0 } else={ … }
+:if ([:len [/ip firewall raw find comment="mikroview blocklist: et compromised (to)"]] = 0) do={ /ip firewall raw add chain=prerouting dst-address-list=mv-bl-et action=drop log=yes log-prefix="D|drop|et-out" comment="mikroview blocklist: et compromised (to)" place-before=0 } else={ … }
+<span class="sec"># 7 · Run both now, rather than waiting for 04:17</span>
+/system script run mv-bl-spamhaus; /system script run mv-bl-et</pre>
+        <div class="copyrow"><button type="button" class="primary">Copy — 2 lists · 7 parts</button><span class="note">Parts 4–6 are new; re-pasting 1–3 changes nothing.</span></div>
+        <div class="obs waiting"><b>Waiting for the router.</b> The next push (every 20 min) says what rb5009 holds in mv-bl-et.</div>
+        <div class="cautionbox"><b>Size and RouterOS.</b> A script reads 63 KB at a time; DROP is 47 KB today, so the script reads in chunks (RouterOS 7.13+; rb5009 runs 7.19.4). An older router stops and logs "list too big" rather than loading part of it.</div>
+
+        <div class="ledgerh"><h5>Where it stands</h5><span>what rb5009 holds, from its own push · Undo per row</span></div>
+        <div class="ledger">
+          <div class="row" style="--ink: var(--ink-spamhaus)">
+            <span class="step-n done">✓</span>
+            <span>Spamhaus DROP<div class="r done">1,693 held · refreshed 04:17 · rule fired 412 times today · flags from this list: 0 in 24 h (dropped first)</div></span>
+            <button type="button" class="linkish">Hide</button>
+            <div class="undo">
+              <pre>/ip firewall raw remove [find comment="mikroview blocklist: spamhaus drop"]
+/system scheduler remove [find name=mv-bl-spamhaus]
+/system script remove [find name=mv-bl-spamhaus]
+/ip firewall address-list remove [find list=mv-bl-spamhaus]
+/ip firewall address-list remove [find list=mv-bl-spamhaus-next]
+/file remove [find name=mv-bl-spamhaus.txt]</pre>
+              <p class="note">Paste on the router. MikroView notices when the list leaves the push and this row goes back to <b>not now</b>. To stop dropping without removing anything: <span class="mono">/ip firewall raw disable [find comment~"^mikroview blocklist"]</span>.</p>
+            </div>
+          </div>
+          <div class="row" style="--ink: var(--ink-et)">
+            <span class="step-n wait">2</span>
+            <span>Emerging Threats compromised<div class="r wait">in the block · not on the router yet</div></span>
+            <span></span>
+          </div>
+          <div class="row">
+            <span class="step-n skip">–</span>
+            <span class="skip"><s>DShield top 20</s><div class="r skip">not now</div></span>
+            <span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <button type="button">Back to the drop list</button>
+      <button type="button">Undo everything on rb5009</button>
+      <span class="fhint">Into the router's terminal, not a script · the router does the fetching; MikroView only watches what comes back</span>
+      <button type="button" class="primary">Copy — 2 lists · 7 parts</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

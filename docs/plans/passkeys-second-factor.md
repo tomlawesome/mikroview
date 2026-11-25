@@ -1,5 +1,7 @@
 # #1250 delivery design: passkeys (WebAuthn) as a second factor
 
+**Status:** delivered in v0.6.1. Its routes and handlers (`server.go`'s table, `passkey.go` and the rest) were superseded in v0.7.0, when authentication moved onto gauntlet (`docs/decisions/gauntlet-adoption.md`, decision 1).
+
 Issue #1250 (passkeys), milestone M19, shipping in v0.6.1. #1249 is merged on
 this branch; this design is written against the code it actually left behind,
 not the issue text. Build agents implement what is written here; anything this
@@ -7,7 +9,7 @@ document does not decide is an escalation, not a guess.
 
 **Library**: `github.com/go-webauthn/webauthn` **v0.18.2**, BSD-3-Clause,
 licence and version checked 2026-09-23. Needs Go >= 1.26; the project is on
-1.27.1. Settled — do not re-open. Passwordless sign-in is out of scope:
+1.27.4. Settled — do not re-open. Passwordless sign-in is out of scope:
 password first, passkey second, and the docs say so.
 
 ## The public URL setting
@@ -117,15 +119,17 @@ and a rename route the issue's frontend list implies but its route list omits:
 
 - `GET /api/auth/passkeys` → `[{id (base64url), name, createdAt, lastUsedAt,
   transports, stale (bool), rpId}]` — feeds the overlay.
-- `POST /api/auth/passkeys/register/begin` `{}` → the library's
+- `POST /api/auth/passkeys/register/begin` `{password}` (#1418: password
+  re-check, 401/429; 409 for an SSO-only account) → the library's
   `protocol.CredentialCreation` JSON; the `webauthn.SessionData` sealed
   AEAD-style (the `pendingLoginCodec` pattern) into a 5-minute cookie
   `mikroview_passkey_register`, path `/api/auth/passkeys`. Refused with the
   availability reason when status is not `ready`. `excludeCredentials` lists
   the account's current-RPID passkeys so one authenticator cannot enrol twice.
 - `POST /api/auth/passkeys/register/finish` `{credential, name}` →
-  `FinishRegistration`, `AddPasskey`, clear the cookie (single-use: a replayed
-  finish is refused because the cookie is gone). If this is the account's
+  `FinishRegistration`, `AddPasskey`, clear the cookie (single-use: the challenge is
+  claimed before `AddPasskey`, so a replayed copy of the cookie is refused,
+  #1418). If this is the account's
   **first factor**: revoke all sessions and reissue this one (parity with TOTP
   confirm — a stolen session must not outlive the factor turning on), and
   mint recovery codes per the rules above. Response
@@ -311,3 +315,4 @@ Follow-up worth its own issue, not built here: a "regenerate recovery codes"
 action — today the only path is remove-and-re-add a factor, which #1249 also
 lives with, but with two factor kinds that workaround gets clumsier.
 
+Written 2026-09-23.

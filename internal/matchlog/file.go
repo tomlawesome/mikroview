@@ -3,9 +3,10 @@
 package matchlog
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -21,16 +25,48 @@ const (
 	kindUpdate = "update"
 )
 
-// maxLineBytes bounds one JSON line bufio.Scanner will accept. A Record
-// embeds a full store.Event, whose Raw field is deliberately unclamped
-// and can reach the syslog TCP listener's 64KB line limit (see #244's
-// memory_test.go, worstCaseLine) -- JSON string-escaping can expand that
-// further, so this is set well above it rather than at bufio.Scanner's
-// 64KB default, which would silently fail to scan exactly the worst-case
-// lines #244 measured.
+// maxLineBytes bounds one encoded line. A Record embeds a full
+// store.Event, whose Raw field is deliberately unclamped and can reach
+// the syslog TCP listener's 64KB line limit (see #244's memory_test.go,
+// worstCaseLine) -- JSON string-escaping can expand that further, so
+// this is set well above it. A record above it is cut, not refused: its
+// Raw is clamped to store.MaxRawBytes and written. Ingest already cuts
+// Raw to that (main.go), so this only catches events stored before that
+// cut existed. A line still over the limit after the cut is refused at
+// write time rather than written as a frame every reader would stop at.
 const maxLineBytes = 256 * 1024
 
-// fileLine is the on-disk shape of one line. A "record" line carries
+var errLineTooLong = errors.New("line too long")
+
+// storeName is the match log's name among the stores -backup carries,
+// and is bound into every frame's additional data.
+const storeName = "match_log"
+
+// Format is the match log's on-disk framing (#1470): the sealed,
+// append-only framing internal/retention's day files use, with its own
+// magic, key-derivation info and additional data, so no frame of one
+// opens as the other. One frame is one line -- a record or an update --
+// rather than a gzipped batch, because each line is written and synced
+// on its own (matches are rare by design, #243 section 4) and a one-line
+// gzip gains nothing. The additional data names the store, not the path,
+// so a log moved with its data directory still opens (as #1450 for the
+// other stores).
+//
+// The default file name, matchlog.jsonl, is historical: the file has not
+// held JSON lines since v0.7.0.
+var Format = retention.FrameFormat{
+	Magic:         "MVMLG",
+	Version:       1,
+	KeyInfo:       "mikroview/match-log/v1/",
+	AADPrefix:     []byte("MVMLG\x01" + storeName),
+	MaxFrameBytes: maxLineBytes + frameOverhead,
+	Description:   "match log",
+}
+
+// frameOverhead is the AES-GCM nonce and tag around one line.
+const frameOverhead = 12 + 16
+
+// fileLine is the plaintext of one frame. A "record" line carries
 // every field; an "update" line -- written when Append collapses a
 // repeat into an already-open record -- carries only ID and LastSeen.
 // Count is deliberately not stored on either kind: it is derived at read
@@ -47,9 +83,12 @@ type fileLine struct {
 	Provisional bool        `json:"provisional,omitempty"`
 }
 
-// FileStore is the append-only, JSON-lines file backend. The only
-// in-memory state it keeps is index: one entry per currently-open
-// (not-yet-capacity-refused) Tuple, mapping to that record's ID.
+// FileStore is the append-only, sealed file backend: one frame of
+// Format per line, under the operator's retention key (rule 2 of the
+// #853 amendment to docs/decisions/event-retention.md: nothing MikroView
+// writes to disk is in the clear). The only in-memory state it keeps is
+// index: one entry per currently-open (not-yet-capacity-refused) Tuple,
+// mapping to that record's ID.
 // Bounded by capacity -- once full, index stops growing (ErrCapacityReached
 // refuses new tuples) -- so this is a small, fixed-size cost relative to
 // the log itself, not a second copy of it: at capacity 500,000 and a
@@ -65,63 +104,114 @@ type fileLine struct {
 type FileStore struct {
 	mu       sync.Mutex
 	path     string
-	f        *os.File
+	key      *retention.Key
+	log      *retention.FrameLog
 	capacity int
 	index    map[string]string // Tuple.key(entryID) -> record ID
 }
 
-// Open opens (creating if needed) a match log at path with the given
-// capacity -- the maximum number of distinct records it will ever hold;
-// see ErrCapacityReached. capacity must be positive: this package has no
-// operator-facing default of its own to fall back to, the caller (the
-// eventual config wiring) owns that decision the same way #244 gave
-// store.maxMemory its own validated default.
+// Open opens (creating if needed) a sealed match log at path under key,
+// with the given capacity -- the maximum number of distinct records it
+// will ever hold; see ErrCapacityReached. capacity must be positive: this
+// package has no operator-facing default of its own to fall back to, the
+// caller (the eventual config wiring) owns that decision the same way
+// #244 gave store.maxMemory its own validated default.
+//
+// key must not be nil: there is no unsealed mode (rule 2). A file that
+// is not a sealed match log is refused and left exactly as it is: a
+// plaintext JSON-lines log from an earlier release with
+// persist.ErrPlaintextDocument (#1202 ruling 19 -- never read, never
+// sealed in place), anything else as not a match log.
 //
 // A file that already has content is replayed once, synchronously, to
 // rebuild index -- the one place this store pays a cost proportional to
 // its own size rather than to a query's result, and it is paid once at
-// startup rather than on every operation.
-func Open(path string, capacity int) (*FileStore, error) {
+// startup rather than on every operation. A torn last frame (a crash
+// mid-write) is cut back to the last whole frame; a frame of whole
+// length that does not open (wrong key, or altered bytes) fails Open.
+func Open(path string, capacity int, key *retention.Key) (*FileStore, error) {
 	if capacity <= 0 {
 		return nil, fmt.Errorf("matchlog: capacity must be positive, got %d", capacity)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("matchlog: opening %s: %w", path, err)
+	if key == nil {
+		return nil, errors.New("matchlog: the match log is sealed and needs history.keyFile; there is no unsealed mode")
 	}
-	s := &FileStore{path: path, f: f, capacity: capacity, index: make(map[string]string)}
+	before, err := sniff(path)
+	if err != nil {
+		return nil, err
+	}
+	l, err := retention.OpenFrameLog(path, key, Format)
+	if err != nil {
+		return nil, fmt.Errorf("matchlog: %s: %w", path, err)
+	}
+	if before > 0 {
+		if fi, err := os.Stat(path); err == nil && fi.Size() != before {
+			logging.New("matchlog").Warn(fmt.Sprintf("the match log at %s ended in a partial frame (an unclean shutdown mid-write); cut back from %d to %d bytes", path, before, fi.Size()))
+		}
+	}
+	s := &FileStore{path: path, key: key, log: l, capacity: capacity, index: make(map[string]string)}
 	if err := s.replay(); err != nil {
-		f.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-// replay rebuilds index from every "record" line already on disk. Reads
-// through a separate handle from s.f (the append-mode write handle)
-// rather than relying on the platform detail that O_APPEND doesn't
-// affect where reads start -- opening a distinct read-only handle for
-// this one-time pass is obviously correct instead.
-//
-// A line that fails to decode -- a torn write left by an unclean
-// shutdown, landing exactly at EOF -- is skipped rather than treated as
-// fatal, the same "a corrupted store must never block startup" rule
-// every other optional store in this codebase follows (see
-// internal/audit.Open's doc comment).
-func (s *FileStore) replay() error {
-	rf, err := os.Open(s.path)
-	if err != nil {
-		return fmt.Errorf("matchlog: replaying %s: %w", s.path, err)
-	}
-	defer rf.Close()
+// Check reports, without writing anything, whether the file at path is
+// one Open would accept as a sealed match log: nil for an absent, empty
+// or sealed file, persist.ErrPlaintextDocument (wrapped) for the
+// JSON-lines log an earlier release wrote, another error otherwise. For
+// a caller that will not open the log but has to say what is there --
+// the Postgres backend, which never reads the file.
+func Check(path string) error {
+	_, err := sniff(path)
+	return err
+}
 
-	sc := bufio.NewScanner(rf)
-	sc.Buffer(make([]byte, 64*1024), maxLineBytes)
-	for sc.Scan() {
-		var l fileLine
-		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
-			continue
-		}
+// sniff checks what is at path before anything opens it for writing,
+// and reports its size (-1 when absent). Absent, empty, starting with
+// Format's magic, or a header torn by a crash (Format.TornHeader, which
+// OpenFrameLog starts again) is fine. A file that starts with '{' (after any
+// whitespace) is the JSON-lines log an earlier release wrote, and is
+// refused with persist.ErrPlaintextDocument; anything else is refused as
+// not a match log. Neither is changed.
+func sniff(path string) (int64, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return -1, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("matchlog: opening %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("matchlog: stat %s: %w", path, err)
+	}
+	head := make([]byte, 512)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, fmt.Errorf("matchlog: reading %s: %w", path, err)
+	}
+	head = head[:n]
+	switch {
+	case n == 0, Format.HasMagic(head), Format.TornHeader(head):
+		return fi.Size(), nil
+	case bytes.HasPrefix(bytes.TrimLeft(head, " \t\r\n"), []byte("{")):
+		return 0, fmt.Errorf("matchlog: store %q (%s): %w", storeName, path, persist.ErrPlaintextDocument)
+	default:
+		return 0, fmt.Errorf("matchlog: %s is not a match log", path)
+	}
+}
+
+// replay rebuilds index from every "record" line already on disk.
+//
+// A frame that does not open, or opens but does not decode, is an error,
+// not skipped: a torn tail is a length problem and OpenFrameLog has
+// already cut it back, so what is left is either the wrong key or a file
+// somebody has altered (rule 3 of the #853 amendment).
+func (s *FileStore) replay() error {
+	return s.scanLines(func(l *fileLine) {
 		if l.Kind == kindRecord {
 			s.index[l.Tuple.key(l.EntryID)] = l.ID
 		}
@@ -129,8 +219,7 @@ func (s *FileStore) replay() error {
 		// tuple replay has already indexed from its "record" line,
 		// which -- being append-only -- always precedes any update
 		// referencing it.
-	}
-	return sc.Err()
+	})
 }
 
 // Append implements Store.
@@ -162,10 +251,19 @@ func (s *FileStore) appendProvisional(entryID string, tuple Tuple, event store.E
 	}
 
 	id := newID()
-	if err := s.writeLineLocked(fileLine{
+	rec := fileLine{
 		Kind: kindRecord, ID: id, EntryID: entryID, Tuple: tuple, Event: event,
 		FirstSeen: t, LastSeen: t, Provisional: provisional,
-	}); err != nil {
+	}
+	err := s.writeLineLocked(rec)
+	if errors.Is(err, errLineTooLong) {
+		// Cut the raw line and retry once (#1471).
+		cut, was := store.ClampRaw(rec.Event.Raw)
+		rec.Event.Raw = cut
+		rec.Event.RawTruncated = rec.Event.RawTruncated || was
+		err = s.writeLineLocked(rec)
+	}
+	if err != nil {
 		return err
 	}
 	// Only added after a successful write: a failed write must not leave
@@ -174,27 +272,21 @@ func (s *FileStore) appendProvisional(entryID string, tuple Tuple, event store.E
 	return nil
 }
 
-// writeLineLocked encodes l as one JSON line and appends it in a single
-// Write call -- built as one byte slice first (JSON, then '\n') rather
-// than two separate writes, to keep the window in which a concurrent
-// Query could observe a torn line as small as a single write(2) syscall
-// can make it. fsync's every write: matches are rare by this feature's
-// own premise (#243 section 4), so the cost is affordable, and it is
-// what actually backs "a match survives a restart" against an unclean
-// shutdown, not just a clean one -- a Write that returns successfully
-// without a Sync can still be sitting in the OS page cache, not on disk,
-// when the process is killed.
+// writeLineLocked encodes l and appends it as one sealed frame, in a
+// single Write call, then fsyncs. fsync's every write: matches are rare
+// by this feature's own premise (#243 section 4), so the cost is
+// affordable, and it is what actually backs "a match survives a restart"
+// against an unclean shutdown, not just a clean one.
 func (s *FileStore) writeLineLocked(l fileLine) error {
 	b, err := json.Marshal(l)
 	if err != nil {
 		return fmt.Errorf("matchlog: encoding a record: %w", err)
 	}
-	b = append(b, '\n')
-	if _, err := s.f.Write(b); err != nil {
-		return fmt.Errorf("matchlog: writing to %s: %w", s.path, err)
+	if len(b) > maxLineBytes {
+		return fmt.Errorf("matchlog: a record of %d bytes is over the %d-byte line limit: %w", len(b), maxLineBytes, errLineTooLong)
 	}
-	if err := s.f.Sync(); err != nil {
-		return fmt.Errorf("matchlog: syncing %s: %w", s.path, err)
+	if err := s.log.Append(b); err != nil {
+		return fmt.Errorf("matchlog: %w", err)
 	}
 	return nil
 }
@@ -204,12 +296,13 @@ func (s *FileStore) writeLineLocked(l fileLine) error {
 // Opens its own read handle rather than taking s.mu across file I/O, so
 // a slow query does not block Append -- correctness does not depend on
 // serializing with writers, only on reading an append-only file, whose
-// already-written bytes never change. The one accepted race: a line
-// still mid-write when Query's scanner reaches it can be read as
-// incomplete JSON and is skipped like any other torn line (see replay's
-// doc comment) -- that match simply is not in this query's results and
-// will be on the next one, which is an acceptable eventual-consistency
-// window for a monitoring feature, not a transactional one.
+// already-written bytes never change. The one accepted race: a frame
+// still mid-write when Query's reader reaches it is short, and the walk
+// stops there like any torn tail -- that match simply is not in this
+// query's results and will be on the next one, which is an acceptable
+// eventual-consistency window for a monitoring feature, not a
+// transactional one. A whole frame that does not open is an error, not
+// fewer results.
 // It runs in two passes, and that shape is the point.
 //
 // A single pass has to keep a whole Record -- Tuple and the entire
@@ -367,31 +460,26 @@ func (s *FileStore) window(ctx context.Context, source *Identity, since, until t
 	return nil
 }
 
-// scanLines opens its own read handle and calls fn for each parsable
-// line. Unparsable lines are skipped, matching replay's handling of a
-// torn write.
+// scanLines opens its own read handle and calls fn for each line, oldest
+// first. A short tail ends the walk silently (a write in progress, or a
+// crash tail); a whole frame that does not open, or does not decode, is
+// an error.
 //
 // Its own handle rather than s.mu across file I/O, so a slow query does
 // not block Append -- correctness does not depend on serialising with
 // writers, only on reading an append-only file, whose already-written
-// bytes never change.
+// bytes never change. A read racing Reset can meet frames under the new
+// salt, which surfaces as that error; Reset is a test hook.
 func (s *FileStore) scanLines(fn func(*fileLine)) error {
-	f, err := os.Open(s.path)
-	if err != nil {
-		return fmt.Errorf("matchlog: querying %s: %w", s.path, err)
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), maxLineBytes)
-	for sc.Scan() {
+	err := retention.ReadFrames(s.path, s.key, Format, func(seq uint64, plain []byte) error {
 		var l fileLine
-		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
-			continue
+		if err := json.Unmarshal(plain, &l); err != nil {
+			return fmt.Errorf("frame %d opened but is not a match log line: %w", seq, err)
 		}
 		fn(&l)
-	}
-	if err := sc.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("matchlog: reading %s: %w", s.path, err)
 	}
 	return nil
@@ -404,25 +492,16 @@ func (s *FileStore) Stats() Stats {
 	return Stats{Count: len(s.index), Capacity: s.capacity, Full: len(s.index) >= s.capacity}
 }
 
-// Reset implements Store: truncates the log to nothing and drops the
-// open-record index, so the next Append starts a fresh record rather than
-// collapsing into one a previous scenario left open.
-//
-// Truncate plus an explicit seek, not a re-open: the handle is in append
-// mode, where the kernel positions every write at the current end of
-// file, so a stale offset cannot make the next line land past a hole --
-// but Stats and the scan path read through their own handles from zero,
-// and leaving the file's length where it was would have them reading
-// zero bytes as records.
+// Reset implements Store: empties the log and drops the open-record
+// index, so the next Append starts a fresh record rather than collapsing
+// into one a previous scenario left open. The file starts again with a
+// fresh header and salt (see retention.FrameLog.Reset).
 func (s *FileStore) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.f.Truncate(0); err != nil {
-		return fmt.Errorf("matchlog: truncating %s: %w", s.path, err)
-	}
-	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("matchlog: rewinding %s: %w", s.path, err)
+	if err := s.log.Reset(); err != nil {
+		return fmt.Errorf("matchlog: %w", err)
 	}
 	s.index = make(map[string]string)
 	return nil
@@ -432,5 +511,5 @@ func (s *FileStore) Reset() error {
 func (s *FileStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.f.Close()
+	return s.log.Close()
 }

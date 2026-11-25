@@ -104,7 +104,33 @@ var schemaMigrations = []SchemaMigration{
 		Description: "record provisional match-log rows (postgres only)",
 		Postgres:    "0003_match_log_provisional.sql",
 	},
+	{
+		Number: 4,
+		// A stamp on both backends, with no data change (#1202): the
+		// accounts and tokens documents are the same documents, rewritten
+		// by the gauntlet-backed stores when they next save. The number
+		// is the downgrade refusal -- a v0.6.x build would read some of
+		// gauntlet's output wrongly rather than not at all
+		// (docs/decisions/gauntlet-adoption.md, decision 2). The file
+		// half is the stamp itself, as for schema 1; the database's half
+		// is a comment-only file.
+		Description: "accounts and tokens on gauntlet",
+		Postgres:    "0004_auth_on_gauntlet.sql",
+	},
 }
+
+// SchemaAuthSealed is schema 4's number, the downgrade guard for the
+// move onto gauntlet: an older build refuses a data directory or
+// database stamped with it. It is stamped last, once every store has
+// opened (the auth stores and the drop list sealed), and not on a start
+// where a file failed to move onto Postgres, rather than with the rest
+// at start-up: a start that is refused part way -- a plaintext document, which is
+// never sealed in place (#1202, ruling 19), or a damaged one -- leaves
+// it unstamped, so the release the data came from can still open it.
+// Callers migrate to SchemaAuthSealed-1 before opening anything and to
+// CurrentSchema after, and a failure to write that last stamp refuses
+// start-up (#1202 review R20).
+const SchemaAuthSealed int64 = 4
 
 // CurrentSchema is the highest schema version this build knows how to
 // produce. Data stamped above it is refused -- see SchemaTooNewError.
@@ -164,8 +190,13 @@ type fileSchemaDocument struct {
 // There is no way back from that, so there is no downgrade; see
 // docs/upgrades.md, "Going back".
 type SchemaTooNewError struct {
-	// DataDir is the directory whose schema document was read.
+	// DataDir is the directory whose schema document was read. Empty
+	// for the Postgres backend.
 	DataDir string
+	// Database describes the Postgres database whose schema_version
+	// table was read (never its credentials). Empty for the file
+	// backend.
+	Database string
 	// Stored is the schema version found on disk.
 	Stored int64
 	// Known is the highest this build can produce (CurrentSchema).
@@ -176,6 +207,17 @@ type SchemaTooNewError struct {
 }
 
 func (e *SchemaTooNewError) Error() string {
+	if e.Database != "" {
+		// Postgres: schema_version holds a migration this build lacks.
+		// A newer release migrated the database; the way out is that
+		// release, or the copy taken before the upgrade.
+		return fmt.Sprintf(
+			"the database %s is at schema version %d, but this build of MikroView only knows schema version %d -- "+
+				"a newer release of MikroView has migrated it, so run that release or a newer one, or restore the "+
+				"pre-upgrade copy of the database. Refusing to start rather than writing: an older build would "+
+				"overwrite newer data in shapes it does not understand, and there is no way back from that",
+			e.Database, e.Stored, e.Known)
+	}
 	// The build version is what the operator acts on, so the sentence is
 	// built around whether the data names one rather than dropping an
 	// empty string into a fixed phrase.
@@ -299,7 +341,27 @@ func MigrateFileSchema(ctx context.Context, dir, buildVersion string) (FileSchem
 	return migrateFileSchema(ctx, dir, buildVersion, schemaMigrations)
 }
 
+// MigrateFileSchemaTo is MigrateFileSchema stopping at schema version
+// to: migrations numbered above it are left pending for a later call.
+// The downgrade guard still compares against everything this build
+// knows. See SchemaAuthSealed for the one caller that needs it.
+func MigrateFileSchemaTo(ctx context.Context, dir, buildVersion string, to int64) (FileSchemaResult, error) {
+	list := make([]SchemaMigration, 0, len(schemaMigrations))
+	for _, m := range schemaMigrations {
+		if m.Number <= to {
+			list = append(list, m)
+		}
+	}
+	return migrateFileSchemaWithin(ctx, dir, buildVersion, list, CurrentSchema())
+}
+
 func migrateFileSchema(ctx context.Context, dir, buildVersion string, list []SchemaMigration) (FileSchemaResult, error) {
+	return migrateFileSchemaWithin(ctx, dir, buildVersion, list, highestSchema(list))
+}
+
+// migrateFileSchemaWithin runs list's pending migrations, refusing data
+// stamped above known.
+func migrateFileSchemaWithin(ctx context.Context, dir, buildVersion string, list []SchemaMigration, known int64) (FileSchemaResult, error) {
 	if err := validateSchemaList(list); err != nil {
 		return FileSchemaResult{}, err
 	}
@@ -310,7 +372,6 @@ func migrateFileSchema(ctx context.Context, dir, buildVersion string, list []Sch
 	}
 	res := FileSchemaResult{From: stored, To: stored}
 
-	known := highestSchema(list)
 	if err := guardSchema(dir, stored, writtenBy, known); err != nil {
 		return res, err
 	}
@@ -322,6 +383,10 @@ func migrateFileSchema(ctx context.Context, dir, buildVersion string, list []Sch
 		}
 	}
 	if len(pending) == 0 {
+		if stored < known {
+			schemaLog.Info(fmt.Sprintf("data directory schema is at version %d (%s); version %d is stamped once the stores have opened", stored, dir, known))
+			return res, nil
+		}
 		schemaLog.Info(fmt.Sprintf("data directory schema is up to date at version %d (%s)", stored, dir))
 		return res, nil
 	}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 // AuthLogin is a thin wrapper: it renders AuthScreen and wires its
 // onsubmit straight to authState.login. Mocking lib/api.ts (rather than
@@ -18,6 +18,7 @@ vi.mock('../lib/api', () => ({
   submitLoginFactor: vi.fn(),
   // The one non-function export this module reaches for.
   PENDING_LOGIN_EXPIRED: 'sign in again',
+  PASSKEY_STEP_EXPIRED: 'the passkey step ran out, try your passkey again',
   // #1250: authState.loginWithPasskey() runs the real
   // lib/passkeys.svelte.ts ceremony (its own test file covers that code
   // in isolation) -- only the network boundary underneath it is faked
@@ -35,6 +36,7 @@ import {
   submitPasskeyLoginAssertion,
 } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
+import { wizardJourney } from '../lib/wizardJourney.svelte'
 import AuthLogin from './AuthLogin.svelte'
 
 // The browser ceremony's own JSON helpers -- jsdom has neither by
@@ -70,6 +72,7 @@ beforeEach(() => {
   authState.mustChangePassword = false
   authState.pendingSecondFactor = []
   authState.pendingPasskeyOrigin = undefined
+  wizardJourney.end()
 })
 
 async function fillAndSubmit(username: string, password: string) {
@@ -284,6 +287,49 @@ describe('AuthLogin at the pending-factor step', () => {
     expect(authState.state).toBe('authenticated')
   })
 
+  // #1386: the way in is armed where the session actually lands. With a
+  // second factor owed, the password step leaves 'pending-factor' and
+  // the role unknown, so arming there alone never fired for an admin
+  // holding a factor -- the journey never played and the plain
+  // auto-launch opened the wizard instead.
+  it('starts the way in for an admin who finishes with a second factor', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'alex',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(wizardJourney.pending).toBe(true))
+    expect(wizardJourney.holdDoor).toBe(true)
+  })
+
+  it('does not start the way in for a viewer who finishes with a second factor', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'sam',
+      role: 'viewer',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(authState.state).toBe('authenticated'))
+    expect(wizardJourney.pending).toBe(false)
+  })
+
   it('shows the server refusal on a wrong code without opening the app', async () => {
     vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
 
@@ -294,6 +340,27 @@ describe('AuthLogin at the pending-factor step', () => {
 
     expect(await screen.findByText('invalid code')).toBeTruthy()
     expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // #1345 R4-F3, code-box half: an authenticator-code refusal that
+  // lands after switching to "recovery code" is not the recovery code's.
+  it('drops a code refusal that lands after switching to a recovery code', async () => {
+    let answer!: (v: string) => void
+    vi.mocked(submitLoginFactor).mockReturnValue(
+      new Promise((r) => {
+        answer = r
+      }),
+    )
+
+    render(AuthLogin)
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '000000' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /use a recovery code instead/i }))
+
+    answer('invalid code')
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: /continue/i })).toHaveProperty('disabled', false))
+
+    expect(screen.queryByText('invalid code')).toBeNull()
   })
 
   // The recovery-code toggle only relabels the field -- same box, same
@@ -460,6 +527,45 @@ describe('AuthLogin at the pending-factor step offering a passkey (#1250)', () =
     expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
     expect(beginPasskeyLogin).not.toHaveBeenCalled()
     expect(authState.state).toBe('authenticated')
+  })
+
+  // #1345 R4-F3: the switch links stay live while the passkey prompt is
+  // open, so the prompt can fail after the operator has already moved
+  // on to the code box -- its message belongs to the passkey button,
+  // not under the box the operator is now typing into.
+  it('drops a passkey failure that lands after switching to the authenticator app', async () => {
+    stubPasskeyCapableBrowser()
+    vi.mocked(beginPasskeyLogin).mockResolvedValue({ publicKey: { challenge: 'c' } })
+    let dismiss!: () => void
+    const get = vi.fn(
+      () =>
+        new Promise<null>((resolve) => {
+          dismiss = () => resolve(null)
+        }),
+    )
+    vi.stubGlobal('navigator', { credentials: { get } })
+
+    render(AuthLogin)
+    await fireEvent.click(screen.getByRole('button', { name: /^use your passkey$/i }))
+    await vi.waitFor(() => expect(get).toHaveBeenCalled())
+    await fireEvent.click(screen.getByRole('button', { name: /use your authenticator app instead/i }))
+    expect(screen.getByLabelText('code')).toBeTruthy()
+
+    dismiss()
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: /continue/i })).toHaveProperty('disabled', false))
+
+    expect(screen.queryByText(/that didn't complete/i)).toBeNull()
+  })
+
+  it('still shows a passkey failure under the passkey button when nothing was switched', async () => {
+    stubPasskeyCapableBrowser()
+    vi.mocked(beginPasskeyLogin).mockResolvedValue({ publicKey: { challenge: 'c' } })
+    vi.stubGlobal('navigator', { credentials: { get: vi.fn(async () => null) } })
+
+    render(AuthLogin)
+    await fireEvent.click(screen.getByRole('button', { name: /^use your passkey$/i }))
+
+    await vi.waitFor(() => expect(screen.getByText(/that didn't complete/i)).toBeTruthy())
   })
 
   it('replaces the button with a link to the right address when this browser cannot use the passkey, but still offers the other ways in', () => {

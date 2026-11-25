@@ -454,27 +454,27 @@
       <tbody>
         <tr class="frow ft-unplanned open" data-d="d1"><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#reach">iot</a> → <a class="wl" href="#reach">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td><span class="openc">▸</span></td></tr>
         <tr class="drawer open ft-unplanned" id="d1"><td colspan="6"><div class="dwr"><div class="dwr-in">
-          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#reach">cam-porch</a> (198.51.100.14) toward <b>nas</b> (198.51.100.2). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
+          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#reach">cam-porch</a> (198.51.100.78) toward <b>nas</b> (198.51.100.34). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Fourteen events between 13:46 and 13:52, bunched toward the end">
               <line x1="8" y1="6" x2="8" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="6" x2="26" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="31" y1="6" x2="31" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="58" y1="6" x2="58" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="92" y1="6" x2="92" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="118" y1="6" x2="118" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="121" y1="6" x2="121" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="6" x2="158" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="170" y1="6" x2="170" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="196" y1="6" x2="196" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="208" y1="6" x2="208" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="224" y1="6" x2="224" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="236" y1="6" x2="236" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="248" y1="6" x2="248" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
             <span class="span">first 13:46 · last 13:52 · still arriving</span></div>
-          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49812->198.51.100.2:445, len 60
-13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49688->198.51.100.2:445, len 60</div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49812->198.51.100.34:445, len 60
+13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49688->198.51.100.34:445, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#reach">wan-in</a> · 198.51.100.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#reach">wan-in</a> · 203.0.113.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-portscan" id="d2"><td colspan="6"><div class="dwr"><div class="dwr-in">
-          <div class="story"><b>One source, twenty doors.</b> 198.51.100.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
+          <div class="story"><b>One source, twenty doors.</b> 203.0.113.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Twenty events, evenly walked over forty seconds">
               <line x1="12" y1="8" x2="12" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="24.6" y1="8" x2="24.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="37.2" y1="8" x2="37.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="49.8" y1="8" x2="49.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="62.4" y1="8" x2="62.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="75" y1="8" x2="75" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="87.6" y1="8" x2="87.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="100.2" y1="8" x2="100.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="112.8" y1="8" x2="112.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="125.39999999999999" y1="8" x2="125.39999999999999" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="138" y1="8" x2="138" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="150.6" y1="8" x2="150.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="163.2" y1="8" x2="163.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="175.79999999999998" y1="8" x2="175.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="188.4" y1="8" x2="188.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="201" y1="8" x2="201" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="213.6" y1="8" x2="213.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="226.2" y1="8" x2="226.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="238.79999999999998" y1="8" x2="238.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="251.4" y1="8" x2="251.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
             <span class="span">13:41:02 → 13:41:42 · stopped</span></div>
-          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40019->203.0.113.7:1019, len 60
-13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40018->203.0.113.7:1018, len 60</div>
+          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 203.0.113.77:40019->192.0.2.7:1019, len 60
+13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 203.0.113.77:40018->192.0.2.7:1018, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this source</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
@@ -484,7 +484,7 @@
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="30" y1="8" x2="30" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="228" y1="8" x2="228" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">13:34 · 13:36 · 13:39 · quiet since</span></div>
-          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 198.51.100.14:51230->198.51.100.9:25, len 60</div>
+          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 198.51.100.78:51230->203.0.113.9:25, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
@@ -494,7 +494,7 @@
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="16" y1="8" x2="16" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="44" y1="8" x2="44" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="72" y1="8" x2="72" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="100" y1="8" x2="100" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="156" y1="8" x2="156" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="184" y1="8" x2="184" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="212" y1="8" x2="212" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="240" y1="8" x2="240" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">every ~2 m since 13:28</span></div>
-          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49812->198.51.100.2:445, len 60</div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49812->198.51.100.34:445, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
@@ -514,7 +514,7 @@
           <div class="side"><span class="lab">first minutes</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><polyline points="0,28 40,26 80,18 120,14 160,15 200,13 240,14 260,13" fill="none" stroke="#b8c56a" stroke-width="1.6"/></svg>
             <span class="span">since 12:57 · all accepted</span></div>
-          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 203.0.113.31:52114->203.0.113.88:443, len 60</div>
+          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 198.51.100.3:52114->203.0.113.88:443, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button class="quiet">clear</button></div>
         </div></div></td></tr>
       </tbody>
@@ -531,7 +531,7 @@
           <div class="side"><span class="lab">the window, last 7 nights</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="194" y1="8" x2="194" y2="26" stroke="var(--alarm)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/><line x1="230" y1="8" x2="230" y2="26" stroke="var(--alarm)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/></svg>
             <span class="span">five kept nights · two empty</span></div>
-          <div class="lines">last match: Thu 02:12:44 firewall,info A|iot-ntp| forward: 198.51.100.14:123->203.0.113.1:123</div>
+          <div class="lines">last match: Thu 02:12:44 firewall,info A|iot-ntp| forward: 198.51.100.78:123->203.0.113.1:123</div>
           <div class="dwr-acts"><button>mend — widen window</button><button>pause watch</button><button class="quiet">open in stream ▸</button></div>
         </div></div></td></tr>
         <tr class="frow wt-ok" data-d="w2"><td class="k">nas backup window</td><td><a class="wl" href="#reach">servers</a> → wan</td><td class="t">02:00–03:00</td><td><span class="wchip2">◉ watching</span></td><td class="t">02:14</td><td><span class="openc">▸</span></td></tr>
@@ -540,7 +540,7 @@
           <div class="side"><span class="lab">the window, last 7 nights</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="194" y1="8" x2="194" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="230" y1="8" x2="230" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">seven kept nights</span></div>
-          <div class="lines">02:14:09 firewall,info A|srv-backup| forward: 198.51.100.2:51820->198.51.100.40:443</div>
+          <div class="lines">02:14:09 firewall,info A|srv-backup| forward: 198.51.100.34:51820->203.0.113.40:443</div>
           <div class="dwr-acts"><button class="quiet">open in stream ▸</button></div>
         </div></div></td></tr>
         <tr class="frow wt-ok"><td class="k">pihole upstream only</td><td><a class="wl" href="#reach">servers</a> → wan · :53</td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:51</td><td><span class="openc">▸</span></td></tr>
@@ -616,7 +616,7 @@
         <rect class="isl" x="-160" y="-120" width="320" height="200" rx="14"/>
         <circle cx="-138" cy="-92" r="4" fill="var(--iot)"/>
         <text x="-124" y="-87" class="n-name" style="font-size:19px">IoT</text>
-        <text x="66" y="-87" class="n-cidr">198.51.100.0/24</text>
+        <text x="66" y="-87" class="n-cidr">198.51.100.64/27</text>
         <text x="-138" y="-56" class="n-sub">7 clients · egress :53 :123 only · logged both ways</text>
         <text x="-138" y="-34" class="cov cov-l">LOGGED BOTH WAYS</text>
         <text x="-138" y="0" class="n-sub" style="font-size:10.5px">the busiest pathway right now: cam-porch → nas · tcp/445 · refused</text>

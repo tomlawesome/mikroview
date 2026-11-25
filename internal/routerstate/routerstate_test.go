@@ -74,6 +74,9 @@ func TestNoDataIsDistinctFromEmpty(t *testing.T) {
 	if _, _, ok := s.IPAddresses("router-1"); ok {
 		t.Error("IPAddresses reported ok for a device that never pushed")
 	}
+	if _, _, ok := s.IPServices("router-1"); ok {
+		t.Error("IPServices reported ok for a device that never pushed")
+	}
 }
 
 // TestDHCPLeasesARPAddressListsSortedAndAccessible is issue #243 slice
@@ -119,6 +122,159 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	}
 	if len(addrs) != 2 || addrs[0].Address != "192.168.1.1/24" || addrs[1].Address != "192.168.1.9/24" {
 		t.Errorf("IPAddresses = %+v, want sorted by address", addrs)
+	}
+}
+
+// TestIPServicesSortedAndAccessibleWithNoAddressRestriction is issue
+// #1329's reproducer: the pushed /ip/service table is stored and
+// readable back sorted by name, and a service with no address
+// restriction at all -- the case that matters most downstream, since it
+// means "reachable from anywhere" -- comes back with an empty Address
+// rather than nil vs. empty ever being confused with each other. winbox
+// carries an explicit "address":[] here, the shape a real static service
+// actually sends (#1405) -- an address key entirely absent instead marks
+// one of RouterOS's own dynamic rows, which IPServices leaves out (see
+// the dynamic-services tests below).
+func TestIPServicesSortedAndAccessibleWithNoAddressRestriction(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"ip-service","page":1,"pages":1,"records":[`+
+		`{"name":"winbox","disabled":false,"port":8291,"address":[],"certificate":""},`+
+		`{"name":"api","disabled":true,"port":8728,"address":"10.0.0.0/8","certificate":""}]}`)
+
+	services, updatedAt, ok := s.IPServices("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	if len(services) != 2 || services[0].Name != "api" || services[1].Name != "winbox" {
+		t.Fatalf("IPServices = %+v, want sorted by name", services)
+	}
+	if !services[0].Disabled {
+		t.Errorf("services[0] (api) Disabled = false, want true")
+	}
+	if len(services[0].Address) != 1 || services[0].Address[0] != "10.0.0.0/8" {
+		t.Errorf("services[0] (api) Address = %+v, want [10.0.0.0/8]", services[0].Address)
+	}
+	if len(services[1].Address) != 0 {
+		t.Errorf("services[1] (winbox) Address = %+v, want empty -- no restriction", services[1].Address)
+	}
+}
+
+// ipServiceFixture builds the ip-service payload's records array for
+// issue #1405's 12-entry acceptance fixture -- a real CHR 7.23.3
+// /ip/service push, captured 2026-09-30: the eight configurable services
+// (ftp, ssh, telnet, www, www-ssl, winbox, api, api-ssl) and RouterOS's
+// own four dynamic ones (dhcpclient, btest, discover, reverse-proxy).
+// withDynamic controls whether each record also carries the "dynamic"
+// key the current wizard script requests -- false reproduces a router
+// still running the script from before that field existed, where the
+// only signal left is which records carry no "address" key at all (the
+// dynamic four never do, on any script version).
+func ipServiceFixture(withDynamic bool) string {
+	dyn := func(v bool) string {
+		if !withDynamic {
+			return ""
+		}
+		if v {
+			return `,"dynamic":true`
+		}
+		return `,"dynamic":false`
+	}
+	records := []string{
+		`{"name":"ftp","disabled":false,"port":21,"address":[]` + dyn(false) + `}`,
+		`{"name":"ssh","disabled":false,"port":22,"address":[]` + dyn(false) + `}`,
+		`{"name":"telnet","disabled":false,"port":23,"address":[]` + dyn(false) + `}`,
+		`{"name":"dhcpclient","disabled":false,"port":68` + dyn(true) + `}`,
+		`{"name":"www","disabled":false,"port":80,"address":[]` + dyn(false) + `}`,
+		`{"name":"www-ssl","disabled":true,"port":443,"address":[],"certificate":"none"` + dyn(false) + `}`,
+		`{"name":"reverse-proxy","disabled":false,"certificate":"none"` + dyn(true) + `}`,
+		`{"name":"btest","disabled":false,"port":2000` + dyn(true) + `}`,
+		`{"name":"discover","disabled":false,"port":5678` + dyn(true) + `}`,
+		`{"name":"winbox","disabled":false,"port":8291,"address":[]` + dyn(false) + `}`,
+		`{"name":"api","disabled":false,"port":8728,"address":[]` + dyn(false) + `}`,
+		`{"name":"api-ssl","disabled":false,"port":8729,"address":[],"certificate":"none"` + dyn(false) + `}`,
+	}
+	return `{"kind":"ip-service","page":1,"pages":1,"records":[` + strings.Join(records, ",") + `]}`
+}
+
+// dynamicServiceNames are RouterOS's own four -- never something an
+// operator configures, and never something IPServices should return.
+var dynamicServiceNames = map[string]bool{
+	"dhcpclient": true, "btest": true, "discover": true, "reverse-proxy": true,
+}
+
+// TestIPServicesDropsRouterOSOwnDynamicRows is issue #1405: a real
+// router's /ip/service table carries twelve rows, not eight. The other
+// four (dhcpclient, btest, discover, reverse-proxy) are RouterOS's own
+// runtime services, marked "dynamic":true by a router running the
+// current wizard script, and IPServices must leave them out entirely so
+// a caller only ever sees what an operator can actually configure.
+func TestIPServicesDropsRouterOSOwnDynamicRows(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", ipServiceFixture(true))
+
+	services, _, ok := s.IPServices("router-1")
+	if !ok {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	if len(services) != 8 {
+		t.Fatalf("len(IPServices) = %d, want 8 (the four dynamic rows dropped): %+v", len(services), services)
+	}
+	for _, svc := range services {
+		if dynamicServiceNames[svc.Name] {
+			t.Errorf("IPServices kept a dynamic row: %+v", svc)
+		}
+	}
+}
+
+// TestIPServicesDropsDynamicRowsOnAnUnpatchedRouter is #1405's fallback
+// case: a router still running a script pasted before "dynamic" existed
+// sends no "dynamic" key on any record, so IPServices must fall back to
+// RouterOS's own distinction -- a static, configurable service always
+// carries an "address" key (even an empty one), a dynamic one never does
+// -- and still drop exactly the same four rows.
+func TestIPServicesDropsDynamicRowsOnAnUnpatchedRouter(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", ipServiceFixture(false))
+
+	services, _, ok := s.IPServices("router-1")
+	if !ok {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	if len(services) != 8 {
+		t.Fatalf("len(IPServices) = %d, want 8 (the four dynamic rows dropped via the address-key fallback): %+v", len(services), services)
+	}
+	for _, svc := range services {
+		if dynamicServiceNames[svc.Name] {
+			t.Errorf("IPServices kept a dynamic row: %+v", svc)
+		}
+	}
+}
+
+// TestIPServicesCertificateNoneReadsAsEmpty is #1405: a TLS service with
+// no certificate set reports the literal string "none", which must read
+// as no certificate (""), the same value an absent certificate key
+// already decodes to -- not the literal word passed straight through to
+// an operator.
+func TestIPServicesCertificateNoneReadsAsEmpty(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", ipServiceFixture(true))
+
+	services, _, ok := s.IPServices("router-1")
+	if !ok {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	checked := 0
+	for _, svc := range services {
+		if svc.Name != "www-ssl" && svc.Name != "api-ssl" {
+			continue
+		}
+		checked++
+		if svc.Certificate != "" {
+			t.Errorf("%s Certificate = %q, want \"\" (a literal \"none\" reads as no certificate)", svc.Name, svc.Certificate)
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("checked %d TLS services, want 2 (www-ssl, api-ssl)", checked)
 	}
 }
 
@@ -447,7 +603,7 @@ func TestHostNamesAreScopedToTheDeviceThatPushedThem(t *testing.T) {
 	apply(t, s, "router-victim", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[`+
 		`{"hostname":"printer","mac":"aa:bb:cc:dd:ee:03","address":"192.168.1.60"}]}`)
 
-	for _, ip := range []string{"192.168.1.50", "203.0.113.99", "8.8.8.8", "1.2.3.4", "198.51.100.7"} {
+	for _, ip := range []string{"192.168.1.50", "203.0.113.99", "203.0.113.6", "203.0.113.4", "198.51.100.7"} {
 		if got := s.HostName("router-victim", ip); got != "" {
 			t.Errorf("HostName(router-victim, %q) = %q -- router-evil's pushed name reached another device's traffic", ip, got)
 		}
@@ -458,8 +614,8 @@ func TestHostNamesAreScopedToTheDeviceThatPushedThem(t *testing.T) {
 	if got := s.HostName("router-evil", "192.168.1.50"); got != "trusted-nas" {
 		t.Errorf("HostName(router-evil, 192.168.1.50) = %q, want trusted-nas", got)
 	}
-	if got := s.HostName("router-evil", "8.8.8.8"); got != "Verified Trusted Network" {
-		t.Errorf("HostName(router-evil, 8.8.8.8) = %q -- a device's own catch-all peer still applies to its own traffic", got)
+	if got := s.HostName("router-evil", "203.0.113.6"); got != "Verified Trusted Network" {
+		t.Errorf("HostName(router-evil, 203.0.113.6) = %q -- a device's own catch-all peer still applies to its own traffic", got)
 	}
 	if got := s.HostName("router-victim", "192.168.1.60"); got != "printer" {
 		t.Errorf("HostName(router-victim, 192.168.1.60) = %q, want printer", got)
@@ -580,3 +736,188 @@ func TestHostNameSourceNamesThePushedTable(t *testing.T) {
 // /ip/address table contributes its masked network, an unparseable or
 // non-IPv4 entry is skipped rather than failing the call, and a device
 // that has never pushed the ip-address kind contributes nothing.
+
+// rawPage is a raw-rule page through the real decoder, one record per
+// (family, ordinal, comment, packets).
+func rawPage(t *testing.T, rules ...[4]string) ingest.Payload {
+	t.Helper()
+	var recs []string
+	for _, r := range rules {
+		recs = append(recs, `{"family":"`+r[0]+`","ordinal":`+r[1]+`,"comment":"`+r[2]+`","chain":"prerouting","action":"drop","packets":`+r[3]+`,"bytes":0}`)
+	}
+	return decode(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[`+strings.Join(recs, ",")+`]}`)
+}
+
+// #1360: one list for both families, IPv4's table then IPv6's, each in
+// RouterOS's own order -- the same display order FilterRules keeps.
+func TestRawRulesSortedByFamilyThenOrdinal(t *testing.T) {
+	s := New()
+	if err := s.Apply("router-1", rawPage(t,
+		[4]string{"ipv6", "0", "v6 first", "0"},
+		[4]string{"ip", "1", "v4 second", "0"},
+		[4]string{"ip", "0", "v4 first", "0"},
+	), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rules, updatedAt, ok := s.RawRules("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("RawRules reported no data after an applied page")
+	}
+	var got []string
+	for _, r := range rules {
+		got = append(got, r.Comment)
+	}
+	if strings.Join(got, "|") != "v4 first|v4 second|v6 first" {
+		t.Errorf("RawRules order = %v, want IPv4 by ordinal, then IPv6", got)
+	}
+	if _, _, ok := s.RawRules("router-2"); ok {
+		t.Error("RawRules reported data for a device that never pushed")
+	}
+}
+
+func TestAddressListCountsSortedByListThenFamily(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"address-list-count","page":1,"pages":1,"records":[`+
+		`{"list":"mv-bl-spamhaus","family":"ipv6","count":0,"loadedAt":""},`+
+		`{"list":"mv-bl-et","family":"ip","count":633,"loadedAt":"2026-10-01 04:31:07"},`+
+		`{"list":"mv-bl-spamhaus","family":"ip","count":1692,"loadedAt":"2026-10-01 04:17:02"}]}`)
+	counts, updatedAt, ok := s.AddressListCounts("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("AddressListCounts reported no data after an applied page")
+	}
+	var got []string
+	for _, c := range counts {
+		got = append(got, c.List+"/"+c.Family)
+	}
+	if strings.Join(got, " ") != "mv-bl-et/ip mv-bl-spamhaus/ip mv-bl-spamhaus/ipv6" {
+		t.Errorf("AddressListCounts order = %v", got)
+	}
+	if counts[1].Count != 1692 || counts[1].LoadedAt != "2026-10-01 04:17:02" {
+		t.Errorf("mv-bl-spamhaus/ip = %+v", counts[1])
+	}
+}
+
+// The two new kinds are per device like every other table: a router's
+// rules, counts and samples are its own.
+func TestBlocklistKindsAreIsolatedPerDevice(t *testing.T) {
+	s := New()
+	now := time.Now()
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "mikroview blocklist: et (from)", "10"}), now); err != nil {
+		t.Fatal(err)
+	}
+	apply(t, s, "router-2", `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":5,"loadedAt":""}]}`)
+
+	if _, _, ok := s.RawRules("router-2"); ok {
+		t.Error("router-1's raw rules are visible on router-2")
+	}
+	if _, _, ok := s.AddressListCounts("router-1"); ok {
+		t.Error("router-2's counts are visible on router-1")
+	}
+	if got := s.RawRuleSamples("router-2", "mikroview blocklist: et (from)"); got != nil {
+		t.Errorf("router-1's samples are visible on router-2: %+v", got)
+	}
+	if got := s.RawRuleSamples("router-1", "mikroview blocklist: et (from)"); len(got) != 1 || got[0].Packets != 10 {
+		t.Errorf("router-1's own samples = %+v, want one at 10", got)
+	}
+}
+
+// #1360 part 2's sample ring: one (at, packets) per push for each
+// commented raw rule, rules sharing a comment summed, uncommented ones
+// left alone, and nothing older than 36 h kept.
+func TestRawRuleSamplesKeepThirtySixHours(t *testing.T) {
+	s := New()
+	const from = "mikroview blocklist: spamhaus (from)"
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	push := func(at time.Time, v4, v6 string) {
+		t.Helper()
+		if err := s.Apply("router-1", rawPage(t,
+			[4]string{"ip", "0", from, v4},
+			[4]string{"ipv6", "0", from, v6},
+			[4]string{"ip", "1", "", "999"},
+		), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	push(t0, "10", "1")
+	push(t0.Add(20*time.Minute), "30", "2")
+	got := s.RawRuleSamples("router-1", from)
+	if len(got) != 2 || got[0] != (RawRuleSample{At: t0, Packets: 11}) || got[1].Packets != 32 {
+		t.Fatalf("samples = %+v, want 11 then 32 (IPv4 and IPv6 summed)", got)
+	}
+	if s.RawRuleSamples("router-1", "") != nil {
+		t.Error("an uncommented rule was sampled")
+	}
+
+	// 36 h after the first push it is still in the window; a minute
+	// later it has gone, and the second has not.
+	push(t0.Add(rawSampleWindow), "40", "2")
+	if got := s.RawRuleSamples("router-1", from); len(got) != 3 {
+		t.Fatalf("at exactly 36 h: %d samples, want 3 -- the first is still inside the window", len(got))
+	}
+	push(t0.Add(rawSampleWindow+time.Minute), "41", "2")
+	got = s.RawRuleSamples("router-1", from)
+	if len(got) != 3 || !got[0].At.Equal(t0.Add(20*time.Minute)) {
+		t.Errorf("after 36 h: %+v, want the first sample dropped and the rest kept", got)
+	}
+
+	// The caller's copy is its own.
+	got[0].Packets = -1
+	if s.RawRuleSamples("router-1", from)[0].Packets == -1 {
+		t.Error("RawRuleSamples handed out the store's own slice")
+	}
+}
+
+// A comment that stops arriving -- the rule was undone -- ages out with
+// the window rather than being held for ever.
+func TestRawRuleSamplesForgetAnUndoneRule(t *testing.T) {
+	s := New()
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "gone", "5"}), t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "kept", "5"}), t0.Add(rawSampleWindow+time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.RawRuleSamples("router-1", "gone"); got != nil {
+		t.Errorf("an undone rule's samples outlived the window: %+v", got)
+	}
+}
+
+// Both bounds hold: a ring past its length drops its oldest, and a
+// device past its comment budget samples no new comment.
+func TestRawRuleSamplesAreBounded(t *testing.T) {
+	defer func(n, c int) { maxRawSamplesPerComment, maxRawSampleComments = n, c }(maxRawSamplesPerComment, maxRawSampleComments)
+	maxRawSamplesPerComment, maxRawSampleComments = 3, 2
+
+	s := New()
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if err := s.Apply("router-1", rawPage(t,
+			[4]string{"ip", "0", "a", itoa(i)},
+			[4]string{"ip", "1", "b", itoa(i)},
+			[4]string{"ip", "2", "c", itoa(i)},
+		), t0.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := s.RawRuleSamples("router-1", "a")
+	if len(got) != 3 || got[0].Packets != 2 || got[2].Packets != 4 {
+		t.Errorf("ring a = %+v, want the newest three (2, 3, 4)", got)
+	}
+	if s.RawRuleSamples("router-1", "c") != nil {
+		t.Error("a third comment was sampled past a budget of two")
+	}
+}
+
+// Reset is the test-only clean slate (#1064): samples go with the
+// tables they came from.
+func TestResetDropsRawRuleSamples(t *testing.T) {
+	s := New()
+	if err := s.Apply("router-1", rawPage(t, [4]string{"ip", "0", "a", "1"}), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Reset()
+	if s.RawRuleSamples("router-1", "a") != nil {
+		t.Error("Reset left raw-rule samples behind")
+	}
+}

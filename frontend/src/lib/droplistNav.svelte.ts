@@ -11,7 +11,7 @@
 // Settings tab, and clears it so a later, unrelated visit never
 // silently reopens it. It never submits on its own -- only prefills the
 // fields and focuses the address input.
-export interface PendingDroplistDraft {
+interface PendingDroplistDraft {
   cidr: string
   reason: string
   flagID?: string

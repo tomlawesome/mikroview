@@ -90,7 +90,7 @@ receiver's own idiom.
 - Same data story as rounds 1–2, kept consistent to the timestamp:
   cam-porch knocking tcp/445 every ~64 s from 13:52:07, 14 events by
   NOW 14:02:11; wan drops ▲3.1× since 13:30, all named by wan-in-drop,
-  latest 198.51.100.34 → :8291; the day's flags 09:03 · 11:20 ×2 ·
+  latest 203.0.113.34 → :8291; the day's flags 09:03 · 11:20 ×2 ·
   12:58 · 13:41 · 13:52; guest→wan dark; wg quiet by choice.
 - Ratified specs honoured: #438's paired source/destination boxes with
   swap in every opened view; #363's newest-at-top (M and O are built on

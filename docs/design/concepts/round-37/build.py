@@ -135,7 +135,7 @@ ent = ent.replace(HOSTHINT2,
 assert ent.count('      <div class="fcard add">\n') == 1
 ent = ent.replace('      <div class="fcard add">\n',
                   '      <div class="fcard unreg">\n'
-                  '        <div class="fhead"><b>192.0.2.1</b><span class="fstate warn">● PUSHING · UNREGISTERED</span></div>\n'
+                  '        <div class="fhead"><b>192.0.2.17</b><span class="fstate warn">● PUSHING · UNREGISTERED</span></div>\n'
                   '        <div class="frow">RouterOS 7.19.4 · pushing since 13:40 · 3 events/s now</div>\n'
                   '        <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>\n'
                   '        <div class="frow"><a class="olink">register it ▸</a></div>\n'

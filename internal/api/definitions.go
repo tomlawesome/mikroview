@@ -19,7 +19,7 @@ import (
 // This file is issue #407: one definitions surface, replacing the two
 // the engine retired. `/api/detectors` and `/api/watchlist/entries` are
 // gone -- no compatibility handler, no alias, no route that exists only
-// to return a friendlier error (AGENTS.md's "removals are wholesale",
+// to return a friendlier error (the "removals are wholesale" rule in docs/development.md,
 // and docs/decisions/evaluation-engine.md's ratified decision 3).
 //
 // What replaces them is not a rename. A detector toggle and a watchlist
@@ -1081,7 +1081,7 @@ func (s *Server) handleDefinitionsDelete(w http.ResponseWriter, r *http.Request)
 		apiLog.Error("hiding the suggestion candidate for a deleted definition failed: " + err.Error())
 	}
 	s.Audit.Record(auditActor(r), "definition.delete", id, sd.Definition.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // cloneRequest is the wire shape for POST /api/definitions/{id}/clone.
@@ -1660,6 +1660,7 @@ func writeDefinitionError(w http.ResponseWriter, err error) {
 		// own path or detail and has no business leaving this process --
 		// see ErrPersistFailed's own doc comment (v0.6.0 audit finding
 		// R6).
+		apiLog.Error("saving a definition change failed: " + err.Error())
 		http.Error(w, "the change could not be saved, so nothing was changed", http.StatusInternalServerError)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)

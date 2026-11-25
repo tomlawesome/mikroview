@@ -271,3 +271,23 @@ describe('the metrics scroll stops at the metrics view (#1189)', () => {
     expect(componentSource).toMatch(/\.metrics\s*\{[^}]*overscroll-behavior:\s*contain/)
   })
 })
+
+// #1540 (C5): until the first load lands, a one-line "<verb>ing…" status
+// stands where the screen has no room for ghost rows; once it has, the
+// status is gone.
+describe('first load shows a one-line status (#1540 C5)', () => {
+  it('says what it is doing while the first load is in flight, and stops once it lands', () => {
+    appState.initialLoadDone = false
+    appState.stats = stats
+    const first = render(Metrics)
+    flushSync()
+    const lines = [...first.container.querySelectorAll('[role="status"]')].map((n) => n.textContent?.trim() ?? '')
+    expect(lines.join('|')).toMatch(/(^|\|)[A-Z][a-z]+ing[^|]*…($|\|)/)
+    first.unmount()
+
+    appState.initialLoadDone = true
+    const second = render(Metrics)
+    flushSync()
+    expect(second.container.textContent).not.toMatch(/(Loading|Reading|Gathering|Mapping)[^.]*…/)
+  })
+})

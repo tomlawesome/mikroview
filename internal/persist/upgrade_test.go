@@ -28,9 +28,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/engine"
@@ -157,7 +155,7 @@ func testOneFixture(t *testing.T, root, version, tarPath string) {
 			// never to this test's own t.TempDir(). See
 			// NewEncryptedFileBackendForPath's doc comment.
 			logicalPath := config.DefaultDataDir + "/" + name
-			return persist.NewEncryptedFileBackendForPath(realPath, logicalPath, key)
+			return persist.NewEncryptedFileBackendForPath(realPath, logicalPath, productionStoreName(t, name), key)
 		}
 		return persist.NewFileBackend(realPath)
 	}
@@ -179,22 +177,11 @@ func testOneFixture(t *testing.T, root, version, tarPath string) {
 		t.Errorf("schema.json records %d, want %d", stored, persist.CurrentSchema())
 	}
 
-	// 2. The admin and viewer accounts exist and their passwords verify.
-	// #853 rule 6 only exempts accounts/tokens/recovery-keys from going
-	// *memory-only* when no history.keyFile is configured at all
-	// (storage.backendFor's plaintextWithoutKeyStores branch); once a
-	// key exists, every file-backed store -- these included -- is
-	// encrypted under it, hashes or not.
-	authStore, err := auth.OpenWithBackend(backendFor("users.json", manifest.HistoryKeyEncrypted))
-	if err != nil {
-		t.Fatalf("opening the accounts store: %v", err)
-	}
-	if _, err := authStore.Authenticate(manifest.AdminUsername, fixtureAdminPassword, time.Now()); err != nil {
-		t.Errorf("admin login (%s): %v", manifest.AdminUsername, err)
-	}
-	if _, err := authStore.Authenticate(manifest.ViewerUsername, fixtureAdminPassword, time.Now()); err != nil {
-		t.Errorf("viewer login (%s): %v", manifest.ViewerUsername, err)
-	}
+	// 2. The accounts: opened through gauntlet, sealed under a key, with
+	// the admin's and viewer's passwords checked, in
+	// TestUpgradeFixturesOpenOnGauntlet (upgrade_gauntlet_test.go, #1202
+	// section C) -- internal/auth, which this step used to open them
+	// with, is gone.
 
 	// 3. The named entity.
 	entityStore, err := entities.OpenWithBackend(backendFor("entities.json", manifest.HistoryKeyEncrypted))

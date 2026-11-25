@@ -136,6 +136,36 @@ func TestUpgradeRouterCountReflectsTheSetupLedger(t *testing.T) {
 	}
 }
 
+// TestUpgradeRouterCountReflectsLoggingLeftovers is #1373's own count:
+// independent of Behind, since a router can be reporting the current
+// wizard's own setup and still carry a leftover an even earlier one
+// left running.
+func TestUpgradeRouterCountReflectsLoggingLeftovers(t *testing.T) {
+	s := upgradeServer(t)
+	s.Setup.NoteUpgrade("v0.4.0", "v0.5.0", time.Now())
+	s.Devices.Ensure("core", time.Now())
+
+	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":6,
+ "records":[
+  {"type":"action","name":"memory","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"192.168.254.1","remoteProtocol":"tls","remoteLogFormat":"syslog"},
+  {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"0.0.0.0","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},
+  {"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}
+ ]}`
+	noteReportBody(t, s, "core", body)
+
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	adminClient := setUpAdmin(t, s, ts)
+
+	got := getUpgrade(t, adminClient, ts.URL).Routers
+	if got.StaleLogging != 1 {
+		t.Errorf("staleLogging = %d, want 1 -- the repointed memory action", got.StaleLogging)
+	}
+	if got.Behind != 0 {
+		t.Errorf("behind = %d, want 0 -- the mikroview action itself is current", got.Behind)
+	}
+}
+
 // `done` is an instance-wide statement, so it is written down and
 // audited with the admin's name.
 func TestUpgradeAcknowledgePersistsAndAudits(t *testing.T) {
@@ -228,9 +258,9 @@ func TestUpgradeReadableByViewerWritableByAdminOnly(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, s, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "viewer"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: fixtureUserPassword, Role: "viewer"}).Body.Close()
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: fixtureUserPassword}).Body.Close()
 	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/upgrade below
 
 	if got := getUpgrade(t, viewerClient, ts.URL); got.Previous != "v0.4.0" {

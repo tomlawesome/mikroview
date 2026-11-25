@@ -59,7 +59,7 @@ export const LEAD_INSET = 40
 export const EDGE_INSET = 10
 
 /** Clearance between the card and anything it is keeping off. */
-export const CARD_GAP = 22
+const CARD_GAP = 22
 
 /** How long a card outlives the pointer leaving it (#1027).
  *
@@ -83,7 +83,7 @@ export const CARD_GRACE_MS = 180
  * boundary card actually renders at. Only ever used before the first
  * measurement lands, so the first frame is placed sensibly rather than
  * at 0,0. */
-export const CARD_FALLBACK: Size = { w: 288, h: 180 }
+const CARD_FALLBACK: Size = { w: 288, h: 180 }
 
 const overlaps = (a: Rect, b: Rect): boolean =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
@@ -96,7 +96,7 @@ const overlapArea = (a: Rect, b: Rect): number => {
 
 const clamp = (n: number, lo: number, hi: number): number => (lo > hi ? lo : Math.min(Math.max(n, lo), hi))
 
-export const grow = (r: Rect, by: number): Rect => ({ x: r.x - by, y: r.y - by, w: r.w + 2 * by, h: r.h + 2 * by })
+const grow = (r: Rect, by: number): Rect => ({ x: r.x - by, y: r.y - by, w: r.w + 2 * by, h: r.h + 2 * by })
 
 /** The bounding box of some points. */
 export function boundsOf(points: readonly Point[]): Rect {
@@ -112,7 +112,7 @@ export function boundsOf(points: readonly Point[]): Rect {
  * stroke; a rectangle that thin is one the card can straddle without
  * ever registering as covering it, so the line is given a little body.
  * `CARD_GAP` is the clearance on top of this. */
-export const LINE_GIRTH = 8
+const LINE_GIRTH = 8
 
 /**
  * A drawn line, as the rectangles the placement has to keep off (#1030).
@@ -533,7 +533,7 @@ export function drawnRects(els: Iterable<Element>, container: Element): Rect[] {
 /** How many samples a line is walked at. Six segments is enough to
  * follow the curve of a rib without the placement search paying for
  * dozens of rectangles it has to score against every candidate. */
-export const PATH_SAMPLES = 6
+const PATH_SAMPLES = 6
 
 /** Whether a shape paints its inside, in which case its own box -- not
  * its outline -- is what a card would be covering.

@@ -112,7 +112,7 @@ describe('composeCommand', () => {
   })
 
   it('refuses to compose when hostIp is not an address or CIDR', () => {
-    const cmd = composeCommand({ ...base, hostIp: '1.2.3.4 dst-address=0.0.0.0/0' })
+    const cmd = composeCommand({ ...base, hostIp: '192.0.2.4 dst-address=0.0.0.0/0' })
     expect(cmd).toBeNull()
   })
 

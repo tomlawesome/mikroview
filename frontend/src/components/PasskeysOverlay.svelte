@@ -5,22 +5,28 @@
   // second-factor.md's own instruction): same modal chrome, same
   // password-gated removal beat, same shared recovery codes.
   //
-  // Five states: list (every registered passkey, with rename/remove),
-  // adding (name it, then the browser's own prompt), codes (the ten
-  // recovery codes, shown once, the same as the authenticator app's --
-  // or, when a factor already minted them, a one-line note that the
-  // existing ones still stand rather than a blank grid), removing
-  // (password confirm, the same beat as turning the authenticator app
-  // off), and unavailable -- shown instead of all of the above whenever
-  // this deployment can't offer a passkey right now, or this browser is
-  // not at the address they were made for. The row that opens this
-  // overlay is never hidden (AccountMenu.svelte); this is where it says
-  // why.
+  // Six states: list (every registered passkey, with rename/remove),
+  // adding (name it and confirm the password -- #1418/#1422 -- then the
+  // browser's own prompt), codes (the ten
+  // recovery codes, shown once, the same as the authenticator app's),
+  // added-done (a passkey added when a factor had already minted
+  // recovery codes: a one-line note that the existing ones still stand
+  // rather than a blank grid), removing (password confirm, the same
+  // beat as turning the authenticator app off), and unavailable --
+  // shown instead of all of the above whenever this deployment can't
+  // offer a passkey right now, or this browser is not at the address
+  // they were made for. The row that opens this overlay is never
+  // hidden (AccountMenu.svelte); this is where it says why.
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot, NO_ANSWER } from '../lib/plainWords'
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
+  import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
-  import { ApiError, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
   import { appState } from '../lib/state.svelte'
   import { formatDayMonth, formatRelative } from '../lib/format'
   import type { PasskeySummary } from '../lib/types'
@@ -35,10 +41,32 @@
   let loadingList = $state(false)
 
   let newName = $state('')
+  // #1418: checked server-side by beginPasskeyRegistration before the
+  // browser is ever asked for anything -- collected in the same 'adding'
+  // step as the name, same fold as the 'removing' step's own warning +
+  // password below.
+  let addPassword = $state('')
   let addError = $state<string | null>(null)
+  // #1202 U13: after the codes screen's call fails or sends the person
+  // back to the list, focus is put inside the dialog again (a disabled or
+  // removed button drops it to the page body).
+  let modalEl = $state<HTMLElement | undefined>(undefined)
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstControl = () =>
+    modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
   let addBusy = $state(false)
   let recoveryCodes = $state<string[]>([])
-  let codesCopied = $state(false)
+  const flash = new CopyFlash()
+  // #1202: a first passkey is held, with its codes, until
+  // confirmRecoveryCodes says they were saved -- not listed or counted
+  // until then. Null when the registration was not held (the account
+  // already had a second factor), where "I have saved these" only closes.
+  let heldPasskey = $state<PasskeySummary | null>(null)
+  let codesError = $state<string | null>(null)
 
   let renamingId = $state<string | null>(null)
   let renameValue = $state('')
@@ -62,13 +90,22 @@
   async function loadList() {
     listError = null
     loadingList = true
-    const result = await fetchPasskeys()
-    loadingList = false
-    if (typeof result === 'string') {
-      listError = result
-      return
+    // Q5-F2: fetchPasskeys now throws ApiError like every other list call
+    // in lib/api.ts -- a 401 here means this session is already gone
+    // (same reasoning as submitAdd/confirmRemove below), routed the same
+    // way rather than shown as plain error text; anything else is a
+    // genuine failure to read the list.
+    try {
+      passkeys = await fetchPasskeys()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      listError = err instanceof Error ? err.message : String(err)
+    } finally {
+      loadingList = false
     }
-    passkeys = result
   }
 
   // Fetched fresh every time this opens, the same reasoning as
@@ -79,13 +116,28 @@
     if (open && !unavailableReason) void loadList()
   })
 
+  // X4-F1: the ten codes exist in clear nowhere else, and a reload before
+  // "I have saved these" loses them for good -- held the same way
+  // LogEveryRule's own guard is, on while this screen is the one
+  // showing them, off the instant it isn't. leaveGuard (#1363) is what
+  // actually prompts on beforeunload now; this just says whether that
+  // prompt should fire.
+  $effect(() => {
+    if (step !== 'codes') return
+    leaveGuard.hold('passkeys-codes')
+    return () => leaveGuard.release('passkeys-codes')
+  })
+
   function resetFields() {
     step = 'list'
     newName = ''
+    addPassword = ''
     addError = null
     addBusy = false
     recoveryCodes = []
-    codesCopied = false
+    flash.key = null
+    heldPasskey = null
+    codesError = null
     renamingId = null
     renameValue = ''
     renameError = null
@@ -121,6 +173,7 @@
   function startAdding() {
     addError = null
     newName = ''
+    addPassword = ''
     step = 'adding'
   }
 
@@ -134,14 +187,26 @@
     // lib/api.ts). Routed the same way here: this overlay's own header
     // X/Escape/backdrop would otherwise offer a way out that doesn't
     // actually work, since the session behind it is already gone.
+    //
+    // #1418: a wrong password (or a spent re-check budget) comes back as
+    // a plain string too, before the browser is ever asked for anything
+    // -- addError below shows it and the caller stays on this same
+    // step to retry.
     try {
-      const result = await registerPasskey(newName.trim())
+      const result = await registerPasskey(newName.trim(), addPassword)
+      // #1202: STEP_EXPIRED is the ceremony running out, not a dead
+      // session -- its words say to start again, and this step is where.
       if (typeof result === 'string') {
-        addError = result
+        addError = couldNot('add', 'this passkey', result)
         return
       }
-      passkeys = [...passkeys, result.passkey]
-      authState.passkeyCount += 1
+      addPassword = ''
+      if (result.pendingConfirmation) {
+        heldPasskey = result.passkey
+      } else {
+        passkeys = [...passkeys, result.passkey]
+        authState.passkeyCount += 1
+      }
       if (result.recoveryCodes) {
         recoveryCodes = result.recoveryCodes
         step = 'codes'
@@ -160,10 +225,55 @@
   }
 
   async function copyCodes() {
-    codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
+    await flash.run('codes', () => copyToClipboard(recoveryCodes.join('\n')))
   }
 
-  function finishCodes() {
+  // #1202: a held passkey that gauntlet no longer holds (the ten minutes
+  // ran out, or nothing is waiting to be confirmed) leaves nothing to
+  // finish. Back to the list, which carries the way to add one again, with
+  // the words saying so -- never a screen with no exit.
+  function startAgain(message: string) {
+    resetFields()
+    addError = message
+  }
+
+  // A 409 carries gauntlet's own words (nothing is waiting to be
+  // confirmed); the step-expired answer is already a full sentence.
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
+  }
+
+  async function finishCodes() {
+    // A held passkey (#1202) goes live only when the server is told the
+    // codes were saved: that call comes first, and the session is read
+    // again so the count is the server's. If the hold is gone the person
+    // goes back to the list with "start again"; if the session is gone
+    // they are signed out; any other failure stays on this screen with the
+    // button usable, so pressing it again is the retry.
+    if (heldPasskey) {
+      codesError = null
+      addBusy = true
+      try {
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
+          void focusWhenReady(firstControl)
+          return
+        }
+        await authState.check()
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        codesError = couldNot('confirm', 'the codes', err instanceof ApiError ? err.message : NO_ANSWER)
+        void focusWhenReady(() => saveButton)
+        return
+      } finally {
+        addBusy = false
+      }
+    }
     close()
   }
 
@@ -186,7 +296,7 @@
     renameError = null
     const err = await renamePasskey(id, name)
     if (err) {
-      renameError = err
+      renameError = couldNot('rename', 'this passkey', err)
       return
     }
     passkeys = passkeys.map((p) => (p.id === id ? { ...p, name } : p))
@@ -215,7 +325,7 @@
     try {
       const result = await disablePasskey(removingId, removePassword)
       if (typeof result === 'string') {
-        removeError = result
+        removeError = couldNot('remove', 'this passkey', result)
         return
       }
       // #1253: this was the account's last second factor -- the server
@@ -253,13 +363,18 @@
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Passkeys" tabindex="-1" use:trapFocus>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Passkeys" tabindex="-1" bind:this={modalEl} use:trapFocus>
       <div class="modal-header">
         <span class="title">Passkeys</span>
         {#if step !== 'codes'}
           <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
+
+      <!-- #1202 U13: one live region for the list and codes screens,
+           outside the step blocks so it is in the page before any message
+           and survives the move from the codes screen back to the list. -->
+      <p class="error live" role="status" aria-live="polite">{step === 'list' ? (addError ?? '') : step === 'codes' ? (codesError ?? '') : ''}</p>
 
       {#if unavailableReason}
         <div class="body">
@@ -301,7 +416,7 @@
           {#if loadingList}
             <p class="muted">Loading…</p>
           {:else if listError}
-            <p class="error">{listError}</p>
+            <FailureLine verb="load" thing="the passkeys" said={listError} />
           {:else if passkeys.length === 0}
             <p>
               Add a passkey -- a fingerprint, face or device PIN -- as a second step at sign-in,
@@ -325,7 +440,7 @@
                       <button type="button" class="pk-icon" onclick={submitRename} aria-label="Save name">✓</button>
                       <button type="button" class="pk-icon" onclick={cancelRename} aria-label="Cancel rename">✕</button>
                     </div>
-                    {#if renameError}<p class="error">{renameError}</p>{/if}
+                    {#if renameError}<FailureLine text={renameError} />{/if}
                   {:else}
                     <div class="pk-main">
                       <span class="pk-name">{row.name}</span>
@@ -350,7 +465,6 @@
               {/each}
             </div>
           {/if}
-          {#if addError}<p class="error">{addError}</p>{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={close}>Close</button>
@@ -366,12 +480,19 @@
               Name
               <input type="text" placeholder="this laptop" bind:value={newName} />
             </label>
+            <!-- #1418: checked before the browser is ever asked for
+                 anything -- same label/autocomplete as the 'removing'
+                 step's own password field below. -->
+            <label>
+              Password
+              <input type="password" bind:value={addPassword} autocomplete="current-password" />
+            </label>
           {/if}
-          {#if addError}<p class="error">{addError}</p>{/if}
+          {#if addError}<FailureLine text={addError} />{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={() => (step = 'list')} disabled={addBusy}>Cancel</button>
-          <button type="button" class="confirm" disabled={addBusy} onclick={submitAdd}>
+          <button type="button" class="confirm" disabled={addBusy || !addPassword} onclick={submitAdd}>
             {addBusy ? 'Waiting…' : 'Continue'}
           </button>
         </div>
@@ -388,15 +509,23 @@
             {/each}
           </div>
           <div class="copyrow">
-            <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
+            <button type="button" class="copy" onclick={copyCodes}>{flash.label('codes', 'Copy all', { copied: 'Copied', failed: 'Copy failed' })}</button>
           </div>
-          <p class="muted">
-            Every other session this account was signed in on has been ended.
-          </p>
+          <!-- #1202: sessions end when the passkey is confirmed, not before. -->
+          {#if heldPasskey}
+            <p class="muted">
+              Nothing is switched on until you press the button below. Then this account is
+              signed out everywhere else.
+            </p>
+          {:else}
+            <p class="muted">
+              Every other session this account was signed in on has been ended.
+            </p>
+          {/if}
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finishCodes}>I have saved these</button>
+          <button type="button" class="confirm" bind:this={saveButton} onclick={finishCodes} disabled={addBusy}>I have saved these</button>
         </div>
       {:else if step === 'added-done'}
         <div class="body">
@@ -423,7 +552,7 @@
             Password
             <input type="password" bind:value={removePassword} autocomplete="current-password" />
           </label>
-          {#if removeError}<p class="error">{removeError}</p>{/if}
+          {#if removeError}<FailureLine text={removeError} />{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={cancelRemove} disabled={removeBusy}>Cancel</button>
@@ -522,6 +651,15 @@
   .error {
     color: var(--reject);
     font-size: 12px;
+  }
+
+  .error.live {
+    margin: 0;
+    padding: 10px 16px 0;
+  }
+
+  .error.live:empty {
+    display: none;
   }
 
   .warning {

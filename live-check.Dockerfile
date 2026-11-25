@@ -16,7 +16,7 @@
 # product Dockerfile's Node major, frontend/package.json's Playwright --
 # so a bump here is the same decision as a bump there, not a second one.
 #
-# Base images name a tag, never a @sha256 digest, per AGENTS.md: a digest
+# Base images name a tag, never a @sha256 digest, per docs/decisions/base-images-on-tags.md: a digest
 # freezes the base and stops it receiving the security patches published
 # by moving the tag, and nothing here bumps digests automatically.
 FROM node:26-bookworm
@@ -25,8 +25,8 @@ FROM node:26-bookworm
 # truth for this version; the tarball is fetched rather than layered from
 # golang:1.27 because that image is Debian-based too and stacking two
 # distributions to save one download is a worse trade than it looks.
-ARG GO_VERSION=1.27.1
-ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+ARG GO_VERSION=1.27.4
+ARG GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 RUN set -eux; \
     curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c -; \
@@ -63,7 +63,7 @@ RUN printf 'export PATH=/usr/local/go/bin:$PATH\n' > /etc/profile.d/go.sh
 # above the engine are out of reach on any Linux host. It catches
 # engine-level differences, which is most of what bites, and nothing
 # beyond that should be claimed from it.
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG PLAYWRIGHT_VERSION=1.64.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -eux; \
     npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium firefox webkit; \

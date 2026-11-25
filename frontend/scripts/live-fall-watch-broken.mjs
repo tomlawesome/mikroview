@@ -28,7 +28,7 @@
 // (internal/watchlist's nights.go tests) and left as a follow-up here if
 // a live proof is ever wanted.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, tokenMint, advanceTestClock } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -42,7 +42,8 @@ async function api(method, path_, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // A 204 (every DELETE since #1538) carries no body to parse.
+  return { status: res.status(), body: res.status() < 400 && res.status() !== 204 ? await res.json() : null }
 }
 
 // The ingest token must be scoped to exactly the device feedSyslog's
@@ -56,7 +57,7 @@ for (let i = 0; i < 40 && !device; i++) {
 }
 check(!!device, `the instance reports the device events arrive from (${device})`)
 
-const tokenRes = await api('POST', '/api/tokens', { name: 'fall-watch-broken', kind: 'ingest', device })
+const tokenRes = await api('POST', '/api/tokens', tokenMint({ name: 'fall-watch-broken', kind: 'ingest', device }))
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 const token = tokenRes.body?.value
 
@@ -87,9 +88,13 @@ check(
 // asks the server what time it thinks it is, which is the clock the
 // window below has to be computed against -- not this process's.
 async function advanceClock(advance) {
-  const res = await api('POST', '/api/test/clock', { advance })
+  // Through the harness's helper, not api(): it also records how far the
+  // server's clock now runs ahead, which freshTotpCode needs for every
+  // sign-in after this one (under the gauntlet the test clock governs
+  // authenticator codes too).
+  const res = await advanceTestClock(page.request, advance)
   check(res.status === 200, `the test clock answers (advance ${advance}, ${res.status})`)
-  return new Date(res.body?.now)
+  return res.now
 }
 
 // A watch window that opens a minute after the server's now and closes a

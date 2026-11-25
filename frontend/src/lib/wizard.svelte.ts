@@ -14,6 +14,7 @@
 // the modal fetches while open belongs to the component and stops with
 // it.
 
+import { untrack } from 'svelte'
 import {
   createDevice,
   fetchDevices,
@@ -24,10 +25,10 @@ import {
   markSetupStep,
   mintEnrolment,
   rebindEnrolment,
-  registerDevice,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
+import { couldNot, plainWords } from './plainWords'
 import {
   buildLedger,
   firstOpenStep,
@@ -43,6 +44,7 @@ import type {
   EnrolmentToken,
   RefusedSender,
   RouterBackupsResponse,
+  RouterBackupSwitchState,
   SetupCommandsResponse,
   SetupMark,
   SetupStatus,
@@ -75,6 +77,11 @@ class WizardState {
   // must not mint a second one.
   enrolment = $state<EnrolmentToken | null>(null)
   enrolmentMintedAt = $state('')
+  // walkMintedAt is this walk's first mint, kept through any re-mint the
+  // walk makes (the wrong-address recovery mints again, but the block
+  // it pasted -- and the certificate it fetched -- came after the
+  // first). The walk's evidence is read from here (#1400, #1401).
+  walkMintedAt = $state('')
   enrolmentError = $state<string | null>(null)
 
   // enrolExpectedAddress is the router's own address, asked for before
@@ -103,11 +110,6 @@ class WizardState {
   // again after minting.
   enrolRebinding = $state(false)
 
-  // registerError surfaces a refused Register step, and registering
-  // guards its button the same way enrolMinting does.
-  registerError = $state<string | null>(null)
-  registering = $state(false)
-
   // rebindError surfaces a refused rebind of the enrolment window
   // (#1291, ruling 23a).
   rebindError = $state<string | null>(null)
@@ -132,6 +134,23 @@ class WizardState {
   // note 10572: this is the only door into that shape; the wizard never
   // offers it on its own). Null in every ordinary launch.
   lostRouterDevice = $state<string | null>(null)
+
+  // reEnrolling is Re-enrol…'s own signal (#1385, "Adding a router,
+  // re-enrolling") to the full-screen wizard's run (wizardRun.begin()):
+  // land on Mint the token for ledgerDevice even though that router's
+  // logs already stand as evidence, rather than reopening the ledger
+  // where an ordinary revisit would -- because a fresh token, not the
+  // existing one, is the whole point of this door. A one-shot flag,
+  // consumed and cleared by begin() the moment it reads it, so a later
+  // Admin ▸ Run setup… on the same router does not keep forcing Mint.
+  reEnrolling = $state(false)
+
+  // addingRouter is true for a walk about one router, opened by a door
+  // that names it or will (+ add a router, Re-enrol…, the ledger's
+  // forget): the fleet's other traffic is not
+  // its evidence (#1397). Only the first-run ledger (launch) reads the
+  // fleet as a whole while no router is named.
+  addingRouter = $state(false)
 
   // pickedVersion (#436) is the operator's choice from the "Your
   // RouterOS version" pick-list -- '' means the first option, "Not
@@ -213,6 +232,14 @@ class WizardState {
   // charset check, #1095), read by the header field beside the input.
   addressSaveError = $state<string | null>(null)
 
+  // syslogCopiedAddress is #1370's own memory: the address this instance
+  // carried the last time the operator pressed Copy on the Send logs
+  // block, so SetupWizard.svelte can tell a since-changed address apart
+  // from a block nobody has copied yet (null). Set by that Copy button
+  // alone, never by a poll -- this is what the operator's clipboard
+  // holds, not what the server reports.
+  syslogCopiedAddress = $state<string | null>(null)
+
   // backupTransport is step 6's one choice (#955): how the router hands
   // its backup over -- 'sftp' through the drop box, or 'https' in
   // slices over the ingest channel, for an install whose only open way
@@ -249,9 +276,9 @@ class WizardState {
     try {
       error = await saveSetupBackupTransport(transport)
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err)
+      error = plainWords(err)
     }
-    this.backupTransportError = error
+    this.backupTransportError = error ? couldNot('switch', 'the backup transport', error) : null
     if (error) return
     this.backupTransport = transport
     this.backupTransportInitialized = true
@@ -278,9 +305,10 @@ class WizardState {
       return
     }
     try {
-      this.addressSaveError = await saveSetupAddress(this.address)
+      const refused = await saveSetupAddress(this.address)
+      this.addressSaveError = refused ? couldNot('save', 'the address', refused) : null
     } catch (err) {
-      this.addressSaveError = err instanceof Error ? err.message : String(err)
+      this.addressSaveError = couldNot('save', 'the address', err)
     }
   }
 
@@ -328,6 +356,32 @@ class WizardState {
     }
   }
 
+  // dropBoxClosed is what The router's Back up nightly choice reads
+  // (#1361): the drop box is known to be closed. Three things have to be
+  // true, so that this never claims "closed" without having asked: the
+  // drop box is the way in at all (an HTTPS-only install has no port to
+  // open, #955), GET /api/router-backups has answered on this open, and
+  // its live port read (RouterBackupsResponse.port) came back empty.
+  get dropBoxClosed(): boolean {
+    return this.backupTransport === 'sftp' && this.backups !== null && !this.backups.port
+  }
+
+  // dropBoxSwitched folds the drop box's own switch (#1361) straight into
+  // this session's copy of the backups read -- the same "show the write's
+  // own answer, don't wait for the next poll" rule EngineRoom's
+  // routerBackupSwitchChanged keeps -- and, when the block has already
+  // been rendered (the operator came Back from Paste once to open it),
+  // asks for it again: internal/api/setupcommands.go leaves the backup
+  // section blank while the drop box is closed, so the block that stands
+  // is missing the part this switch just made possible. The same
+  // device/token key ensureIngestToken used, so the re-render carries the
+  // ingest token the backup script embeds.
+  async dropBoxSwitched(next: RouterBackupSwitchState): Promise<void> {
+    if (this.backups) this.backups = { ...this.backups, port: next.open ? next.port : undefined }
+    if (!this.commands) return
+    await this.refreshCommands({ device: this.ledgerDevice || undefined, token: this.token || undefined })
+  }
+
   get marks(): SetupMark[] {
     return this.status?.marks ?? []
   }
@@ -344,7 +398,12 @@ class WizardState {
   // explain their own silence have something to explain it with.
   async refresh(): Promise<void> {
     try {
-      const [s, d] = await Promise.all([fetchSetupStatus(), fetchDevices()])
+      // The typed address rides the status fetch so Go judges the
+      // certificate for it (#1507). Read untracked: Wizard.svelte calls
+      // refresh() from an effect, and a tracked read would re-run it on
+      // every keystroke; the poll picks the new address up.
+      const typed = untrack(() => this.address)
+      const [s, d] = await Promise.all([fetchSetupStatus(typed), fetchDevices()])
       this.status = s
       this.devices = d
       this.error = null
@@ -376,7 +435,7 @@ class WizardState {
         this.backupTransportInitialized = true
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e)
+      this.error = couldNot('read', 'the setup status', e)
     }
   }
 
@@ -437,8 +496,9 @@ class WizardState {
   }
 
   // launch opens the ledger at the first step still waiting. Evidence
-  // that arrived while it was closed is already green, because the
-  // ledger is rebuilt from the server's observations every time.
+  // that arrived while it was closed turns green once Wizard.svelte's
+  // open-time read lands: the ledger held here may be the sign-in one,
+  // so the wizard reads it again and re-places the run on it (#1404).
   launch() {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'
@@ -449,10 +509,11 @@ class WizardState {
     // Name your router already done, and Send logs would offer that
     // other router's live token to reroll (#1284).
     this.ledgerDevice = ''
+    this.addingRouter = false
     this.tokenDevice = ''
     this.token = ''
     this.clearEnrolment()
-    this.clearRegister()
+    this.walkMintedAt = ''
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null
@@ -478,21 +539,6 @@ class WizardState {
     this.enrolPassword = ''
     this.enrolMinting = false
     this.rebindError = null
-  }
-
-  // clearRegister wipes the Register step's own fields, the same reason
-  // and the same way clearEnrolment wipes enrolment's: registerError and
-  // registering were being cleared only by launch() and registerRouter()
-  // itself, so openRegister() (Entities.svelte's Finish registering…,
-  // which never goes through launch()) could open the Register pane
-  // still carrying a different router's refusal -- the operator hits an
-  // error on router A, closes the wizard, opens Finish registering… on
-  // router B, and A's message is sitting there before B's request has
-  // even been made. Called from every door onto a walk, same list as
-  // clearEnrolment().
-  clearRegister() {
-    this.registerError = null
-    this.registering = false
   }
 
   // reconcileEnrolment closes the gap the 2026-09-18 audit found
@@ -528,12 +574,14 @@ class WizardState {
     this.steps = ROUTER_STEPS
     this.finishTo = 'fleet'
     this.ledgerDevice = ''
+    this.addingRouter = true
     this.tokenDevice = ''
     this.clearEnrolment()
-    this.clearRegister()
+    this.walkMintedAt = ''
     this.pane = 1
     this.showStepList = false
     this.lostRouterDevice = null
+    this.reEnrolling = false
     this.open = true
   }
 
@@ -546,22 +594,7 @@ class WizardState {
     this.ledgerDevice = device
     this.tokenDevice = device
     this.pane = this.steps.indexOf('syslog') + 1
-  }
-
-  // openRegister is a router row's Finish registering… (#1291's other
-  // unmet checklist item): the same ledger, opened at Register for a
-  // router that already enrolled, with its device and history kept and
-  // nothing minted. A router only short of the Register step does not
-  // need a fresh token to close it -- that is what Re-enrol… is for,
-  // and it stays offered alongside this for when the enrolment itself
-  // is the problem. openAddRouter's own clearEnrolment() and
-  // clearRegister() calls mean no stale password, address or register
-  // refusal rides along from whatever walk was open before.
-  openRegister(device: string) {
-    this.openAddRouter()
-    this.ledgerDevice = device
-    this.tokenDevice = device
-    this.pane = this.steps.indexOf('register') + 1
+    this.reEnrolling = true
   }
 
   // createRouter is the name step's own act: naming a router is what
@@ -603,7 +636,7 @@ class WizardState {
     // entry points meet, the same way rebinding's does.
     if (this.enrolMinting) return
     if (!this.enrolPassword) {
-      this.enrolmentError = 'Enter your password to mint a token.'
+      this.enrolmentError = 'Enter your password to mint an ingest token.'
       return
     }
     this.enrolmentError = null
@@ -638,6 +671,7 @@ class WizardState {
     }
     this.enrolment = result
     this.enrolmentMintedAt = new Date().toISOString()
+    if (!this.walkMintedAt) this.walkMintedAt = this.enrolmentMintedAt
     // Re-render the block so its last line carries the token just
     // minted -- the server writes that line, and this is the only call
     // that tells it which token to write.
@@ -668,41 +702,6 @@ class WizardState {
     }
     this.enrolExpectedAddress = address
     await this.refreshRefused()
-  }
-
-  // registerRouter records the operator's confirmation -- the ledger's
-  // final step (#1291). It grants the router nothing: the server never
-  // sets an accepted address from this call, so the router's logs are
-  // still accepted only because its token arrived from its address.
-  async registerRouter(name = ''): Promise<void> {
-    if (!this.ledgerDevice) {
-      this.registerError = 'Name the router first.'
-      return
-    }
-    this.registerError = null
-    this.registering = true
-    // Same reasoning as mintEnrolmentToken's requestPane/requestDevice:
-    // a slow Register response must not land on a pane, or a router, the
-    // operator has already left (v0.6.0 audit Lows, F4).
-    const requestPane = this.pane
-    const requestDevice = this.ledgerDevice
-    let result: Device | string
-    try {
-      result = await registerDevice(this.ledgerDevice, name)
-    } catch (err) {
-      result = err instanceof Error ? err.message : String(err)
-    } finally {
-      this.registering = false
-    }
-    if (!this.open || this.pane !== requestPane || this.ledgerDevice !== requestDevice) return
-    if (typeof result === 'string') {
-      this.registerError = result
-      return
-    }
-    // Refresh rather than patch the row in place: the ledger reads the
-    // device list, and one row edited by hand here would be overwritten
-    // by the next 5s poll anyway.
-    await this.refresh()
   }
 
   // refreshRefused reads the dropped-line addresses (#1281), polled
@@ -743,10 +742,10 @@ class WizardState {
     // goes with the walk it was typed in, rather than waiting to
     // pre-fill the next router's.
     this.clearEnrolment()
-    // ...and whatever the Register step was told on this walk goes with
-    // it too -- a refusal here must not sit and wait for the next
-    // router's Register pane to open under it.
-    this.clearRegister()
+    this.walkMintedAt = ''
+    // A closed-without-minting Re-enrol… walk must not force Mint on
+    // whatever this router's next, unrelated open turns out to be.
+    this.reEnrolling = false
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in
@@ -765,6 +764,15 @@ class WizardState {
   // open" instead would re-arm the moment the operator closed the modal,
   // and reopen it under them -- an explicit close that undoes itself is
   // worse than no close at all.
+  // wouldAutoLaunch is maybeAutoLaunch's test without its side effects:
+  // the journey (#1386) asks it under the held door, and then spends the
+  // slot and launches itself, or lets the door down.
+  wouldAutoLaunch(hasDevices: boolean): boolean {
+    if (this.autoLaunched) return false
+    if (!this.status) return false
+    return !hasDevices && this.marks.length === 0
+  }
+
   maybeAutoLaunch(hasDevices: boolean) {
     if (this.autoLaunched) return
     // No ledger yet means no answer yet, not an answer of "no".
@@ -827,8 +835,9 @@ class WizardState {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'
     this.ledgerDevice = ''
+    this.addingRouter = false
     this.clearEnrolment()
-    this.clearRegister()
+    this.walkMintedAt = ''
     this.refused = []
     this.pane = 1
     this.status = null
@@ -836,6 +845,7 @@ class WizardState {
     this.error = null
     this.showStepList = false
     this.lostRouterDevice = null
+    this.reEnrolling = false
     this.pickedVersion = ''
     this.token = ''
     this.tokenDevice = ''
@@ -847,6 +857,7 @@ class WizardState {
     this.address = ''
     this.addressInitialized = false
     this.addressSaveError = null
+    this.syslogCopiedAddress = null
     this.backupTransport = 'sftp'
     this.backupTransportInitialized = false
     this.backupTransportError = null

@@ -14,13 +14,28 @@ The README's quickstart (`curl ... | sh`) is
 [`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
 running this same `docker run`. After pulling, it prints the exact image
 digest it just pulled (`ghcr.io/tomlawesome/mikroview@sha256:...`) --
-see [SECURITY.md](../SECURITY.md) for verifying that digest with
-`cosign verify` before you trust it. A release carries **two independent
-signatures**, one made by the GitLab tag pipeline with a held key and one
-made keyless on GitHub by hand, and a digest is only good if **both**
-verify -- treat either one missing as a reason not to trust it.
-SECURITY.md has both commands. If you'd rather run it yourself instead of
-fetching a script:
+check that digest before you trust it. Every image on GHCR carries
+GitHub's provenance and SBOM attestations, made when it was copied there; a
+release also carries the owner's keyless signature once it has been
+countersigned:
+
+```sh
+# every image: provenance and SBOM
+gh attestation verify oci://ghcr.io/tomlawesome/mikroview@sha256:... \
+    --repo tomlawesome/mikroview
+
+# a release, once countersigned
+cosign verify ghcr.io/tomlawesome/mikroview@sha256:... \
+    --certificate-identity-regexp '^https://github.com/tomlawesome/mikroview/' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Treat a release whose attestations or countersignature fail to verify, or
+are missing, as a reason not to trust it. GitLab's key-based signature is
+checked before the image is copied, and stays in the GitLab registry;
+[SECURITY.md](../SECURITY.md) has the details. If you'd rather run it
+yourself instead of fetching a script, make the key first (next section),
+then:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
@@ -31,8 +46,66 @@ docker run -d --name mikroview --restart unless-stopped \
     ghcr.io/tomlawesome/mikroview:latest
 ```
 
+This is the one `docker run` `install.sh` shows you before running, but not
+the two throwaway helper-container runs it makes ahead of it to give a fresh
+install a key. Running the line above yourself skips that, and **MikroView
+refuses to start without a key** ([CFG-0083](configuration.md#cfg-0083)).
+Make it first, as below.
+
+### The key: make it once, before the first start
+
+MikroView seals its accounts, API tokens, recovery keys and sign-in history
+under one key, so that a copy of the data folder or a backup is unreadable
+without it. (It also seals the on-disk event history, which is on by
+default -- see
+[docs/configuration.md](configuration.md#on-disk-event-history-on-by-default).)
+There is no unencrypted mode, so there is no start without a key. For the
+named volume the `docker run` line above uses, one command makes it:
+
+```sh
+docker run --rm -v mikroview-etc:/etc/mikroview alpine sh -c '
+  set -e
+  mkdir -p /etc/mikroview/keys
+  head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key
+  chown 1000:1000 /etc/mikroview/keys/history.key
+  chmod 600 /etc/mikroview/keys/history.key
+'
+```
+
+What each part does, so you are not pasting something you do not
+understand:
+
+- `docker run --rm -v mikroview-etc:/etc/mikroview alpine` starts a
+  throwaway container that is deleted when it finishes, with the
+  `mikroview-etc` volume mounted for writing. MikroView's own container
+  mounts that volume read-only, so something else has to put the key in.
+  Doing it in a helper container means the key is created inside the
+  volume and never appears on your command line or screen.
+- `mkdir -p .../keys` makes the folder MikroView looks in.
+- `head -c 32 /dev/urandom | base64 > .../history.key` takes 32 random
+  bytes from the operating system and writes them out as text. MikroView
+  needs at least 32 bytes.
+- `chown 1000:1000` hands the file to the account MikroView runs as. Without
+  it MikroView cannot read the file and stops with `permission denied`.
+- `chmod 600` makes the file readable by that account only.
+
+**Keep a copy of the key somewhere safe, apart from your data** (a password
+manager, or an encrypted backup). Without it nothing MikroView sealed can be
+read -- not the event history, and not the accounts either -- and there is no
+way to recover a lost key. To copy it out of the volume into the current
+folder, then move that copy where you keep secrets:
+
+```sh
+docker run --rm -v mikroview-etc:/from:ro -v "$PWD:/to" alpine \
+    cp /from/keys/history.key /to/history.key
+```
+
+Never put the key inside the data volume, and never commit it to anything.
+`install.sh` does all of the above for you on a fresh install, and leaves a
+key that is already there alone.
+
 The `mikroview-etc` volume is the app folder #1243 introduced: an empty
-folder is fine, and dropping a config file, GeoIP database or
+folder is fine, and dropping a config file or
 certificate pair into it is picked up at the next restart with no other
 change. It is mounted read-only, as the Compose examples below have
 always mounted it -- MikroView only ever reads it, and nothing that
@@ -91,12 +164,12 @@ services:
       retries: 3
     volumes:
       # One app folder on the host, two mounts: read-only for what you
-      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # own (config, keys, certs), read-write for what MikroView
       # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
       - ./mikroview:/etc/mikroview:ro
       - ./mikroview/data:/var/lib/mikroview
       # Mounting each file separately instead -- config.yaml,
-      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or a
+      # a bind-mounted data/ of its own, or a
       # named volume for data -- is the old way and still works: a path
       # set in config.yaml or the environment always wins over the
       # folder default. See docs/configuration.md.
@@ -106,9 +179,6 @@ services:
       # deployment). Naming it here explicitly would make that file
       # mandatory instead of optional -- see docs/configuration.md.
       # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
-      # file into mikroview/ is the old way and still works -- see
-      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
@@ -143,13 +213,31 @@ Create the `mikroview` folder next to the compose file first, with your config i
 ```
 mikroview/
   config.yaml                   optional -- defaults run without it
-  GeoLite2-Country.mmdb         optional -- country flags appear when present
-  keys/history.key              optional -- history encryption on when present
+  keys/history.key              required -- MikroView does not start without it (make it first, below)
   certs/tls.crt, certs/tls.key  optional -- your own certificate instead of the self-signed one
   data/                         MikroView's store; created for you
 ```
 
-The bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try there. **The Compose form is no different**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and an empty folder starts on defaults just as the `docker run` above does. Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
+The README's quickstart runs on defaults with named volumes and no folder of your own, and `install.sh` makes the key for you, so there is nothing to set up for a first try there. **The Compose form is no different about the config**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and a folder with no `config.yaml` starts on defaults just as the `docker run` above does. What it cannot start without is the key (next). Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
+
+**Compose does not run `install.sh`, so nothing mints `keys/history.key` for you here -- and MikroView refuses to start without it** ([CFG-0083](configuration.md#cfg-0083)). It seals the accounts, API tokens, recovery keys and sign-in history under this key (and the on-disk event history, which is on by default). Make it once, before your first `up`, from the folder that holds the compose file:
+
+```sh
+mkdir -p mikroview/keys
+head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
+sudo chown 1000:1000 mikroview/keys/history.key && chmod 600 mikroview/keys/history.key
+```
+
+Why each line:
+
+- `mkdir -p mikroview/keys` makes the `keys` folder inside the app folder. The compose file mounts the whole `mikroview/` folder at `/etc/mikroview`, and MikroView looks for `keys/history.key` there with nothing else set.
+- `head -c 32 /dev/urandom | base64 > ...` writes 32 random bytes, as text, to the key file. The key stays on this machine; nothing prints it. MikroView needs at least 32 bytes.
+- `sudo chown 1000:1000 ...` hands the file to the account the container runs as (uid `1000`). If you skip it and the file is yours but not uid 1000's, MikroView cannot read it and stops with `permission denied`. If your own account is uid 1000 (the first account on most Linux hosts) it already is, and `sudo` is harmless.
+- `chmod 600 ...` lets only that account read it.
+
+**Keep a copy of the key somewhere safe, apart from `mikroview/data`** (a password manager, or an encrypted backup). Without the key the sealed accounts cannot be read, and a lost key cannot be recovered. Do not put it inside `mikroview/data`: a key kept beside the files it protects protects nothing.
+
+See [docs/configuration.md](configuration.md#on-disk-event-history-on-by-default) for what the encryption does and doesn't protect against.
 
 ## Which ports to publish, and to whom
 
@@ -169,6 +257,17 @@ the container — a container cannot firewall its own host:
   line from anything that can reach it — TLS proves MikroView's identity
   to the router, not the router's to MikroView — so restrict it on the
   host to your routers' addresses.
+- **The router-backup drop box's port (`47022/tcp`) is published but not
+  listening yet.** `install.sh` and `deploy/docker-compose.yml` always map
+  it (the `docker run` and Compose examples above leave it out, so add
+  `-p 47022:47022/tcp` or a `"47022:47022/tcp"` line if you want the drop
+  box), because a container's own port
+  mapping can't be flipped on and off the way the switch that actually
+  opens it can — see
+  [docs/configuration.md](configuration.md#router-backups-over-sftp-issue-394).
+  Nothing answers on it until an admin opens the drop box from
+  Settings → router backups; firewall it to your routers' addresses the
+  same way as the syslog port once it is on.
 
 You can also limit which addresses reach the web UI from MikroView's own
 side, with `ui.allow` in `config.yaml`; it is a file-only setting, and
@@ -244,9 +343,7 @@ and still works exactly as before; see docs/decisions/app-folder.md.
 
 The same fix applies to any other host path you bind-mount over a
 `/var/lib/mikroview/*` sub-path (e.g. `flags.storePath`, `auth.storePath`,
-`tls.storePath` — see [docs/configuration.md](configuration.md)), or
-over `/etc/mikroview/GeoLite2-Country.mmdb` if you ever mount that
-read-write. Read-only mounts like `config.yaml` don't need either fix —
+`tls.storePath` — see [docs/configuration.md](configuration.md)). Read-only mounts like `config.yaml` don't need either fix —
 world-readable (`chmod 644`, as in the Quickstart above) is enough, since
 the container only needs to read it, not own it.
 

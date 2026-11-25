@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/ingest"
@@ -164,8 +165,12 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Identity, which must all still be here afterwards.
-	keeper, err := s.Auth.CreateUser("keeper", "password123", auth.RoleUser, time.Now())
+	// Identity, which must all still be here afterwards. gauntlet keeps
+	// an accounts document only while it holds an admin, so there is one.
+	if _, err := s.Auth.Register(fixtureAdminUsername, fixtureAdminPassword, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	keeper, err := s.Auth.CreateUser("keeper", fixtureUserPassword, gauntlet.RoleUser, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +181,7 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 	if err := s.Prefs.Merge(keeper.ID, json.RawMessage(`{"altitudeStop":"street"}`)); err != nil {
 		t.Fatal(err)
 	}
-	rawToken, _, err := s.Tokens.Create("kept token", auth.TokenKindIngest, "core", keeper, time.Now())
+	rawToken, _, err := s.Tokens.Create("kept token", gauntlet.TokenKindIngest, "core", keeper, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +236,7 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 	if _, ok := s.Auth.Get(keeper.ID); !ok {
 		t.Error("the account was deleted -- accounts are identity and must survive")
 	}
-	if _, ok := s.Tokens.Authenticate(rawToken, auth.TokenKindIngest, time.Now()); !ok {
+	if _, ok := s.Tokens.Authenticate(rawToken, gauntlet.TokenKindIngest, time.Now()); !ok {
 		t.Error("the ingest token stopped working -- live-env.sh issues one before any scenario runs")
 	}
 	if got := len(s.Devices.List()); got != devicesBefore {

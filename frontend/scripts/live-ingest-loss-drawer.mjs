@@ -38,7 +38,7 @@
 // the five-row ordering in isolation, and the screenshots attached to
 // #1015 show it rendered.
 
-import { session, feedRaw, check, done, goTo, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, feedRaw, check, done, goTo, launchBrowser, enrolFactorAndSignIn, removePerson } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -122,6 +122,7 @@ async function waitForLanding(page) {
 // From the stream, where session() left us.
 await page.click(DETAIL)
 await waitForLanding(page)
+// safe: waitForLanding's waitForFunction throws on timeout
 check(true, 'clicking `details` from the stream lands on the ingest section')
 
 // And from somewhere else entirely: the link states a destination, not a
@@ -132,6 +133,7 @@ check(true, 'clicking `details` from the stream lands on the ingest section')
 await goTo(page, 'Flags')
 await page.click(DETAIL)
 await waitForLanding(page)
+// safe: waitForLanding's waitForFunction throws on timeout
 check(true, 'clicking `details` from the docket lands on the ingest section too')
 
 // The section is centred, not merely somewhere on the page:
@@ -177,7 +179,7 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await enrolFactorAndSignIn(viewerPage)
+await enrolFactorAndSignIn(viewerPage, VIEWER_PASS)
 
 const viewerBanner = viewerPage.locator('.banner').first()
 await viewerBanner.waitFor({ timeout: 25000 })
@@ -193,13 +195,10 @@ check(
 await viewerBrowser.close()
 
 // --- clean up the account, so a rerun starts where this one did -----------
-// Arm-then-confirm (round 28's gesture): a click arms remove, a second
-// click on the same button confirms it.
+// Remove asks for the admin's password (#1202 U8): removePerson types it.
 
-const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
-await remove.click()
-await remove.click()
-await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+await removePerson(page, VIEWER_USER)
+// safe: waitForSelector above throws on timeout
 check(true, 'the viewer account is removed again')
 
 // --- 5: Clear all removes the drawer, not just hides it --------------------

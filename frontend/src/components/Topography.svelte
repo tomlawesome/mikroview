@@ -9,7 +9,9 @@
   // a render. An event counts once per interface it touches, matching
   // the old `e.inInterface === iface || e.outInterface === iface` OR
   // check: if in and out are the same interface, that is one count.
+  import FailureLine from './FailureLine.svelte'
   import type { ClientEvent } from '../lib/types'
+  import { restoreFocus } from '../lib/focusTrap'
 
   export function tunnelEventCounts(events: readonly ClientEvent[]): Map<string, number> {
     const counts = new Map<string, number>()
@@ -146,6 +148,13 @@
     ribKey,
     zoneTally,
   } from '../lib/portFilter'
+  // The "seen serving" lens (#1320): a sibling to the two above, sharing
+  // this same map rather than opening a view of its own. serving.ts
+  // holds the arithmetic and the wording, serving.svelte.ts holds what
+  // the server answered.
+  import { servingState } from '../lib/serving.svelte'
+  import { wanDoorsState } from '../lib/wanDoors.svelte'
+  import { hostBadge, servingTally } from '../lib/serving'
   import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
   // The decommission ghost (#460, round 55): a segment the router has
@@ -182,10 +191,30 @@
       // own timer: an offer appears on a push, and a push is what moves
       // every other table here too.
       decommissionsState.refresh()
+      // The doors panel's own standing count (#1319), so the boundary
+      // card's "Doors from the internet · N" row and the internet
+      // anchor beside it have a number without the sheet being open --
+      // refreshed with the rest rather than only on open, the same
+      // reasoning decommissionsState just gave above.
+      wanDoorsState.refresh()
     }
   })
 
   const isAdmin = $derived(authState.role === 'admin')
+  /** The tail of both "Doors from the internet" labels (the internet
+   * anchor's row and the boundary card's row). The sheet's own states in
+   * the sheet's own order (WanDoors.svelte), so the map never reads
+   * "none" for an answer it does not yet have, or failed to get: "none"
+   * is a security-posture statement and is only printed once a read has
+   * landed and counted nothing. */
+  const doorsTail = $derived.by((): string => {
+    if (wanDoorsState.loading && wanDoorsState.devices.length === 0) return ' · reading…'
+    if (wanDoorsState.error) return ' · could not read'
+    const doors = wanDoorsState.totalDoors
+    const unjudged = wanDoorsState.totalUnjudged
+    if (unjudged === 0) return doors > 0 ? ` · ${doors}` : ' · none'
+    return doors > 0 ? ` · ${doors} · ${unjudged} not judged` : ` · none known · ${unjudged} not judged`
+  })
 
   /** Component-unique prefix for this instance's SVG ids. */
   const uid = $props.id()
@@ -621,11 +650,22 @@
     return spanLabel(now - t)
   }
 
-  /** The dot's own tooltip, and the accessible name of its button. */
+  /** The dot's own tooltip, and the accessible name of its button.
+   *
+   * The serving lens's own badge (#1320) rides on the end of whichever
+   * base label presence already picked, rather than replacing it: a
+   * quiet host the lens still lights is still quiet, and the map must
+   * not stop saying so just because it also answers something. */
   function hostDotLabel(d: HostDot): string {
-    if (d.presence === 'intended') return `${d.label} · quiet on purpose`
-    if (d.presence === 'quiet' && d.host) return `${d.label} · quiet · ${quietFor(d.host.lastSeen, nowMs)}`
-    return d.label
+    let base: string
+    if (d.presence === 'intended') base = `${d.label} · quiet on purpose`
+    else if (d.presence === 'quiet' && d.host) base = `${d.label} · quiet · ${quietFor(d.host.lastSeen, nowMs)}`
+    else base = d.label
+    if (servingOn) {
+      const sh = servingState.byIp.get(d.ip)
+      if (sh) return `${base} · seen serving ${hostBadge(sh.ports, sh.more)}`
+    }
+    return base
   }
 
   // Shared by ribPath and the internet-edge limbs (#726: "bundle the
@@ -1073,8 +1113,16 @@
    * is room -- is pushed clear of whatever it would have covered. A
    * label with no text takes no space, so a lens that badges only some
    * of its edges still keeps its indices aligned.
+   *
+   * `floors` are boxes nothing may be pushed down onto (#1430): a plate
+   * that lands on one is lifted clear instead. Same shape as a plate --
+   * a box hanging from its anchor, y-10 to y-10+h.
    */
-  function placeBadges(items: { line: Line; text: string; dy?: number }[], reserved?: PlacedBadge): PlacedBadge[] {
+  function placeBadges(
+    items: { line: Line; text: string; dy?: number }[],
+    reserved?: PlacedBadge,
+    floors: PlacedBadge[] = [],
+  ): PlacedBadge[] {
     const raw = items.map((it, i) => {
       const p = edgeBadgeAt(it.line, i)
       return { x: p.x, y: p.y + (it.dy ?? 0), w: plateW(it.text), text: it.text }
@@ -1111,18 +1159,33 @@
       })
     }
 
+    const covers = (d: PlacedBadge, b: { x: number; y: number; w: number }) =>
+      Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR &&
+      Math.abs(centreOf(d) - centreOf(b)) < ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR
+    // Solve centreOf(b) for b.y: the anchor sits 10 above its box.
+    const below = (d: PlacedBadge) => centreOf(d) + ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR + 10 - PLATE_H / 2
+    const above = (d: PlacedBadge) => centreOf(d) - ((d.h ?? PLATE_H) + PLATE_H) / 2 - PLATE_CLEAR + 10 - PLATE_H / 2
+
     for (const b of raw.filter((b) => b.text !== '' && !inCorridor(b)).sort((a, b) => a.y - b.y)) {
-      // At most one push per already-settled plate: each pass clears one
-      // conflict, and there are finitely many of them.
-      for (let pass = 0; pass < settled.length + 1; pass++) {
-        const hit = settled.find(
-          (d) =>
-            Math.abs(d.x - b.x) < (d.w + b.w) / 2 + PLATE_CLEAR &&
-            Math.abs(centreOf(d) - centreOf(b)) < ((d.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR,
-        )
+      // At most one move per already-settled plate or floor: each pass
+      // clears one conflict, and there are finitely many of them.
+      //
+      // A plate is pushed down past whatever it covers -- until it
+      // reaches a floor (#1430): a lane's own services row, with the
+      // card itself right under it, so there is nowhere further down
+      // that a label could be read. From there it is lifted clear
+      // instead, and keeps lifting past any plate it then meets.
+      let lifting = false
+      for (let pass = 0; pass < settled.length + floors.length + 1; pass++) {
+        const floor = floors.find((f) => covers(f, b))
+        if (floor) {
+          lifting = true
+          b.y = above(floor)
+          continue
+        }
+        const hit = settled.find((d) => covers(d, b))
         if (!hit) break
-        // Solve centreOf(b) for b.y: the anchor sits 10 above its box.
-        b.y = centreOf(hit) + ((hit.h ?? PLATE_H) + PLATE_H) / 2 + PLATE_CLEAR + 10 - PLATE_H / 2
+        b.y = lifting ? above(hit) : below(hit)
       }
       settled.push({ x: b.x, y: b.y, w: b.w })
     }
@@ -1210,6 +1273,26 @@
       .map(([p]) => p)
       .join(' ')
   }
+
+  // The services row's own baseline (#723 pulled it to a small gap
+  // above the card's top edge at 490) and its 10.5px mono face's width
+  // per character -- BADGE_CH's 9.5px figure scaled to this size.
+  const SVC_BASELINE = 472
+  const SVC_CH = 6.3
+
+  // Each drawn services row as a floor for placeBadges (#1430): the
+  // lane card sits right under it, so a plate pushed down onto the row
+  // has nowhere readable left below and is lifted clear instead. Under a
+  // filter the row is not drawn, but neither are the plates, so the
+  // floors need no lens of their own.
+  const svcFloors = $derived.by((): PlacedBadge[] =>
+    zones.flatMap((z, i) => {
+      const svc = laneServices(z)
+      // The text box, 9 above its baseline to 3 below, in a plate's own
+      // terms (anchor 10 above the box top).
+      return svc ? [{ x: laneX(i, laneCount), y: SVC_BASELINE - 9 + 10, w: svc.length * SVC_CH, h: 12 }] : []
+    }),
+  )
 
   // Volume speaks through weight: 1 event is a hairline, thousands a
   // firm stroke, never a shout.
@@ -1609,6 +1692,7 @@
         ...ghostIntents.map((g) => ({ line: g.line, text: 'never exercised', dy: -12 })),
       ],
       worstUnplannedCard,
+      svcFloors,
     ),
   )
 
@@ -2337,9 +2421,19 @@
   }
 
   /** Standing on something clears #1018's two filters, the same way
-   * opening one of them clears the reach. Three answers layered on one
-   * map would stack their crumbs on each other and leave nobody able to
-   * say which of them a dim rib was dim because of.
+   * opening either one of them clears the reach and the other. Two
+   * answers layered on one map would stack their crumbs on each other
+   * and leave nobody able to say which of them a dim rib was dim
+   * because of.
+   *
+   * #1320's serving lens deliberately does not clear here (#1396): it
+   * lights no rib and dims no lane whole (see hostsFilterOn/filterOn
+   * above), so there is no crumb of its own to stack against a reach --
+   * and the reach is exactly where its answer is read in full, as the
+   * host's own served-port chips. Clearing it on descend meant those
+   * chips could never render at all. It still clears, and still clears
+   * the other two, wherever *it* is the one being turned on
+   * (toggleServing/openPortPicker/openTrace).
    *
    * Declared here rather than beside the filters themselves because the
    * three descends below call it, and they are declared above the
@@ -2445,6 +2539,7 @@
       else if (cityStop === null && mapTraceState.active && mapTraceState.listOpen) mapTraceState.listOpen = false
       else if (cityStop === null && mapTraceState.active) mapTraceState.clear()
       else if (cityStop === null && (portFilterState.active || portFilterState.open)) portFilterState.clear()
+      else if (cityStop === null && servingState.open) servingState.clear()
       else if (reach) surface()
     }
   }
@@ -2841,6 +2936,17 @@
     lineCardPlace = null
   }
 
+  /** Drafting from the card pins it first (#1496): an action that opens
+   * a form from a card turns the hover card into one the operator keeps,
+   * as askHostMark and openExpectedForm do. */
+  function draftFromLineCard() {
+    const s = lineCardRefused
+    if (!s) return
+    lineGrace.hold()
+    lineCardPinned = true
+    openCompose(s)
+  }
+
   /** Every card pins (DESIGN.md "Cards"). */
   function pinLineCard() {
     lineCardPinned = !lineCardPinned
@@ -2872,7 +2978,7 @@
   // carries across the join too (crossAltitudeCentre below).
   //
   // The last stop visited persists per user via altitudeStopState,
-  // using the small-module pattern shared with colorway and retention.
+  // using the small-module pattern shared with retention and the rest.
   let altitude = $state<Altitude>(ALTITUDE_LABELS.indexOf(altitudeStopState.stop) as Altitude)
   const cityStop = $derived(isCityAltitude(altitude) ? STOPS[altitude - CENTRE_ALTITUDE] : null)
 
@@ -3449,7 +3555,7 @@
   const watchesZeroLine = 'no watches yet'
 
   const watchPanelGroupLabel = $derived(
-    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watcher${watcherTotal === 1 ? '' : 's'}, broken first`,
+    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watch${watcherTotal === 1 ? '' : 'es'}, broken first`,
   )
 
   // Same handoff as activateFlagRow above, for the watchlist tab.
@@ -3519,6 +3625,13 @@
   function openWatchlist(e: Event) {
     e.stopPropagation()
     appState.view = 'watchlist'
+  }
+
+  // The doors panel's internet-anchor entry (#1319) -- the same target
+  // the boundary card's own "Doors from the internet" row opens.
+  function openWanDoorsFromAnchor(e: Event) {
+    e.stopPropagation()
+    wanDoorsState.open()
   }
 
   // A rounded-rect path for the bar's outer half(es) -- SVG's <rect> only
@@ -4004,7 +4117,91 @@
 
   const portOn = $derived(portFilterState.active && portFilterState.settled)
   const traceOn = $derived(mapTraceState.active)
+  // Settled the same way portOn is: dimming to an in-flight fetch's
+  // empty placeholder would read as "nothing answers" for the moment
+  // between turning the lens on and its answer landing.
+  const servingOn = $derived(servingState.open && servingState.settled)
+  // filterOn is deliberately port/trace only: every consumer below it is
+  // about ribs, roads and the baseline/alarm decoration that comes off
+  // with a filter -- exactly what the serving lens must leave alone
+  // (#1320). hostsFilterOn is the wider flag for the two things the
+  // lens is allowed to change: a host's own dot and the lane's own
+  // tally line.
   const filterOn = $derived(portOn || traceOn)
+  const hostsFilterOn = $derived(portOn || traceOn || servingOn)
+
+  /** The pill's own fraction: how many of every host the map knows
+   * about, across every lane, the lens lit. The pill's claim is about
+   * the whole estate, unlike the lane card's own per-zone tally. */
+  const servingCount = $derived.by((): { on: number; total: number } => {
+    if (!servingOn) return { on: 0, total: 0 }
+    let on = 0
+    let total = 0
+    for (const z of zones) {
+      const row = laneHostRow(z)
+      total += row.total
+      on += row.dots.filter((d) => servingState.hosts.has(d.ip)).length
+      on += row.hidden.filter((d) => servingState.hosts.has(d.ip)).length
+    }
+    return { on, total }
+  })
+
+  /** The collapsed pill's own tail: `7 of 41 hosts answer in the
+   * window`, or the empty phrase where the window carried nothing. */
+  const servingTailText = $derived(
+    servingState.nothingSeen
+      ? 'nothing answered in the window'
+      : `${servingTally(servingCount.on, servingCount.total) ?? 'nothing answered'} in the window`,
+  )
+
+  /* ---------------- the reach's own served-port chips (#1320) ---------------- */
+
+  /** The reach subject's own served-port answer, or undefined where the
+   * lens is off or this host answered nothing. */
+  const reachServed = $derived(servingOn && reach ? servingState.byIp.get(reach.ip) : undefined)
+
+  interface ReachChip {
+    label: string
+    x: number
+    w: number
+    /** Whether this is the `+N more` chip -- the only one that is a
+     * button, opening the dossier the way every other `+N more` on this
+     * screen does. */
+    more: boolean
+  }
+
+  const SERVE_CHIP_Y = 74
+  const SERVE_CHIP_H = 16
+  const SERVE_CHIP_PAD = 8
+  const SERVE_CHIP_GAP = 6
+  // There is no live text measurement on this canvas (no other chip
+  // here uses one either); a per-character estimate is exact enough for
+  // a single-line monospace label and keeps the row a pure layout, no
+  // second render pass.
+  const SERVE_CHIP_CHAR = 5.6
+
+  function serveChipWidth(label: string): number {
+    return label.length * SERVE_CHIP_CHAR + SERVE_CHIP_PAD * 2
+  }
+
+  /** One chip per served port, busiest first as the answer already
+   * sorts them, then `+N more` -- laid out left to right and centred as
+   * a row under the host name. */
+  const reachChips = $derived.by((): ReachChip[] => {
+    const sh = reachServed
+    if (!sh || sh.ports.length === 0) return []
+    const labels: { label: string; more: boolean }[] = sh.ports.map((p) => ({ label: `${p.port}/${p.proto}`, more: false }))
+    if (sh.more > 0) labels.push({ label: `+${sh.more} more`, more: true })
+    const widths = labels.map((l) => serveChipWidth(l.label))
+    const total = widths.reduce((a, b) => a + b, 0) + SERVE_CHIP_GAP * (labels.length - 1)
+    let x = -total / 2
+    return labels.map((l, i) => {
+      const w = widths[i]
+      const chip: ReachChip = { label: l.label, x: x + w / 2, w, more: l.more }
+      x += w + SERVE_CHIP_GAP
+      return chip
+    })
+  })
 
   /**
    * Every direction the trace lights: the half it came in on and the
@@ -4038,7 +4235,15 @@
 
   /** What the filter in force lights, keyed the same way reality.ts
    * keys a direction, so a lit direction and a drawn one are one string
-   * rather than two conventions that agree until they do not. */
+   * rather than two conventions that agree until they do not.
+   *
+   * The serving lens deliberately lights none of these (#1320): its own
+   * answer is host-level, not per-crossing, and a rib lit from zone
+   * membership alone would be a claim about traffic on that boundary the
+   * lens cannot actually back -- exactly the kind of thing "seen
+   * serving" exists to refuse. Ribs and roads keep their ordinary,
+   * unfiltered look while the lens is on; only hosts and lane tallies
+   * change (see hostsFilterOn below). */
   const lit = $derived(portOn ? litRibs(portFilterState.ribs) : traceOn ? traceLit : new Map())
 
   interface LitHalf {
@@ -4274,18 +4479,20 @@
     return doorHalves.has(key) ? 0.6 : 0.4
   }
 
-  /** The addresses the filter lights: the hosts on the port, or the two
-   * ends of the traced line. */
+  /** The addresses the filter lights: the hosts on the port, the hosts
+   * seen serving, or the two ends of the traced line. */
   const litHosts = $derived.by((): Set<string> => {
     if (portOn) return portFilterState.hostIps
+    if (servingOn) return servingState.hosts
     const e = mapTraceState.event
     if (!e) return new Set<string>()
     return new Set([e.srcIp, e.dstIp].filter((ip): ip is string => !!ip))
   })
 
   /** The lane card's line under a filter: `2 of 12 hosts on 445/tcp`
-   * for the port, and the traced end's own tally for the trace
-   * (`cam-porch · 14× today`, `alex-desktop · never reached`).
+   * for the port, `7 of 12 hosts answer` for the serving lens, and the
+   * traced end's own tally for the trace (`cam-porch · 14× today`,
+   * `alex-desktop · never reached`).
    *
    * The port's count runs over this row's own dots -- the hosts the
    * surface knows about -- and never over the answer's host list
@@ -4297,6 +4504,10 @@
     if (portOn) {
       const on = row.dots.filter((d) => litHosts.has(d.ip)).length + hiddenLitHosts(row)
       return zoneTally(on, row.total, portFilterState.label)
+    }
+    if (servingOn) {
+      const on = row.dots.filter((d) => litHosts.has(d.ip)).length + hiddenLitHosts(row)
+      return servingTally(on, row.total)
     }
     const e = mapTraceState.event
     if (!e) return null
@@ -4431,12 +4642,26 @@
     return { at: { x, y: 470 }, lines }
   })
 
-  /** Opening one filter closes the other, and both close the reach:
-   * three answers layered on one map would leave nobody able to say
-   * which of them a dim rib was dim because of. */
+  /** Opening one filter closes the others, and all three close the
+   * reach: three answers layered on one map would leave nobody able to
+   * say which of them a dim rib was dim because of. */
   async function openPortPicker() {
     mapTraceState.clear()
+    servingState.clear()
     await portFilterState.openPicker()
+  }
+
+  /** The serving lens's own on/off (#1320): no picker to open, so one
+   * click is the whole control. Same "closes the others" rule as
+   * openPortPicker. */
+  async function toggleServing() {
+    if (servingState.open) {
+      servingState.clear()
+      return
+    }
+    mapTraceState.clear()
+    portFilterState.clear()
+    await servingState.turnOn()
   }
 
   /** What the callout asks for: the pair it names, exactly. A pair the
@@ -4456,6 +4681,7 @@
 
   function openTrace(req: Parameters<typeof mapTraceState.open>[0], opts?: Parameters<typeof mapTraceState.open>[1]) {
     portFilterState.clear()
+    servingState.clear()
     if (reach) surface()
     void mapTraceState.open(req, opts)
   }
@@ -4487,6 +4713,7 @@
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="topo" bind:this={topoEl}>
+  {#if !appState.initialLoadDone}<p class="first-load" role="status">Mapping the network…</p>{/if}
   <!-- The aggregate bar (#648, round 23): absent, purple-only, red-only,
        or split with a centre divider -- reused under every zone island
        and every reach counterpart cluster below. -->
@@ -4499,7 +4726,7 @@
         class="hbar-g"
         role="button"
         tabindex="0"
-        aria-label="{agg.watchCount} watcher{agg.watchCount === 1 ? '' : 's'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
+        aria-label="{agg.watchCount} watch{agg.watchCount === 1 ? '' : 'es'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
         onclick={openWatchlist}
         onkeydown={(e) => {
           if (e.key === 'Enter') openWatchlist(e)
@@ -4750,7 +4977,7 @@
           aria-expanded={expandedDial === 'watchlist'}
           aria-controls="{uid}-watch-panel"
           onclick={() => toggleDialPanel('watchlist')}
-          aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
+          aria-label="{watcherTotal} watch{watcherTotal === 1 ? '' : 'es'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
         >
           <svg viewBox="0 0 56 56" aria-hidden="true">
             {#if watcherTotal === 0}
@@ -4852,6 +5079,7 @@
     {#if portFilterState.open}
       <div
         class="pill p edit"
+        data-pill="port"
         role="group"
         aria-label="Pick ports — click to select, several at once; or type a list and press enter"
       >
@@ -4912,6 +5140,7 @@
            settled. -->
       <button
         class="pill p on"
+        data-pill="port"
         aria-pressed="true"
         title="filtered to {portFilterState.label} — click to change, ✕ to clear"
         onclick={openPortPicker}
@@ -4919,7 +5148,34 @@
       >
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
-      <button class="pill p" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
+      <button class="pill p" data-pill="port" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
+    {/if}
+    <!-- The "seen serving" lens (#1320), right of ⌕ port. No picker bar:
+         there is nothing to narrow, only to turn on, so one click is the
+         whole control and the pill has two shapes instead of the port
+         pill's three. -->
+    {#if servingState.open}
+      <!-- Collapsed the instant the lens is turned on, not once its
+           answer lands -- the same #1178 reasoning the port pill
+           follows. The tail is held back until settled so an in-flight
+           fetch is never read as "nothing answered". -->
+      <button
+        class="pill p on"
+        data-pill="serving"
+        aria-pressed="true"
+        title="A host busy last week but closed now still shows; a quiet listener never does."
+        onclick={toggleServing}
+        >⌕ <b>serving</b>{#if servingOn}&nbsp;<em>· {servingTailText}</em>{/if}</button
+      >
+      <button class="pill-x" aria-label="Clear the serving lens" onclick={() => servingState.clear()}>✕</button>
+    {:else}
+      <button
+        class="pill p"
+        data-pill="serving"
+        aria-pressed="false"
+        title="Hosts seen answering in the window, and on what. Not a port scan: a quiet listener is invisible here."
+        onclick={toggleServing}>⌕ serving</button
+      >
     {/if}
     <!-- `⟡ off-baseline today · N`, ahead of the ⚑ count, in the accept
          ink (round-49/index.html's `chrome`, the `.nmk` mark, and
@@ -5510,6 +5766,34 @@
           {#if internetAggregate && !filterOn}
             {@render aggregateBar(internetAggregate, -100, 200, 34, 16, { id: zonesState.wanInterface ?? '', name: 'the internet' })}
           {/if}
+          <!-- The doors panel's other entry (#1319), beside the boundary
+               card's own row: what the pushed tables let the internet
+               reach. Passive like the rest of this card -- its own
+               pointer-events are switched back on the same way the
+               aggregate bar's `.hbar-g` already is. -->
+          {#if zonesState.wanInterface}
+            <g
+              class="doors-anchor-btn"
+              role="button"
+              tabindex="0"
+              aria-label="Doors from the internet"
+              onclick={openWanDoorsFromAnchor}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openWanDoorsFromAnchor(e)
+                }
+              }}
+            >
+              <!-- y=52 hangs the row just under the card. When the card
+                   also draws its aggregate bar (y=34..50 above, #699),
+                   the row would sit across the bar's lower half and its
+                   flag count (#1430), so it drops beneath the bar instead. -->
+              <text x="-82" y={internetAggregate && !filterOn ? 64 : 52} class="n-sub doors-anchor-t"
+                >Doors from the internet{doorsTail}</text
+              >
+            </g>
+          {/if}
         </g>
       </g>
 
@@ -5683,7 +5967,7 @@
                        to still be there for it to be one. -->
                   <g
                     class="hot"
-                    class:dot-off={filterOn && !litHosts.has(d.ip)}
+                    class:dot-off={hostsFilterOn && !litHosts.has(d.ip)}
                     role="button"
                     tabindex="0"
                     aria-label="{hostDotLabel(d)} — open its reach"
@@ -5750,6 +6034,12 @@
                     {#if w.watchCount > 0}
                       <circle class="h-watch" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
                     {/if}
+                    <!-- Seen serving (#1320): a hollow ring in the same
+                         dim ink h-watch uses, never the alarm colour --
+                         a fact, not a warning, so it does not pulse. -->
+                    {#if servingOn && servingState.hosts.has(d.ip)}
+                      <circle class="h-serve" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
+                    {/if}
                     {#if hostCard?.key === d.key}
                       <circle class="h-open" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 4} />
                     {/if}
@@ -5765,11 +6055,11 @@
                    `2 of 12 hosts on 445/tcp`, or the traced end's own
                    tally -- and goes back to the presence count when the
                    filter clears. -->
-              {@const tally = filterOn ? filterTally(row) : null}
+              {@const tally = hostsFilterOn ? filterTally(row) : null}
               <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally" class:filter-tally={!!tally}
                 >{tally ?? hostTally(row)}</text
               >
-            {:else if !filterOn}
+            {:else if !hostsFilterOn}
               <!-- #1165: a zone the router named but whose addresses
                    resolved to nothing left this band blank, which reads
                    as a card that failed to draw. It says the fact
@@ -5902,7 +6192,7 @@
                  to a small, proximate gap and given a leader tick down to
                  the card's own top edge (y=490), the tie every other
                  label on this map already has via its plate or its line. -->
-            <text x={laneX(i, laneCount)} y="472" text-anchor="middle" class="svc-t">{svc}</text>
+            <text x={laneX(i, laneCount)} y={SVC_BASELINE} text-anchor="middle" class="svc-t">{svc}</text>
             <line class="svc-leader" x1={laneX(i, laneCount)} y1="477" x2={laneX(i, laneCount)} y2="489" />
           {/if}
         {/each}
@@ -6409,6 +6699,46 @@
             <text y="4" text-anchor="middle" class="n-cidr small">{reach.ip}</text>
           {/if}
         </g>
+        <!-- The serving lens's own drill-down (#1320): one line of chips
+             under the host name, only while the lens is on and this
+             host answered something. Chips are not buttons -- they are
+             the evidence, already on the map -- except `+N more`, which
+             opens the same HostDossier every other `+N more` on this
+             screen does. -->
+        {#if reachChips.length > 0}
+          <g transform="translate({MX} {MY})" class="serve-chips">
+            <text y={SERVE_CHIP_Y - 10} text-anchor="middle" class="n-sub">seen serving in the window:</text>
+            {#each reachChips as c (c.label)}
+              {#if c.more}
+                <g
+                  role="button"
+                  tabindex="0"
+                  class="serve-chip serve-more"
+                  aria-label="{c.label} — open the dossier for every port it answered"
+                  onclick={(e) => {
+                    e.stopPropagation()
+                    dossierState.open(reach!.ip, e.currentTarget as unknown as HTMLElement)
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      dossierState.open(reach!.ip, e.currentTarget as unknown as HTMLElement)
+                    }
+                  }}
+                >
+                  <rect class="serve-chip-bg" x={c.x - c.w / 2} y={SERVE_CHIP_Y} width={c.w} height={SERVE_CHIP_H} rx="8" />
+                  <text class="chip-t" x={c.x} y={SERVE_CHIP_Y + SERVE_CHIP_H / 2 + 3} text-anchor="middle">{c.label}</text>
+                </g>
+              {:else}
+                <g class="serve-chip">
+                  <rect class="serve-chip-bg" x={c.x - c.w / 2} y={SERVE_CHIP_Y} width={c.w} height={SERVE_CHIP_H} rx="8" />
+                  <text class="chip-t" x={c.x} y={SERVE_CHIP_Y + SERVE_CHIP_H / 2 + 3} text-anchor="middle">{c.label}</text>
+                </g>
+              {/if}
+            {/each}
+          </g>
+        {/if}
         {#each siblings as sib, i (sib.ip)}
           <g
             transform="translate({i === 0 ? 478 : 646} {i === 0 ? 408 : 412})"
@@ -6517,6 +6847,7 @@
       style={lineCardPlace ? `left:${R2(lineCardPlace.left)}px;top:${R2(lineCardPlace.top)}px` : undefined}
       bind:this={lineCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="{reachSideName} → {counterpartName(lineCard.counterpart)}: the ports on this line"
       onpointerenter={lineGrace.hold}
@@ -6600,15 +6931,11 @@
                before: mikroview observes, it never connects.
                Only on a host's reach: the line it prints names one
                machine as its source, and a zone's or a rib's refused
-               line is a statement about many (#1016). -->
-          <button
-            class="hot"
-            data-draft-rule
-            onclick={() => {
-              const s = lineCardRefused
-              if (s) openCompose(s)
-            }}>draft the rule ▸</button
-          >
+               line is a statement about many (#1016).
+               The door pins the card first, like askHostMark and
+               openExpectedForm, so the evidence stays beside the draft
+               (#1496). -->
+          <button class="hot" data-draft-rule onclick={draftFromLineCard}>draft the rule ▸</button>
         {/if}
         <button onclick={openLineStream}>stream ▸</button>
       </div>
@@ -6616,7 +6943,7 @@
   {/if}
 
   {#if reach && compose}
-    <div class="composer" role="dialog" aria-label="Draft a rule for this strand">
+    <div class="composer" role="dialog" use:restoreFocus aria-label="Draft a rule for this strand">
       <div class="portpanel">
         <h4>
           {compose.direction === 'out'
@@ -6672,7 +6999,7 @@
         {:else}
           <p class="cmdnote">pick a port — the command drafts itself from what was observed</p>
         {/if}
-        <button class="composer-close" onclick={() => (compose = null)}>Close</button>
+        <button class="composer-close" onclick={() => (compose = null)}>close</button>
       </div>
     </div>
   {/if}
@@ -6702,6 +7029,7 @@
       style={hostCardPlace ? `left:${R2(hostCardPlace.left)}px;top:${R2(hostCardPlace.top)}px` : undefined}
       bind:this={hostCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="The host {d.label}"
       onpointerenter={hostGrace.hold}
@@ -6776,7 +7104,7 @@
       {/if}
 
       {#if hostsState.error}
-        <p class="d-error">{hostsState.error}</p>
+        <FailureLine verb="load" thing="the hosts" said={hostsState.error} />
       {/if}
 
       <div class="acts">
@@ -6889,6 +7217,7 @@
       style={cardPlace ? `left:${R2(cardPlace.left)}px;top:${R2(cardPlace.top)}px` : undefined}
       bind:this={cardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="The {pairName(boundaryCard.from, boundaryCard.to)} boundary"
       onpointerenter={cardGrace.hold}
@@ -6932,6 +7261,16 @@
         <div class="s">nothing drawn across it is a fact; nothing is known</div>
       {/if}
 
+      {#if zonesState.wanInterface && boundaryCard.from === zonesState.wanInterface}
+        <!-- The doors panel's own entry (#1319): this boundary's "from"
+             side is the internet, so the card gains one last row into
+             what the pushed tables let it reach. The internet anchor
+             above opens the same panel. -->
+        <button type="button" class="s doors-row" onclick={() => wanDoorsState.open()}>
+          Doors from the internet{doorsTail}
+        </button>
+      {/if}
+
       {#if cardPinned && isAdmin && cardCoverage !== 'quiet'}
         <!-- The declare form: a reason, both directions, and who. Both
              directions is checked by default (round 49 item 7) because
@@ -6951,7 +7290,7 @@
             both directions
           </label>
           {#if coverageState.error}
-            <p class="d-error">{coverageState.error}</p>
+            <FailureLine verb="load" thing="the coverage" said={coverageState.error} />
           {/if}
           <div class="btns">
             <button type="button" class="go" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>Declare</button>
@@ -6999,7 +7338,7 @@
           <span class="who">{expectedWho(authState.username, scope, offScopeLines.length)}</span>
         </div>
         {#if baselineState.error}
-          <p class="d-error">{baselineState.error}</p>
+          <FailureLine verb="load" thing="the baseline" said={baselineState.error} />
         {/if}
       </div>
     {/if}
@@ -7035,6 +7374,7 @@
       style={offCardPlace ? `left:${R2(offCardPlace.left)}px;top:${R2(offCardPlace.top)}px` : undefined}
       bind:this={offCardEl}
       role="dialog"
+      use:restoreFocus
       tabindex="-1"
       aria-label="Off the baseline on the {pairName(openOffDrawn.r.from, openOffDrawn.r.to)} rib"
       onpointerenter={offGrace.hold}
@@ -7171,7 +7511,7 @@
     <!-- The node info card (#648, rounds 22-23): a small glass card --
          name, address, lane, open warnings, actions -- anchored to the
          click, clamped inside the viewport. -->
-    <div class="node-card" role="dialog" aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
+    <div class="node-card" role="dialog" use:restoreFocus aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
       <button class="nc-close" onclick={closeNodeCard} aria-label="Close">✕</button>
       <b class="nc-name">{nodeCard.name}</b>
       {#if nodeCard.address}<span class="nc-addr">{nodeCard.address}</span>{/if}
@@ -7224,6 +7564,19 @@
 </div>
 
 <style>
+  /* #1540 (C5): the one-line status while the first load is in flight, for
+     a screen with no room for ghost rows. */
+  .first-load {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
   .topo {
     flex: 1;
     min-height: 0;
@@ -7530,6 +7883,16 @@
     stroke-opacity: 0.9;
   }
 
+  /* Seen serving (#1320): a hollow ring, the same muted token h-watch
+     uses -- a fact about traffic, never the alarm ink -- and no
+     animation, because nothing here is a warning. */
+  .h-serve {
+    fill: none;
+    stroke: var(--marked);
+    stroke-width: 1.1;
+    stroke-opacity: 0.9;
+  }
+
   /* Whose card is open. Dashed and in the accent, so it reads as the
      pointer's own mark rather than as anything about the host. */
   .h-open {
@@ -7614,6 +7977,21 @@
     fill: none;
     stroke-linecap: round;
     opacity: 0.55;
+  }
+
+  /* The tunnel's ghost line to where its traffic goes (#877): round 30's
+     `.rib-ghost` as drawn, a faint dashed hairline in --ink-3, which is
+     this app's --fg-dim (the same #55628a). Without a rule of its own
+     the path took the SVG defaults -- black fill, no stroke -- and the
+     S-curve filled as a solid black band (#1433). The camera's own
+     `.camera.cam-zones .rib-ghost` opacity of 0 still wins over the
+     0.45 here, being the more specific selector. */
+  .rib-ghost {
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 6;
+    opacity: 0.45;
   }
 
   /* --- the ghost lane (#460, round 55) ----------------------------------- */
@@ -8009,6 +8387,27 @@
     color: var(--fg);
   }
 
+  /* The doors panel's own row (#1319): a plain `.s` fact line that
+     happens to be a button, reset back to the div-like look every other
+     `.s` line has -- no alarm colour, no border, just an underline on
+     hover/focus so it still reads as interactive. */
+  .card .s.doors-row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .card .s.doors-row:hover,
+  .card .s.doors-row:focus-visible {
+    color: var(--fg);
+    text-decoration: underline;
+  }
+
   /* The card's own table (round-49/index.html:209-213): the off-baseline
      lines, and the reach's port table before it. */
   .card table {
@@ -8282,12 +8681,6 @@
   .card .form .who {
     margin-left: auto;
     color: var(--fg-dim);
-  }
-
-  .d-error {
-    margin: 5px 0 0;
-    font-size: 11.5px;
-    color: var(--reject);
   }
 
   /* --- the composer (round 2 scene 4) ------------------------------------ */
@@ -9423,6 +9816,28 @@
     pointer-events: auto;
   }
 
+  /* The internet island's doors-panel anchor (#1319) takes its own
+     clicks back the same way its aggregate bar does above. No alarm
+     ink: this is a statement, not a warning. */
+  .passive .doors-anchor-btn {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .doors-anchor-t {
+    text-decoration: none;
+  }
+
+  .doors-anchor-btn:hover .doors-anchor-t,
+  .doors-anchor-btn:focus-visible .doors-anchor-t {
+    fill: var(--fg);
+    text-decoration: underline;
+  }
+
+  .doors-anchor-btn:focus-visible {
+    outline: none;
+  }
+
   /* --- node info cards (#648, rounds 22-23) ------------------------------ */
   .host-node,
   .cluster-g {
@@ -9845,10 +10260,20 @@
      it is about. Round 53's own device for that is the mockup's
      `.flat text`: the glyphs are painted over a stroke of the page
      colour, so whatever runs under them passes behind rather than
-     through. Same numbers as the mockup. */
+     through. Same numbers as the mockup.
+
+     Two more take it for the opposite reason (#1430): a lane's port
+     list above its card and the internet card's doors row are crossed
+     by edge curves that are not about them -- the lines are already
+     painted beneath (#723), and the curves run wherever the lanes put
+     them. Neither is a label *of* a line, so #699's plate (.edge-plate
+     above) is not theirs; the halo lets a passing line pass visibly
+     behind the text instead of through it. */
   .trace-note,
   .door-t,
-  .note-t {
+  .note-t,
+  .svc-t,
+  .doors-anchor-t {
     paint-order: stroke;
     stroke: var(--bg);
     stroke-width: 3.4px;
@@ -9906,5 +10331,25 @@
   .uc-trace:hover .uc-trace-t,
   .uc-trace:focus-visible .uc-trace-t {
     text-decoration: underline;
+  }
+
+  /* The serving lens's own drill-down chips (#1320): a faint background
+     so a chip on the bare map reads as a shape, not floating text -- the
+     port picker's own chips sit inside a bar and need none. */
+  .serve-chip-bg {
+    fill: color-mix(in srgb, var(--fg) 10%, transparent);
+  }
+
+  .serve-more {
+    cursor: pointer;
+  }
+
+  .serve-more .chip-t {
+    fill: var(--accent);
+  }
+
+  .serve-more:hover .serve-chip-bg,
+  .serve-more:focus-visible .serve-chip-bg {
+    fill: color-mix(in srgb, var(--accent) 20%, transparent);
   }
 </style>

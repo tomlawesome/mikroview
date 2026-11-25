@@ -7,9 +7,10 @@
 // applied before first paint, never changed by the app on its own --
 // the same grammar as the rail's density states (#486)." That is
 // literally lib/rail.svelte.ts's shape, and this deliberately copied
-// it: read synchronously at module load so the page never paints one
-// view and jumps to another, written only when the operator picks, and
-// never written by anything else.
+// it, originally: read synchronously at module load so the page never
+// paints one view and jumps to another, written only when the operator
+// picks, and never written by anything else. #1283 below changes the
+// "read synchronously" half.
 //
 // #1283 moves the write off localStorage onto the shared per-user
 // record, fetched from the server after sign-in -- which means the
@@ -52,7 +53,7 @@ function isView(v: unknown): v is MetricsView {
   return v === 'seismograph' || v === 'register' || v === 'table'
 }
 
-export function viewLabel(v: MetricsView): string {
+function viewLabel(v: MetricsView): string {
   return METRICS_VIEWS.find((o) => o.value === v)?.label ?? v
 }
 

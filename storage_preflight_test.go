@@ -138,7 +138,7 @@ func TestCheckNoRestoreInProgressAllowsAQuietDataDirectory(t *testing.T) {
 // stopped part-way leaves restoreMarkerName behind, and startup must
 // refuse rather than boot quietly on a data directory that is a mixture
 // of the restored backup and whatever was there before. The refusal must
-// name both ways out: re-running the same -restore --force, or restoring
+// name both ways out: re-running the same -restore -force, or restoring
 // from the operator's own copy of the data directory.
 func TestCheckNoRestoreInProgressRefusesWhileTheMarkerExists(t *testing.T) {
 	dir := t.TempDir()
@@ -156,11 +156,20 @@ func TestCheckNoRestoreInProgressRefusesWhileTheMarkerExists(t *testing.T) {
 	if !strings.Contains(err.Error(), "restore") {
 		t.Errorf("the refusal must say a restore stopped part-way, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "-restore") || !strings.Contains(err.Error(), "--force") {
-		t.Errorf("the refusal must name re-running -restore --force, got: %v", err)
+	if !strings.Contains(err.Error(), "-restore") || !strings.Contains(err.Error(), "-force") {
+		t.Errorf("the refusal must name re-running -restore -force, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "own copy") {
 		t.Errorf("the refusal must name restoring from the operator's own copy of the data directory, got: %v", err)
+	}
+	// #1345 FR9-F1: the marker also outlives a restore whose stores all
+	// landed and only the vault or retained history did not, so the
+	// refusal must not tell that operator their stores are mixed.
+	if strings.Contains(err.Error(), "stores on disk are a mixture") {
+		t.Errorf("the refusal claims the stores are mixed, which is false when only the vault or history failed, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stores all landed") {
+		t.Errorf("the refusal must allow for the stores having all landed, got: %v", err)
 	}
 }
 

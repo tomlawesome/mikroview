@@ -46,6 +46,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"auth":            {"auth", "storePath"},
 		"tokens":          {"auth", "tokensStorePath"},
 		"recovery_keys":   {"auth", "recoveryKeysPath"},
+		"signins":         {"auth", "signInsStorePath"},
 		"flags":           {"flags", "storePath"},
 		"rule_usage":      {"flags", "ruleUsageStorePath"},
 		"entities":        {"entities", "storePath"},
@@ -65,6 +66,10 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"match_log":       {"watchlist", "matchLogPath"},
 		"droplist":        {"droplist", "storePath"},
 		"prefs":           {"prefs", "storePath"},
+		// The config editor's snapshots (#1347) have no key of their
+		// own: they live beside the accounts store (configSnapshotsPath),
+		// so the block's auth.storePath is what places them.
+		"config_snapshots": {"auth", "storePath"},
 	}
 
 	sections := parseStoreBlock(text)
@@ -163,15 +168,20 @@ func TestLiveScriptsUseTheSharedStoreBlock(t *testing.T) {
 // reads as deliberate.
 func TestEveryLiveCheckIsRun(t *testing.T) {
 	excluded := map[string]string{
-		"frontend/scripts/live-browser.mjs":       "the shared helper every scenario imports, not a scenario",
-		"frontend/scripts/live-routeros-real.mjs": "needs a real CHR booted; run by make live-routeros-container",
-		"scripts/live-env.sh":                     "the shared environment helper",
-		"scripts/live-container.sh":               "the shared environment helper, container flavour",
-		"scripts/live-stores.sh":                  "the shared store block, sourced not run",
-		"scripts/live-slot.sh":                    "the shared port allocator, sourced not run (#660)",
-		"scripts/live-routeros.sh":                "boots the CHR; driven by make live-routeros-container",
-		"scripts/live-routeros-step0.sh":          "a probe driven by live-routeros.sh, not a standalone check",
-		"scripts/live-rule-coverage-probe.sh":     "a probe driven by live-routeros.sh, not a standalone check",
+		"frontend/scripts/live-browser.mjs":          "the shared helper every scenario imports, not a scenario",
+		"frontend/scripts/live-routeros-real.mjs":    "needs a real CHR booted; run by make live-routeros-container",
+		"frontend/scripts/live-freshness-reload.mjs": "restarts the server mid-run (#1363); needs its own instance, not the shared one -- run standalone by scripts/live-freshness-reload.sh",
+		"frontend/scripts/live-setup-code.mjs":       "needs an instance with no account yet (#1415); the shared one holds its admin -- run standalone by scripts/live-setup-code.sh",
+		"scripts/live-env.sh":                        "the shared environment helper",
+		"scripts/live-container.sh":                  "the shared environment helper, container flavour",
+		"scripts/live-stores.sh":                     "the shared store block, sourced not run",
+		"scripts/live-slot.sh":                       "the shared port allocator, sourced not run (#660)",
+		"scripts/live-routeros.sh":                   "boots the CHR; driven by make live-routeros-container",
+		"scripts/live-routeros-step0.sh":             "a probe driven by live-routeros.sh, not a standalone check",
+		"scripts/live-blocklist-chr.sh":              "boots its own CHR at a given RouterOS version; run by hand and recorded (#1360)",
+		"scripts/live-rule-coverage-probe.sh":        "a probe driven by live-routeros.sh, not a standalone check",
+		"scripts/live-web-dist.sh":                   "sourced by the checks and by its own test, never run standalone (#1337)",
+		"scripts/live-web-dist.test.sh":              "a plain bash unit test with no server involved, run by gate:scripts instead (#1337)",
 	}
 
 	runners := map[string]string{

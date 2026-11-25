@@ -190,7 +190,7 @@ describe('applyFilters srcQuery/dstQuery', () => {
 
 describe('applyFilters srcCountry/dstCountry', () => {
   it('matches a resolved country code', () => {
-    const events = [evt({ id: 1, srcIp: '8.8.8.8', srcCountry: 'US' }), evt({ id: 2, srcIp: '1.1.1.1', srcCountry: 'AU' })]
+    const events = [evt({ id: 1, srcIp: '192.0.2.8', srcCountry: 'US' }), evt({ id: 2, srcIp: '192.0.2.2', srcCountry: 'AU' })]
     expect(applyFilters(events, { ...emptyFilters(), srcCountry: 'US' }).map((e) => e.id)).toEqual([1])
   })
 
@@ -198,7 +198,7 @@ describe('applyFilters srcCountry/dstCountry', () => {
     const events = [
       evt({ id: 1, srcIp: '10.0.0.5' }), // has an address, no country -- unknown
       evt({ id: 2 }), // no source address at all -- not "unknown", not applicable
-      evt({ id: 3, srcIp: '8.8.8.8', srcCountry: 'US' }),
+      evt({ id: 3, srcIp: '192.0.2.8', srcCountry: 'US' }),
     ]
     const got = applyFilters(events, { ...emptyFilters(), srcCountry: 'unknown' })
     expect(got.map((e) => e.id)).toEqual([1])
@@ -538,7 +538,9 @@ describe('#1304 E2: chain/country option lists stay correct incrementally', () =
 
   it('picks up a newly observed chain and source country, then drops them once evicted', async () => {
     appState.appendLive([evt({ id: 1, chain: 'mangle', srcIp: '203.0.113.9', srcCountry: 'FR' })])
-    await new Promise((r) => setTimeout(r, 220))
+    await vi.waitFor(() => {
+      expect(appState.chainOptions).toContain('mangle')
+    })
 
     expect(appState.chainOptions).toContain('mangle')
     expect(appState.srcCountryOptions.map((o) => o.value)).toContain('FR')
@@ -549,7 +551,9 @@ describe('#1304 E2: chain/country option lists stay correct incrementally', () =
       evt({ id: i + 100, chain: 'forward', srcIp: '198.51.100.1', srcCountry: 'US' }),
     )
     appState.appendLive(filler)
-    await new Promise((r) => setTimeout(r, 220))
+    await vi.waitFor(() => {
+      expect(appState.chainOptions).not.toContain('mangle')
+    })
 
     expect(appState.chainOptions).not.toContain('mangle')
     expect(appState.srcCountryOptions.map((o) => o.value)).not.toContain('FR')

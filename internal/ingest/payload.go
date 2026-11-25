@@ -13,6 +13,7 @@
 package ingest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -56,6 +57,21 @@ const (
 	// (docs/decisions/upgrade-framework.md, "Router-side drift joins
 	// the framework").
 	KindLogging Kind = "logging"
+	// KindIPService is issue #1329's table: one row per /ip/service entry
+	// -- telnet, ftp, www, www-ssl, ssh, api, api-ssl, winbox -- so
+	// mikroview shows the router's own management services as observed
+	// rather than inferred from traffic. See IPServiceEntry's own doc
+	// comment for what each row carries and why.
+	KindIPService Kind = "ip-service"
+	// KindRawRule is issue #1360's: /ip/firewall/raw and
+	// /ipv6/firewall/raw in one page, where the blocklist builder's drop
+	// rules sit. See RawRule.
+	KindRawRule Kind = "raw-rule"
+	// KindAddressListCount is issue #1360's other kind: how many entries
+	// each of the blocklist builder's address lists (mv-bl-*) holds, sent
+	// instead of the entries, which would not fit a push. See
+	// AddressListCount.
+	KindAddressListCount Kind = "address-list-count"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -135,10 +151,16 @@ type AddressListEntry struct {
 //     the second is true of a rule that carries no connection-state.
 //
 //   - InInterface/OutInterface are single interface names, so they are
-//     plain strings: a rule matches at most one of each (an interface
-//     *list* match is a separate RouterOS property, not in this schema),
-//     and a name cannot serialise as a number the way a single port
-//     does. Negation ("!ether1") is part of the string.
+//     plain strings: a rule matches at most one of each, and a name
+//     cannot serialise as a number the way a single port does. Negation
+//     ("!ether1") is part of the string. InInterfaceList is the separate
+//     RouterOS in-interface-list property, added for the doors panel
+//     (v0.7.0 pre-release audit, A4-F1): `accept in-interface-list=LAN`
+//     used to arrive with InInterface "" and read as "any interface,
+//     the WAN included". Absent means not yet reported, the same
+//     reading Disabled documents below -- a push from a script that
+//     predates the field leaves it "", and the doors panel then lists
+//     the rule as it did before; re-pasting the script corrects it.
 type FilterRule struct {
 	Ordinal         RouterOSInt      `json:"ordinal"`
 	Comment         string           `json:"comment"`
@@ -153,6 +175,7 @@ type FilterRule struct {
 	SrcAddress      string           `json:"srcAddress"`
 	ConnectionState RouterOSList     `json:"connectionState"`
 	InInterface     string           `json:"inInterface"`
+	InInterfaceList string           `json:"inInterfaceList"`
 	OutInterface    string           `json:"outInterface"`
 	// Disabled is what lets a count of this table mean "rules doing
 	// something" rather than "rules present" (#701 fact 2). NATRule has
@@ -165,19 +188,20 @@ type FilterRule struct {
 	// hit counter whether or not the rule logs, so the Log every rule
 	// helper can show "fired 41,000 times in the last day" beside a
 	// tick-box before any logging is switched on -- cost, from the
-	// router's own evidence, ahead of the decision to watch. Both are
-	// RouterOSInt (not RouterOSInt64): :serialize to=json emits them as
-	// the same float shape every other RouterOS integer here uses, and
-	// this schema follows FilterRule's own precedent of a plain int32
-	// range rather than WireguardPeer.RX/TX's wider type -- a fixed
-	// contract decision (#435), not an oversight; a counter that
-	// genuinely outgrows int32 is a rule worth flagging on its own
-	// terms; refusing the push. A push made before this field existed
-	// omits it, which decodes as 0 -- the same "absent means not yet
-	// reported" reading Disabled documents above, not "fired zero
-	// times".
-	Packets RouterOSInt `json:"packets"`
-	Bytes   RouterOSInt `json:"bytes"`
+	// router's own evidence, ahead of the decision to watch. A push made
+	// before this field existed omits it, which decodes as 0 -- the same
+	// "absent means not yet reported" reading Disabled documents above,
+	// not "fired zero times".
+	//
+	// Both are RouterOSInt64, WireguardPeer.RX/TX's type, since #1409.
+	// #435 chose a plain int32 range, but no push ever carried a counter
+	// to test that against: the script read them off `print as-value`,
+	// which leaves them out on every RouterOS release checked, so every
+	// push sent null. The script now reads them with `get`, and a busy
+	// rule passes 2 GiB without doing anything unusual -- int32 would
+	// refuse that router's whole filter page.
+	Packets RouterOSInt64 `json:"packets"`
+	Bytes   RouterOSInt64 `json:"bytes"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule.
@@ -211,21 +235,22 @@ type FilterRule struct {
 // Disabled/Dynamic as plain bools where an absent key means false the
 // way FilterRule.Log already documents.
 type NATRule struct {
-	Ordinal      RouterOSInt      `json:"ordinal"`
-	Comment      string           `json:"comment"`
-	Chain        string           `json:"chain"`
-	Action       string           `json:"action"`
-	LogPrefix    string           `json:"logPrefix"`
-	ToAddresses  string           `json:"toAddresses"`
-	ToPorts      RouterOSPortSpec `json:"toPorts"`
-	DstPort      RouterOSPortSpec `json:"dstPort"`
-	Protocol     string           `json:"protocol"`
-	InInterface  string           `json:"inInterface"`
-	OutInterface string           `json:"outInterface"`
-	SrcAddress   string           `json:"srcAddress"`
-	DstAddress   string           `json:"dstAddress"`
-	Disabled     bool             `json:"disabled"`
-	Dynamic      bool             `json:"dynamic"`
+	Ordinal         RouterOSInt      `json:"ordinal"`
+	Comment         string           `json:"comment"`
+	Chain           string           `json:"chain"`
+	Action          string           `json:"action"`
+	LogPrefix       string           `json:"logPrefix"`
+	ToAddresses     string           `json:"toAddresses"`
+	ToPorts         RouterOSPortSpec `json:"toPorts"`
+	DstPort         RouterOSPortSpec `json:"dstPort"`
+	Protocol        string           `json:"protocol"`
+	InInterface     string           `json:"inInterface"`
+	InInterfaceList string           `json:"inInterfaceList"`
+	OutInterface    string           `json:"outInterface"`
+	SrcAddress      string           `json:"srcAddress"`
+	DstAddress      string           `json:"dstAddress"`
+	Disabled        bool             `json:"disabled"`
+	Dynamic         bool             `json:"dynamic"`
 }
 
 // DNSStaticEntry mirrors one /ip/dns/static entry.
@@ -407,6 +432,13 @@ type LoggingEntry struct {
 	Topics   RouterOSList `json:"topics"`
 	Action   string       `json:"action"`
 	Disabled RouterOSFlag `json:"disabled"`
+	// SrcAddress is the action's own src-address (#1373), added the day
+	// the page carries it -- see routeros.LoggingSetup's comment on why
+	// it was left off before. Omitted by a router still running a script
+	// pasted before this field existed, which decodes as "" and is simply
+	// not something a leftover check can say anything about for that
+	// action.
+	SrcAddress string `json:"srcAddress,omitempty"`
 }
 
 // LoggingEntry record types, as the page's own `type` key spells them.
@@ -414,6 +446,156 @@ const (
 	LoggingTypeAction = "action"
 	LoggingTypeRule   = "rule"
 )
+
+// IPServiceEntry mirrors one /ip/service row -- issue #1329: the
+// router's own management services (telnet, ftp, www, www-ssl, ssh,
+// api, api-ssl, winbox), pushed so mikroview shows what the router
+// itself listens on rather than inferring it from traffic.
+//
+// A real router returns twelve /ip/service rows, not eight -- confirmed
+// against a live CHR 7.23.3 router, #1405. The other four (dhcpclient,
+// btest, discover, reverse-proxy) are RouterOS's own runtime services,
+// never added, removed or reconfigured by an operator, and mikroview
+// was never meant to show them beside the eight above. Dynamic and
+// IsDynamic (below) are what tell the two apart; an earlier version of
+// this comment said "exactly eight ... none is ever added or removed",
+// which was never actually true, only unobserved. Paging still doesn't
+// matter either way: twelve rows never approaches maxRecordsPerPage.
+//
+// Deliberately narrow otherwise, matching the owner-ratified scope on
+// #1329: only what tells an operator "is this exposed, on what port,
+// from where" -- Name identifies which service this is, Disabled and
+// Port are self-explanatory, Address is RouterOS's own comma-separated
+// allow-list (empty meaning no restriction -- reachable from anywhere,
+// the case that matters most downstream), and Certificate is the
+// certificate's *name* for the TLS services (www-ssl, api-ssl,
+// reverse-proxy) -- never key material, which a read-policy script's
+// view of this menu never carries in the first place, the same
+// guarantee WireguardPeer's own comment already documents for private
+// keys. A router reports "none" for a TLS service with no certificate
+// set; UnmarshalJSON reads that as "", the same empty value a non-TLS
+// service's absent certificate key decodes to.
+//
+// Address is RouterOSList rather than a plain string for the same
+// shape-depends-on-content reason WireguardPeer.AllowedAddress is: a
+// script that passes the property straight through gets whatever
+// RouterOS's serializer gives it, and this type takes either shape
+// without the caller needing to know which arrived. Absent or empty
+// decodes to nil/no entries, which this schema (like RouterOSList
+// everywhere else) reads as "unset" -- here that reads as "no
+// restriction", not "restricted to nothing", matching RouterOS's own
+// behaviour for an empty address property on one of the eight
+// configurable services. On a real router the *dynamic* four never
+// carry an address property at all -- see IsDynamic.
+//
+// RouterOS 7.24 renamed address to available-from (#1411; 7.18.2 to
+// 7.23.3 say address, 7.24 and 7.24.4 say available-from, each checked
+// on a real CHR). The push sends both, as "address" and
+// "availableFrom", and UnmarshalJSON puts whichever the router filled
+// into Address, so nothing downstream knows which release it was.
+//
+// Field names are RouterOS 7's documented /ip/service properties (name,
+// port, address, certificate, disabled, dynamic), confirmed against a
+// live CHR 7.23.3 router (#1405). tls-version and vrf exist on a real
+// router too; neither is carried here, since nothing #1329 or #1405
+// asks for reads them.
+type IPServiceEntry struct {
+	Name        string       `json:"name"`
+	Disabled    bool         `json:"disabled"`
+	Port        RouterOSInt  `json:"port"`
+	Address     RouterOSList `json:"address"`
+	Certificate string       `json:"certificate"`
+	// Dynamic mirrors AddressListEntry.Dynamic: RouterOS's own "dynamic"
+	// flag on the row, true for its own four runtime services rather
+	// than something an operator configured -- #1405. Only present when
+	// the pushed script requests it (blockSpecs["ip-service"]'s
+	// "dynamic" mapping); a caller wanting the actual answer, including
+	// on a router still running a script pasted before this field
+	// existed, wants IsDynamic below, not this field directly.
+	Dynamic bool `json:"dynamic"`
+
+	// dynamicKeyAbsent and addressKeyAbsent are decode-time bookkeeping
+	// for IsDynamic, set by UnmarshalJSON only when that decode
+	// positively determined the named key was missing from the pushed
+	// JSON. Left false (the zero value) for an entry built any other
+	// way -- e.g. a struct literal in a test -- so IsDynamic then reads
+	// Dynamic/Address at face value, the same "assume the current,
+	// fully-specified shape" default every other zero-valued field here
+	// already gets.
+	dynamicKeyAbsent bool
+	addressKeyAbsent bool
+}
+
+// UnmarshalJSON decodes one /ip/service record, on top of what the
+// struct tags alone would give it: it records whether the pushed JSON
+// carried a "dynamic" or "address" key at all (see the unexported fields
+// above and IsDynamic below), and reads a certificate of the literal
+// string "none" -- what a router reports for a TLS service with no
+// certificate set -- as "", the same empty value an absent certificate
+// already decodes to (#1405).
+//
+// Delegates to an identical alias type to avoid recursing back into this
+// method, but keeps its own strict decoder (DisallowUnknownFields)
+// rather than relying on decodeRecords' outer one: once a type
+// implements json.Unmarshaler, encoding/json hands it the raw bytes for
+// the whole record and no longer enforces that option itself.
+func (e *IPServiceEntry) UnmarshalJSON(data []byte) error {
+	type ipServiceEntryAlias IPServiceEntry
+	// availableFrom is 7.24's name for address (#1411). It lands in
+	// Address when address itself is empty -- a router has one or the
+	// other, never both.
+	wire := struct {
+		*ipServiceEntryAlias
+		AvailableFrom RouterOSList `json:"availableFrom"`
+	}{ipServiceEntryAlias: (*ipServiceEntryAlias)(e)}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&wire); err != nil {
+		return err
+	}
+	if len(e.Address) == 0 {
+		e.Address = wire.AvailableFrom
+	}
+
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if _, ok := probe["dynamic"]; !ok {
+		e.dynamicKeyAbsent = true
+	}
+	_, hasAddress := probe["address"]
+	_, hasAvailableFrom := probe["availableFrom"]
+	if !hasAddress && !hasAvailableFrom {
+		e.addressKeyAbsent = true
+	}
+
+	if e.Certificate == "none" {
+		e.Certificate = ""
+	}
+	return nil
+}
+
+// IsDynamic reports whether e is one of RouterOS's own dynamic
+// /ip/service rows -- dhcpclient, btest, discover, reverse-proxy -- so a
+// caller can leave them out of what it calls a router's management
+// services (#1405).
+//
+// A router running the current wizard script says so directly: the
+// pushed record carries a "dynamic" key, true for the four and false for
+// the other eight. A router still running a script pasted before that
+// field existed sends no "dynamic" key on any record, so this falls back
+// to RouterOS's own distinction instead -- a static, configurable
+// service always carries an "address" key (an empty list when
+// unrestricted), while a dynamic one carries none at all, a property of
+// what /ip/service itself returns rather than something the wizard
+// script adds.
+func (e IPServiceEntry) IsDynamic() bool {
+	if !e.dynamicKeyAbsent {
+		return e.Dynamic
+	}
+	return e.addressKeyAbsent
+}
 
 // RouterOSFlag decodes a yes/no field that :serialize to=json may emit
 // either as the string RouterOS prints ("yes"/"no") or as a JSON
@@ -442,6 +624,65 @@ func (f *RouterOSFlag) UnmarshalJSON(data []byte) error {
 		*f = "no"
 	}
 	return nil
+}
+
+// RawRule mirrors one /ip/firewall/raw or /ipv6/firewall/raw rule
+// (#1360). The blocklist builder writes its drop rules here -- raw
+// prerouting, placed first (owner, answer 11a) -- and the ledger reads
+// their counters to say how often each fired. Field types are
+// FilterRule's, for the same properties on a sibling menu; what is new
+// is Family, which menu the rule came from, and DstAddressList, the list
+// a "to" rule matches on.
+//
+// Ordinal is the position within its own family's table: an IPv4 rule
+// and an IPv6 rule can both be 0.
+//
+// Shapes confirmed on a real CHR (TestDecodeRealRawRulePush): an unset
+// property arrives as null rather than absent -- an enabled rule's
+// disabled, an unlogged rule's log and log-prefix, a "from" rule's
+// dst-address-list -- and decodes to the zero value. Packets and Bytes
+// are read with `get` by the push script, since `print as-value` leaves
+// them out (internal/routeros blockSpecs["raw-rule"]), and are 64-bit
+// for the same reason FilterRule's are (#1409).
+type RawRule struct {
+	Ordinal        RouterOSInt   `json:"ordinal"`
+	Family         string        `json:"family"`
+	Comment        string        `json:"comment"`
+	Chain          string        `json:"chain"`
+	Action         string        `json:"action"`
+	SrcAddressList string        `json:"srcAddressList"`
+	DstAddressList string        `json:"dstAddressList"`
+	LogPrefix      string        `json:"logPrefix"`
+	Log            bool          `json:"log"`
+	Disabled       bool          `json:"disabled"`
+	Packets        RouterOSInt64 `json:"packets"`
+	Bytes          RouterOSInt64 `json:"bytes"`
+}
+
+// Address families a RawRule or AddressListCount may name: the RouterOS
+// menu roots the push script reads, /ip and /ipv6.
+const (
+	FamilyIP   = "ip"
+	FamilyIPv6 = "ipv6"
+)
+
+// AddressListCount is how many entries one of the blocklist builder's
+// address lists holds on one family (#1360) -- the push sends a count
+// for every mv-bl-* name the catalogue knows, on both families, rather
+// than the entries: 15,000 of them would overflow the ~64 KiB body
+// /tool fetch can POST. A name the router does not hold arrives with
+// Count 0.
+//
+// LoadedAt is the router's own creation-time for the list's first entry,
+// in the router's local time and RouterOS's own format ("2026-10-01
+// 12:24:44" on 7.18 and later), or "" when the list is empty. Kept as
+// the router wrote it: the router's clock and timezone are its own, and
+// reading it as an instant is the ledger's call, not the schema's.
+type AddressListCount struct {
+	List     string      `json:"list"`
+	Family   string      `json:"family"`
+	Count    RouterOSInt `json:"count"`
+	LoadedAt string      `json:"loadedAt"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may

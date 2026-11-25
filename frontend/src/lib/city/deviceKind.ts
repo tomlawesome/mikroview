@@ -13,7 +13,7 @@
 // not carry. A camera shape says "something about this host's name or
 // the ports it answered on looked like a camera" -- it never says
 // mikroview identified a camera, and no other surface may read it that
-// way. Mikroview never probes anything (AGENTS.md), so every input
+// way. Mikroview never probes anything (docs/decisions/observe-never-probe.md), so every input
 // below arrived on its own: a label an operator typed, a name the
 // router pushed, and ports and peers seen in the log stream.
 //
@@ -33,7 +33,7 @@
 import { DEVICE_KINDS, type DeviceKind } from './devices'
 
 /** What a host was seen doing, as far as the event buffer reaches. */
-export interface TrafficShape {
+interface TrafficShape {
   /** How many distinct hosts opened a connection to it in the window. */
   talkedToBy?: number
   /** The ports it was reached ON (destination ports), not the ones it used. */
@@ -60,7 +60,7 @@ export interface DeviceKindInput {
 }
 
 /** Where a shape came from, so a caller can say so rather than imply more. */
-export type DeviceKindSource = 'register' | 'gateway' | 'router' | 'name' | 'traffic' | 'fallback'
+type DeviceKindSource = 'register' | 'gateway' | 'router' | 'name' | 'traffic' | 'fallback'
 
 export interface DeviceKindVerdict {
   kind: DeviceKind

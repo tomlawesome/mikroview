@@ -6,11 +6,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 )
@@ -38,8 +41,20 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	suggestionsPath := filepath.Join(srcDir, "suggestions.json")
 	matchLogPath := filepath.Join(srcDir, "matchlog.jsonl")
 
+	// #1470: the match log is sealed and has no unsealed mode, so the
+	// install is keyed -- and, keyed, every store is sealed too.
+	keyPath := filepath.Join(t.TempDir(), "history.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("k", retention.MinKeyBytes)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := retention.LoadKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MIKROVIEW_HISTORY_KEY_FILE", keyPath)
+
 	// Populate suggestions with one candidate.
-	sg, err := suggest.Open(suggestionsPath)
+	sg, err := suggest.OpenWithBackend(persist.NewEncryptedFileBackend(suggestionsPath, "suggestions", key))
 	if err != nil {
 		t.Fatalf("suggest.Open: %v", err)
 	}
@@ -58,7 +73,7 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	// Populate the match log with two records -- two distinct tuples, so
 	// the file has two "record" lines rather than a record and a
 	// collapsed update.
-	ml, err := matchlog.Open(matchLogPath, 100)
+	ml, err := matchlog.Open(matchLogPath, 100, key)
 	if err != nil {
 		t.Fatalf("matchlog.Open: %v", err)
 	}
@@ -124,7 +139,7 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	}
 
 	// The suggestion comes back.
-	sg2, err := suggest.Open(newSuggestionsPath)
+	sg2, err := suggest.OpenWithBackend(persist.NewEncryptedFileBackend(newSuggestionsPath, "suggestions", key))
 	if err != nil {
 		t.Fatalf("suggest.Open after restore: %v", err)
 	}
@@ -138,7 +153,7 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 
 	// Both match log records come back -- proving the JSON-lines wrapping
 	// round-trips, not just that the file exists.
-	ml2, err := matchlog.Open(newMatchLogPath, 100)
+	ml2, err := matchlog.Open(newMatchLogPath, 100, key)
 	if err != nil {
 		t.Fatalf("matchlog.Open after restore: %v", err)
 	}

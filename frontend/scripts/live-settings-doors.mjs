@@ -15,7 +15,7 @@
 //    window.confirm() dialog, and a stray click actually disarms it;
 //  - a freshly let-in account can actually sign in and reach the app.
 
-import { session, check, done, goTo, launchBrowser, grantClipboard, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, launchBrowser, grantClipboard, enrolFactorAndSignIn, adminPassword, removePerson } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -57,6 +57,8 @@ await page.click(`${KEYS} .pform .seg[aria-label="Key kind"] button:has-text("in
 // By id, not text: the picker shows the device's name ("Live Router")
 // where it has one, and the id is what the chip and the API carry.
 await page.click(`${KEYS} .pform .seg[aria-label="which router"] button[data-device-id="${DEVICE}"]`)
+// Minting asks for the admin's own password (#1202).
+await page.fill(`${KEYS} .pform input[aria-label="your password"]`, adminPassword)
 await page.click(`${KEYS} .pform button:has-text("mint it")`)
 
 await page.waitForSelector(`${KEYS} .reveal code`)
@@ -131,6 +133,7 @@ check(
 await revoke.click()
 await revoke.click()
 await page.waitForSelector(`${KEYS} .prow:has-text("${KEY_NAME}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, 'a second click on the armed button revokes the key')
 
 const afterRevoke = await page.request.get(`${URL_BASE}/api/tokens`).then((r) => r.json())
@@ -185,29 +188,42 @@ await viewerPage.click('button[type="submit"]')
 // step. enrolFactorAndSignIn only resolves once the door is cleared and
 // #main-content is up, so a rejection here is a genuine failure to sign
 // in, not a shortcut around the assertion below.
-const signedIn = await enrolFactorAndSignIn(viewerPage).then(() => true, () => false)
+const signedIn = await enrolFactorAndSignIn(viewerPage, VIEWER_PASS).then(() => true, () => false)
 check(signedIn, 'the freshly let-in viewer account can actually sign in')
 await browser.close()
 
-// --- people: remove arms, then confirms -----------------------------------
+// --- people: remove asks for the admin's password, then confirms -----------
+// (#1202 U8: a first click opens a password prompt under the row; it no
+// longer arms the button.)
 
 const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`)
+const adminPrompt = page.locator(`${PEOPLE} input[aria-label="your password"]`)
 await remove.click()
+await adminPrompt.waitFor({ state: 'visible', timeout: 5000 })
 check(
-  (await remove.textContent())?.trim() === 'confirm — signs them out, revokes their keys',
-  'a first click arms remove rather than acting immediately',
+  (await adminPrompt.count()) === 1 &&
+    (await page.locator(`${PEOPLE} button:has-text("confirm — signs them out, revokes their keys")`).count()) === 1 &&
+    (await remove.textContent())?.trim() === 'remove',
+  'a first click opens the password prompt rather than acting immediately',
 )
 
 await page.click(`${PEOPLE} h3`)
 check(
-  (await remove.textContent())?.trim() === 'remove',
-  'clicking elsewhere disarms remove without acting',
+  (await adminPrompt.count()) === 1 &&
+    (await page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`).count()) === 1,
+  'clicking elsewhere leaves the prompt open and removes nothing',
 )
 
-await remove.click()
-await remove.click()
-await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
-check(true, 'a second click on the armed button removes the account')
+await page.click(`${PEOPLE} .pform button:has-text("cancel")`)
+check(
+  (await adminPrompt.count()) === 0 &&
+    (await page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`).count()) === 1,
+  'cancel closes the prompt without acting',
+)
+
+await removePerson(page, VIEWER_USER)
+// safe: removePerson waits for the row to detach, throwing on timeout
+check(true, 'typing the password and confirming removes the account')
 
 const usersAfter = await page.request.get(`${URL_BASE}/api/auth/users`).then((r) => r.json())
 check(

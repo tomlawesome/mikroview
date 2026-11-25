@@ -27,7 +27,7 @@
 // every pair already on record other than the one this scenario means
 // to escalate gets an explicit forward accept of its own, named rather
 // than left to fall to 'unplanned' by default.
-import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal, clickSvgText } from './live-browser.mjs'
+import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal, clickSvgText, tokenMint } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -81,7 +81,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-trace-list', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-trace-list', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value

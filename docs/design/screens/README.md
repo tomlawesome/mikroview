@@ -17,12 +17,22 @@ here (or in its issue body), never from the concept mockups.
 | The city (second view of the topography) | #854 | `city/` |
 | Log every rule (was Tune logging) | #1134 | `log-every-rule/` |
 | The stream | #1191 | `stream/` |
+| Blocklist builder, and the wizard's first-run tail | #1360 | `blocklist/` |
+| First run with a setup code | #1415 | `setup-code/` |
 
-`log-every-rule/` and `stream/` are the exceptions to the
-one-directory-per-round shape: each holds rulings on a page that was
-already built, not a round trail.
+`log-every-rule/`, `stream/` and `setup-code/` are the exceptions to
+the one-directory-per-round shape: each holds rulings on a page that
+was already built, not a round trail.
 
 Same mechanics as the concept rounds: self-contained HTML, no build
 step, the shared fictional data story, `capture.mjs` screenshots into
 `shots/`, README as the durable round record. Direction letters
 continue across rounds and areas (concepts ended at O).
+
+## Building a ratified design
+
+Port the mockup's markup and CSS; never build from an impression of it.
+Drawn but built differently is a **defect** -- build it as drawn. Something
+the app does that the design draws nowhere is a **gap** -- leave it off,
+keep its code, write it down, never invent a home mid-build. Fidelity work
+goes to a top-tier model.

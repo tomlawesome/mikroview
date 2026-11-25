@@ -9,9 +9,11 @@ import (
 	"net/url"
 	"strings"
 
+	goidc "github.com/tomlawesome/gauntlet/oidc"
+
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/decommission"
-	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/ipscope"
 )
 
 // Validate checks a loaded configuration and reports everything wrong
@@ -42,6 +44,7 @@ func (c *Config) Validate() Result {
 
 	c.validateListen(fatal)
 	c.validateUI(fatal)
+	c.validateNetworks(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
 	c.validateBaseline(warn)
@@ -53,6 +56,10 @@ func (c *Config) Validate() Result {
 	c.validateNotify(warn)
 	c.validateOIDC(warn)
 	c.validatePublicURL(warn)
+	// After validatePublicURL, which may clear or strip publicUrl: the
+	// admin passkey rule is judged on the address passkeys will
+	// actually be offered at.
+	c.validateAdminPasskey(fatal)
 
 	return r
 }
@@ -132,7 +139,7 @@ var examplesByCode = map[string]string{
   decommissionCleanWindow: 6h`,
 
 	"CFG-0020": `auth:
-  sessionTTL: 24h`,
+  sessionTTL: 1h`,
 
 	"CFG-0021": `# Serving TLS yourself -- the usual case:
 tls:
@@ -199,12 +206,22 @@ auth:
   days: 30`,
 	"CFG-0082": `history:
   maxBytes: 1073741824   # 1 GiB`,
+	"CFG-0083": `history:
+  keyFile: /etc/mikroview/keys/history.key   # outside the data directory
+# made once, only if no key exists yet, with: head -c 32 /dev/urandom | base64 > mikroview/keys/history.key`,
+
+	"CFG-0022": `auth:
+  adminPasskey: required   # or optional`,
+	"CFG-0023": `publicUrl: "https://mikroview.example.com:8443"
+auth:
+  adminPasskey: required   # or optional, while MikroView has no such address`,
 
 	"CFG-0100": `publicUrl: "https://mikroview.example.com:8443"`,
 	"CFG-0101": `publicUrl: "https://mikroview.example.com:8443"  # a hostname, not an IP address`,
 	"CFG-0102": `publicUrl: "https://mikroview.example.com:8443"  # https, not http`,
 	"CFG-0103": `publicUrl: "https://mikroview.example.com:8443"  # scheme, host and port only -- no path, query or fragment`,
 	"CFG-0104": `publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ`,
+	"CFG-0105": "networks:\n  home:\n    - 198.51.100.0/24  # each inside network as a CIDR prefix, never /0",
 }
 
 // validateUI checks ui.allow (issue #1287).
@@ -219,6 +236,19 @@ func (c *Config) validateUI(fatal problemFunc) {
 	if _, err := ParseUIAllow(c.UI.Allow); err != nil {
 		fatal("CFG-0004", "ui.allow", err.Error(),
 			"list each address as an IP or CIDR, or leave the list empty to let every address reach the web UI")
+	}
+}
+
+// validateNetworks checks networks.home (#1481). Fatal, as for ui.allow:
+// a skipped entry would leave inside hosts reading as outside (and sent
+// to reputation lookups), and a /0 would silently switch off every
+// outside-facing detection.
+func (c *Config) validateNetworks(fatal problemFunc) {
+	for i, s := range c.Networks.Home {
+		if _, err := ipscope.Parse(s); err != nil {
+			fatal("CFG-0105", fmt.Sprintf("networks.home[%d]", i), err.Error(),
+				"list each inside network as a CIDR prefix such as 198.51.100.0/24; a /0 is refused")
+		}
 	}
 }
 
@@ -255,17 +285,17 @@ func (c *Config) validateListen(fatal problemFunc) {
 			"list each proxy as an IP or CIDR, or use \"private\" for a proxy on your LAN or docker network")
 	}
 
-	// backup.listen only has to parse once the drop box is actually
-	// turned on -- same reasoning validateHistory gives for checking
-	// history.keyFile only when history.enabled is true: an address
-	// sitting unused in a disabled block is not yet a problem.
-	if c.Backup.Enabled {
-		if c.Backup.Listen == "" {
-			fatal("CFG-0001", "backup.listen", "is empty", "set an address such as \":47022\"")
-		} else if _, _, err := net.SplitHostPort(c.Backup.Listen); err != nil {
-			fatal("CFG-0002", "backup.listen", fmt.Sprintf("%q is not a valid listen address", c.Backup.Listen),
-				"use host:port, or :port to listen on every interface")
-		}
+	// backup.listen is validated unconditionally (#1361): the router-
+	// backup drop box's switch lives in the settings store now, moved
+	// from this file, so this address can be live at any moment an admin
+	// chooses -- not only while a config-file flag says so -- and a bad
+	// one has to be caught before that, not discovered as a startup
+	// failure the moment somebody opens it from Settings.
+	if c.Backup.Listen == "" {
+		fatal("CFG-0001", "backup.listen", "is empty", "set an address such as \":47022\"")
+	} else if _, _, err := net.SplitHostPort(c.Backup.Listen); err != nil {
+		fatal("CFG-0002", "backup.listen", fmt.Sprintf("%q is not a valid listen address", c.Backup.Listen),
+			"use host:port, or :port to listen on every interface")
 	}
 }
 
@@ -424,7 +454,7 @@ func (c *Config) validateAuth(fatal problemFunc) {
 	if c.Auth.SessionTTL <= 0 {
 		fatal("CFG-0020", "auth.sessionTTL",
 			fmt.Sprintf("%s means sessions never expire", c.Auth.SessionTTL),
-			"set a positive duration such as 24h")
+			"set a positive duration such as 1h")
 	}
 	// Serving TLS while issuing cookies without the Secure flag is a
 	// contradiction, and a downgrade: the cookie becomes sendable over a
@@ -433,6 +463,111 @@ func (c *Config) validateAuth(fatal problemFunc) {
 		fatal("CFG-0021", "auth.secureCookie",
 			"is false while tls.enabled is true, so session cookies would be issued without the Secure flag",
 			"set auth.secureCookie: true, or set tls.enabled: false if you really terminate TLS elsewhere")
+	}
+	switch c.Auth.AdminPasskey {
+	case "", AdminPasskeyRequired, AdminPasskeyOptional:
+	default:
+		fatal("CFG-0022", "auth.adminPasskey",
+			fmt.Sprintf("%q is not a known value", c.Auth.AdminPasskey),
+			"set required or optional, or leave it unset to let publicUrl decide")
+	}
+}
+
+// The two values auth.adminPasskey takes (#1202, ruling 1). Unset is a
+// third state of its own: publicUrl decides (see main's
+// adminPasskeyRule).
+const (
+	AdminPasskeyRequired = "required"
+	AdminPasskeyOptional = "optional"
+)
+
+// validateAdminPasskey refuses auth.adminPasskey: required where no
+// passkey can ever be made (#1202, ruling 1). Fatal rather than a
+// warning with a substitute: quietly running admins without a rule the
+// operator asked for is the silent failure gauntlet's own refusal exists
+// to prevent (gate.New refuses the same combination), and the operator
+// gets this code and key instead of that library's error.
+func (c *Config) validateAdminPasskey(fatal problemFunc) {
+	if c.Auth.AdminPasskey != AdminPasskeyRequired || PasskeysPossible(c.PublicURL) {
+		return
+	}
+	fatal("CFG-0023", "auth.adminPasskey",
+		"is required, but publicUrl is not an https address on a domain name, so no admin could ever register the passkey the rule holds them to",
+		"set publicUrl to the https address people reach MikroView on, or set auth.adminPasskey: optional")
+}
+
+// PasskeysPossible reports whether a browser can make a passkey for
+// publicURL: an absolute URL whose host is a name rather than an IP
+// address, over https -- or plain http on localhost, which browsers
+// count as a secure context. The same test gauntlet/passkey applies
+// when it builds the relying party, written out here so a config can be
+// judged without building one.
+func PasskeysPossible(publicURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(publicURL))
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return false
+	}
+	if net.ParseIP(u.Hostname()) != nil {
+		return false
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && u.Hostname() == "localhost")
+}
+
+// KeyRequired is the refusal every start-up path gives when no key is
+// mounted (#1202, rulings 2 and 12): the server, setup-only mode, and
+// the four command-line tools that open the account stores. One function
+// so the code and the words cannot drift between them -- an operator who
+// meets it from a recovery command must read what the server says.
+//
+// keyErr is retention.LoadKey's error: ErrNoKey when nothing is
+// configured (noKey true), or why a configured key could not be used.
+// Either way there is nothing to seal the account stores under, and
+// gauntlet will not hold them in the clear, so nothing starts.
+//
+// A configured key that could not be used is never answered with the
+// make-a-key command: the file may be the live key with a permission or
+// mount mistake, and `>` would truncate it (v0.7.0 audit O1-S1).
+func KeyRequired(keyFile string, noKey bool, keyErr error) Problem {
+	msg := "no key is mounted, and from v0.7.0 MikroView keeps its accounts, API tokens, recovery keys and sign-in history sealed under one -- there is no unencrypted mode, so nothing has been started or written"
+	remediation := "if no key exists yet, make one with `head -c 32 /dev/urandom | base64 > mikroview/keys/history.key` (the app folder's keys/history.key, " +
+		"read from /etc/mikroview in the container), or point history.keyFile -- or MIKROVIEW_HISTORY_KEY_FILE -- at a key file kept outside " +
+		"the data directory, then start again. Never write a new key over one that exists: anything sealed under it can only be opened with it. " +
+		"Keep a copy of the key somewhere safe: without it the sealed data cannot be read"
+	example := examplesByCode["CFG-0083"]
+	if !noKey {
+		msg = fmt.Sprintf("is set to %s but could not be used (%v), and from v0.7.0 MikroView keeps its accounts, API tokens, recovery keys and sign-in history sealed under it -- there is no unencrypted mode, so nothing has been started or written", keyFile, keyErr)
+		remediation = fmt.Sprintf("check the file at %s rather than making a new key: anything sealed under an existing key can only be opened with that key, "+
+			"and writing a fresh one over it loses the accounts, API tokens, recovery keys and retained history for good. If the file is there but "+
+			"MikroView cannot read it, make it readable by the account MikroView runs as (uid 1000 in the container: on the host, `sudo chown 1000:1000` "+
+			"then `chmod 600` on the file -- mikroview/keys/history.key in the Compose layout); if the setting points at the wrong place, point "+
+			"history.keyFile -- or MIKROVIEW_HISTORY_KEY_FILE -- at the right key file; then start again. A file holding fewer than 32 bytes never "+
+			"sealed anything and can be replaced with a fresh key. Keep a copy of the key somewhere safe: without it the sealed data cannot be read", keyFile)
+		example = "history:\n  keyFile: /etc/mikroview/keys/history.key   # the existing key, unchanged"
+	}
+	return Problem{
+		Code: "CFG-0083", Severity: SeverityFatal, Key: "history.keyFile", Message: msg,
+		Remediation: remediation,
+		Example:     example,
+		Docs:        docsAnchor("CFG-0083"),
+	}
+}
+
+// KeyRequiredHistoryUnreadable is KeyRequired for setup-only mode when
+// the config file's history section -- where history.keyFile lives --
+// could not be read (#1202 review R13). "No key is mounted" would be
+// wrong there: a key may well be named in the part that failed. So it
+// says what happened and names the two places a key is found without
+// that section: MIKROVIEW_HISTORY_KEY_FILE, and the app folder's
+// keys/history.key at appFolderKey. Same code as KeyRequired.
+func KeyRequiredHistoryUnreadable(appFolderKey string) Problem {
+	return Problem{
+		Code: "CFG-0083", Severity: SeverityFatal, Key: "history.keyFile",
+		Message: "cannot be found: the config file's history section could not be read, so any key it names is unknown, " +
+			"and none was found anywhere else -- the account stores are sealed under that key, so nothing has been started or written",
+		Remediation: fmt.Sprintf("set MIKROVIEW_HISTORY_KEY_FILE to the key file's path, or put the key at %s, and start again; "+
+			"then fix the history section in the config editor", appFolderKey),
+		Example: examplesByCode["CFG-0083"],
+		Docs:    docsAnchor("CFG-0083"),
 	}
 }
 
@@ -486,8 +621,8 @@ func (c *Config) validateNotify(warn warnFunc) {
 // value: nothing is filled in on their behalf, and pretending otherwise
 // would be worse than saying so.
 //
-// The multi-tenant issuer check calls oidc.AllowIssuer rather than
-// keeping its own copy of the list. This package is otherwise a
+// The multi-tenant issuer check calls gauntlet/oidc's
+// IsMultiTenantIssuer rather than keeping its own copy of the list. This package is otherwise a
 // dependency-free leaf, and the one exception is deliberate: the
 // alternative is a second copy of a security allowlist that would drift
 // from the first, which is worse than the import.
@@ -508,7 +643,7 @@ func (c *Config) validateOIDC(warn warnFunc) {
 			"SSO login disabled; local login unaffected",
 			"set both from the client your provider issued, or remove oidc.issuerUrl to turn SSO off deliberately")
 	}
-	if err := oidc.AllowIssuer(c.OIDC.IssuerURL); err != nil {
+	if goidc.IsMultiTenantIssuer(c.OIDC.IssuerURL) {
 		warn("CFG-0062", "oidc.issuerUrl",
 			"names a multi-tenant provider, which MikroView does not support",
 			"SSO login disabled; local login unaffected",
@@ -556,14 +691,14 @@ func (c *Config) validatePublicURL(warn warnFunc) {
 			}
 			// Any scheme that is not https, rather than http alone.
 			// CFG-0102 names http because that is what an operator
-			// actually mistypes, but the runtime side (NewRelyingParty
-			// in internal/api) treats every non-https scheme as
+			// actually mistypes, but the runtime side (gauntlet/passkey's
+			// New, see main's newRelyingParty) treats every non-https scheme as
 			// insecure, and the two have to agree: a setting that
 			// switches passkeys off while this check stays silent is
 			// the silent failure the design rules out. http on
 			// localhost is the one exemption, because a browser counts
 			// it as a secure context.
-			if !(u.Scheme == "https" || (u.Scheme == "http" && u.Hostname() == "localhost")) {
+			if u.Scheme != "https" && (u.Scheme != "http" || u.Hostname() != "localhost") {
 				warn("CFG-0102", "publicUrl",
 					fmt.Sprintf("scheme is %q, and browsers only offer passkeys over https", u.Scheme),
 					`passkeys unavailable (status "insecure")`,
@@ -627,7 +762,7 @@ func (c *Config) validateDevices(fatal problemFunc) {
 
 		// id is the device's identity everywhere downstream -- it keys
 		// pushed router state and scopes an ingest token (see
-		// internal/auth.Token.Device), so two devices sharing one is two
+		// gauntlet.Token.Device), so two devices sharing one is two
 		// routers wearing one identity: either can then supply host
 		// names for the other's traffic, defeating the per-device
 		// scoping issue #285 added. Left unset it defaults to sourceIp

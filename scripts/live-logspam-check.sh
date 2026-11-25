@@ -42,6 +42,7 @@ cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$HTTP_PORT", httpRedirect: "", syslogTls: "127.0.0.1:$SYSLOG_PORT"}
 tls: {enabled: true, storePath: $DIR/tls}
 $(mv_store_block "$DIR" true)
+$(mv_history_key_block "$DIR")
 # Since #1281 the syslog listener refuses an unknown address at accept,
 # before the per-source cap this script is testing is ever reached -- so
 # the burst below needs to come from a declared device, not just any

@@ -2,24 +2,31 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   // Authenticator app (TOTP) second factor, from the account menu (#1249).
   //
-  // Four screens, one component: status (on/off, and the way into either
-  // direction), enrol (QR + the same secret as text beside it, always --
-  // the issue is explicit that the text is not a fallback for a broken
-  // scanner, it is shown unconditionally -- plus the code box that
-  // confirms it), the ten recovery codes (shown once, closed only by the
-  // explicit "I have saved these" rather than the header X/Escape/
-  // backdrop every other overlay here answers to), and turning it off
-  // (password-gated, like changePassword -- there is deliberately no way
-  // to do this without one; a lost phone goes through the CLI recovery
-  // path instead, not this dialog).
+  // Five screens, one component: status (on/off, and the way into either
+  // direction), a password check before enrolling (#1418/#1422 -- a
+  // session alone must not be enough to mint this account's first
+  // factor, same re-check budget and same beat as turning it off below),
+  // enrol (QR + the same secret as text beside it, always -- the issue is
+  // explicit that the text is not a fallback for a broken scanner, it is
+  // shown unconditionally -- plus the code box that confirms it), the ten
+  // recovery codes (shown once, closed only by the explicit "I have saved
+  // these" rather than the header X/Escape/backdrop every other overlay
+  // here answers to), and turning it off (password-gated, like
+  // changePassword -- there is deliberately no way to do this without
+  // one; a lost phone goes through the CLI recovery path instead, not
+  // this dialog).
   //
   // Structure and styling deliberately mirror ChangePasswordOverlay,
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
+  import { couldNot, NO_ANSWER } from '../lib/plainWords'
+  import { tick } from 'svelte'
   import { authState } from '../lib/auth.svelte'
-  import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+  import { ApiError, STEP_EXPIRED, confirmRecoveryCodes, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { trapFocus } from '../lib/focusTrap'
+  import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { qrCode } from '../lib/qrcode'
 
   // Bound to the caller's local state (#1332): AccountMenu mounts one
@@ -33,7 +40,7 @@
   // account's recovery codes were already minted by an earlier passkey
   // -- confirming still turns the factor on, it just has no fresh codes
   // to show (see confirm() below).
-  type Step = 'status' | 'enrolling' | 'codes' | 'on-done' | 'turning-off' | 'off-done'
+  type Step = 'status' | 'enrol-password' | 'enrolling' | 'codes' | 'on-done' | 'turning-off' | 'off-done'
 
   let step = $state<Step>('status')
   let uri = $state('')
@@ -43,7 +50,22 @@
   let password = $state('')
   let error = $state<string | null>(null)
   let busy = $state(false)
-  let codesCopied = $state(false)
+  // #1202 U13: after the codes screen's call fails or sends the person
+  // back to the status screen, focus is put inside the dialog again (a
+  // disabled or removed button drops it to the page body).
+  let modalEl = $state<HTMLElement | undefined>(undefined)
+  let saveButton = $state<HTMLButtonElement | undefined>(undefined)
+  async function focusWhenReady(find: () => HTMLElement | null | undefined) {
+    await tick()
+    find()?.focus()
+  }
+  const firstControl = () =>
+    modalEl?.querySelector<HTMLElement>('.body button:not(:disabled), .actions button:not(:disabled)') ?? modalEl
+  const flash = new CopyFlash()
+  // #1202: gauntlet holds a first factor, with its codes, until
+  // confirmRecoveryCodes says they were saved. False when the app went live at once,
+  // where "I have saved these" only closes.
+  let pendingConfirmation = $state(false)
 
   // #1253: turning the authenticator app off leaves this account with no
   // second factor at all iff it has no passkeys either -- the only other
@@ -73,7 +95,8 @@
     password = ''
     error = null
     busy = false
-    codesCopied = false
+    flash.key = null
+    pendingConfirmation = false
   }
 
   // Reachable from the header X, Escape and the backdrop -- everywhere
@@ -89,6 +112,22 @@
     resetFields()
   }
 
+  // #1202: a setup that gauntlet no longer holds (the secret or the held
+  // factor ran out, or nothing is waiting to be confirmed) leaves nothing
+  // to finish. Back to the status screen, which carries the way to begin
+  // again, with the words saying so -- never a screen with no exit.
+  function startAgain(message: string) {
+    resetFields()
+    error = message
+  }
+
+  // A 409 carries gauntlet's own words (nothing is waiting to be
+  // confirmed); the step-expired answer is already a full sentence.
+  function startAgainText(refusal: string): string {
+    if (refusal === STEP_EXPIRED) return refusal
+    return `${refusal.trim().replace(/[.\s]+$/, '')}. Please start again.`
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && step !== 'codes' && !busy) close()
   }
@@ -97,17 +136,27 @@
     if (e.target === e.currentTarget && step !== 'codes' && !busy) close()
   }
 
+  // Reached from the status screen's "Set up authenticator app" --
+  // #1418/#1422 needs the password checked before the secret is ever
+  // minted, so this just opens the password step rather than calling
+  // startEnrol() itself.
+  function beginEnrol() {
+    error = null
+    password = ''
+    step = 'enrol-password'
+  }
+
   async function startEnrol() {
     error = null
     busy = true
     // enrolTOTP throws rather than returning text on a 401 -- the same
     // session-death case AuthEnrolFactor's own forced-enrolment door
-    // guards against (see enrolTOTP's comment in lib/api.ts). Routed the
-    // same way here: this overlay's own header X/Escape/backdrop would
-    // otherwise offer a way out that doesn't actually work, since the
-    // session behind it is already gone.
+    // guards against (see enrolTOTP's comment in lib/api.ts). A wrong
+    // password (or a spent re-check budget) comes back as text instead,
+    // the one exception to that -- shown here and the caller stays on
+    // this password step to retry, same as turnOff below.
     try {
-      const result = await enrolTOTP()
+      const result = await enrolTOTP(password)
       if (typeof result === 'string') {
         error = result
         return
@@ -115,6 +164,7 @@
       uri = result.uri
       secret = secretFromUri(result.uri)
       code = ''
+      password = ''
       step = 'enrolling'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -133,11 +183,19 @@
     // Same reasoning as startEnrol above.
     try {
       const result = await confirmTOTP(code)
+      if (result === STEP_EXPIRED) {
+        // #1202: the scanned secret ran out -- not a dead session.
+        startAgain(result)
+        return
+      }
       if (typeof result === 'string') {
         error = result
         return
       }
-      authState.hasTOTP = true
+      // A held factor is not on yet: finish() below turns it on by
+      // confirming, then re-reads the session.
+      pendingConfirmation = result.pendingConfirmation === true
+      if (!pendingConfirmation) authState.hasTOTP = true
       // #1250: recovery codes are shared with passkeys and minted once, by
       // whichever factor activates first. A passkey already on this
       // account means confirmTOTP just turned the factor on with nothing
@@ -161,12 +219,41 @@
   }
 
   async function copyCodes() {
-    codesCopied = await copyToClipboard(recoveryCodes.join('\n'))
+    await flash.run('codes', () => copyToClipboard(recoveryCodes.join('\n')))
   }
 
-  function finish() {
-    // The codes have been shown once and acknowledged -- nothing left to
-    // do here but the same field reset every other close path takes.
+  async function finish() {
+    // The codes have been shown once and acknowledged. A held factor
+    // (#1202) goes live only when the server is told so: that call comes
+    // first, and the session is read again so the menu shows the factor
+    // on. If the hold is gone the person goes back to the status screen
+    // with "start again"; if the session is gone they are signed out; any
+    // other failure stays on this screen with the button usable, so
+    // pressing it again is the retry. Otherwise nothing is left to do but
+    // the same field reset every other close path takes.
+    if (pendingConfirmation) {
+      error = null
+      busy = true
+      try {
+        const gone = await confirmRecoveryCodes()
+        if (gone) {
+          startAgain(startAgainText(gone))
+          void focusWhenReady(firstControl)
+          return
+        }
+        await authState.check()
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          authState.handleUnauthorized()
+          return
+        }
+        error = couldNot('confirm', 'the codes', err instanceof ApiError ? err.message : NO_ANSWER)
+        void focusWhenReady(() => saveButton)
+        return
+      } finally {
+        busy = false
+      }
+    }
     close()
   }
 
@@ -196,19 +283,36 @@
       busy = false
     }
   }
+
+  // X4-F1: the ten codes exist in clear nowhere else, and a reload before
+  // "I have saved these" loses them for good -- held the same way
+  // LogEveryRule's own guard is, on while this screen is the one
+  // showing them, off the instant it isn't. leaveGuard (#1363) is what
+  // actually prompts on beforeunload now; this just says whether that
+  // prompt should fire.
+  $effect(() => {
+    if (step !== 'codes') return
+    leaveGuard.hold('authenticator-codes')
+    return () => leaveGuard.release('authenticator-codes')
+  })
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" use:trapFocus>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" bind:this={modalEl} use:trapFocus>
       <div class="modal-header">
         <span class="title">Authenticator app</span>
         {#if step !== 'codes'}
           <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
+
+      <!-- #1202 U13: one live region for the status and codes screens,
+           outside the step blocks so it is in the page before any message
+           and survives the move from the codes screen back to status. -->
+      <p class="error live" role="status" aria-live="polite">{step === 'status' || step === 'codes' ? (error ?? '') : ''}</p>
 
       {#if step === 'status'}
         <div class="body">
@@ -223,7 +327,6 @@
               or similar) as a second step at sign-in, alongside your password.
             </p>
           {/if}
-          {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
           <button type="button" class="cancel" onclick={close} disabled={busy}>Close</button>
@@ -232,10 +335,29 @@
               Turn off
             </button>
           {:else}
-            <button type="button" class="confirm" disabled={busy} onclick={startEnrol}>
-              {busy ? 'Starting…' : 'Set up authenticator app'}
+            <button type="button" class="confirm" onclick={beginEnrol}>
+              Set up authenticator app
             </button>
           {/if}
+        </div>
+      {/if}
+
+      {#if step === 'enrol-password'}
+        <div class="body">
+          <p>Confirm your password before setting up an authenticator app.</p>
+          <label>
+            Password
+            <input type="password" bind:value={password} autocomplete="current-password" />
+          </label>
+          {#if error}<p class="error">{error}</p>{/if}
+        </div>
+        <div class="actions">
+          <button type="button" class="cancel" onclick={() => ((step = 'status'), (password = ''), (error = null))} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" class="confirm" disabled={busy || !password} onclick={startEnrol}>
+            {busy ? 'Checking…' : 'Continue'}
+          </button>
         </div>
       {/if}
 
@@ -265,8 +387,8 @@
           </label>
 
           <p class="muted">
-            Confirming turns this on and signs out everywhere else this account is currently
-            signed in. You'll stay signed in here.
+            When the setup is finished, this account is signed out everywhere else. You'll stay
+            signed in here.
           </p>
 
           {#if error}<p class="error">{error}</p>{/if}
@@ -291,18 +413,26 @@
             {/each}
           </div>
           <div class="copyrow">
-            <button type="button" class="copy" onclick={copyCodes}>{codesCopied ? 'Copied' : 'Copy all'}</button>
+            <button type="button" class="copy" onclick={copyCodes}>{flash.label('codes', 'Copy all', { copied: 'Copied', failed: 'Copy failed' })}</button>
           </div>
-          <p class="muted">
-            Every other session this account was signed in on has been ended.
-          </p>
+          <!-- #1202: sessions end when the factor is confirmed, not before. -->
+          {#if pendingConfirmation}
+            <p class="muted">
+              Nothing is switched on until you press the button below. Then this account is
+              signed out everywhere else.
+            </p>
+          {:else}
+            <p class="muted">
+              Every other session this account was signed in on has been ended.
+            </p>
+          {/if}
           <!-- #1250: the two overlays' one cross-reference line -- codes
                are shared, so whichever second factor is added later
                reuses these rather than minting its own. -->
           <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
         </div>
         <div class="actions">
-          <button type="button" class="confirm" onclick={finish}>I have saved these</button>
+          <button type="button" class="confirm" bind:this={saveButton} onclick={finish} disabled={busy}>I have saved these</button>
         </div>
       {/if}
 
@@ -437,6 +567,15 @@
   .error {
     color: var(--reject);
     font-size: 12px;
+  }
+
+  .error.live {
+    margin: 0;
+    padding: 10px 16px 0;
+  }
+
+  .error.live:empty {
+    display: none;
   }
 
   .warning {

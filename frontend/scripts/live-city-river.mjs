@@ -7,7 +7,7 @@
 // pushed here -- so the honest "state not pushed" path is what a real
 // browser renders when nothing named the tunnel's state, and the river
 // itself carries no dash of any kind.
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -26,7 +26,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-river', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-river', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

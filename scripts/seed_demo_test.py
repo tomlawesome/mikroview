@@ -17,14 +17,17 @@ file is executed directly, never on import.
 """
 import argparse
 import importlib.util
+import ipaddress
 import os
 import pathlib
 import random
 import shutil
 import stat
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 _PATH = pathlib.Path(__file__).resolve().parent / "seed-demo.py"
 _spec = importlib.util.spec_from_file_location("seed_demo", _PATH)
@@ -405,6 +408,284 @@ class IngestPushSourceTests(unittest.TestCase):
         finally:
             srv.shutdown()
         self.assertEqual(seen, ["127.0.0.2"])
+
+
+class TotpClaimLockTests(unittest.TestCase):
+    """#1466: fresh_totp_code claims a step under a mkdir lock
+    ($MV_DIR/totp-last-counter.lock) so concurrent claimers never share one."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="seed-demo-totp-")
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.lock = os.path.join(self.dir, "totp-last-counter.lock")
+        env = mock.patch.dict(os.environ, {"MV_DIR": self.dir, "MV_TOTP_SECRET": "JBSWY3DPEHPK3PXP"})
+        env.start()
+        self.addCleanup(env.stop)
+        code = mock.patch.object(seed_demo, "totp_code", lambda secret, counter: counter)
+        code.start()
+        self.addCleanup(code.stop)
+
+    def _claim_in_thread(self, results):
+        t = threading.Thread(target=lambda: results.append(seed_demo.fresh_totp_code()), daemon=True)
+        t.start()
+        return t
+
+    def test_concurrent_claimers_never_share_a_counter(self):
+        # A fake clock: waiting for the next 30 s step advances it instead
+        # of sleeping; short sleeps (lock polling) really sleep.
+        offset = [0.0]
+        guard = threading.Lock()
+        real_time, real_sleep = time.time, time.sleep
+
+        def fake_time():
+            return real_time() + offset[0]
+
+        def fake_sleep(seconds):
+            if seconds >= 1:
+                with guard:
+                    offset[0] += seconds
+            else:
+                real_sleep(seconds)
+
+        shim = mock.Mock(wraps=time)
+        shim.time = fake_time
+        shim.sleep = fake_sleep
+        results = []
+
+        # Yield between the lock-protected read and write. With the lock
+        # held the pause costs only time; with no lock every claimer has
+        # read the old counter before any of them writes, so they share
+        # one and the test fails every run, not by luck of scheduling.
+        real_mkstemp = seed_demo.tempfile.mkstemp
+
+        def slow_mkstemp(*a, **kw):
+            real_sleep(0.1)
+            return real_mkstemp(*a, **kw)
+
+        with mock.patch.object(seed_demo, "time", shim), \
+                mock.patch.object(seed_demo.tempfile, "mkstemp", slow_mkstemp):
+            threads = [self._claim_in_thread(results) for _ in range(8)]
+            for t in threads:
+                t.join(60)
+        self.assertEqual(len(results), 8, "every claimer returns")
+        self.assertEqual(len(set(results)), 8, f"counters must be distinct: {sorted(results)}")
+
+    def test_stale_lock_does_not_block(self):
+        os.mkdir(self.lock)
+        old = time.time() - 60
+        os.utime(self.lock, (old, old))
+        results = []
+        t = self._claim_in_thread(results)
+        t.join(5)
+        self.assertFalse(t.is_alive(), "a lock older than 30 s is removed as stale")
+        self.assertEqual(len(results), 1)
+
+    def test_fresh_lock_held_by_someone_else_makes_the_claimer_wait(self):
+        os.mkdir(self.lock)
+        results = []
+        t = self._claim_in_thread(results)
+        t.join(1.5)
+        self.assertTrue(t.is_alive(), "claimer must wait while a fresh lock is held")
+        self.assertEqual(results, [])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "totp-last-counter")))
+        os.rmdir(self.lock)
+        t.join(5)
+        self.assertFalse(t.is_alive(), "claimer proceeds once the lock is released")
+        self.assertEqual(len(results), 1)
+
+
+_REPO = pathlib.Path(__file__).resolve().parent.parent
+_SAMPLE_NAMES = _REPO / "docs" / "design" / "sample-names.md"
+_V4_RE = r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?(?![\d.])"
+_V6_RE = r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:/\d{1,3})?(?![0-9A-Fa-f:])"
+_DOC_V4 = [ipaddress.ip_network(n) for n in
+           ("198.51.100.0/24", "192.0.2.0/24", "203.0.113.0/24")]
+_DOC_V6 = ipaddress.ip_network("2001:db8::/32")
+# RFC 1918, built from numbers so this file holds no private address text.
+_PRIVATE_V4 = [ipaddress.ip_network((a << 24 | b << 16, p))
+               for a, b, p in ((10, 0, 8), (172, 16, 12), (192, 168, 16))]
+
+
+def _source_v4():
+    """Every IPv4 address or CIDR in seed-demo.py's text (comments
+    included), as (line number, token) pairs."""
+    import re
+    out = []
+    for n, line in enumerate(_PATH.read_text().splitlines(), 1):
+        for tok in re.findall(_V4_RE, line):
+            try:
+                ipaddress.ip_interface(tok)
+            except ValueError:
+                continue  # e.g. a version number like 1.2.3.400
+            out.append((n, tok))
+    return out
+
+
+def _source_v6():
+    import re
+    out = []
+    for n, line in enumerate(_PATH.read_text().splitlines(), 1):
+        for tok in re.findall(_V6_RE, line):
+            try:
+                ipaddress.ip_interface(tok)
+            except ValueError:
+                continue  # e.g. a MAC address or a time of day
+            out.append((n, tok))
+    return out
+
+
+def _sample_names_blocks():
+    """{lower-cased network name: IPv4Network} from the Networks table in
+    docs/design/sample-names.md, one-block rows only."""
+    import re
+    blocks = {}
+    for line in _SAMPLE_NAMES.read_text().splitlines():
+        m = re.match(r"\|\s*([^|]+?)\s*\|\s*(\d+\.\d+\.\d+\.\d+/\d+)\s*\|", line)
+        if m:
+            blocks[m.group(1).lower()] = ipaddress.ip_network(m.group(2))
+    return blocks
+
+
+class DocumentationAddressTests(unittest.TestCase):
+    """#1481: the seed uses only the documentation ranges and per-network
+    blocks in docs/design/sample-names.md, never a private address."""
+
+    def test_no_private_ipv4_anywhere_in_the_source(self):
+        bad = [(n, tok) for n, tok in _source_v4()
+               if any(ipaddress.ip_interface(tok).ip in net for net in _PRIVATE_V4)]
+        self.assertEqual(bad, [], f"private addresses (line, token): {bad[:10]} ... {len(bad)} in all")
+
+    def test_every_address_is_in_a_documentation_range(self):
+        # 127.0.0.0/8 is exempt: each router's syslog/push leaves from its
+        # own loopback address (#1281, #1302), which is not a sample address.
+        bad = [(n, tok) for n, tok in _source_v4()
+               if not ipaddress.ip_interface(tok).ip.is_loopback
+               and not any(ipaddress.ip_interface(tok).ip in net for net in _DOC_V4)]
+        bad += [(n, tok) for n, tok in _source_v6()
+                if ipaddress.ip_interface(tok).ip not in _DOC_V6]
+        self.assertEqual(bad, [], f"addresses outside the documentation ranges: {bad[:10]} ... {len(bad)} in all")
+
+    def test_every_cidr_is_a_network_address(self):
+        # An interface address is host/prefix by nature (RouterOS
+        # /ip/address), so `address=` and `wan_addr` values are exempt;
+        # every other CIDR names a network and must have no host bits.
+        import re
+        lines = _PATH.read_text().splitlines()
+        bad = []
+        for n, tok in _source_v4() + _source_v6():
+            if "/" not in tok:
+                continue
+            if re.search(r'(\baddress=|"(wan_addr|address)":\s*)"' + re.escape(tok) + '"', lines[n - 1]):
+                continue
+            if ipaddress.ip_interface(tok).ip != ipaddress.ip_interface(tok).network.network_address:
+                bad.append((n, tok))
+        self.assertEqual(bad, [], f"CIDRs with host bits set: {bad[:10]} ... {len(bad)} in all")
+
+    def test_named_networks_get_the_block_the_table_gives(self):
+        # A line that carries exactly one table name as a whole quoted
+        # string ("lan", comment="wg0", ...) and IPv4 addresses is taken
+        # to configure that network: each address must be in its block.
+        # Interface names such as vlan10 are not matched: they do not map
+        # to a table name clear-cut, so only quoted network names count.
+        import re
+        blocks = _sample_names_blocks()
+        for want in ("lan", "servers", "iot", "guest", "wg0", "workshop", "cams", "garage"):
+            self.assertIn(want, blocks, f"{want} missing from the table")
+        # #1481: the 192.0.2.0/24 rows the seed already uses, one /27 per zone.
+        for want, cidr in (("staff", "192.0.2.32/27"), ("office", "192.0.2.64/27"),
+                           ("voip", "192.0.2.96/27"), ("wifi", "192.0.2.128/27"),
+                           ("mgmt", "192.0.2.160/27"), ("core", "192.0.2.192/27")):
+            self.assertIn(want, blocks, f"{want} missing from the table")
+            self.assertEqual(str(blocks[want]), cidr, f"{want} has the wrong block in the table")
+        checked, bad = 0, []
+        for n, line in enumerate(_PATH.read_text().splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            quoted = {q.lower() for q in re.findall(r'"([^"]+)"', line)}
+            names = quoted & set(blocks)
+            toks = [t for m, t in _source_v4() if m == n]
+            if len(names) != 1 or not toks:
+                continue
+            block = blocks[names.pop()]
+            for tok in toks:
+                checked += 1
+                if ipaddress.ip_interface(tok).ip not in block:
+                    bad.append((n, tok, str(block)))
+        self.assertEqual(bad, [], f"addresses outside their network's block (line, addr, block): {bad[:10]}")
+        self.assertGreater(checked, 0, "no network-named address lines found; has the seed's layout changed?")
+
+
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_DEMO_HISTORY = _ROOT / "cmd" / "demo-history" / "main.go"
+_LIVE_ENV = _ROOT / "scripts" / "live-env.sh"
+
+
+def _demo_history_entries():
+    """[(name, ip, ports)] from the demoWatchlist literal in main.go."""
+    import re
+    text = _DEMO_HISTORY.read_text()
+    m = re.search(r"var demoWatchlist = \[\]demoEntry\{(.*?)\n\}", text, re.DOTALL)
+    assert m, "demoWatchlist literal not found in cmd/demo-history/main.go"
+    out = []
+    for row in re.finditer(r'\{"[^"]*",\s*"([^"]+)",\s*"([^"]+)",\s*\[\]int\{([^}]*)\}', m.group(1)):
+        ports = [int(p) for p in row.group(3).split(",") if p.strip()]
+        out.append((row.group(1), row.group(2), ports))
+    return out
+
+
+class DemoHistoryAddressTests(unittest.TestCase):
+    """#1481: cmd/demo-history seeds the same estate as seed-demo.py, on
+    documentation addresses only."""
+
+    def test_demo_history_entries_match_the_seeds_watchlist_entries(self):
+        want = [(e["name"], e["ip"], e["ports"]) for e in seed_demo.WATCHLIST_ENTRIES]
+        got = _demo_history_entries()
+        self.assertEqual(got, want, "cmd/demo-history demoWatchlist drifted from WATCHLIST_ENTRIES")
+
+    def test_every_address_in_demo_history_is_in_a_documentation_range(self):
+        import re
+        bad, seen = [], 0
+        for n, line in enumerate(_DEMO_HISTORY.read_text().splitlines(), 1):
+            for tok in re.findall(_V4_RE, line):
+                try:
+                    ip = ipaddress.ip_interface(tok).ip
+                except ValueError:
+                    continue
+                seen += 1
+                if not ip.is_loopback and not any(ip in net for net in _DOC_V4):
+                    bad.append((n, tok))
+        self.assertGreater(seen, 0, "no addresses found in cmd/demo-history/main.go")
+        self.assertEqual(bad, [], f"addresses outside the documentation ranges (line, addr): {bad[:10]}")
+
+
+class LiveEnvHomeNetworksTests(unittest.TestCase):
+    """#1481: the demo's cfg.yaml tells mikroview which blocks are inside."""
+
+    def test_live_env_demo_config_sets_networks_home_to_the_inside_blocks(self):
+        import re
+        text = _LIVE_ENV.read_text()
+        # The block must sit inside the MV_DEMO_DEVICES=1 branch (demo only:
+        # the gate's scenarios use 198.51.100.0/24 as outside sources).
+        branch = re.search(
+            r'^if \[ "\$\{MV_DEMO_DEVICES:-\}" = "1" \]; then\n(.*?)^fi$',
+            text, re.DOTALL | re.MULTILINE)
+        self.assertIsNotNone(branch, "no MV_DEMO_DEVICES=1 branch in scripts/live-env.sh")
+        assign = re.search(r"^[ \t]*NETWORKS_BLOCK='([^']*)'", branch.group(1), re.MULTILINE)
+        self.assertIsNotNone(assign, "NETWORKS_BLOCK is not set inside the MV_DEMO_DEVICES=1 branch")
+        block = assign.group(1)
+        self.assertEqual(len(re.findall(r"NETWORKS_BLOCK='", text)), 1,
+                         "NETWORKS_BLOCK is assigned outside the MV_DEMO_DEVICES=1 branch")
+        self.assertRegex(block, r"\A\s*networks:\s*\n\s+home:\s*\[", "networks: must hold a home: list")
+        self.assertIn("${NETWORKS_BLOCK:-}", text, "cfg.yaml never emits NETWORKS_BLOCK")
+        home = block[block.index("home:"):]
+        got = set(re.findall(r"\b\d+\.\d+\.\d+\.\d+/\d+\b", block))
+        self.assertEqual(got, set(re.findall(r"\b\d+\.\d+\.\d+\.\d+/\d+\b", home)),
+                         "CIDRs outside the home: list")
+        want = {"198.51.100.0/24", "192.0.2.32/27", "192.0.2.64/27", "192.0.2.96/27",
+                "192.0.2.128/27", "192.0.2.160/27", "192.0.2.192/27",
+                "192.0.2.224/28", "192.0.2.240/29", "192.0.2.248/29"}
+        self.assertTrue(want <= got, f"networks.home is missing {sorted(want - got)}")
+        self.assertNotIn("192.0.2.0/27", got, "192.0.2.0/27 holds the router WANs: it is outside")
 
 
 if __name__ == "__main__":

@@ -181,7 +181,7 @@ be the expensive way round.
 - API: `/api/detectors` and `/api/watchlist` are replaced wholesale in
   v0.3.0 -- no compatibility routes. Owner decision, 2026-08-15: the
   sole deployment is the owner's own, and pre-1.0 removals are
-  wholesale per AGENTS.md. The CHANGELOG communicates it, as always.
+  wholesale per docs/development.md. The CHANGELOG communicates it, as always.
 
 ## What this fixes by construction
 
@@ -199,7 +199,7 @@ names the engine contract that retires it.
   programmatic kind is permanent, not transitional.
 - **No behaviour changes smuggled in with the port.** Characterization
   first; intentional changes ride their own issues.
-- **No new runtime dependencies**, per AGENTS.md.
+- **No new runtime dependencies**, per docs/decisions/scope-and-companion-projects.md.
 
 ## Costs, stated
 
@@ -239,7 +239,7 @@ names the engine contract that retires it.
    practice, retention gets its own ADR with real sizing numbers from
    the running instance rather than estimates.
 3. **No API compatibility routes.** See Migration above -- wholesale,
-   per AGENTS.md, sole-deployment reality acknowledged.
+   per docs/development.md, sole-deployment reality acknowledged.
 
 ## Addendum, 2026-08-29: custom detection definitions (#502)
 
@@ -354,9 +354,10 @@ which already satisfies the replay contract.
 
 ### Who decided it
 
-effort on 2026-08-24, under explicit owner authorisation, departing
-from AGENTS.md's standing rule routing architecture calls to Fable
-5: Fable 5 had reached its account model limit, and the owner
-authorised Opus rather than wait for the reset. Worth recording
+The schema decision above was made on 2026-08-24, under explicit
+owner authorisation, departing from AGENTS.md's standing rule routing
+architecture calls to the top-tier model: that model had reached its
+account limit, and the owner authorised another rather than wait for
+the reset. Worth recording
 here because the decision shapes persisted data -- definitions
 created under it will exist in the field.

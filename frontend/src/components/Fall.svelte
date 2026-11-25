@@ -21,6 +21,7 @@
   // What "boundary" means here is narrower than the ratified record asks
   // for, and that gap is deliberate and disclosed rather than invented
   // silently -- see lib/fall.svelte.ts's header comment and PR #620.
+  import FailureLine from './FailureLine.svelte'
   import { appState } from '../lib/state.svelte'
   import AccountMenu from './AccountMenu.svelte'
   import {
@@ -32,6 +33,8 @@
     type FallBoundary,
   } from '../lib/fall.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { geoipState } from '../lib/geoip.svelte'
+  import { DBIP_URL } from '../lib/geo'
   import { fetchEventsWindow } from '../lib/api'
   import { isCancelledFetch } from '../lib/cancelled'
   import { formatHM, formatRelative } from '../lib/format'
@@ -73,6 +76,18 @@
   // all, and that is the window-cap chip in the fall's head below, not
   // this caption.
   const WINDOW_RANGE_CAPTION_ENABLED: boolean = false
+
+  // DB-IP's credit (#1352): DB-IP Lite's licence asks for a link, and the
+  // owner settled where it goes -- a subtle line at the foot of the fall,
+  // only while DB-IP is the source in use. Once an admin sets up IPinfo
+  // or MaxMind it goes; it is never in About. Gated on the live source
+  // the same way the caption above is gated on its const, so nothing is
+  // drawn at all rather than drawn and hidden. /api/healthz says which
+  // source is live, read once and shared (lib/geoip.svelte.ts).
+  const dbipCreditShown = $derived(geoipState.source === 'dbip')
+  $effect(() => {
+    geoipState.ensureLoaded().catch(() => {})
+  })
 
   // The fall's own event budget, and the number the window-cap chip
   // states. Named rather than written into the fetch below so the chip
@@ -192,7 +207,19 @@
   // untouched and still draws the window's own message.
   let windowPollStopped = false
 
+  // #1345 R4B-F2: two window polls can be in flight at once (a span
+  // change, or one tick answering slower than POLL_MS), and nothing
+  // makes them answer in the order they were sent -- EngineRoom's #1275
+  // overtaken() problem. Same answer: each poll remembers its place in
+  // line and stands down, failure path included, if a later one has
+  // already been answered. A counter rather than EngineRoom's clock, so
+  // two polls issued in the same millisecond (a span click right after
+  // a tick) still order.
+  let windowIssued = 0
+  let windowAnswered = 0
+
   async function loadWindow() {
+    const seq = ++windowIssued
     const end = Date.now()
     const start = end - spanMs
     // Flags come from the shared flagsState store (App.svelte already
@@ -200,19 +227,21 @@
     // Fall used to poll flags on its own tick too, doubling the request.
     try {
       const res = await fetchEventsWindow({ since: new Date(start).toISOString(), limit: WINDOW_LIMIT })
+      if (seq < windowAnswered) return
+      windowAnswered = seq
       const receivedAt = Date.now()
       windowEvents = res.events.map((e) => ({ ...e, receivedAt }))
       windowHasMore = res.hasMore
       windowError = null
     } catch (e) {
+      if (seq < windowAnswered) return
       if (!isCancelledFetch(e, windowPollStopped)) {
         windowError = e instanceof Error ? e.message : String(e)
       }
-    } finally {
-      windowStart = start
-      windowEnd = end
-      windowLoading = false
     }
+    windowStart = start
+    windowEnd = end
+    windowLoading = false
   }
 
   $effect(() => {
@@ -539,6 +568,11 @@
 
   const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
+  // #1255: the unmatched lane's own attention chip. bandsData only ever
+  // pushes the '__unmatched__' band once some event actually landed
+  // there, so its mere presence here already means "has traffic" -- no
+  // separate total > 0 guard needed.
+  const unmatchedBand = $derived(allBands.find((b) => b.key === '__unmatched__'))
   // One boundary, one colour, everywhere: shared by the rig's band-head
   // underlines and the overview strip's ticks below, the same lane map
   // the atlas overlay's zones draw from (fall.svelte.ts's laneColors) --
@@ -896,6 +930,14 @@
   // its box overlaps anything already in `occupied` -- another placed
   // label, or a neighbouring carrier's own curve. Pushes its own final
   // box into `occupied` before returning, so later candidates see it.
+  //
+  // A label that is still overlapping once the lifting stops folds:
+  // null, drawn nowhere (#1430). Two near-busiest carriers squeezed
+  // together by assignX both start within a line of the band head, so
+  // neither can lift, and the old code then drew the second across the
+  // first -- two unreadable labels where the foot rule (portLabels
+  // below, #700) already says what to do with a crowded band: the
+  // heaviest keeps its label and the rest fold.
   function placeLabel(
     occupied: OccupiedBox[],
     x: number,
@@ -904,21 +946,23 @@
     lo: number,
     hi: number,
     minY: number,
-  ): { tx: number; ty: number; anchor: LabelAnchor } {
+  ): { tx: number; ty: number; anchor: LabelAnchor } | null {
     const { tx, anchor } = clampLabelX(x, w, lo, hi)
     const x1 = anchor === 'middle' ? tx - w / 2 : anchor === 'end' ? tx - w : tx
     const x2 = x1 + w
     const boxAt = (cy: number): OccupiedBox => ({ x1, x2, y1: cy - LABEL_ASCENT, y2: cy + LABEL_DESCENT })
+    const blocked = (cy: number) => occupied.some((o) => boxesOverlap(boxAt(cy), o))
     let ty = y
     let guard = 0
-    while (guard++ < LABEL_LIFT_MAX && ty - LABEL_LIFT >= minY && occupied.some((o) => boxesOverlap(boxAt(ty), o)))
-      ty -= LABEL_LIFT
+    while (guard++ < LABEL_LIFT_MAX && ty - LABEL_LIFT >= minY && blocked(ty)) ty -= LABEL_LIFT
+    if (blocked(ty)) return null
     occupied.push(boxAt(ty))
     return { tx, ty, anchor }
   }
 
   // Peak labels: one per active carrier, tallest placed first so a
-  // shorter neighbour's label is the one that lifts clear.
+  // shorter neighbour's label is the one that lifts clear -- or, with
+  // no room left to lift into, the one that folds (#1430).
   const peakLabels = $derived.by(() => {
     const cands: { x: number; y: number; text: string; lane: Lane; h: number; slot: BandSlot }[] = []
     const occupiedByBand = new Map<string, OccupiedBox[]>()
@@ -943,8 +987,8 @@
       const occupied = occupiedByBand.get(c.slot.band.key)!
       const lo = c.slot.bx + LABEL_MARGIN
       const hi = c.slot.bx + bandW - LABEL_MARGIN
-      const { tx, ty, anchor } = placeLabel(occupied, c.x, c.y, w, lo, hi, SPEC_TOP + 12)
-      placed.push({ x: tx, y: ty, anchor, text: c.text, lane: c.lane })
+      const spot = placeLabel(occupied, c.x, c.y, w, lo, hi, SPEC_TOP + 12)
+      if (spot) placed.push({ x: spot.tx, y: spot.ty, anchor: spot.anchor, text: c.text, lane: c.lane })
     }
     return placed
   })
@@ -1230,6 +1274,21 @@
         <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
       </button>
     {/if}
+    <!-- #1255: the unmatched lane's own chip, so the sentence the caption's
+         hover and the band head's aria-label already carry (unmatchedExplanation,
+         above) reaches a sighted reader without hovering. Dim ink and a
+         hollow marker like the window-cap chip below -- a fact, not an
+         alarm -- but a real button like the dark-boundary chip above,
+         since there is somewhere for this one to lead: the same
+         openInStream this fall already opens every other band with. No
+         new geometry: both `.att` and `.att.dim` are the rig's own
+         classes, reused rather than duplicated. -->
+    {#if unmatchedBand}
+      {@const ub = unmatchedBand}
+      <button type="button" class="att dim" onclick={() => openInStream(ub)}>
+        <i></i>{ub.label} -- {unmatchedExplanation(ub)}
+      </button>
+    {/if}
     <!-- The window cap (#801, round 36 item 6.1): the third chip in the
          fall's head, dim, and present only when the window really does
          hold more than the fall was handed -- `windowHasMore` is the
@@ -1248,7 +1307,7 @@
   {#if fallState.loading}
     <p class="state-msg">Reading pushed firewall rules…</p>
   {:else if fallState.error}
-    <p class="state-msg error" role="alert">Could not read the pushed rule tables: {fallState.error}</p>
+    <FailureLine verb="read" thing="the pushed rule tables" said={fallState.error} />
   {:else if windowError && windowEvents.length === 0}
     <!-- #737: a failed window load is not a quiet one. Without this, a
          fetchEventsWindow failure left every band's traffic at zero,
@@ -1258,7 +1317,7 @@
          there is no window data at all: once a load has ever succeeded,
          a later transient failure still has real (if ageing) events to
          draw instead of hiding them behind this message. -->
-    <p class="state-msg error" role="alert">Could not load the window: {windowError}</p>
+    <FailureLine verb="load" thing="the window" said={windowError} />
   {:else if allBands.length === 0 && !windowLoading}
     <!-- Unmissable, mid-page: an empty fall must read as waiting, never
          as broken or unbuilt (owner, 2026-08-30). -->
@@ -1600,6 +1659,9 @@
         title="How to read the fall — full explanation in the docs"
         aria-label="How to read the fall (opens the docs)">i</a
       >
+      {#if dbipCreditShown}
+        <a class="geo-credit" href={DBIP_URL} target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a>
+      {/if}
       {#if WINDOW_RANGE_CAPTION_ENABLED}
         <span class="window-caption">
           {#if windowHasMore}showing the most recent 5,000 events; more exist ·
@@ -1812,10 +1874,6 @@
     color: var(--o-ink3, var(--o-ink2));
     font-size: 12.5px;
   }
-  .state-msg.error {
-    color: var(--o-drop);
-  }
-
   /* ── the rig ─────────────────────────────────────────────────────── */
   .rig {
     flex: 1;
@@ -2196,6 +2254,20 @@
   .ibtn:hover {
     color: var(--accent);
     border-color: var(--accent);
+  }
+  /* DB-IP's credit: small and dim, on the (i)'s own line at the right,
+     so its coming and going moves nothing -- the foot is already as tall
+     as the (i). */
+  .geo-credit {
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--o-ink3);
+    opacity: 0.8;
+    text-decoration: none;
+  }
+  .geo-credit:hover {
+    color: var(--accent);
+    opacity: 1;
   }
   .window-caption {
     margin: 0;

@@ -127,7 +127,7 @@ function shape(el: Element, depth = 0): string[] {
 /** The 2D map's declare form, open. */
 function flatForm(): Element {
   zonesState.pushed = [{ address: '10.0.40.1/24', network: '10.0.40.0', interface: 'bridge4', comment: 'Guest' }]
-  appState.events = [event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }), event({ id: 2, inInterface: 'ether1', srcIp: '8.8.8.8' })]
+  appState.events = [event({ inInterface: 'bridge4', srcIp: '10.0.40.9' }), event({ id: 2, inInterface: 'ether1', srcIp: '192.0.2.8' })]
   policyState.anyPushed = true
   policyState.edges = [
     { key: 'bridge4|ether1', from: 'bridge4', to: 'ether1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
@@ -193,7 +193,7 @@ describe('the declare form’s footer, on both surfaces (#1031)', () => {
     // The card is 288px wide, which is 262px of content; `Declare`,
     // `cancel`, the checkbox and the gaps between them take about 141
     // of it, leaving room for roughly 19 characters of 10.5px monospace
-    // against the 24 in "as alex · both directions" -- and a longer
+    // against the 25 in "as alex · both directions" -- and a longer
     // username only makes it worse.
     for (const form of [flatForm(), await cityForm()]) {
       const both = form.querySelector('label.both')!

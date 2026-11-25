@@ -107,9 +107,9 @@ func usableSnapshotDir(log *slog.Logger, dir string) string {
 		return ""
 	}
 	name := probe.Name()
-	probe.Close()
+	_ = probe.Close()
 	// #nosec G703 -- removes the probe file CreateTemp just made in that same directory.
-	os.Remove(name)
+	_ = os.Remove(name)
 	return dir
 }
 

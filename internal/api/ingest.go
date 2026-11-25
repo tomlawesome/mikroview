@@ -42,7 +42,7 @@ type ingestAckResponse struct {
 
 // handleIngestRouterOS is issue #186 step 3: the push endpoint a
 // router-side script POSTs to. Reachable only via an ingest bearer token
-// -- see requireAuth's bearer-token branch and ingestRoutes -- there is
+// -- see Routes in gauntlet.go and ingestRoutes -- there is
 // no session-based path to it at all, matching #186's design: mikroview
 // never holds RouterOS credentials, and a router pushing its own state is
 // the only way data arrives here.
@@ -123,7 +123,7 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	tok := ingestTokenFromContext(r)
 	if tok == nil {
 		// Unreachable in practice: ingestRoutes is only ever dispatched to
-		// from requireAuth's ingest-token branch, which always sets this
+		// by the gate for an ingest token, and withToken always sets this
 		// first. Guarded anyway rather than trusting that invariant
 		// silently -- the alternative is a nil-pointer panic on tok.ID
 		// below.
@@ -170,8 +170,8 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		// err is safe to echo: it describes a problem with the caller's
 		// own request (an unknown field, an oversized value, a bad page
 		// number), never anything about mikroview's existing state --
-		// the same reasoning handleTokensCreate's validation-error branch
-		// already relies on.
+		// the same reasoning a validation error on any other request body
+		// here relies on.
 		if s.noteIngest(tok.Device, "", false, now) {
 			s.Audit.Record("device:"+tok.Device, "ingest.routeros.refused", tok.Device,
 				fmt.Sprintf("payload rejected: %v", err))
@@ -234,6 +234,10 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	if payload.Kind == ingest.KindLogging && s.Setup != nil {
 		s.Setup.NoteLoggingReport(tok.Device, payload, now)
 	}
+
+	// #1360's record 8: the first push reporting a blocklist list with
+	// entries in it witnesses the first-run tail.
+	s.noteBlocklistWitness(tok.Device, payload, now)
 
 	// #186 step 5: never persist a raw payload wholesale. RouterState
 	// above is in-memory only by design, and nothing here logs the
@@ -314,6 +318,24 @@ func (s *Server) handleRouterOSAddresses(w http.ResponseWriter, r *http.Request)
 	}
 	if addrs == nil {
 		resp.Rules = []ingest.IPAddressEntry{}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleRouterOSServices is handleRouterOSRules for the pushed
+// /ip/service table (issue #1329) -- the router's own management
+// services, observed from what it pushed rather than inferred from
+// traffic, and read-only here the same way every other table on this
+// file is: nothing contacts the router on request.
+func (s *Server) handleRouterOSServices(w http.ResponseWriter, r *http.Request) {
+	device := r.PathValue("device")
+	services, updatedAt, ok := s.RouterState.IPServices(device)
+	resp := routerTableResponse{Available: ok, Rules: services}
+	if ok {
+		resp.UpdatedAt = &updatedAt
+	}
+	if services == nil {
+		resp.Rules = []ingest.IPServiceEntry{}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -35,14 +35,15 @@ again="$(env PATH=/usr/bin:/bin MV_COSIGN_DIR="$TMP/cache" bash "$SCRIPT" 2>"$TM
 check "$again" "$out" "a second run returns the cached path"
 check "$(grep -c downloading "$TMP/err2")" "0" "a second run does not download"
 
-# 3. The refusal. Same script, one character of the expected checksum
-# changed, so the download is genuine and only the comparison differs.
+# 3. The refusal. Same script, the expected checksum replaced with an
+# all-zero digest, so the download is genuine and only the comparison
+# differs.
 sed 's/^readonly COSIGN_SHA256=".*"$/readonly COSIGN_SHA256="0000000000000000000000000000000000000000000000000000000000000000"/' \
   "$SCRIPT" > "$TMP/bad-sha.sh"
 env PATH=/usr/bin:/bin MV_COSIGN_DIR="$TMP/bad" bash "$TMP/bad-sha.sh" >"$TMP/out3" 2>"$TMP/err3"
 check "$?" "1" "a checksum mismatch refuses"
 grep -q "checksum mismatch" "$TMP/err3" && echo "ok - the refusal says why" || { echo "FAIL - the refusal says why"; fail=1; }
-check "$(ls "$TMP/bad" 2>/dev/null | grep -c '^cosign-[0-9]')" "0" "a mismatched download is not left installed"
+check "$(find "$TMP/bad" -maxdepth 1 -name 'cosign-[0-9]*' 2>/dev/null | wc -l | tr -d ' ')" "0" "a mismatched download is not left installed"
 
 # 4. A corrupted cache entry is not handed back as if it were the pin.
 printf 'not cosign' > "$TMP/cache/cosign-$(sed -n 's/^readonly COSIGN_VERSION="\(.*\)"$/\1/p' "$SCRIPT")"

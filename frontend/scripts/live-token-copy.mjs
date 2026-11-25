@@ -123,6 +123,7 @@ while (Date.now() < deadline) {
 }
 check(!!arrived, `the test event reached the server (rule=${RULE})`)
 if (!arrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- token interactions cannot be exercised on a row that never arrived')
   done()
 }
@@ -154,6 +155,7 @@ try {
 }
 check(rowFound, `a row showing "${HOST_LABEL}" rendered (srcHostName was "${arrived.srcHostName ?? '(none)'}")`)
 if (!rowFound) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- token interactions cannot be exercised on a row that never rendered')
   done()
 }
@@ -230,9 +232,12 @@ await grantClipboard(page)
 
 await copyBtn.click()
 
-await page.waitForSelector('.toast[role="status"]', { timeout: 3000 })
-const toastText = await page.textContent('.toast')
-check(!!toastText && /copied/i.test(toastText), `a transient "copied" toast appears (saw "${toastText}")`)
+// #1542: the control flips its own label to "copied" for 1.5 s; there is
+// no toast for a copy any more.
+await page.waitForFunction((el) => el.textContent.trim() !== '⧉', await copyBtn.elementHandle(), { timeout: 3000 })
+const flippedTo = ((await copyBtn.textContent()) ?? '').trim()
+check(flippedTo === 'copied', `the copy glyph flips its own label to "copied" (saw "${flippedTo}")`)
+check((await page.locator('.toast').count()) === 0, 'and no toast is raised for the copy')
 
 const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
 check(
@@ -240,9 +245,10 @@ check(
   `the clipboard holds the RAW IP, not the "${HOST_LABEL}" label the row shows (got "${clipboardText}")`,
 )
 
-// The toast is transient -- it must go away on its own rather than linger.
-await page.waitForSelector('.toast', { state: 'detached', timeout: 4000 })
-check(true, 'the "copied" toast auto-dismisses')
+// The flip is transient -- it must return to the glyph on its own.
+await page.waitForFunction((el) => el.textContent.trim() === '⧉', await copyBtn.elementHandle(), { timeout: 4000 })
+// safe: waitForFunction above throws on timeout
+check(true, 'the "copied" label returns to the glyph on its own')
 
 // Clicking the copy glyph must not also have applied the filter.
 await unfoldStreamFilter(page)

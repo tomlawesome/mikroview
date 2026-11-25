@@ -820,7 +820,7 @@
         <g class="isl-card">
           <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12"/>
           <text x="-82" y="-3" class="n-name">Internet</text>
-          <text x="-82" y="14" class="n-cidr">ether1 · 203.0.113.7</text>
+          <text x="-82" y="14" class="n-cidr">ether1 · 192.0.2.7</text>
           <text x="48" y="-6" class="cov cov-l">LOGGED</text>
           <rect class="wp-r" x="-100" y="34" width="200" height="16" rx="7"/><text class="wp" x="-88" y="45.5">◉ 1</text>
           <rect class="fchip-r" x="-100" y="54" width="200" height="16" rx="7"/><text class="fchip" x="-88" y="65.5">✱ 2</text>
@@ -846,7 +846,7 @@
         <g class="isl-card">
           <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12"/>
           <text x="-66" y="-2" class="n-name" style="font-size:13px">WireGuard</text>
-          <text x="-66" y="14" class="n-cidr">wg0 · 203.0.113.0/24</text>
+          <text x="-66" y="14" class="n-cidr">wg0 · 198.51.100.128/27</text>
           <text x="54" y="-4" class="cov cov-q">QUIET</text>
           <rect class="wp-r" x="-84" y="32" width="188" height="16" rx="7"/><text class="wp" x="-72" y="43.5">◉ 1</text>
         </g>
@@ -859,7 +859,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--lan)"/>
-          <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">203.0.113.0/24</text>
+          <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">198.51.100.0/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">alex-desktop · phone-alex · laptop-anna · +9</text>
           <text x="-90" y="70" class="cov cov-l">LOGGED BOTH WAYS</text>
           <rect class="wp-r" x="-108" y="110" width="216" height="16" rx="7"/><text class="wp" x="-96" y="121.5">◉ 2</text>
@@ -875,7 +875,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--srv)"/>
-          <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">198.51.100.0/24</text>
+          <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">198.51.100.32/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">nas · pihole · unifi</text>
           <text x="-90" y="70" class="cov cov-l">LOGGED BOTH WAYS</text>
           <rect class="wp-r" x="-108" y="110" width="216" height="16" rx="7"/><text class="wp" x="-96" y="121.5">◉ 2</text>
@@ -890,7 +890,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--iot)"/>
-          <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">198.51.100.0/24</text>
+          <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">198.51.100.64/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">cam-porch · hue-bridge · thermostat · +4</text>
           <text x="-90" y="70" class="cov cov-l">LOGGED BOTH WAYS</text>
           <rect class="wp-r" x="-108" y="110" width="216" height="16" rx="7"/><text class="wp" x="-96" y="121.5">◉ 1 · ring broken</text>
@@ -907,7 +907,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--guest)"/>
-          <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">192.0.2.0/24</text>
+          <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">198.51.100.96/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">guest-e8b2 · +2</text>
           <text x="-90" y="74" class="cov cov-d">DARK TOWARD WAN</text>
           <text x="-90" y="88" class="n-sub">no log rule on this boundary</text>
@@ -973,7 +973,7 @@
         <rect class="isl" x="-160" y="-120" width="320" height="200" rx="14"/>
         <circle cx="-138" cy="-92" r="4" fill="var(--iot)"/>
         <text x="-124" y="-87" class="n-name" style="font-size:19px">IoT</text>
-        <text x="66" y="-87" class="n-cidr">198.51.100.0/24</text>
+        <text x="66" y="-87" class="n-cidr">198.51.100.64/27</text>
         <text x="-138" y="-56" class="n-sub">7 clients · egress :53 :123 only · logged both ways</text>
         <text x="-138" y="-34" class="cov cov-l">LOGGED BOTH WAYS</text>
         <text x="-138" y="0" class="n-sub" style="font-size:10.5px">the busiest pathway right now: cam-porch → nas · tcp/445 · refused</text>
@@ -1350,26 +1350,26 @@
       <tr><th class="num">time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr>
     </thead>
     <tbody>
-      <tr class="hl"><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-alex</td><td class="num">203.0.113.23</td><td class="geo">192.0.2.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
-      <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td class="geo">198.51.100.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
-      <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td class="host">pihole</td><td class="num">198.51.100.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
-      <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">203.0.113.7</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
-      <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td class="geo">198.51.100.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
-      <tr class="hl"><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">14:00:58.667</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">hue-bridge</td><td class="num">198.51.100.4</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
-      <tr><td class="num">14:00:41.120</td><td><span class="badge b-nat">NAT</span></td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td class="geo">203.0.113.4</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
-      <tr class="hl"><td class="num">14:00:03.155</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">13:59:52.089</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">unifi</td><td class="num">198.51.100.7</td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td>tcp</td><td class="num">8443</td><td>srv-to-lan-mgmt</td></tr>
-      <tr><td class="num">13:59:31.844</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.199 RU</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">443</td><td>wan-in-drop</td></tr>
-      <tr><td class="num">13:58:59.081</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">13:58:41.336</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">phone-alex</td><td class="num">203.0.113.23</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
-      <tr><td class="num">13:58:22.510</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.11 NL</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
-      <tr><td class="num">13:58:03.902</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">203.0.113.2</td><td class="host">pihole</td><td class="num">198.51.100.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
-      <tr class="hl"><td class="num">13:57:55.007</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
-      <tr><td class="num">13:57:36.184</td><td><span class="badge b-nat">NAT</span></td><td class="host">laptop-anna</td><td class="num">203.0.113.7</td><td class="geo">198.51.100.229</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
-      <tr><td class="num">13:57:12.660</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">thermostat</td><td class="num">198.51.100.9</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
-      <tr class="hl"><td class="num">13:56:50.933</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.11</td><td class="host">nas</td><td class="num">198.51.100.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr class="hl"><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-alex</td><td class="num">198.51.100.23</td><td class="geo">203.0.113.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td class="host">pihole</td><td class="num">198.51.100.35</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">198.51.100.7</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
+      <tr class="hl"><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:00:58.667</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">hue-bridge</td><td class="num">198.51.100.68</td><td class="geo">ntp.example.net</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr><td class="num">14:00:41.120</td><td><span class="badge b-nat">NAT</span></td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td class="geo">203.0.113.4</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr class="hl"><td class="num">14:00:03.155</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:59:52.089</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">unifi</td><td class="num">198.51.100.39</td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td>tcp</td><td class="num">8443</td><td>srv-to-lan-mgmt</td></tr>
+      <tr><td class="num">13:59:31.844</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.199 RU</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">443</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:59.081</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:58:41.336</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">phone-alex</td><td class="num">198.51.100.23</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">13:58:22.510</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.11 NL</td><td class="num">—</td><td class="host">rb5009</td><td class="num">192.0.2.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:03.902</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">alex-desktop</td><td class="num">198.51.100.2</td><td class="host">pihole</td><td class="num">198.51.100.35</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr class="hl"><td class="num">13:57:55.007</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:57:36.184</td><td><span class="badge b-nat">NAT</span></td><td class="host">laptop-anna</td><td class="num">198.51.100.7</td><td class="geo">203.0.113.229</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">13:57:12.660</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">thermostat</td><td class="num">198.51.100.73</td><td class="geo">ntp.example.net</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr class="hl"><td class="num">13:56:50.933</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">198.51.100.78</td><td class="host">nas</td><td class="num">198.51.100.34</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
     </tbody>
   </table>
   <div class="foot-legend">
@@ -1398,27 +1398,27 @@
       <tbody>
         <tr class="frow ft-unplanned open" data-d="d1"><td class="fmark">✱ UNPLANNED</td><td class="k"><a class="wl" href="#s3" onclick="descend()">iot</a> → <a class="wl" href="#s3" onclick="descend()">lan</a> · tcp/445</td><td>caught by default drop — no rule planned this pathway</td><td class="num">14×</td><td class="t">6 m</td><td><span class="openc">▸</span></td></tr>
         <tr class="drawer open ft-unplanned" id="d1"><td colspan="6"><div class="dwr"><div class="dwr-in">
-          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#s3" onclick="descend()">cam-porch</a> (198.51.100.14) toward <b>nas</b> (198.51.100.2). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
+          <div class="story"><b>14 asks in six minutes</b>, all tcp/445, all from <a class="wl" href="#s3" onclick="descend()">cam-porch</a> (198.51.100.78) toward <b>nas</b> (198.51.100.34). Nothing planned an iot → lan pathway, so the <b>default drop</b> caught every one. The camera has never asked for this before today.</div>
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Fourteen events between 13:46 and 13:52, bunched toward the end">
               <line x1="8" y1="6" x2="8" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="6" x2="26" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="31" y1="6" x2="31" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="58" y1="6" x2="58" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="92" y1="6" x2="92" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="118" y1="6" x2="118" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="121" y1="6" x2="121" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="6" x2="158" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="170" y1="6" x2="170" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="196" y1="6" x2="196" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="208" y1="6" x2="208" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="224" y1="6" x2="224" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="236" y1="6" x2="236" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/><line x1="248" y1="6" x2="248" y2="28" stroke="#ff5470" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
             <span class="span">first 13:46 · last 13:52 · still arriving</span></div>
-          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49812->198.51.100.2:445, len 60
-13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49688->198.51.100.2:445, len 60</div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49812->198.51.100.34:445, len 60
+13:52:07 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49688->198.51.100.34:445, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
-        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 198.51.100.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td><span class="openc">▸</span></td></tr>
+        <tr class="frow ft-portscan" data-d="d2"><td class="fmark">✱ PORT SCAN</td><td class="k"><a class="wl" href="#s3" onclick="descend()">wan-in</a> · 203.0.113.77</td><td>20 distinct ports in 40 s</td><td class="num">20</td><td class="t">11 m</td><td><span class="openc">▸</span></td></tr>
         <tr class="drawer ft-portscan" id="d2"><td colspan="6"><div class="dwr"><div class="dwr-in">
-          <div class="story"><b>One source, twenty doors.</b> 198.51.100.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
+          <div class="story"><b>One source, twenty doors.</b> 203.0.113.77 walked ports 1000–1019 in forty seconds, every knock refused at the wan boundary. Known scanner ranges say nothing about this address; the blocklist does not carry it.</div>
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-label="Twenty events, evenly walked over forty seconds">
               <line x1="12" y1="8" x2="12" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="24.6" y1="8" x2="24.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="37.2" y1="8" x2="37.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="49.8" y1="8" x2="49.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="62.4" y1="8" x2="62.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="75" y1="8" x2="75" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="87.6" y1="8" x2="87.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="100.2" y1="8" x2="100.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="112.8" y1="8" x2="112.8" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="125.39999999999999" y1="8" x2="125.39999999999999" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="138" y1="8" x2="138" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="150.6" y1="8" x2="150.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="163.2" y1="8" x2="163.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="175.79999999999998" y1="8" x2="175.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="188.4" y1="8" x2="188.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="201" y1="8" x2="201" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="213.6" y1="8" x2="213.6" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="226.2" y1="8" x2="226.2" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="238.79999999999998" y1="8" x2="238.79999999999998" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/><line x1="251.4" y1="8" x2="251.4" y2="26" stroke="#ff9e64" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
             <span class="span">13:41:02 → 13:41:42 · stopped</span></div>
-          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40019->203.0.113.7:1019, len 60
-13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 198.51.100.77:40018->203.0.113.7:1018, len 60</div>
+          <div class="lines">13:41:42 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 203.0.113.77:40019->192.0.2.7:1019, len 60
+13:41:40 firewall,info D|wan-in-drop| input: in:ether1, proto TCP (SYN), 203.0.113.77:40018->192.0.2.7:1018, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this source</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
@@ -1428,7 +1428,7 @@
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="30" y1="8" x2="30" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/><line x1="228" y1="8" x2="228" y2="26" stroke="#f072c8" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">13:34 · 13:36 · 13:39 · quiet since</span></div>
-          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 198.51.100.14:51230->198.51.100.9:25, len 60</div>
+          <div class="lines">13:39:12 firewall,info D|iot-egress| forward: in:bridge-iot out:ether1, proto TCP (SYN), 198.51.100.78:51230->203.0.113.9:25, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
@@ -1438,7 +1438,7 @@
           <div class="side"><span class="lab">the episode</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="16" y1="8" x2="16" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="44" y1="8" x2="44" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="72" y1="8" x2="72" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="100" y1="8" x2="100" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="128" y1="8" x2="128" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="156" y1="8" x2="156" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="184" y1="8" x2="184" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="212" y1="8" x2="212" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/><line x1="240" y1="8" x2="240" y2="26" stroke="#e0765a" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">every ~2 m since 13:28</span></div>
-          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.14:49812->198.51.100.2:445, len 60</div>
+          <div class="lines">13:52:41 firewall,info D|default| forward: in:bridge-iot out:bridge1, proto TCP (SYN), 198.51.100.78:49812->198.51.100.34:445, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button>watch this pathway</button><button class="quiet">clear with a note</button></div>
         </div></div></td></tr>
 
@@ -1458,7 +1458,7 @@
           <div class="side"><span class="lab">first minutes</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><polyline points="0,28 40,26 80,18 120,14 160,15 200,13 240,14 260,13" fill="none" stroke="#b8c56a" stroke-width="1.6"/></svg>
             <span class="span">since 12:57 · all accepted</span></div>
-          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 203.0.113.31:52114->203.0.113.88:443, len 60</div>
+          <div class="lines">12:57:03 firewall,info A|lan-wan| forward: in:bridge1 out:ether1, proto TCP (SYN), 198.51.100.3:52114->203.0.113.88:443, len 60</div>
           <div class="dwr-acts"><button>open in stream ▸</button><button class="quiet">clear</button></div>
         </div></div></td></tr>
       </tbody>
@@ -1475,7 +1475,7 @@
           <div class="side"><span class="lab">the window, last 7 nights</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="194" y1="8" x2="194" y2="26" stroke="var(--alarm)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/><line x1="230" y1="8" x2="230" y2="26" stroke="var(--alarm)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/></svg>
             <span class="span">five kept nights · two empty</span></div>
-          <div class="lines">last match: Thu 02:12:44 firewall,info A|iot-ntp| forward: 198.51.100.14:123->203.0.113.1:123</div>
+          <div class="lines">last match: Thu 02:12:44 firewall,info A|iot-ntp| forward: 198.51.100.78:123->203.0.113.1:123</div>
           <div class="dwr-acts"><button>mend — widen window</button><button>pause watch</button><button class="quiet">open in stream ▸</button></div>
         </div></div></td></tr>
         <tr class="frow wt-ok" data-d="w2"><td class="k">nas backup window</td><td><a class="wl" href="#s3" onclick="descend()">servers</a> → wan</td><td class="t">02:00–03:00</td><td><span class="wchip2">◉ watching</span></td><td class="t">02:14</td><td><span class="openc">▸</span></td></tr>
@@ -1484,7 +1484,7 @@
           <div class="side"><span class="lab">the window, last 7 nights</span>
             <svg viewBox="0 0 260 34" preserveAspectRatio="none"><line x1="14" y1="8" x2="14" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="50" y1="8" x2="50" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="86" y1="8" x2="86" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="122" y1="8" x2="122" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="158" y1="8" x2="158" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="194" y1="8" x2="194" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/><line x1="230" y1="8" x2="230" y2="26" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/></svg>
             <span class="span">seven kept nights</span></div>
-          <div class="lines">02:14:09 firewall,info A|srv-backup| forward: 198.51.100.2:51820->198.51.100.40:443</div>
+          <div class="lines">02:14:09 firewall,info A|srv-backup| forward: 198.51.100.34:51820->203.0.113.40:443</div>
           <div class="dwr-acts"><button class="quiet">open in stream ▸</button></div>
         </div></div></td></tr>
         <tr class="frow wt-ok"><td class="k">pihole upstream only</td><td><a class="wl" href="#s3" onclick="descend()">servers</a> → wan · :53</td><td class="t">always</td><td><span class="wchip2">◉ watching</span></td><td class="t">13:51</td><td><span class="openc">▸</span></td></tr>
@@ -1840,15 +1840,15 @@
     <table class="etable">
       <thead><tr><th>name</th><th>lane</th><th>address</th><th>mac</th><th>first seen</th><th>last seen</th><th>marks</th></tr></thead>
       <tbody>
-        <tr><td class="k">alex-desktop</td><td><i class="lz" style="background:var(--lan)"></i>lan</td><td>203.0.113.2</td><td class="dim">2C:F0:5D:…:8A</td><td class="dim">412 d</td><td>now</td><td></td></tr>
-        <tr><td class="k">phone-alex</td><td><i class="lz" style="background:var(--lan)"></i>lan</td><td>203.0.113.23</td><td class="dim">A8:51:AB:…:11</td><td class="dim">398 d</td><td>2 m</td><td></td></tr>
-        <tr><td class="k">laptop-anna</td><td><i class="lz" style="background:var(--lan)"></i>lan</td><td>203.0.113.7</td><td class="dim">3C:22:FB:…:C4</td><td class="dim">380 d</td><td>1 h</td><td><span style="color:#b8c56a">▲ new talker</span></td></tr>
-        <tr><td class="k">nas</td><td><i class="lz" style="background:var(--srv)"></i>servers</td><td>198.51.100.2</td><td class="dim">90:09:D0:…:2F</td><td class="dim">412 d</td><td>now</td><td><span style="color:#a78bfa">◉ watched</span></td></tr>
-        <tr><td class="k">pihole</td><td><i class="lz" style="background:var(--srv)"></i>servers</td><td>198.51.100.3</td><td class="dim">B8:27:EB:…:77</td><td class="dim">412 d</td><td>now</td><td><span style="color:#a78bfa">◉ watched</span></td></tr>
-        <tr class="warn"><td class="k">cam-porch</td><td><i class="lz" style="background:var(--iot)"></i>iot</td><td>198.51.100.14</td><td class="dim">44:01:BB:…:E3</td><td class="dim">201 d</td><td>now</td><td><span style="color:var(--alarm)">✱✱ flagged · ○ ring broken</span></td></tr>
-        <tr><td class="k">hue-bridge</td><td><i class="lz" style="background:var(--iot)"></i>iot</td><td>198.51.100.4</td><td class="dim">EC:B5:FA:…:90</td><td class="dim">399 d</td><td>4 m</td><td></td></tr>
-        <tr><td class="k">thermostat</td><td><i class="lz" style="background:var(--iot)"></i>iot</td><td>198.51.100.9</td><td class="dim">70:EE:50:…:31</td><td class="dim">340 d</td><td>12 m</td><td></td></tr>
-        <tr><td class="k">guest-e8b2</td><td><i class="lz" style="background:var(--guest)"></i>guest</td><td>192.0.2.12</td><td class="dim">private</td><td class="dim">2 h</td><td>19 m</td><td></td></tr>
+        <tr><td class="k">alex-desktop</td><td><i class="lz" style="background:var(--lan)"></i>lan</td><td>198.51.100.2</td><td class="dim">2C:F0:5D:…:8A</td><td class="dim">412 d</td><td>now</td><td></td></tr>
+        <tr><td class="k">phone-alex</td><td><i class="lz" style="background:var(--lan)"></i>lan</td><td>198.51.100.23</td><td class="dim">A8:51:AB:…:11</td><td class="dim">398 d</td><td>2 m</td><td></td></tr>
+        <tr><td class="k">laptop-anna</td><td><i class="lz" style="background:var(--lan)"></i>lan</td><td>198.51.100.7</td><td class="dim">3C:22:FB:…:C4</td><td class="dim">380 d</td><td>1 h</td><td><span style="color:#b8c56a">▲ new talker</span></td></tr>
+        <tr><td class="k">nas</td><td><i class="lz" style="background:var(--srv)"></i>servers</td><td>198.51.100.34</td><td class="dim">90:09:D0:…:2F</td><td class="dim">412 d</td><td>now</td><td><span style="color:#a78bfa">◉ watched</span></td></tr>
+        <tr><td class="k">pihole</td><td><i class="lz" style="background:var(--srv)"></i>servers</td><td>198.51.100.35</td><td class="dim">B8:27:EB:…:77</td><td class="dim">412 d</td><td>now</td><td><span style="color:#a78bfa">◉ watched</span></td></tr>
+        <tr class="warn"><td class="k">cam-porch</td><td><i class="lz" style="background:var(--iot)"></i>iot</td><td>198.51.100.78</td><td class="dim">44:01:BB:…:E3</td><td class="dim">201 d</td><td>now</td><td><span style="color:var(--alarm)">✱✱ flagged · ○ ring broken</span></td></tr>
+        <tr><td class="k">hue-bridge</td><td><i class="lz" style="background:var(--iot)"></i>iot</td><td>198.51.100.68</td><td class="dim">EC:B5:FA:…:90</td><td class="dim">399 d</td><td>4 m</td><td></td></tr>
+        <tr><td class="k">thermostat</td><td><i class="lz" style="background:var(--iot)"></i>iot</td><td>198.51.100.73</td><td class="dim">70:EE:50:…:31</td><td class="dim">340 d</td><td>12 m</td><td></td></tr>
+        <tr><td class="k">guest-e8b2</td><td><i class="lz" style="background:var(--guest)"></i>guest</td><td>198.51.100.108</td><td class="dim">private</td><td class="dim">2 h</td><td>19 m</td><td></td></tr>
       </tbody>
     </table>
     <p class="oghint">a name is yours to give — click one to rename it; the router's own names arrive with its pushes</p>
@@ -1921,19 +1921,19 @@
 <script>
   // ---- every node speaks (topography, descended view, wherever) ----
   var NODE_INFO = {
-    'cam-porch': { ip: '198.51.100.14', lane: 'iot', rows: ['porch camera · first seen 201 d ago', 'last event just now — asking nas for tcp/445'], warn: '✱✱ two open flags · ○ quiet-hours ring broken' },
-    'alex-desktop': { ip: '203.0.113.2', lane: 'lan', rows: ['your desk · first seen 412 d ago', 'last event just now — https, ordinary shape'] },
-    'phone-alex': { ip: '203.0.113.23', lane: 'lan', rows: ['last event 2 m ago · nat to 443'] },
-    'laptop-anna': { ip: '203.0.113.7', lane: 'lan', rows: ['back after 14 quiet days'], warn: '▲ new-talker advisory, 55 m old' },
-    'nas': { ip: '198.51.100.2', lane: 'servers', rows: ['backup window kept last night · 02:14'], watch: '◉ watched — backup window' },
-    'pihole': { ip: '198.51.100.3', lane: 'servers', rows: ['dns · metronomic :53'], watch: '◉ watched — upstream only' },
-    'unifi': { ip: '198.51.100.7', lane: 'servers', rows: ['management · mostly quiet'] },
-    'hue-bridge': { ip: '198.51.100.4', lane: 'iot', rows: ['egress :123 only, as planned'] },
-    'thermostat': { ip: '198.51.100.9', lane: 'iot', rows: ['egress :53 :123 · sleepy'] },
-    'esp-weather': { ip: '198.51.100.21', lane: 'iot', rows: ['one report a minute, rain or shine'] },
-    'plug-kettle': { ip: '198.51.100.17', lane: 'iot', rows: ['speaks only when the kettle does'] },
-    'doorbell': { ip: '198.51.100.11', lane: 'iot', rows: ['bursts when pressed · else silent'] },
-    'tv-lounge': { ip: '198.51.100.6', lane: 'iot', rows: ['evening talker · https only'] },
+    'cam-porch': { ip: '198.51.100.78', lane: 'iot', rows: ['porch camera · first seen 201 d ago', 'last event just now — asking nas for tcp/445'], warn: '✱✱ two open flags · ○ quiet-hours ring broken' },
+    'alex-desktop': { ip: '198.51.100.2', lane: 'lan', rows: ['your desk · first seen 412 d ago', 'last event just now — https, ordinary shape'] },
+    'phone-alex': { ip: '198.51.100.23', lane: 'lan', rows: ['last event 2 m ago · nat to 443'] },
+    'laptop-anna': { ip: '198.51.100.7', lane: 'lan', rows: ['back after 14 quiet days'], warn: '▲ new-talker advisory, 55 m old' },
+    'nas': { ip: '198.51.100.34', lane: 'servers', rows: ['backup window kept last night · 02:14'], watch: '◉ watched — backup window' },
+    'pihole': { ip: '198.51.100.35', lane: 'servers', rows: ['dns · metronomic :53'], watch: '◉ watched — upstream only' },
+    'unifi': { ip: '198.51.100.39', lane: 'servers', rows: ['management · mostly quiet'] },
+    'hue-bridge': { ip: '198.51.100.68', lane: 'iot', rows: ['egress :123 only, as planned'] },
+    'thermostat': { ip: '198.51.100.73', lane: 'iot', rows: ['egress :53 :123 · sleepy'] },
+    'esp-weather': { ip: '198.51.100.85', lane: 'iot', rows: ['one report a minute, rain or shine'] },
+    'plug-kettle': { ip: '198.51.100.81', lane: 'iot', rows: ['speaks only when the kettle does'] },
+    'doorbell': { ip: '198.51.100.75', lane: 'iot', rows: ['bursts when pressed · else silent'] },
+    'tv-lounge': { ip: '198.51.100.70', lane: 'iot', rows: ['evening talker · https only'] },
   };
   var ni = document.getElementById('nodeinfo');
   function showNode(name, x, y) {

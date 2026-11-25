@@ -24,8 +24,10 @@ import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { ClientEvent, Device, FirewallEvent } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import { portFilterState } from '../lib/portFilter.svelte'
+import { servingState } from '../lib/serving.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import type { TraceResponse } from '../lib/api'
+import { CARD_GRACE_MS } from '../lib/cardAnchor'
 import City from './City.svelte'
 
 // #915: twelve of these tests timed out on the GitLab runner against
@@ -1205,6 +1207,78 @@ describe('the reach’s line card (round 49, #1016)', () => {
     expect(refused.container.querySelector('.lcard [data-draft-rule]')).not.toBeNull()
   })
 
+  it('drafting a rule pins the line card, so it outlives the pointer (#1496)', () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = openLine([
+        event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: 'default drop' }),
+      ])
+      const card = container.querySelector('.lcard') as HTMLElement
+      expect(card.classList.contains('pinned'), 'the hover card opens unpinned').toBe(false)
+      fireEvent.click(card.querySelector('[data-draft-rule]') as Element)
+      flushSync()
+      expect(container.querySelector('.composer')).not.toBeNull()
+      expect(container.querySelector('.lcard')?.classList.contains('pinned')).toBe(true)
+
+      fireEvent.pointerLeave(container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element)
+      fireEvent.pointerLeave(card)
+      vi.advanceTimersByTime(CARD_GRACE_MS + 100)
+      flushSync()
+      expect(container.querySelector('.lcard'), 'the card closed under the composer').not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /** Draft from the refused line's card, then let the pointer leave and
+   * the grace timer run out. Fake timers are the caller's. */
+  function draftAndLeave() {
+    const r = openLine([
+      event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 22, protocol: 'tcp', action: 'drop', ruleLabel: 'default drop' }),
+    ])
+    const card = r.container.querySelector('.lcard') as HTMLElement
+    fireEvent.click(card.querySelector('[data-draft-rule]') as Element)
+    flushSync()
+    fireEvent.pointerLeave(r.container.querySelector('[data-road-hot="bridge-lan|vlan-srv"]') as Element)
+    fireEvent.pointerLeave(card)
+    vi.advanceTimersByTime(CARD_GRACE_MS + 100)
+    flushSync()
+    return r.container
+  }
+
+  const escape = () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    flushSync()
+  }
+
+  it('unpinning a drafted line card closes the card and leaves the composer open (#1496)', () => {
+    vi.useFakeTimers()
+    try {
+      const container = draftAndLeave()
+      expect(container.querySelector('.lcard')).not.toBeNull()
+      fireEvent.click(container.querySelector('.lcard .pin') as Element)
+      flushSync()
+      expect(container.querySelector('.lcard'), 'unpin should close a pinned card').toBeNull()
+      expect(container.querySelector('.composer')).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Escape takes a drafted line card down first, then the composer (#1496)', () => {
+    vi.useFakeTimers()
+    try {
+      const container = draftAndLeave()
+      escape()
+      expect(container.querySelector('.lcard')).toBeNull()
+      expect(container.querySelector('.composer')).not.toBeNull()
+      escape()
+      expect(container.querySelector('.composer')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('pins, like every other card, and lets go when the pin is clicked again', () => {
     const { container } = openLine([
       event({ srcIp: '10.10.0.10', dstIp: '10.20.0.10', inInterface: 'bridge-lan', outInterface: 'vlan-srv', dstPort: 445, protocol: 'tcp' }),
@@ -2354,6 +2428,33 @@ describe('the port filter on the city (#1055, round 54)', () => {
   })
 })
 
+// #1396: standing on a building used to clear the serving lens along
+// with the port filter, the same bug Topography.svelte.test.ts's own
+// #1396 test covers on the flat map -- the lens lights no road and dims
+// no district whole, so there was never a crumb of its own for standing
+// to clash with.
+describe('the "seen serving" lens on the city (#1320, #1396)', () => {
+  afterEach(() => servingState.clear())
+
+  it('survives standing on a building', async () => {
+    servingState.open = true
+    servingState.answer = {
+      generatedAt: 1,
+      windowSeconds: 3600,
+      hosts: [{ ip: '10.10.0.10', name: 'lan-1', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }],
+    }
+    servingState.settled = true
+
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+    expect(servingState.open).toBe(true)
+
+    await fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+    expect(servingState.open).toBe(true)
+  })
+})
+
 describe('the event trace on the city (#1050, rounds 54 & 56)', () => {
   afterEach(() => mapTraceState.clear())
 
@@ -2511,5 +2612,26 @@ describe('the event trace on the city (#1050, rounds 54 & 56)', () => {
     key(document.body, 'Escape')
     expect(mapTraceState.active).toBe(false)
     expect(container.querySelector('.plate[data-cid="vlan-iot"]')).not.toBeNull()
+  })
+})
+
+// #1540 (C5): until the first load lands, a one-line "<verb>ing…" status
+// stands where the screen has no room for ghost rows; once it has, the
+// status is gone.
+describe('first load shows a one-line status (#1540 C5)', () => {
+  it('says what it is doing while the first load is in flight, and stops once it lands', () => {
+    appState.initialLoadDone = false
+    matchMedia(true)
+    vi.spyOn(baselineState, 'refresh').mockResolvedValue(undefined)
+    const first = render(City, { props: { stop: 'city', ground } })
+    flushSync()
+    const lines = [...first.container.querySelectorAll('[role="status"]')].map((n) => n.textContent?.trim() ?? '')
+    expect(lines.join('|')).toMatch(/(^|\|)[A-Z][a-z]+ing[^|]*…($|\|)/)
+    first.unmount()
+
+    appState.initialLoadDone = true
+    const second = render(City, { props: { stop: 'city', ground } })
+    flushSync()
+    expect(second.container.textContent).not.toMatch(/(Loading|Reading|Gathering|Mapping)[^.]*…/)
   })
 })

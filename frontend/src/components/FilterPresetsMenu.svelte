@@ -20,6 +20,9 @@
   import type { Filters } from '../lib/types'
 
   let open = $state(false)
+  // Round 28's arm-then-confirm gesture (#1539 C1): the first click on a
+  // row's `×` arms it, the second deletes. Closing the menu disarms.
+  let armedName = $state<string | null>(null)
   let rootEl: HTMLDivElement | undefined = $state()
   let triggerEl: HTMLButtonElement | undefined = $state()
 
@@ -29,12 +32,16 @@
   // those before they reach the document, which is also what keeps them
   // from reaching the filter box's own "open the strip" handler.
   function onDocClick(e: MouseEvent) {
-    if (rootEl && !rootEl.contains(e.target as Node)) open = false
+    if (rootEl && !rootEl.contains(e.target as Node)) {
+      open = false
+      armedName = null
+    }
   }
 
   function onDocKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
     open = false
+    armedName = null
     triggerEl?.focus()
   }
 
@@ -53,8 +60,11 @@
   // for a saved filter is not reaching for the fields, and unfolding the
   // whole strip under the menu the moment it is opened reads as the
   // interface flinching.
+  // It is also round 28's "any other click disarms" for the armed `×`
+  // below, since a click in here never reaches a window handler.
   function contain(e: MouseEvent) {
     e.stopPropagation()
+    armedName = null
   }
 
   function toggle(e: MouseEvent) {
@@ -75,6 +85,11 @@
 
   function remove(e: MouseEvent, name: string) {
     e.stopPropagation()
+    if (armedName !== name) {
+      armedName = name
+      return
+    }
+    armedName = null
     presetState.remove(name)
   }
 </script>
@@ -108,9 +123,11 @@
               <button
                 type="button"
                 class="fpx"
+                class:armed={armedName === p.name}
                 onclick={(e) => remove(e, p.name)}
                 title="forget this one"
-                aria-label="Forget the saved filter {p.name}">×</button
+                aria-label="Forget the saved filter {p.name}"
+                >{armedName === p.name ? 'confirm — the filter is forgotten' : '×'}</button
               >
             </div>
           {/each}
@@ -244,8 +261,13 @@
     padding: 6px 14px 6px 0;
   }
 
-  .fpx:hover {
+  .fpx:hover,
+  .fpx.armed {
     color: var(--alarm);
+  }
+
+  .fpx.armed {
+    white-space: nowrap;
   }
 
   .fpname:focus-visible,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   formatRelative,
   formatDurationShort,
@@ -12,6 +12,8 @@ import {
   formatDayMonth,
   formatLastHeard,
   isPublicIp,
+  setHomeNetworks,
+  listenPort,
 } from './format'
 
 describe('formatTimeMs', () => {
@@ -252,5 +254,64 @@ describe('isPublicIp', () => {
     // a lookup button for an address no lookup can succeed on.
     expect(isPublicIp('999.1.1.1')).toBe(false)
     expect(isPublicIp('203.0.113.256')).toBe(false)
+  })
+})
+
+// #1481: networks.home -- configured inside ranges that are not RFC 1918.
+describe('isPublicIp with home networks (#1481)', () => {
+  const demoHome = [
+    '198.51.100.0/24',
+    '192.0.2.32/27',
+    '192.0.2.64/27',
+    '192.0.2.96/27',
+    '192.0.2.128/27',
+    '192.0.2.160/27',
+    '192.0.2.192/27',
+    '192.0.2.224/28',
+    '192.0.2.240/29',
+    '192.0.2.248/29',
+  ]
+  afterEach(() => setHomeNetworks([]))
+
+  it('answers as before while no home networks are set', () => {
+    expect(isPublicIp('198.51.100.66')).toBe(true)
+    expect(isPublicIp('203.0.113.44')).toBe(true)
+    expect(isPublicIp('192.0.2.1')).toBe(true)
+    expect(isPublicIp('192.0.2.33')).toBe(true)
+    expect(isPublicIp('10.0.0.1')).toBe(false)
+  })
+
+  it('treats an address inside a configured home block as not public', () => {
+    setHomeNetworks(demoHome)
+    expect(isPublicIp('198.51.100.66')).toBe(false)
+    expect(isPublicIp('192.0.2.33')).toBe(false)
+    expect(isPublicIp('192.0.2.250')).toBe(false)
+  })
+
+  it('keeps outside peers and the un-configured router block public', () => {
+    setHomeNetworks(demoHome)
+    expect(isPublicIp('203.0.113.44')).toBe(true)
+    expect(isPublicIp('192.0.2.1')).toBe(true)
+  })
+
+  it('still refuses RFC 1918 and malformed input with a home set', () => {
+    setHomeNetworks(demoHome)
+    expect(isPublicIp('10.0.0.1')).toBe(false)
+    expect(isPublicIp('999.1.1.1')).toBe(false)
+    expect(isPublicIp(undefined)).toBe(false)
+  })
+
+  it('returns to the default when the home set is cleared', () => {
+    setHomeNetworks(demoHome)
+    setHomeNetworks([])
+    expect(isPublicIp('198.51.100.66')).toBe(true)
+  })
+})
+
+describe('listenPort', () => {
+  it('takes the port off the server\'s own listen addresses', () => {
+    expect(listenPort(':8080')).toBe('8080')
+    expect(listenPort('0.0.0.0:8080')).toBe('8080')
+    expect(listenPort('[::]:8080')).toBe('8080')
   })
 })

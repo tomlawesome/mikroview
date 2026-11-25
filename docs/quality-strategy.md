@@ -11,8 +11,8 @@ job's answer cannot have changed" from "run it and find out."
 The reuse gate (ported from Orbit's `scripts/ci/reuse-gate.sh`, orbit #898)
 closes that gap for the jobs expensive enough to be worth it. It never
 changes *whether* a job runs at all -- that is the docs-only lane's job
-(`*docs_only_paths` / `*code_paths` in `.gitlab-ci.yml`, and AGENTS.md, "The
-docs-only lane") -- only whether a job that would run repeats real work it
+(`*docs_only_paths` / `*code_paths` in `.gitlab-ci.yml`, and "The docs-only
+lane" below) -- only whether a job that would run repeats real work it
 has already done on this same merge request.
 
 ### How it decides
@@ -55,18 +55,39 @@ not stop at the first red job.
 
 | Job(s)                                              | Stands on a match of |
 |------------------------------------------------------|-----------------------|
-| `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml` |
-| `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` and `live-check.Dockerfile` |
+| `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml`, `Makefile`, `live-check.Dockerfile`, `deploy/`, `internal/`, `THIRD-PARTY-NOTICES.md` (#1391) -- own shard's scripts content-hashed, other listed scenarios by name only (#1350) |
+| `gate:scenarios:firefox 1/4` … `4/4`, `gate:scenarios:webkit 1/4` … `4/4` | the same as `gate:scenarios`, kept as a separate entry per engine (#1350) |
+| `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` |
 | `test:install-line`                                  | the above, plus `install.sh` (#1242 -- root-level, so none of the other lists' globs see it) |
 | `test:go`, `test:frontend`                           | not covered -- already cheap enough (#1066) |
 
-The four `gate:scenarios` shards share one input set even though each only
-runs a slice of the scenario list (`scripts/run-scenarios.sh`'s `plan()`):
-every shard builds and runs the same live-check image over the same
-binary, so a change anywhere in that set can move any shard's result.
-Splitting the shards' own inputs to match `plan()`'s contiguous slices is
-future work, not required by #1066 -- today a scenario-only change still
-reruns all four shards, just not the rest of the pipeline.
+Each `gate:scenarios` shard's hash is name-aware (#1350): shared inputs
+(`SCENARIOS_PATHS`, minus every scenario script) content-hashed, that
+shard's own scripts (`MV_SHARD=i/N scripts/run-scenarios.sh --list`)
+content-hashed, and every other listed scenario hashed by *name only*.
+Safe because `plan()` is a pure function of the sorted name list: if no
+name changed, no script moved shard either, so editing one shard's script
+reruns only that shard, on every engine; adding, removing or renaming a
+scenario changes the name set and reruns all four. `scripts/run-scenarios.sh
+--list` (with or without `MV_SHARD`) is shelled out to rather than
+reimplemented, so this file never drifts from `plan()`. The lister is
+injected (`jobInputHash`'s third argument); a lister failure, or a listed
+path absent from the tree, throws -- the job then runs for real and
+writes no evidence.
+
+`gate:scenarios:firefox` and `gate:scenarios:webkit` (#1306) run the
+identical shard script under a different `MV_BROWSER`, on `dev` ->
+`preview` merge requests only. Each engine's four shards get their own
+`JOB_INPUTS` entry and the same shard-aware hash. Reuse across pipelines
+is matched by `scripts/ci-reuse-gate.js`'s exact job-name lookup
+(`CI_JOB_NAME`, e.g. `gate:scenarios:firefox 2/4`), so a Firefox pass can
+never stand in for a Chromium or WebKit shard, or vice versa -- the engine
+is part of the job name, not a separate field this file has to track.
+
+On a hash mismatch, if the evidence being compared against names a
+`commit` (added by #1350), the gate prints `git diff --name-only <that
+commit> HEAD` filtered to the job's own inputs, so the job log says what
+changed rather than just that something did.
 
 `gate:image`, `test:container` and `test:postgres` share one combined,
 deliberately over-broad list rather than three narrow ones: the first
@@ -94,6 +115,41 @@ dedicated read-only token limits what a leak of it could reach.
 
 Until `CI_REUSE_TOKEN` exists, nothing changes: every candidate job runs
 exactly as it did before #1066. Creating it is what turns reuse on.
+
+## The docs-only lane (#1038)
+
+`.gitlab-ci.yml` skips the jobs a prose change cannot break. Two lists at
+the top of that file, `*docs_only_paths` and `*code_paths`, and every gated
+job asks them in one order: a code path changed -> run; else a docs path
+changed -> never; else run. The last rung is the safety property. Skipping
+is opt-in against the docs list and is never a fallback, so a path in
+neither list, an empty diff, or a pipeline whose diff GitLab cannot compute
+runs the full set. Do not reorder those rungs, and do not try to express
+"docs only" in a single `changes:` -- it asks whether *any* listed path
+changed, so one list alone would skip a merge request that touched `main.go`
+and `README.md` together.
+
+Four jobs stay outside the lane on purpose, and each says so in a comment
+where it is defined:
+
+- `test:go` -- five tests read and assert on `docs/configuration.md`.
+- `test:build-checks` -- runs the markdown anchor and link check.
+- `security:gitleaks` -- a secret pastes into prose as easily as into code.
+- `gate:image` -- near-free when `live-check.Dockerfile` is unchanged, and
+  three other jobs pull the tag it publishes.
+
+`policy:promotion-hop` and `sync:mirror-to-github` are outside it too:
+neither keys off the diff at all.
+
+`lint:changed-paths-guard` closes the one gap the ladder cannot: it runs
+unconditionally and goes red naming any changed path in neither list, with
+the instruction to add its tree to `*code_paths`. Its script reads the lists
+from `.gitlab-ci.yml`; `scripts/ci-changed-paths-guard.test.sh` is its test.
+
+Adding a job: it gets `<<: *dev_or_mr_code` (or `*dev_or_mr_code_frontend`)
+only if a documentation change genuinely cannot fail it. If in doubt use
+plain `*dev_or_mr` -- running a job that did not need to run costs minutes;
+skipping one that did costs a green pipeline that tested nothing.
 
 ## Upgrade fixtures (`testdata/upgrade/`, #1239, #1247)
 
@@ -134,9 +190,11 @@ What lives where:
   either the data directory (a tarball) or a `pg_dump`. Booting an old
   image happens here and nowhere else in the gate.
 - `record:upgrade-fixture` in `.gitlab-ci.yml` -- runs both of those on
-  every `v*` tag, after waiting up to 45 minutes for that version's
-  image to appear on GHCR. `allow_failure: true`, so a slow release
-  never reddens a tag pipeline; if it does fail, run the script by hand.
+  every `v*` tag, against the digest that tag's own pipeline built,
+  signed and published to the GitLab registry (#1472; the script's
+  `MV_IMAGE_REF`). A failed pull exits 75, which alone is allowed to
+  fail, so a registry blip never reddens a tag pipeline; if it does,
+  run the script by hand.
 
 The registry copy of the manifest is the fallback, not the source. A job
 token can upload a package but cannot push or open a merge request, so

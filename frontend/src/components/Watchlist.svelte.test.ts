@@ -75,7 +75,7 @@ function fallBoundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
 // #547/#584 gave Suggestions and Matches tabs of their own on the house
 // tablist. Round 33 (#771) goes further than round 30's "no sub-tab row"
 // fidelity check ever did: Suggestions.svelte and MatchesTab.svelte are
-// deleted outright (AGENTS.md's "removals are wholesale"), and what they
+// deleted outright (docs/development.md's "removals are wholesale"), and what they
 // carried is redrawn as two things directly inside this table -- a match
 // list in each watch's own drawer, and a suggestion body underneath the
 // watches. #712 records the tab-era coverage (empty states, load-older
@@ -856,6 +856,19 @@ describe('The ratified watch table (#676)', () => {
     expect(vi.mocked(fetchWatchlistEntries)).toHaveBeenCalledTimes(2)
   })
 
+  it('a failed pause names the action: "Could not pause this watch: <words>"', async () => {
+    vi.mocked(setWatchlistEnabled).mockResolvedValue('nope')
+    await renderWatchlist([entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
+
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: /Open the drawer/ }))
+    flushSync()
+    await fireEvent.click(within(watchTable()).getByRole('button', { name: 'pause watch' }))
+    await settle()
+
+    expect(screen.getAllByRole('alert')[0].textContent).toContain('Could not pause this watch')
+    expect(screen.getAllByRole('alert')[0].textContent).toContain('nope')
+  })
+
   it('a paused entry offers "resume watch" instead', async () => {
     await renderWatchlist([entry('e1', 'paused watch', { enabled: false, source: { mac: 'aa:bb:cc:dd:ee:ff' } })])
 
@@ -1253,7 +1266,7 @@ describe('a watcher offered by a resolved flag (#641)', () => {
     await settle()
 
     expect(appState.view).toBe('watchlist')
-    expect(draftRow().querySelector('.error')?.textContent).toContain('at least one port')
+    expect(draftRow().querySelector('[role="alert"]')?.textContent).toContain('at least one port')
   })
 
   // A draft the operator opened here has no provenance and nowhere to be
@@ -1408,5 +1421,25 @@ describe('the decommission table (#1069)', () => {
       expect(decommSection()?.querySelector('.wt-drawer')).toBeNull()
       expect(topologyNavState.pendingDecommissionWatchId).toBeNull()
     })
+  })
+})
+
+// #1539 C2 (decision 18a): Escape disarms an armed control, same as a
+// click elsewhere. Today the armed start-over button stays red.
+describe('Escape disarms start over (#1539 C2)', () => {
+  it('an armed start-over goes back to its resting label on Escape and wipes nothing', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([suggestion('s1', 'device', { status: 'off' })])
+    await renderWatchlist([entry('e1', 'SSH watch')])
+
+    const btn = within(document.body).getByRole('button', { name: /wipe every watch/ })
+    await fireEvent.click(btn)
+    flushSync()
+    expect(btn.textContent).toContain('confirm — every watch goes')
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    flushSync()
+
+    expect(btn.textContent).toContain('start over — wipe every watch')
+    expect(resetSuggestions).not.toHaveBeenCalled()
   })
 })

@@ -20,12 +20,13 @@
 //     they're confident are entirely malicious-controlled (hijacked/
 //     stolen allocations, bulletproof hosting), which is exactly what
 //     "safe to flag on sight, no behavioral corroboration needed" needs.
-//   - Emerging Threats' compromised-IPs list (opt-in, not
-//     default-enabled): a much larger, faster-changing list of
-//     individual compromised hosts (not curated netblocks) -- still a
-//     well-known, free, no-registration feed, but noisier and bigger by
-//     nature, so it's offered on the menu without being part of the
-//     conservative default.
+//   - Emerging Threats' compromised-IPs list (default-enabled
+//     alongside Spamhaus DROP, owner decision 2026-09-25, #1359): a
+//     much larger, faster-changing list of individual compromised
+//     hosts (not curated netblocks) -- still a well-known, free,
+//     no-registration feed, noisier and bigger than DROP by nature but
+//     still well within this package's performance ceiling (see
+//     maxTotalEntries below).
 //
 // Performance: matching is a per-feed binary search over that feed's own
 // sorted, disjoint (lo, hi) address ranges -- O(log n) per feed, never a
@@ -110,11 +111,39 @@ var registryBySource = func() map[Source]feedDef {
 	return m
 }()
 
-// DefaultSources is the issue's own recommended starting point -- small,
-// free, no registration, conservative. Used by internal/config's
-// defaults(); exported so that default stays defined in exactly one
-// place rather than duplicated as a string literal in two packages.
-var DefaultSources = []string{string(SourceSpamhausDROP)}
+// DefaultSources is the recommended starting point: both feeds on the
+// menu, on by default (owner decision, 2026-09-25, issue #1359).
+// Spamhaus DROP was issue #113's original conservative default; Emerging
+// Threats' compromised-IPs list joined it once its own licence
+// (BSD-3-Clause, bundled as rules/LICENSE alongside compromised-ips.txt
+// in the ET Open ruleset distribution -- see docs/configuration.md) and
+// its own documented best practice (daily automated fetching is what ET
+// itself recommends configuring an updater to do) were checked and
+// found to place no restriction on unattended per-install use. Used by
+// internal/config's defaults(); exported so that default stays defined
+// in exactly one place rather than duplicated as a string literal in
+// two packages.
+var DefaultSources = []string{string(SourceSpamhausDROP), string(SourceEmergingThreatsCompromised)}
+
+// catalogueKeys pairs each feed with the blocklist builder's catalogue
+// entry for the same list (#1360), so the builder can tell which of a
+// router's lists MikroView also flags from, and by what label its flags
+// name it.
+var catalogueKeys = map[string]Source{
+	"spamhaus": SourceSpamhausDROP,
+	"et":       SourceEmergingThreatsCompromised,
+}
+
+// FlagLabel is the label known_bad_ip flags name the feed by ("matches
+// <label> (<range>)") for the builder's catalogue key, and whether
+// MikroView flags from that list at all.
+func FlagLabel(catalogueKey string) (string, bool) {
+	src, ok := catalogueKeys[catalogueKey]
+	if !ok {
+		return "", false
+	}
+	return registryBySource[src].Label, true
+}
 
 // KnownSources returns every Source on the menu, in registry order --
 // for config validation error messages and docs/tests, not consulted on
@@ -423,7 +452,7 @@ func fetchAndParse(ctx context.Context, client *http.Client, def feedDef) ([]net
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}

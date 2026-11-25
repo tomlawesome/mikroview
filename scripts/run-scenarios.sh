@@ -55,14 +55,47 @@ trap 'stop 2' INT
 # The scenarios this run drives, in filename order, one per line. The
 # exclusions live here rather than in the loop so the shard planner below
 # and the loop agree on what a scenario is.
+#
+# Quarantine (flake log, #1459): scripts/quarantine.txt names one scenario
+# per line (`live-<thing>`, no directory or .mjs; `#` comments allowed).
+# The default run leaves those out; MV_QUARANTINE=only runs just those, for
+# a non-blocking job. scripts/ci/flake-check.sh --quarantined reads the same
+# file, so what is skipped and what is checked cannot drift apart.
+quarantine_names() {
+  [ -f scripts/quarantine.txt ] || return 0
+  grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' scripts/quarantine.txt \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true
+}
 scenarios() {
+  quarantined=$(quarantine_names)
   for scenario in frontend/scripts/live-*.mjs; do
+    name=${scenario##*/}
+    name=${name%.mjs}
+    if printf '%s\n' "$quarantined" | grep -qxF -- "$name"; then
+      [ "${MV_QUARANTINE:-}" = "only" ] || continue
+    else
+      [ "${MV_QUARANTINE:-}" != "only" ] || continue
+    fi
     case "$scenario" in
       # The shared helper every scenario imports, not a scenario itself.
       *live-browser.mjs) continue ;;
       # Needs a real RouterOS CHR booted alongside the instance, which the
       # plain targets do not stand up. Run by `make live-routeros-container`.
       *live-routeros-real.mjs) continue ;;
+      # #1363: restarts the server mid-run (live-env.sh's `upgrade`) to
+      # simulate a real upgrade. Every other scenario shares this one
+      # instance and depends on state an earlier one left in it (see the
+      # live-check skill, "a scenario cannot be judged on its own") --
+      # restarting it here would silently wipe that for everything after
+      # it in filename order. Run standalone instead: scripts/live-
+      # freshness-reload.sh, its own instance, picked up by
+      # run-live-scripts.sh after this shared one is already down.
+      *live-freshness-reload.mjs) continue ;;
+      # #1415: needs an instance with no account, so the server has
+      # logged a setup code and shows the create-account screen; this one
+      # already holds its admin. Run standalone by
+      # scripts/live-setup-code.sh, its own instance, the same way.
+      *live-setup-code.mjs) continue ;;
     esac
     echo "$scenario"
   done
@@ -175,7 +208,7 @@ for scenario in $(plan); do
   # but from the file rather than through node's own stdout, so this
   # script blocks on `wait`, not on the pipeline itself. `--pid` is a
   # GNU coreutils extension; live-check only ever runs on the Linux
-  # hosts this project targets (AGENTS.md's "second host"), so that is
+  # hosts this project targets (docs/runner-host.md), so that is
   # not a portability cost paid here. It stops following (after a final
   # read) once node exits, so it never outlives the scenario the way an
   # unmanaged `tail -f` would.

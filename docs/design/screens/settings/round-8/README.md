@@ -39,8 +39,8 @@ text, not boxes.
 | s3 | The same bar at step one — `dst` typed, the field list down to `destination` and `dst port` |
 | s4 | Complete and tried — the receipt, save live; the same detector to a viewer (no box, no `×`); and at 390 px |
 
-Data story unchanged since round 5: the garage range `203.0.113.0/24` and
-its two stragglers, `203.0.113.14 garage-cam` and `203.0.113.31 ev-charger`.
+Data story unchanged since round 5: the garage range `198.51.100.224/27` and
+its two stragglers, `198.51.100.238 garage-cam` and `198.51.100.225 ev-charger`.
 
 No new colour is minted — the bar uses `--bg-hover`, `--bg-elevated`,
 the text tokens, `--accent`, `--now` and the value inks round 7 already

@@ -4,13 +4,19 @@ package api
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/droplist"
 )
+
+// TokenKindDroplistPull is the third kind of bearer token (#1224): the
+// key a router's own scheduled /tool fetch presents for the drop-list
+// feed. API and ingest tokens are gauntlet's own kinds; this one is
+// mikroview's, and the token store is opened knowing it (TokenKinds).
+const TokenKindDroplistPull gauntlet.TokenKind = "droplist-pull"
 
 // droplistEntryResponse is what one entry looks like over the wire --
 // the CIDR rendered as its canonical string, never the netip.Prefix
@@ -50,7 +56,7 @@ type droplistKeyStatus struct {
 // via TokenStore.ByKind -- never the raw value, which this store never
 // retains past the moment it was minted.
 func (s *Server) droplistKeyStatus() droplistKeyStatus {
-	toks := s.Tokens.ByKind(auth.TokenKindDroplistPull)
+	toks := s.Tokens.ByKind(TokenKindDroplistPull)
 	if len(toks) == 0 {
 		return droplistKeyStatus{}
 	}
@@ -290,22 +296,22 @@ func (s *Server) handleDroplistDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// droplistKeyCreateRequest is handleDroplistKeyCreate's optional body:
-// address to render Scheduler for, same meaning and same fallback to
-// r.Host as GET /api/droplist's own "address" query parameter. Every
-// field absent -- no body at all, an empty body, or the literal JSON
-// null a bodyless POST from this package's own tests sends -- is the
-// same as an empty Address, not a request error: this route took no
-// body before #1225, and callers that still send none must keep
-// working.
+// droplistKeyCreateRequest is handleDroplistKeyCreate's body: address
+// to render Scheduler for, same meaning and same fallback to r.Host as
+// GET /api/droplist's own "address" query parameter, and the caller's
+// own password, re-checked before anything is minted (#1447). The body
+// is required now, as router enrolment's is: an empty one is a 400, and
+// one that decodes without a password (the literal JSON null, {}, an
+// address alone) is refused by the re-check with 401.
 type droplistKeyCreateRequest struct {
-	Address string `json:"address"`
+	Address  string `json:"address"`
+	Password string `json:"password"`
 }
 
 type droplistKeyCreateResponse struct {
 	// Key is the raw bearer value -- shown exactly once, the same
-	// one-time contract every other token kind follows (see
-	// auth.TokenStore.Create).
+	// one-time contract every other token kind follows (see gauntlet's
+	// TokenStore.Create).
 	Key       string    `json:"key"`
 	CreatedAt time.Time `json:"createdAt"`
 	// Scheduler is the setup scheduler command (droplist.NewSetup) with
@@ -319,16 +325,49 @@ type droplistKeyCreateResponse struct {
 // than accumulating: at most one is ever meant to exist, since every
 // router fetches the same feed with the same credential, so minting
 // again revokes whatever was there first in the same call. Admin-only,
-// like every other token-issuing endpoint (see handleTokensCreate).
+// like every other token-issuing endpoint (gauntlet's POST /api/tokens).
 func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-
+	// Holding an admin session is not enough to mint this key (issue
+	// #1447), for the same reason it is not enough to mint a router
+	// enrolment token (#1291, handleDeviceEnrolment): the key lets any
+	// machine that holds it fetch the drop list, so a stolen session
+	// cookie, a cross-site request riding the admin's browser, or script
+	// injected into a page they are viewing must not be sufficient on its
+	// own. The admin re-proves who they are at the moment of minting.
+	//
+	// All of this runs before droplistKeyMintMu and before any create or
+	// revoke below, so a refused mint leaves the existing key working.
+	user, ok := s.sessionUser(r, time.Now())
+	if !ok {
+		writeUnauthorized(w, "sign in first")
+		return
+	}
 	var req droplistKeyCreateRequest
-	if err := decodeJSONBody(w, r, &req); err != nil && !errors.Is(err, io.EOF) {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	// An SSO-only admin has no local password to re-prove with, and
+	// inventing a weaker check for them would defeat the point of having
+	// one at all. Minting through a round trip back to the identity
+	// provider is its own piece of work; until it ships they are told
+	// plainly rather than quietly let through, with the 409 gauntlet's
+	// own password change gives the same situation.
+	if !user.LocalPassword() {
+		http.Error(w, "this account signs in through your identity provider, and minting a drop-list key needs a password re-check that does not exist for it yet; ask an admin with a local password to mint it", http.StatusConflict)
+		return
+	}
+	// Counted in gauntlet's per-account password re-check budget (see
+	// recheckPassword), the same budget router enrolment spends: the
+	// password is a credential and this is a guess at it, so verifying
+	// one without counting the attempt is a brute-force oracle that
+	// happens to need a session -- and a session is exactly what an
+	// attacker who has stolen a cookie already has.
+	if !s.recheckPassword(w, r, user, req.Password, "password is incorrect") {
 		return
 	}
 	address := droplistAddressOr(req.Address, r.Host)
@@ -346,10 +385,14 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 	defer s.droplistKeyMintMu.Unlock()
 
 	now := time.Now()
-	raw, tok, err := s.Tokens.Create("droplist-pull", auth.TokenKindDroplistPull, "", userFromContext(r), now)
+	// No expiry, as before #1202: a router's scheduled fetch must not
+	// stop on the key's anniversary and push an empty feed -- the same
+	// reasoning gauntlet gives for an ingest token. The daily sweep still
+	// removes one no router has fetched with for a year.
+	raw, tok, err := s.Tokens.CreateWithExpiry("droplist-pull", TokenKindDroplistPull, "", userFromContext(r), now, time.Time{})
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, auth.ErrTokenNotPersisted) {
+		if errors.Is(err, gauntlet.ErrTokenNotPersisted) {
 			status = http.StatusServiceUnavailable
 		}
 		authLog.Warn(err.Error())
@@ -357,7 +400,7 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	replaced := false
-	for _, t := range s.Tokens.ByKind(auth.TokenKindDroplistPull) {
+	for _, t := range s.Tokens.ByKind(TokenKindDroplistPull) {
 		if t.ID == tok.ID {
 			continue
 		}
@@ -390,7 +433,7 @@ func (s *Server) handleDroplistKeyDelete(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	toks := s.Tokens.ByKind(auth.TokenKindDroplistPull)
+	toks := s.Tokens.ByKind(TokenKindDroplistPull)
 	if len(toks) == 0 {
 		http.Error(w, "no droplist pull key exists", http.StatusNotFound)
 		return
@@ -407,12 +450,12 @@ func (s *Server) handleDroplistKeyDelete(w http.ResponseWriter, r *http.Request)
 
 // handleDroplistPull serves the generated .rsc feed (issue #1224) --
 // reachable only through droplistPullRoutes, the bearer mux a
-// droplist-pull token dispatches to (see requireAuth in auth.go). No
+// droplist-pull token dispatches to (see Routes in gauntlet.go). No
 // audit entry is recorded per pull: this is hit on the router's own
 // fetch schedule and would flood the admin trail the same way an
 // unqualified per-push ingest audit once did (see noteIngest's doc
 // comment in ingest.go) -- the token's own LastUsedAt is the record of
-// "is this still being fetched", already updated by requireAuth's
+// "is this still being fetched", already updated by the gate's
 // Authenticate call before this handler ever runs (security review: the
 // separate TokenStore.Touch this used to call here was redundant with
 // that and has been removed).
@@ -421,8 +464,8 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 	if tok == nil {
 		// Unreachable in practice, same reasoning as
 		// handleIngestRouterOS's identical guard: droplistPullRoutes is
-		// only ever dispatched to from requireAuth's droplist-pull-token
-		// branch, which always sets this first.
+		// only ever dispatched to by the gate for a droplist-pull token,
+		// and withToken always sets this first.
 		writeUnauthorized(w, "unauthorized")
 		return
 	}
@@ -450,5 +493,5 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	w.Write(droplist.Script(entries, now))
+	_, _ = w.Write(droplist.Script(entries, now))
 }

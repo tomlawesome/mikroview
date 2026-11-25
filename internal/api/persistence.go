@@ -23,18 +23,15 @@ type PersistenceInfo struct {
 	// backendFor and docs/decisions/event-retention.md's amendment. Never
 	// guessed independently of that decision.
 	//
-	// Accounts and tokens are not covered by this value (#853 rule 6):
-	// both hold only one-way hashes, so they keep persisting to a plain
-	// file even when Backend reports "memory", and to an encrypted one
-	// when Backend reports "file".
+	// Since #1202 a server never starts without a key, so a running one
+	// reports "file" or "postgres"; "memory" remains the honest answer
+	// for a Server built without one (a test).
 	Backend string `json:"backend"`
 	// Dir is the directory the JSON documents live under, for the file
-	// backend -- one representative store's own configured path
-	// (internal/auth's, since accounts persist in every backend state --
-	// see main.go), directory-only rather than a specific filename since
-	// several documents share it. Absent for postgres (no filesystem path
-	// to report) and for memory (nothing but accounts and tokens is
-	// actually written there).
+	// backend -- one representative store's own configured path (the
+	// accounts store's -- see main.go), directory-only rather than a
+	// specific filename since several documents share it. Absent for
+	// postgres (no filesystem path to report).
 	Dir string `json:"dir,omitempty"`
 }
 
@@ -50,7 +47,7 @@ type PersistenceInfo struct {
 // distinction handleConfigProblems' own doc comment explains.
 func (s *Server) handlePersistence(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Persistence)

@@ -24,20 +24,20 @@ watch), the altitude axis (clients · services · zones · survey).
 ## Data story (one story, every direction — do not vary it)
 
 Primary borough — **rb5009**, RouterOS 7.20.1, 41 rules, LIVE 34/s.
-WAN: `ether1` → Internet 203.0.113.7, coverage LOGGED. WireGuard `wg0`
-203.0.113.0/24, QUIET, 1 watcher.
+WAN: `ether1` → Internet 192.0.2.7, coverage LOGGED. WireGuard `wg0`
+198.51.100.128/27, QUIET, 1 watcher.
 
 | District | Subnet | Coverage toward WAN | Hosts |
 |---|---|---|---|
-| LAN | 203.0.113.0/24 | LOGGED BOTH WAYS | alex-desktop, phone-alex, laptop-anna, tv-lounge |
-| Servers | 198.51.100.0/24 | LOGGED BOTH WAYS | nas, pihole, unifi |
-| IoT | 192.0.2.0/24 | DARK TOWARD WAN | cam-porch ✱✱, hue-bridge, thermostat, doorbell, esp-weather, plug-kettle, +4 |
-| Guest | 198.51.100.0/24 | DARK — no log rule on this boundary | guest-e8b2, +2 |
+| LAN | 198.51.100.0/27 | LOGGED BOTH WAYS | alex-desktop, phone-alex, laptop-anna, tv-lounge |
+| Servers | 198.51.100.32/27 | LOGGED BOTH WAYS | nas, pihole, unifi |
+| IoT | 198.51.100.64/27 | DARK TOWARD WAN | cam-porch ✱✱, hue-bridge, thermostat, doorbell, esp-weather, plug-kettle, +4 |
+| Guest | 198.51.100.96/27 | DARK — no log rule on this boundary | guest-e8b2, +2 |
 
 Second borough — **hap-ax3**, RouterOS 7.20.1, 12 rules, in the workshop.
-Its `ether1` carries 203.0.113.9 — inside rb5009's LAN — so the borough is
-reached by a road from LAN. Districts: **Workshop** 192.0.2.0/24 (cnc,
-printer-3d, pc-bench), coverage LOGGED BOTH WAYS; **Cams** 198.51.100.0/24
+Its `ether1` carries 198.51.100.9 — inside rb5009's LAN — so the borough is
+reached by a road from LAN. Districts: **Workshop** 198.51.100.160/27 (cnc,
+printer-3d, pc-bench), coverage LOGGED BOTH WAYS; **Cams** 198.51.100.192/27
 (cam-yard, cam-gate), coverage DARK.
 
 Traffic: `any → wan · 9/s`; LAN ↔ Servers heavy (`:53 :123`, `:445 :5001`);
@@ -227,7 +227,7 @@ lit; the minimap stays.
    district's gates and light the peer buildings at the far end, with the
    ports on the road; a refused road ends at the wall with bollards, the
    red mark and the refusing rule's name on the wall (`caught by default
-   drop`). The breadcrumb card (`alex-desktop · 203.0.113.21 · reaches 4 ·
+   drop`). The breadcrumb card (`alex-desktop · 198.51.100.21 · reaches 4 ·
    reached by 6`) sits at the top like the 2D crumb; the **composer** is a
    card pinned to the wall where a refused road stopped — "it's been
    asking · tcp/445 · 14×" and the printed RouterOS line for a new gate,

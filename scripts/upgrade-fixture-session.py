@@ -31,9 +31,14 @@
 # issue #1281 refuses a TLS syslog connection from an address nobody
 # declared before the handshake even starts -- and "no" otherwise.
 
+import base64
+import hashlib
+import hmac
 import json
+import os
 import socket
 import ssl
+import struct
 import sys
 import time
 import urllib.error
@@ -84,7 +89,7 @@ ssl_ctx.verify_mode = ssl.CERT_NONE
 class API:
     def __init__(self, base):
         self.base = base
-        self.cookie = None
+        self.cookies = {}
 
     def _req(self, method, path, body=None):
         url = self.base + path
@@ -92,17 +97,24 @@ class API:
         headers = {"Content-Type": "application/json"}
         if method != "GET":
             headers[CSRF_HEADER] = CSRF_VALUE
-        if self.cookie:
-            headers["Cookie"] = self.cookie
+        if self.cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- base_url is the recording script's own https://127.0.0.1:<port>, not input from anyone else
             resp = urllib.request.urlopen(req, context=ssl_ctx, timeout=15)
         except urllib.error.HTTPError as e:
             return e.code, e.read(), e.headers
-        set_cookie = resp.headers.get("Set-Cookie")
-        if set_cookie:
-            self.cookie = set_cookie.split(";")[0]
+        # Every Set-Cookie, not just the first: gauntlet (#1202) answers a
+        # sign-in with its known-browser cookie *before* the session
+        # cookie, so keeping only the first one dropped the session. An
+        # empty value is the server clearing that cookie.
+        for set_cookie in resp.headers.get_all("Set-Cookie") or []:
+            name, _, value = set_cookie.split(";")[0].partition("=")
+            if value:
+                self.cookies[name] = value
+            else:
+                self.cookies.pop(name, None)
         return resp.getcode(), resp.read(), resp.headers
 
     def post(self, path, body, ok=(200, 201)):
@@ -140,6 +152,66 @@ def wait_for_health(api_base, attempts=120, delay=0.5):
     raise SystemExit(f"container never answered {api_base}/api/healthz: {last}")
 
 
+def totp_code_now(secret_b32, step=30, digits=6):
+    """The current RFC 6238 TOTP code for a base32 secret, stdlib only
+    (hmac/hashlib/base64/struct -- no third-party TOTP library),
+    matching internal/auth/totp.go's own algorithm and parameters
+    (HMAC-SHA1, a 30-second step, 6 digits): the counter is the number
+    of 30-second steps since the epoch, HMAC-SHA1'd with the secret,
+    then RFC 4226 §5.3's dynamic truncation picks 4 bytes out of the
+    20-byte digest and masks their top bit before taking it mod 10**6.
+    VerifyTOTP accepts the current step and one step either side, so a
+    few seconds of latency between computing this and the server
+    checking it does not matter.
+    """
+    secret = base64.b32decode(secret_b32 + "=" * (-len(secret_b32) % 8), casefold=True)
+    counter = int(time.time() // step)
+    digest = hmac.new(secret, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = int.from_bytes(digest[offset : offset + 4], "big") & 0x7FFFFFFF
+    return str(code % (10**digits)).zfill(digits)
+
+
+def enrol_second_factor_if_required(api):
+    """Enrols an authenticator-app (TOTP) factor for the caller's own
+    just-signed-in account, if the server demands one before it will
+    do anything else.
+
+    Since v0.6.1 (#1253) every local account is stopped at a forced
+    "set up your second factor" gate on its first sign-in, and
+    POST /api/auth/totp/enrol is the route that starts clearing it.
+    Older images have no such route at all -- that generation of the
+    server didn't have TOTP -- so a 404 here means "nothing to do",
+    detected from the response the server actually gives rather than
+    from comparing version strings, which keeps this working
+    unmodified against whatever a later release changes. Any other
+    non-200 is a real failure and is raised.
+
+    Since #1418/#1422, a newer server also refuses this without the
+    caller's own current password (checked server-side, never read
+    back) -- sent unconditionally here, since an older server that
+    predates the gate simply ignores the extra field.
+
+    Since #1202 the first factor is also held until the recovery codes
+    are confirmed; see the call after totp/confirm below.
+    """
+    status, body, _ = api._req("POST", "/api/auth/totp/enrol", {"password": FIXTURE_PASSWORD})
+    if status == 404:
+        return False
+    if status != 200:
+        raise RuntimeError(f"POST /api/auth/totp/enrol: {status} {body[:300]!r}")
+    secret = json.loads(body)["secret"]
+    confirmed = api.post("/api/auth/totp/confirm", {"code": totp_code_now(secret)})
+    # A server on gauntlet (#1202) holds the first second factor until the
+    # person says they saved the recovery codes, and tells them so with
+    # pendingConfirmation: true; until then the account is still held at
+    # the door and the factor is not live. Older images never return the
+    # field, and have nothing to confirm, so nothing is called for them.
+    if isinstance(confirmed, dict) and confirmed.get("pendingConfirmation") is True:
+        api.post("/api/auth/recovery-codes/confirm", {})
+    return True
+
+
 wait_for_health(base_url)
 api = API(base_url)
 manifest = {"version": version, "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -147,8 +219,26 @@ manifest = {"version": version, "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ"
 # 1. The permanent admin, created by the same bootstrap endpoint the
 # setup wizard's first screen calls -- this also opens the session
 # every later call in this script uses.
-api.post("/api/auth/register", {"username": FIXTURE_ADMIN, "password": FIXTURE_PASSWORD})
+#
+# From #1415 on, the first admin also needs the one-time setup code the
+# server printed in its log. This container cannot read that log, so
+# record-upgrade-fixture.sh reads it with `docker logs` and hands it
+# over as MV_SETUP_CODE -- an environment variable, never argv, and
+# never written to the manifest. Releases before #1415 print no code and
+# get none.
+register_body = {"username": FIXTURE_ADMIN, "password": FIXTURE_PASSWORD}
+setup_code = os.environ.get("MV_SETUP_CODE", "")
+if setup_code:
+    register_body["setupCode"] = setup_code
+api.post("/api/auth/register", register_body)
 manifest["adminUsername"] = FIXTURE_ADMIN
+
+# 1a. The admin just signed in above -- from v0.6.1 on, that account
+# can reach nothing else at all until it enrols a second factor
+# (#1253). Older images never ask; see
+# enrol_second_factor_if_required's own comment for how that is told
+# apart.
+manifest["secondFactorEnrolled"] = enrol_second_factor_if_required(api)
 
 # 2. A second, viewer-tier account.
 api.post("/api/auth/users", {"username": FIXTURE_VIEWER, "password": FIXTURE_PASSWORD, "role": "viewer"})
@@ -156,7 +246,9 @@ manifest["viewerUsername"] = FIXTURE_VIEWER
 
 # 3. A read-only API token. Its raw value is returned exactly once and
 # is never written to the manifest -- only that one was created.
-api.post("/api/tokens", {"name": "upgrade-fixture-token", "kind": "api"})
+# The admin's own password is part of the request on a gauntlet-era image;
+# an older image ignores the extra field.
+api.post("/api/tokens", {"name": "upgrade-fixture-token", "kind": "api", "password": FIXTURE_PASSWORD})
 manifest["apiTokenName"] = "upgrade-fixture-token"
 
 # 4. A named entity.

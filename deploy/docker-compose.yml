@@ -26,13 +26,16 @@ services:
       # "" below) if you'd rather handle the redirect at your own
       # reverse proxy.
       - "80:8081"
-      # RouterOS config backups over SFTP (issue #394, optional) -- a
-      # second listening port, only needed once you turn `backup:
-      # enabled: true` on in config.yaml (see config.example.yaml's
-      # commented `backup:` block and docs/configuration.md's "Router
-      # backups" section). Uncomment this alongside that; it must match
-      # `backup.listen`'s port (":47022" by default).
-      # - "47022:47022/tcp"
+      # RouterOS config backups over SFTP (issue #394). Always published
+      # (#1361) -- the switch that actually opens this listener moved
+      # into Settings -> router backups, where an admin turns it on and
+      # off with no restart, and a container's own port mapping can't
+      # follow that. While the switch is off nothing is listening on it
+      # and a connection is simply refused; see docs/configuration.md's
+      # "Router backups" section. Change the left-hand port to match if
+      # you set `backup.listen` to something other than the default
+      # ":47022".
+      - "47022:47022/tcp"
     # Container hardening. The image is already distroless + non-root
     # (see Dockerfile), so these are defense-in-depth rather than the
     # primary control -- but they're free, and they cap what a
@@ -58,8 +61,8 @@ services:
     # that would need to write anywhere else. Note it does NOT need a
     # /tmp tmpfs: every persisted store writes its temp file alongside
     # the real one inside /var/lib/mikroview (see the atomic
-    # write-temp-then-rename in internal/auth, internal/flags,
-    # internal/entities, internal/audit), never into /tmp.
+    # write-temp-then-rename in internal/persist, which every store
+    # writes through), never into /tmp.
     read_only: true
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
@@ -69,15 +72,27 @@ services:
       retries: 3
     volumes:
       # One app folder on the host, two mounts: read-only for what you
-      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # own (config, keys, certs), read-write for what MikroView
       # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
       # Sample config: deploy/config.example.yaml -- copy it to
       # mikroview/config.yaml (see docs/install.md's "Persistent data"
       # section for the permissions step data/ needs first).
+      #
+      # A KEY IS REQUIRED. MikroView seals its accounts, API tokens,
+      # recovery keys and sign-in history (and, with history on, the
+      # event history) under one key, and refuses to start without it
+      # (CFG-0083, from v0.7.0). It is read from the folder mounted on the
+      # next line: mikroview/keys/history.key on the host, which is
+      # /etc/mikroview/keys/history.key inside the container. `install.sh`
+      # makes one on a fresh install; this file does not run that script,
+      # so make it yourself BEFORE the first `docker compose up`, as
+      # docs/install.md's Compose section explains step by step. Keep a
+      # copy somewhere safe, apart from mikroview/data: without the key
+      # the sealed accounts cannot be read.
       - ./mikroview:/etc/mikroview:ro
       - ./mikroview/data:/var/lib/mikroview
       # Mounting each file separately instead -- config.yaml,
-      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or the
+      # a bind-mounted data/ of its own, or the
       # mikroview-data named volume -- is the old way and still works: a
       # path set in config.yaml or the environment always wins over the
       # folder default. See docs/configuration.md.
@@ -92,9 +107,6 @@ services:
       # come up on defaults. Set it only if your config lives somewhere
       # other than mikroview/config.yaml.
       # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
-      # file into mikroview/ is the old way and still works -- see
-      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
@@ -170,6 +182,10 @@ services:
     # sslmode must be require, verify-ca or verify-full; anything weaker
     # is refused at startup. Prefer verify-full -- require encrypts but
     # does not verify who you are talking to.
+    #
+    # The history key above is still required on Postgres: the accounts,
+    # tokens, recovery keys and sign-in history are sealed under it in
+    # their database rows too. Keep it off the database host.
     #
     # MOVING TO POSTGRES IS A ONE-WAY CHOICE. MAKE IT BEFORE YOU START,
     # OR NOT AT ALL.

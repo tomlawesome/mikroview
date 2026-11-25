@@ -1,0 +1,29 @@
+/* AJ — The storm. Enter, and the weather turns: the wind gets into the
+   rain, the frame darkens at its edges, the amber box gutters like a lamp.
+   Then the rain is drawn in — every stroke on the screen curves into the
+   wordmark's box and the sky empties as the box charges to white. It
+   breaks: one ring goes out from the box, and everything inside the ring
+   is the wizard, already lit; the rain the box drank comes back as embers
+   riding the ring's edge, in every ink, and dies out over the new place.
+   Finish charges the box from the strip and breaks the same way, and the
+   ring's wake is the fall. */
+#fx { position: fixed; inset: 0; z-index: 4; pointer-events: none; display: none; }
+.door { background: transparent; }
+.page { z-index: 1; }
+.door .clear { position: absolute; inset: 0; background: radial-gradient(ellipse 460px 380px at 50% 52%, var(--bg) 62%, transparent 78%); transition: opacity 500ms ease 100ms; }
+body.in .door .clear { opacity: 0; }
+body.in .door .fullfall { opacity: 0; }
+.door .vignette { position: absolute; inset: 0; background: radial-gradient(ellipse 70% 60% at 50% 50%, transparent 40%, #000 100%); opacity: 0; transition: opacity 1000ms ease; pointer-events: none; }
+body.in .door .vignette { opacity: 0.85; }
+/* the box: a lamp in wind, then charged; --charge is 0..1 from the script */
+.door .wm-box { --charge: 0; position: relative; z-index: 3; background: var(--bg); transition: none; }
+body.in .door .wm-box { animation: gutter 90ms steps(2) infinite; border-color: color-mix(in srgb, var(--now) calc(100% - var(--charge) * 100%), #fff calc(var(--charge) * 100%)); box-shadow: 0 0 calc(14px + 90px * var(--charge)) color-mix(in srgb, var(--now) calc(22% + var(--charge) * 70%), transparent), inset 0 0 calc(10px + 40px * var(--charge)) color-mix(in srgb, var(--now) calc(6% + var(--charge) * 40%), transparent); }
+body.in.charged .door .wm-box { animation: none; }
+@keyframes gutter { 50% { opacity: 0.86; } }
+.door .wm-box.riding { position: fixed; margin: 0; z-index: 8; transition: transform 700ms cubic-bezier(.2,.7,.2,1), border-color 500ms ease 250ms, box-shadow 400ms ease 200ms, background 300ms ease; }
+/* the reveal: the page exists only inside the ring, and the fall likewise on the way out */
+.page.ringed { clip-path: circle(var(--r, 0px) at var(--cx, 50%) var(--cy, 50%)); }
+.fallframe.ringed, .siderail.ringed { clip-path: circle(var(--r, 0px) at var(--cx, 50%) var(--cy, 50%)); opacity: 1 !important; transform: none !important; }
+body.out .main { pointer-events: none; }
+.flash { position: fixed; inset: 0; z-index: 7; background: #fff7e6; opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { #fx, .flash { display: none !important; } .door .wm-box { animation: none !important; } .page.ringed, .fallframe.ringed, .siderail.ringed { clip-path: none; } }

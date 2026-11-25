@@ -118,7 +118,7 @@ type Enrolment struct {
 // hashEnrolToken is the one place a raw enrolment token is ever hashed
 // -- used identically by MintEnrolment (to compute what gets stored)
 // and TryEnrol (to compute what gets looked up), so the two can never
-// drift apart. Mirrors internal/auth's hashTokenValue.
+// drift apart. Mirrors gauntlet's hashTokenValue.
 func hashEnrolToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
@@ -139,7 +139,7 @@ func randomEnrolToken() string {
 				// unavailable -- not a condition worth degrading
 				// gracefully from for a token that grants a router
 				// syslog-source identity. Same convention as
-				// internal/auth's newID.
+				// gauntlet's newID.
 				panic("device: crypto/rand unavailable: " + err.Error())
 			}
 			if int(buf[0]) < limit {
@@ -505,6 +505,7 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 
 	prevAcceptedIP := info.AcceptedIP
 	prevEnrolledAt := info.EnrolledAt
+	prevRegisteredAt := info.RegisteredAt
 	prevRefused, wasRefused := r.refused[key]
 
 	if info.AcceptedIP != "" {
@@ -512,6 +513,10 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	}
 	info.AcceptedIP = key
 	info.EnrolledAt = now
+	// Registration is acceptance (#1493): the operator confirmed this
+	// router when they minted its token with their password, so there is
+	// no second step to wait for.
+	info.RegisteredAt = now
 	r.byAcceptedIP[key] = info
 	// The router logged its own logging-action change before this line
 	// reached us, so its address is already in the refused list; leaving
@@ -528,6 +533,7 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 		delete(r.byAcceptedIP, key)
 		info.AcceptedIP = prevAcceptedIP
 		info.EnrolledAt = prevEnrolledAt
+		info.RegisteredAt = prevRegisteredAt
 		if prevAcceptedIP != "" {
 			r.byAcceptedIP[normalizeIP(prevAcceptedIP)] = info
 		}

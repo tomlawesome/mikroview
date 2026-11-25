@@ -9,9 +9,11 @@
 // is exercised for real by running the script directly against this repo,
 // which is how #711's policy file was built and checked in the first
 // place.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -137,6 +139,19 @@ describe("extractGoVersionPins", () => {
 
   it("returns an empty map when none of the four inputs are given", () => {
     assert.equal(extractGoVersionPins({}).size, 0);
+  });
+
+  it("reads actions/setup-go's go-version from a GitHub workflow (#1356)", () => {
+    const pins = extractGoVersionPins({
+      workflows: {
+        ".github/workflows/docker.yml": [
+          "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+          "        with:",
+          "          go-version: '1.27.1'",
+        ].join("\n"),
+      },
+    });
+    assert.equal(pins.get(".github/workflows/docker.yml:3"), "1.27.1");
   });
 });
 
@@ -268,6 +283,29 @@ describe("collectRepositoryPins", () => {
     assert.match(problems[0], /disagree/);
   });
 
+  it("fails when a GitHub workflow's go-version pin disagrees with go.mod (#1356)", () => {
+    const dir = scratchDir();
+    writeFileSync(join(dir, "go.mod"), "module example\n\ngo 1.27.1\n", "utf8");
+    const workflowsDir = join(dir, ".github", "workflows");
+    mkdirSync(workflowsDir, { recursive: true });
+    // Deliberately one patch behind go.mod, the #1356 shape.
+    writeFileSync(
+      join(workflowsDir, "docker.yml"),
+      [
+        "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+        "        with:",
+        "          go-version: '1.27.0'",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { goVersionPins } = collectRepositoryPins(dir);
+    const problems = diffGoVersionPins(goVersionPins);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /disagree/);
+    assert.match(problems[0], /docker\.yml:3=1\.27\.0/);
+  });
+
   it("passes when a copy of the four Go pins agrees", () => {
     const dir = scratchDir();
     writeFileSync(join(dir, "go.mod"), "module example\n\ngo 1.27.1\n", "utf8");
@@ -313,5 +351,67 @@ describe("loadPolicy", () => {
 
   it("reports a missing file rather than an unhandled read error", () => {
     assert.throws(() => loadPolicy("/nonexistent/pins-policy.json"), /is missing/);
+  });
+});
+
+// #1472 step 3, ruling v2: the attest job takes the verified SBOM from the
+// gitlab job as an artifact, so actions/download-artifact joins the pins.
+describe("#1472 ruling v2: actions/download-artifact is a reviewed pin", () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  it("is recorded with a 40-hex commit and a reviewedOn date", () => {
+    const policy = loadPolicy(join(repoRoot, "supply-chain/pins-policy.json"));
+    const entry = policy.ciActions.find((a) => a.name === "actions/download-artifact");
+    assert.ok(entry, "no actions/download-artifact entry in supply-chain/pins-policy.json");
+    assert.match(entry.commit, /^[0-9a-f]{40}$/);
+    assert.match(String(entry.reviewedOn ?? ""), /^\d{4}-\d{2}-\d{2}$/);
+  });
+  it("node tools/supply-chain/pins-policy.mjs exits 0", () => {
+    const r = spawnSync(process.execPath, ["tools/supply-chain/pins-policy.mjs"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(r.status, 0, `pins-policy.mjs failed:\n${r.stdout}${r.stderr}`);
+  });
+});
+
+describe("every pin of an action is compared with the policy", () => {
+  const OLD = "1111111111111111111111111111111111111111";
+  const NEW = "2222222222222222222222222222222222222222";
+  const policyFor = (commit, version) => ({
+    ciActions: [{ name: "docker/login-action", commit, version }],
+    containerImages: [],
+  });
+  const check = (policy, fileTexts) =>
+    diffPolicy(policy, { actionPins: extractActionPins(fileTexts), imagePins: new Map() });
+
+  it("fails and names the file that pins an older commit than the policy records", () => {
+    const problems = check(policyFor(NEW, "v4.8.0"), {
+      "old.yml": `uses: docker/login-action@${OLD} # v4.7.0\n`,
+      "new.yml": `uses: docker/login-action@${NEW} # v4.8.0\n`,
+    });
+    const named = problems.filter((p) => p.includes("old.yml") && p.includes("docker/login-action"));
+    assert.ok(named.length > 0, `no problem names old.yml and docker/login-action: ${JSON.stringify(problems)}`);
+    assert.ok(!problems.some((p) => p.includes("new.yml")), "the file on the recorded commit must not be reported");
+  });
+
+  it("still passes when two files pin the same recorded commit", () => {
+    const problems = check(policyFor(NEW, "v4.8.0"), {
+      "a.yml": `uses: docker/login-action@${NEW} # v4.8.0\n`,
+      "b.yml": `uses: docker/login-action@${NEW} # v4.8.0\n`,
+    });
+    assert.deepEqual(problems, []);
+  });
+
+  it("the real workflows each pin exactly what the real policy records", () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const policy = loadPolicy(join(repoRoot, "supply-chain/pins-policy.json"));
+    const wfDir = join(repoRoot, ".github", "workflows");
+    const drift = [];
+    for (const entry of readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f))) {
+      const file = `.github/workflows/${entry}`;
+      const text = readFileSync(join(wfDir, entry), "utf8");
+      // One file at a time, so a file cannot hide behind another file's pin.
+      for (const problem of check(policy, { [file]: text })) {
+        if (/is pinned to|pin comment says|not recorded/.test(problem)) drift.push(`${file}: ${problem}`);
+      }
+    }
+    assert.deepEqual(drift, []);
   });
 });

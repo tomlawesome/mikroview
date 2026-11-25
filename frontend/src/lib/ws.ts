@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+// #1363: a fresh WebSocket connection means the tab is definitely
+// talking to a live server right now, which makes it a good moment to
+// ask that same server whether it is still the version this tab loaded
+// with.
+import { freshnessState } from './freshness.svelte'
 import { appState } from './state.svelte'
 import type { FirewallEvent } from './types'
 
@@ -92,6 +97,7 @@ export class LiveSocket {
       // A new connection is a new server-side client registration, whose
       // dropped counter starts back at 0 -- see hub.go.
       appState.resetWsDropped()
+      void freshnessState.checkNow()
     }
 
     ws.onmessage = (ev) => {

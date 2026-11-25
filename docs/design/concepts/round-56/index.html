@@ -364,7 +364,7 @@
 <p class="cap"><b>CITY · THE LIST</b>round 54's city trace, untouched (the ✕ was already at the LAN wall), with the same list under the same crumb. Nothing on the city had to be redrawn for it.</p>
 <section class="scene" id="city-trace-list" aria-label="The traced refusal on the city with the same list open under the crumb"></section>
 
-<p class="cap"><b>2D · NO OUT-INTERFACE</b>an input drop: 192.0.2.61 → rb5009 22/tcp, the SSH knocking that "▲3.1× drops · wan-in" is counting. The log names in: ether1 and no out, so the ✕ stands on the router — the line was for the router and the router refused it. The Internet rib is red from the halo down to the ✕; nothing else lights.</p>
+<p class="cap"><b>2D · NO OUT-INTERFACE</b>an input drop: 203.0.113.61 → rb5009 22/tcp, the SSH knocking that "▲3.1× drops · wan-in" is counting. The log names in: ether1 and no out, so the ✕ stands on the router — the line was for the router and the router refused it. The Internet rib is red from the halo down to the ✕; nothing else lights.</p>
 <section class="scene" id="flat-trace-input" aria-label="An input drop traced on the flat map: the Internet rib red to a ✕ on the router, the chip beside it"></section>
 
 <p class="cap"><b>CITY · NO OUT-INTERFACE</b>the same input drop on the city: the highway and the WAN bridge red from ether1's halo to a ✕ at the router's door, the chip beside the router. The same rule as the flat map — no out, so the router.</p>
@@ -809,20 +809,20 @@ const worst = (a, b) => COV_RANK[a] >= COV_RANK[b] ? a : b;
 const COV_INK = { l: null, q: 'var(--quiet)', d: 'var(--dark)' };
 
 const DISTRICTS = [
-  { id: 'lan', name: 'LAN', cidr: '203.0.113.0/24', u: -76, v: 36, r: 21, ink: 'var(--lan)', tally: '◉2 ✱1', lw: 172, boro: 'rb',
+  { id: 'lan', name: 'LAN', cidr: '198.51.100.0/27', u: -76, v: 36, r: 21, ink: 'var(--lan)', tally: '◉2 ✱1', lw: 172, boro: 'rb',
     gates: [
       { id: 'wan', dir: [66, -26], n: 8, cov: 'l', dirs: [['lan → wan', 'l', 'rule #8 logs'], ['wan → lan', 'l', 'rule #3 logs']] },
       { id: 'srv', dir: [58, 36], n: 12, cov: 'l', dirs: [['lan → servers', 'l', 'rule #12 logs'], ['servers → lan', 'l', 'rule #13 logs']] },
       { id: 'hap', dir: [-6, 20], n: 19, cov: 'l', dirs: [['lan → hap-ax3', 'l', 'rule #19 logs'], ['hap-ax3 → lan', 'l', 'rule #4 logs']] }
     ],
     hosts: [
-      { id: 'alex-desktop', name: 'alex-desktop', ip: '203.0.113.21', t: 'workstation', du: 10, dv: -2, R: 5.0, watch: 1 },
-      { id: 'laptop-anna', name: 'laptop-anna', ip: '203.0.113.34', t: 'laptop', du: -1, dv: -11, R: 4.6, flags: 1 },
-      { id: 'phone-alex', name: 'phone-alex', ip: '203.0.113.52', t: 'phone', du: -11, dv: 1, R: 3.8 },
-      { id: 'tv-lounge', name: 'tv-lounge', ip: '203.0.113.60', t: 'tv', du: 1, dv: 11, R: 4.6, pres: 'quiet', down: 1 },
-      { id: 'printer-old', name: 'printer-old', ip: '203.0.113.77', t: 'puck', du: -9, dv: 9, R: 3.8, pres: 'intended', down: 1 }
+      { id: 'alex-desktop', name: 'alex-desktop', ip: '198.51.100.21', t: 'workstation', du: 10, dv: -2, R: 5.0, watch: 1 },
+      { id: 'laptop-anna', name: 'laptop-anna', ip: '198.51.100.5', t: 'laptop', du: -1, dv: -11, R: 4.6, flags: 1 },
+      { id: 'phone-alex', name: 'phone-alex', ip: '198.51.100.24', t: 'phone', du: -11, dv: 1, R: 3.8 },
+      { id: 'tv-lounge', name: 'tv-lounge', ip: '198.51.100.6', t: 'tv', du: 1, dv: 11, R: 4.6, pres: 'quiet', down: 1 },
+      { id: 'printer-old', name: 'printer-old', ip: '198.51.100.17', t: 'puck', du: -9, dv: 9, R: 3.8, pres: 'intended', down: 1 }
     ] },
-  { id: 'srv', name: 'Servers', cidr: '198.51.100.0/24', u: -18, v: 72, r: 19, ink: 'var(--srv)', tally: '◉2', lw: 172, boro: 'rb',
+  { id: 'srv', name: 'Servers', cidr: '198.51.100.32/27', u: -18, v: 72, r: 19, ink: 'var(--srv)', tally: '◉2', lw: 172, boro: 'rb',
     gates: [
       { id: 'lan', dir: [-58, -36], n: 13, cov: 'l', dirs: [['servers → lan', 'l', 'rule #13 logs'], ['lan → servers', 'l', 'rule #12 logs']] },
       { id: 'wan', dir: [8, -68], n: 14, cov: 'l', dirs: [['servers → wan', 'l', 'rule #14 logs'], ['wan → servers', 'l', 'rule #3 logs']] },
@@ -830,42 +830,42 @@ const DISTRICTS = [
       { id: 'hap', dir: [6, 20], n: 22, cov: 'l', dirs: [['servers → workshop', 'l', 'rule #22 logs'], ['workshop → servers', 'l', 'rule #4 logs']] }
     ],
     hosts: [
-      { id: 'pihole', name: 'pihole', ip: '198.51.100.5', t: 'server', du: 0, dv: -9, R: 5.0 },
-      { id: 'nas', name: 'nas', ip: '198.51.100.10', t: 'server', du: -9, dv: 2, R: 5.4, watch: 1, down: 1 },
-      { id: 'unifi', name: 'unifi', ip: '198.51.100.12', t: 'server', du: 9, dv: 2, R: 5.0, down: 1 }
+      { id: 'pihole', name: 'pihole', ip: '198.51.100.37', t: 'server', du: 0, dv: -9, R: 5.0 },
+      { id: 'nas', name: 'nas', ip: '198.51.100.42', t: 'server', du: -9, dv: 2, R: 5.4, watch: 1, down: 1 },
+      { id: 'unifi', name: 'unifi', ip: '198.51.100.44', t: 'server', du: 9, dv: 2, R: 5.0, down: 1 }
     ] },
-  { id: 'iot', name: 'IoT', cidr: '192.0.2.0/24', u: 46, v: 30, r: 20, ink: 'var(--iot)', tally: '◉1 ✱3', lw: 172, boro: 'rb',
+  { id: 'iot', name: 'IoT', cidr: '198.51.100.64/27', u: 46, v: 30, r: 20, ink: 'var(--iot)', tally: '◉1 ✱3', lw: 172, boro: 'rb',
     gates: [
       { id: 'wan', dir: [-56, -20], n: 24, cov: 'd', dirs: [['iot → wan', 'd', 'rule #24 accepts, nothing logs'], ['wan → iot', 'l', 'rule #3 logs']] },
       { id: 'srv', dir: [-64, 42], n: 26, cov: 'l', dirs: [['iot → servers', 'l', 'rule #26 logs'], ['servers → iot', 'l', 'rule #27 logs']] }
     ],
     hosts: [
-      { id: 'cam-porch', name: 'cam-porch', ip: '192.0.2.14', t: 'camera', du: -10, dv: -2, R: 4.4, flags: 2, watch: 1 },
-      { id: 'hue-bridge', name: 'hue-bridge', ip: '192.0.2.21', t: 'puck', du: -2, dv: -10, R: 4.0 },
-      { id: 'thermostat', name: 'thermostat', ip: '192.0.2.30', t: 'puck', du: 4, dv: -4, R: 3.8 },
-      { id: 'doorbell', name: 'doorbell', ip: '192.0.2.41', t: 'puck', du: -4, dv: 4, R: 3.8, flags: 1 },
-      { id: 'esp-weather', name: 'esp-weather', ip: '192.0.2.52', t: 'puck', du: 10, dv: 2, R: 3.8 },
-      { id: 'plug-kettle', name: 'plug-kettle', ip: '192.0.2.58', t: 'puck', du: 2, dv: 10, R: 3.8 }
+      { id: 'cam-porch', name: 'cam-porch', ip: '198.51.100.78', t: 'camera', du: -10, dv: -2, R: 4.4, flags: 2, watch: 1 },
+      { id: 'hue-bridge', name: 'hue-bridge', ip: '198.51.100.85', t: 'puck', du: -2, dv: -10, R: 4.0 },
+      { id: 'thermostat', name: 'thermostat', ip: '198.51.100.94', t: 'puck', du: 4, dv: -4, R: 3.8 },
+      { id: 'doorbell', name: 'doorbell', ip: '198.51.100.76', t: 'puck', du: -4, dv: 4, R: 3.8, flags: 1 },
+      { id: 'esp-weather', name: 'esp-weather', ip: '198.51.100.88', t: 'puck', du: 10, dv: 2, R: 3.8 },
+      { id: 'plug-kettle', name: 'plug-kettle', ip: '198.51.100.92', t: 'puck', du: 2, dv: 10, R: 3.8 }
     ] },
-  { id: 'guest', name: 'Guest', cidr: '198.51.100.0/24', u: 66, v: -14, r: 13, ink: 'var(--guest)', dark: 1, lw: 172, boro: 'rb',
+  { id: 'guest', name: 'Guest', cidr: '198.51.100.96/27', u: 66, v: -14, r: 13, ink: 'var(--guest)', dark: 1, lw: 172, boro: 'rb',
     gates: [ { id: 'wan', dir: [-88, 10], n: 31, cov: 'd', dirs: [['guest → wan', 'd', 'rule #31 accepts, nothing logs'], ['wan → guest', 'd', 'default drop, nothing logs']] } ],
     hosts: [
-      { id: 'guest-e8b2', name: 'guest-e8b2', ip: '198.51.100.19', t: 'phone', du: 0, dv: -1, R: 4.0 }
+      { id: 'guest-e8b2', name: 'guest-e8b2', ip: '198.51.100.115', t: 'phone', du: 0, dv: -1, R: 4.0 }
     ] },
-  { id: 'wsh', name: 'Workshop', cidr: '192.0.2.0/24', u: -30, v: 116, r: 15, ink: 'var(--wsh)', lw: 172, boro: 'hap',
+  { id: 'wsh', name: 'Workshop', cidr: '198.51.100.160/27', u: -30, v: 116, r: 15, ink: 'var(--wsh)', lw: 172, boro: 'hap',
     gates: [ { id: 'hap', dir: [44, -12], n: 4, cov: 'l', dirs: [['workshop → lan', 'l', 'rule #4 logs'], ['lan → workshop', 'l', 'rule #2 logs']] } ],
     hosts: [
-      { id: 'cnc', name: 'cnc', ip: '192.0.2.4', t: 'puck', du: 0, dv: -7, R: 4.2 },
-      { id: 'printer-3d', name: 'printer-3d', ip: '192.0.2.7', t: 'puck', du: 7, dv: 1, R: 4.2 },
-      { id: 'pc-bench', name: 'pc-bench', ip: '192.0.2.9', t: 'workstation', du: -6, dv: 3, R: 4.6, pres: 'quiet', down: 1 }
+      { id: 'cnc', name: 'cnc', ip: '198.51.100.164', t: 'puck', du: 0, dv: -7, R: 4.2 },
+      { id: 'printer-3d', name: 'printer-3d', ip: '198.51.100.167', t: 'puck', du: 7, dv: 1, R: 4.2 },
+      { id: 'pc-bench', name: 'pc-bench', ip: '198.51.100.169', t: 'workstation', du: -6, dv: 3, R: 4.6, pres: 'quiet', down: 1 }
     ] },
   /* hap-ax3 has pushed no rule table for Cams: the wall has an opening
      where the road passes and no gate, and the plaque says so */
-  { id: 'cams', name: 'Cams', cidr: '198.51.100.0/24', u: 58, v: 116, r: 13, ink: 'var(--cam2)', norules: 1, tally: '✱1', lw: 172, boro: 'hap',
+  { id: 'cams', name: 'Cams', cidr: '198.51.100.192/27', u: 58, v: 116, r: 13, ink: 'var(--cam2)', norules: 1, tally: '✱1', lw: 172, boro: 'hap',
     gates: [ { id: 'hap', dir: [-44, -12], n: 0, cov: 'l', dirs: [['cams → nas', 'l', 'seen in the feed; no rule table pushed']] } ],
     hosts: [
-      { id: 'cam-yard', name: 'cam-yard', ip: '198.51.100.3', t: 'camera', du: -1, dv: -6, R: 4.2 },
-      { id: 'cam-gate', name: 'cam-gate', ip: '198.51.100.4', t: 'camera', du: 1, dv: 6, R: 4.2, flags: 1, down: 1 }
+      { id: 'cam-yard', name: 'cam-yard', ip: '198.51.100.195', t: 'camera', du: -1, dv: -6, R: 4.2 },
+      { id: 'cam-gate', name: 'cam-gate', ip: '198.51.100.196', t: 'camera', du: 1, dv: 6, R: 4.2, flags: 1, down: 1 }
     ] }
 ];
 
@@ -874,8 +874,8 @@ const NODES = [
     roof: 'rb5009', roofsub: 'RouterOS 7.20.1 · 41 rules · LIVE 34/s' },
   { id: 'hapax3', name: 'hap-ax3', t: 'router-ant', u: 14, v: 96, R: 6.2, ink: 'var(--accent)', down: 1,
     roof: 'hap-ax3', roofsub: '12 rules · a second router' },
-  { id: 'ether1', name: 'ether1', t: 'post', u: 0, v: 0, R: 3.4, ink: 'var(--accent)', roof: 'ether1', roofsub: 'wan · 203.0.113.7' },
-  { id: 'wg0', name: 'wg0', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)', watch: 1, roof: 'wg0', roofsub: '203.0.113.0/24 · ◉1', pres: 'intended' },
+  { id: 'ether1', name: 'ether1', t: 'post', u: 0, v: 0, R: 3.4, ink: 'var(--accent)', roof: 'ether1', roofsub: 'wan · 192.0.2.7' },
+  { id: 'wg0', name: 'wg0', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)', watch: 1, roof: 'wg0', roofsub: '198.51.100.128/27 · ◉1', pres: 'intended' },
   { id: 'l2tp', name: 'l2tp', t: 'post', u: 0, v: 0, R: 3.0, ink: 'var(--accent)', roof: 'l2tp', roofsub: '1 peer · 0.3/s' }
 ];
 const PEERS = [
@@ -885,8 +885,8 @@ const PEERS = [
 /* a bridge is an interface; `cov` is its boundary's state, the deck
    wears it: lamps when logged, white when declared, grey when dark */
 const BRIDGES = [
-  { id: 'wan', at: -56, w: 3.4, node: 'ether1', cov: 'l', lamps: 2, label: 'ether1 → Internet · 203.0.113.7' },
-  { id: 'wg0', at: 8, w: 1.5, node: 'wg0', cov: 'q', lamps: 0, label: 'wg0 · 203.0.113.0/24 · quiet on purpose' },
+  { id: 'wan', at: -56, w: 3.4, node: 'ether1', cov: 'l', lamps: 2, label: 'ether1 → Internet · 192.0.2.7' },
+  { id: 'wg0', at: 8, w: 1.5, node: 'wg0', cov: 'q', lamps: 0, label: 'wg0 · 198.51.100.128/27 · quiet on purpose' },
   { id: 'l2tp', at: 36, w: 1.5, node: 'l2tp', cov: 'l', lamps: 1, ldy: 30, label: 'l2tp · 1 peer · 0.3/s' }
 ];
 /* roads are what was seen. k: a = something accepted (green), r = only
@@ -1197,12 +1197,12 @@ const CARDS = {
       '<div class="quote">peers are trusted; logging them is noise</div>' +
       '<div class="s">alex · 2026-09-01 14:20 · 1 watcher ◉</div>',
     acts: [['undeclare', 1, 'hot'], ['watchers', 1], ['rules #36', 1], ['stream', 1, 'dim']] }),
-  tvQuiet: (px) => ({ px: px, n: 'tv-lounge', sub: '203.0.113.60',
+  tvQuiet: (px) => ({ px: px, n: 'tv-lounge', sub: '198.51.100.6',
     body: '<div class="s dk"><i class="sw dot" style="background:var(--dark)"></i>quiet · not heard for <b>26 h</b> (window 24 h)</div>' +
       '<div class="s">last seen yesterday 19:12 · first seen 3 Aug · 1,204 events · LAN</div>' +
       '<div class="s">comes back by itself when the feed hears it again</div>',
     acts: [['mark quiet on purpose', 1], ['dismiss', 1, 'hot'], ['stream', 1, 'dim'], ['reach', 1, 'dim']] }),
-  nasLine: (px) => ({ px: px, w: 292, n: 'alex-desktop → nas', sub: '198.51.100.10',
+  nasLine: (px) => ({ px: px, w: 292, n: 'alex-desktop → nas', sub: '198.51.100.42',
     body: '<table><tr><th>PORT</th><th>PROTO</th><th class="n">ACCEPTED</th><th class="n">DROPPED</th></tr>' +
       '<tr><td>445</td><td>tcp</td><td class="n ok">212</td><td class="n dim">—</td></tr>' +
       '<tr style="color:var(--ink)"><td>5001 <span class="wp" style="color:var(--accept)">new</span></td><td>tcp</td><td class="n ok">40</td><td class="n dim">—</td></tr>' +
@@ -1230,19 +1230,19 @@ const CARDS = {
    is the colour. Hosts are a dot row inside their lane card.
    ================================================================ */
 const N2 = {
-  internet: { x: 700, y: 68, w: 200, h: 60, name: 'Internet', cidr: 'ether1 · 203.0.113.7', hb: ['◉ 1', '✱ 2'] },
+  internet: { x: 700, y: 68, w: 200, h: 60, name: 'Internet', cidr: 'ether1 · 192.0.2.7', hb: ['◉ 1', '✱ 2'] },
   rb: { x: 700, y: 268, w: 256, h: 68, name: 'rb5009', sub: 'RouterOS 7.20.1 · the waist · 41 rules', router: 1 },
-  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 203.0.113.0/24', hb: ['◉ 1', null], small: 1 },
-  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '203.0.113.0/24', hb: ['◉ 2', '✱ 1'],
+  wg: { x: 1128, y: 132, w: 188, h: 56, name: 'WireGuard', cidr: 'wg0 · 198.51.100.128/27', hb: ['◉ 1', null], small: 1 },
+  lan: { x: 285, y: 490, lane: 'var(--lan)', name: 'LAN', cidr: '198.51.100.0/27', hb: ['◉ 2', '✱ 1'],
     hosts: [['alex-desktop', 'live', 'w'], ['phone-alex', 'live'], ['laptop-anna', 'live', 'f'], ['tv-lounge', 'quiet'], ['printer-old', 'intended'],
       ['nuc', 'live'], ['tablet', 'live'], ['ap-hall', 'live'], ['ap-loft', 'live'], ['switch-desk', 'live']], more: 2,
     tally: '12 hosts · 1 quiet · 1 quiet on purpose' },
-  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '198.51.100.0/24', hb: ['◉ 2', null],
+  srv: { x: 577, y: 490, lane: 'var(--srv)', name: 'Servers', cidr: '198.51.100.32/27', hb: ['◉ 2', null],
     hosts: [['nas', 'live', 'w'], ['pihole', 'live'], ['unifi', 'live']], tally: '3 hosts' },
-  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '192.0.2.0/24', hb: ['◉ 1 ○', '✱ 3'],
+  iot: { x: 848, y: 490, lane: 'var(--iot)', name: 'IoT', cidr: '198.51.100.64/27', hb: ['◉ 1 ○', '✱ 3'],
     hosts: [['cam-porch', 'live', 'f'], ['hue-bridge', 'live'], ['thermostat', 'live'], ['doorbell', 'live', 'f'], ['esp-weather', 'live'], ['plug-kettle', 'live'], ['tv-kitchen', 'live']],
     tally: '7 hosts' },
-  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '198.51.100.0/24',
+  guest: { x: 1116, y: 490, lane: 'var(--guest)', name: 'Guest', cidr: '198.51.100.96/27',
     hosts: [['guest-e8b2', 'live'], ['guest-1a07', 'quiet'], ['guest-c3d9', 'quiet']], tally: '3 hosts · 2 quiet' }
 };
 /* a rib: [from, to, bezier, width, {cov,k,nb} for from→to, {cov,k,nb} for to→from]
@@ -1364,13 +1364,13 @@ function reach2(opt) {
   let s = '<svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img" aria-label="alex-desktop held centre; its strands to what it reaches and what reaches it, nothing written on them">';
   const C = [700, 340];
   const strands = [
-    { to: [360, 300], n: 'nas', ip: '198.51.100.10', k: 'a', w: 3.2, out: 1, hot: 1, nb: 1 },
-    { to: [380, 500], n: 'pihole', ip: '198.51.100.5', k: 'a', w: 2.2, out: 1 },
-    { to: [560, 610], n: 'unifi', ip: '198.51.100.12', k: 'a', w: 1.4, out: 1 },
+    { to: [360, 300], n: 'nas', ip: '198.51.100.42', k: 'a', w: 3.2, out: 1, hot: 1, nb: 1 },
+    { to: [380, 500], n: 'pihole', ip: '198.51.100.37', k: 'a', w: 2.2, out: 1 },
+    { to: [560, 610], n: 'unifi', ip: '198.51.100.44', k: 'a', w: 1.4, out: 1 },
     { to: [700, 90], n: 'Internet', ip: 'via ether1', k: 'a', w: 2.6, out: 1 },
-    { to: [1065, 480], n: 'phone-alex', ip: '203.0.113.52', k: 'a', w: 1.2, out: 0 },
-    { to: [1080, 250], n: 'laptop-anna', ip: '203.0.113.34', k: 'a', w: 1.6, out: 0 },
-    { to: [430, 150], n: 'cam-porch', ip: '192.0.2.14', k: 'r', w: 1.6, out: 0, refused: 1 }
+    { to: [1065, 480], n: 'phone-alex', ip: '198.51.100.24', k: 'a', w: 1.2, out: 0 },
+    { to: [1080, 250], n: 'laptop-anna', ip: '198.51.100.5', k: 'a', w: 1.6, out: 0 },
+    { to: [430, 150], n: 'cam-porch', ip: '198.51.100.78', k: 'r', w: 1.6, out: 0, refused: 1 }
   ];
   strands.forEach((t) => {
     const col = t.k === 'a' ? 'var(--accept)' : 'var(--alarm)';
@@ -1392,7 +1392,7 @@ function reach2(opt) {
   });
   s += '<g transform="translate(700 340)"><rect class="isl" x="-130" y="-52" width="260" height="104" rx="14"/>' +
     '<circle cx="-108" cy="-26" r="4" fill="var(--lan)"/><text x="-94" y="-21" class="n-name" style="font-size:19px">alex-desktop</text>' +
-    '<text x="-108" y="4" class="n-cidr">203.0.113.21 · LAN · workstation</text>' +
+    '<text x="-108" y="4" class="n-cidr">198.51.100.21 · LAN · workstation</text>' +
     '<text x="-108" y="24" class="n-sub">reaches 4 · reached by 3 · 1 refused · <tspan fill="var(--accept)">1 off-baseline</tspan></text>' +
     (opt.watch ? '<text x="108" y="-21" text-anchor="end" class="wp">◉ watched</text>' : '') + '</g>';
   return s + '</svg>';
@@ -1548,7 +1548,7 @@ function chrome_49(id) {
     '<button class="who">alex (admin)</button></span></div>';
   h += '<div class="stage">' + (cfg.flat || cfg.reach2 ? '<div id="st-' + id + '"></div>' :
     '<svg id="st-' + id + '" viewBox="0 0 1400 700" role="img" aria-label="' + id + ' camera on the estate"></svg>') + '</div>';
-  if (cfg.crumb) h += '<div class="crumb" aria-label="Standing on alex-desktop"><b>alex-desktop</b><span>203.0.113.21</span><i></i>' +
+  if (cfg.crumb) h += '<div class="crumb" aria-label="Standing on alex-desktop"><b>alex-desktop</b><span>198.51.100.21</span><i></i>' +
     '<span>reaches <b>4</b></span><span>reached by <b>3</b></span><span>refused <b>1</b></span><i></i><span class="esc">Esc surfaces ▸</span></div>';
   if (cfg.cards) {
     const c = cfg.c ? cam(cfg.c[0], cfg.c[1], cfg.c[2]) : null;
@@ -1639,16 +1639,16 @@ const TRACES = {
     ghost: 'rb>lan', ghostAt: [330, 372], ghostText: 'would have reached alex-desktop · never left the router',
     chip: { ink: 'var(--alarm)', l1: '✕ REFUSED · #17 default drop', l2: 'in: iot → out: — · 445/tcp · 22:04' },
     tally: { iot: 'cam-porch · 14× today', lan: 'alex-desktop · never reached' },
-    crumb: '<b>cam-porch</b><span>192.0.2.14</span><span>→</span><b>alex-desktop</b><span>203.0.113.21</span><i></i>' +
+    crumb: '<b>cam-porch</b><span>198.51.100.78</span><span>→</span><b>alex-desktop</b><span>198.51.100.21</span><i></i>' +
       '<span>445/tcp</span><span class="al">refused at #17 default drop</span><span>22:04</span><i></i>' +
       '<span>and <b>13 more like it</b> ▸</span><i></i><span class="esc">Esc ▸</span>'
   },
   accepted: {
     path: { 'lan>rb': 'a', 'rb>lan': 'a', 'rb>internet': 'a', 'internet>rb': 'a' }, from: 'laptop-anna', to: 'internet', ring: [700, 144],
-    chip: { ink: 'var(--accept)', l1: '✓ ACCEPTED · #8 lan → wan', l2: 'srcnat → 203.0.113.7:51820 · 22/tcp · 21:26' },
+    chip: { ink: 'var(--accept)', l1: '✓ ACCEPTED · #8 lan → wan', l2: 'srcnat → 192.0.2.7:51820 · 22/tcp · 21:26' },
     tally: { lan: 'laptop-anna · first seen 21:26 · off-baseline' },
-    crumb: '<b>laptop-anna</b><span>203.0.113.34</span><span>→</span><b>198.51.100.23</b><span>Internet</span><i></i>' +
-      '<span>22/tcp</span><span class="ok">accepted at #8 lan → wan</span><span class="nt">nat 203.0.113.7:51820</span><span>first seen 21:26</span><i></i>' +
+    crumb: '<b>laptop-anna</b><span>198.51.100.5</span><span>→</span><b>203.0.113.23</b><span>Internet</span><i></i>' +
+      '<span>22/tcp</span><span class="ok">accepted at #8 lan → wan</span><span class="nt">nat 192.0.2.7:51820</span><span>first seen 21:26</span><i></i>' +
       '<span class="esc">Esc ▸</span>'
   }
 };
@@ -1944,7 +1944,7 @@ function render(id) {
 }
 /* the host card, with the trace as a button: it traces the line the
    card already shows as the last one, so the target is never a guess */
-CARDS.camHost = (px) => ({ px: px, w: 292, n: 'cam-porch', sub: '192.0.2.14 · IoT',
+CARDS.camHost = (px) => ({ px: px, w: 292, n: 'cam-porch', sub: '198.51.100.78 · IoT',
   body: '<div class="s"><i class="sw dot" style="background:var(--ok)"></i>live · camera · <b>✱ 2</b> flags · ◉ watched</div>' +
     '<div class="s al" style="margin-top:6px"><b>last line</b> → alex-desktop · 445/tcp · refused at #17 · 22:04 · <b>14× today</b></div>' +
     '<div class="s"><i class="sw es"></i>→ nas · 554/tcp · accepted · 1,180 lines · established</div>',
@@ -2001,7 +2001,7 @@ TRACES.refused.chip.l2 = 'in: iot → out: lan · 445/tcp · 22:04:31';
 TRACES.refused.chipAt = [22, 340];
 TRACES.refused.lead = [[268, 356], [281, 464]];
 TRACES.refused.note = { at: [30, 396], lines: ['would have reached alex-desktop', 'stopped at the LAN boundary'] };
-TRACES.refused.crumb = '<b>cam-porch</b><span>192.0.2.14</span><span>→</span><b>alex-desktop</b><span>203.0.113.21</span><i></i>' +
+TRACES.refused.crumb = '<b>cam-porch</b><span>198.51.100.78</span><span>→</span><b>alex-desktop</b><span>198.51.100.21</span><i></i>' +
   '<span>445/tcp</span><span class="al">refused at #17 default drop</span><span>22:04:31</span><i></i>' +
   '<span class="more">and <b>13 more like it</b> ▸</span><i></i><span class="esc">Esc ▸</span>';
 /* C1 with no out-interface: an input drop. The line was for the router
@@ -2010,7 +2010,7 @@ TRACES.input = {
   path: { 'internet>rb': 'r', 'rb>internet': 'r' }, from: 'internet', to: 'rb', stop: [700, 226], halo: [700, 144],
   chip: { ink: 'var(--alarm)', l1: '✕ REFUSED · #1 input drop', l2: 'in: ether1 → out: — · 22/tcp · 22:03:58' },
   chipAt: [430, 172], lead: [[676, 188], [691, 219]], tally: {},
-  crumb: '<b>192.0.2.61</b><span>Internet</span><span>→</span><b>rb5009</b><span>203.0.113.7</span><i></i>' +
+  crumb: '<b>203.0.113.61</b><span>Internet</span><span>→</span><b>rb5009</b><span>192.0.2.7</span><i></i>' +
     '<span>22/tcp</span><span class="al">refused at #1 input drop</span><span>22:03:58</span><i></i>' +
     '<span class="more">and <b>41 more like it</b> ▸</span><i></i><span class="esc">Esc ▸</span>'
 };

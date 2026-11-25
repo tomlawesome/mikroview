@@ -19,6 +19,12 @@
   import { authState } from '../lib/auth.svelte'
   import { passkeysUsableAt } from '../lib/passkeys.svelte'
   import Fullfall from './Fullfall.svelte'
+  import { wizardJourney } from '../lib/wizardJourney.svelte'
+
+  // The way in (#1386): while the journey plays, the door is held over
+  // the shell and its stack slides away (journey.css, .screen.in); the
+  // rain fades and the wordmark's box gives way to the riding copy.
+  const wayIn = $derived(wizardJourney.phase === 'in')
 
   let {
     title = '',
@@ -62,6 +68,14 @@
     // longer mean what they say is a trap for whoever edits this next.
     factorOnly = false,
     onSubmitFactor,
+    // #1415's first run (docs/design/screens/setup-code/DESIGN.md): the
+    // create-account form also asks for the one-time setup code from
+    // MikroView's log, first, above the account field. Submitted through
+    // its own onSubmitSetup for the same reason onSubmitFactor is a
+    // distinct prop. Reuses the code state below; never set together
+    // with factorOnly.
+    setupCode = false,
+    onSubmitSetup,
     // #1250: the passkey alternative to onSubmitFactor above, for the
     // same pending login -- a distinct prop for the same reason
     // onSubmitFactor already is one (see its own comment): the primary
@@ -87,6 +101,16 @@
     passwordOnly?: boolean
     factorOnly?: boolean
     onSubmitFactor?: (code: string) => Promise<string | null>
+    setupCode?: boolean
+    // forgetPassword empties both password fields; a caller that has
+    // finished with the password calls it so the form keeps no copy a
+    // moment longer than it must (#1202 U10).
+    onSubmitSetup?: (
+      setupCode: string,
+      username: string,
+      password: string,
+      forgetPassword: () => void,
+    ) => Promise<string | null>
     onLoginWithPasskey?: () => Promise<string | null>
   } = $props()
 
@@ -142,12 +166,18 @@
   // firePasskey is the passkey mode's own action, wired to the "Use your
   // passkey" button rather than the form's submit -- there is no field
   // for it to carry, only the click itself.
+  //
+  // #1345 R4-F3: the "instead" links stay live while a request is out
+  // (the passkey prompt can sit open indefinitely), so a result can land
+  // after the operator has switched ways. Its error is only shown if the
+  // way it was sent from is still the one on screen -- otherwise it
+  // would appear under a control that never sent it.
   async function firePasskey() {
     error = null
     submitting = true
     const result = await onLoginWithPasskey?.()
     submitting = false
-    if (result) error = result
+    if (result && factorWay === 'passkey') error = result
   }
 
   async function handleSubmit(e: Event) {
@@ -159,10 +189,11 @@
         error = factorWay === 'recovery' ? 'Enter a recovery code.' : 'Enter the code from your app.'
         return
       }
+      const sentFrom = factorWay
       submitting = true
       const result = await onSubmitFactor?.(code)
       submitting = false
-      if (result) error = result
+      if (result && factorWay === sentFrom) error = result
       return
     }
 
@@ -172,6 +203,13 @@
     // app's, and pointed at a field the error line below already covers.
     // The `required` attributes stay: they are what tells assistive tech
     // the fields are not optional, and they no longer trigger the bubble.
+    //
+    // #1415: the setup code is checked first, before the account -- the
+    // server checks it before anything else too.
+    if (setupCode && !code) {
+      error = "Enter the setup code from MikroView's log."
+      return
+    }
     if (!passwordOnly && !username) {
       error = 'Enter your account name.'
       return
@@ -191,7 +229,11 @@
     }
 
     submitting = true
-    const result = await onsubmit?.(username, password)
+    const forgetPassword = () => {
+      password = ''
+      passwordConfirm = ''
+    }
+    const result = setupCode ? await onSubmitSetup?.(code, username, password, forgetPassword) : await onsubmit?.(username, password)
     submitting = false
     if (result) error = result
   }
@@ -200,24 +242,24 @@
 <!-- data-void: the door is always the void (#645). The ratified scene
      -- round 29's door, "the fall rains over the whole void" -- was
      accepted against the dark ground, and the sign-in is the one screen
-     whose job is that identity: night outside, the operator's own theme
+     whose job is that identity: night outside, the operator's own view
      once they enter. app.css's [data-void] rule re-declares the dark
-     token block on this subtree under any theme or colorway. -->
-<div class="screen" class:reverse={reverseBeat} data-void>
+     token block on this subtree. -->
+<div class="screen" class:reverse={reverseBeat} class:in={wayIn} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
        over the login elements: the shared layer's `door` mask carves
        the centre out entirely (round 5 fourth batch). Fullfall.svelte
        carries the strokes, the CSP lesson and the reduced-motion rule
-       -- extracted under #1214 so the journey's attach beat rains the
-       same weather rather than going flat after this screen. -->
+       (extracted under #1214; the enrolment door rains the same
+       weather). -->
   <Fullfall mask="door" />
 
-  <div class="stack">
+  <div class="stack" style:transform={wayIn ? `translateY(${-wizardJourney.slideY}px)` : null}>
     <!-- The amber 1.5px box framing the wordmark (round 5 third batch,
          "v2 accepted... the amber draws as a thin box... instead of the
          underline"). Replaces the pre-door top-left corner lockup --
          this page is the door, not a scene carrying SceneBar's chrome. -->
-    <div class="wm-box"><span class="wm">MIKRO<em>VIEW</em></span></div>
+    <div class="wm-box" class:gone={wayIn}><span class="wm">MIKRO<em>VIEW</em></span></div>
 
     {#if gate}
       <div class="col">
@@ -299,6 +341,33 @@
               </label>
             {/if}
           {:else}
+            {#if setupCode}
+              <!-- #1415: the note before the field, because the
+                   operator looks for the thing before they type it; the
+                   field first, above account, because proof of host
+                   access is the key to this door. Letters and digits,
+                   so neither numeric input nor one-time-code autofill,
+                   and no reformatting: the server takes it with or
+                   without dashes, in either case. -->
+              <p class="subtitle-note">
+                It's in MikroView's log from when it last started (docker compose logs mikroview), on the line
+                that says “create the first admin with setup code”. Lost it? Restart MikroView and it prints a new
+                one.
+              </p>
+              <label>
+                <span class="sr-only">setup code</span>
+                <input
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="setup code"
+                  bind:value={code}
+                  required
+                />
+              </label>
+            {/if}
+
             <!-- "account" / "password" is the ratified scene's own copy
                  (round 15 amended its "passphrase"; "account" stood), and
                  it sits inside the field as the mockup draws it (owner,

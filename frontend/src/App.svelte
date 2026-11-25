@@ -3,10 +3,9 @@
   import { appState } from './lib/state.svelte'
   import { subscribe as subscribeVisibility } from './lib/visibility'
   import { liveSocket } from './lib/ws'
-  import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
-  import { authState } from './lib/auth.svelte'
+  import { authState, wireForcedAuthGate } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { isCancelledFetch } from './lib/cancelled'
   import { filtersFromSearchParams } from './lib/types'
@@ -17,6 +16,10 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
+  // The freshness banner (#1363): directly above the upgrade notice in
+  // the same stack, for every role -- see the component.
+  import FreshnessBanner from './components/FreshnessBanner.svelte'
+  import { freshnessState } from './lib/freshness.svelte'
   // The upgrade notice (#1240): directly under the config-problem banner
   // in the same stack, and admin-only like it -- see the component.
   import UpgradeNotice from './components/UpgradeNotice.svelte'
@@ -28,30 +31,52 @@
   // The device dossier card (#410), one instance for the whole app --
   // every surface that opens one calls lib/dossier.svelte.ts.
   import HostDossier from './components/HostDossier.svelte'
+  import WanDoors from './components/WanDoors.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import AuthEnrolFactor from './components/AuthEnrolFactor.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
-  // The journey (#646): choreography over the shell below, not a page of
-  // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
-  // outside it these three never render.
-  import { journeyState } from './lib/journey.svelte'
-  import JourneyAttach from './components/JourneyAttach.svelte'
-  import JourneyGlass from './components/JourneyGlass.svelte'
+  // The deck tour (#646's beat 6, kept by #1386): offered once over the
+  // fall after the wizard's Finish, and in the account menu any time.
+  // Choreography over the shell below, not a page of its own.
+  import { tourState } from './lib/tour.svelte'
+  import TourOffer from './components/TourOffer.svelte'
   import JourneyTour from './components/JourneyTour.svelte'
   // Mounted here, not in the account menu that triggers it: the menu is
   // scoped to whichever scene's own bar renders it, and this overlay
   // outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
-  // The setup wizard is a modal over the shell, not a page (#487) -- so
-  // it is mounted here with the other overlays rather than reached
-  // through appState.view. Its "Run setup…" row lives in the account
-  // menu (desktop) and the bottom bar (mobile), both of which call
-  // wizardState.launch() directly.
-  import SetupWizard from './components/SetupWizard.svelte'
+  // The setup wizard is a full screen over the shell, not a page
+  // (#1381, after #487's modal) -- so it is mounted here with the other
+  // overlays rather than reached through appState.view. Its "Run
+  // setup…" row lives in the account menu (desktop) and the bottom bar
+  // (mobile), both of which call wizardState.launch() directly.
+  import Wizard from './components/wizard/Wizard.svelte'
+  import { blocklistState } from './lib/blocklist.svelte'
+  import { wizardState } from './lib/wizard.svelte'
+  // The wizard's way in and way out (#1386): the canvas and the riding
+  // wordmark, mounted beside the wizard. While a sign-in's journey is
+  // deciding or playing, the door itself is held over the shell below.
+  import WizardJourney from './components/wizard/WizardJourney.svelte'
+  import { wizardJourney } from './lib/wizardJourney.svelte'
+  // The config editor (#1347) is a full-screen document over the shell,
+  // mounted here like the wizard and opened from Settings' Config card
+  // through configEditorState. In setup-only mode (a refused config) it
+  // is the whole app: serverModeState holds the shell back.
+  import ConfigEditor from './components/ConfigEditor.svelte'
+  import { configEditorState } from './lib/configEditor.svelte'
+  import { serverModeState } from './lib/serverMode.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
+
+  // The blocklist builder's page (#1360) loads on first open.
+  type BuilderModule = typeof import('./components/blocklist/lazy')
+  let builderModule = $state<BuilderModule | undefined>(undefined)
+  $effect(() => {
+    if (!blocklistState.open || builderModule) return
+    import('./components/blocklist/lazy').then((m) => (builderModule = m)).catch(() => {})
+  })
 
   // The deck's scenes (#633). Entities and Settings joined the deck in
   // #647 (round 23), folding Fleet's own table into Entities' leading
@@ -144,16 +169,42 @@
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
   authState.consumeSSOLinkedFromURL()
-
-  $effect(() => {
-    colorwayState.apply()
-  })
+  // #1362: registers the handler that routes a mid-app 403 (a session
+  // that lost its second factor, or was forced to change its password)
+  // to the matching door instead of letting it surface as a plain
+  // error -- see wireForcedAuthGate's own doc comment for why this
+  // lives here rather than at auth.svelte.ts's module load.
+  wireForcedAuthGate()
 
   // Runs once on mount, unconditionally -- everything else in this file
   // waits on its result (authState.state) before doing anything that
   // needs a session.
+  //
+  // #1347: GET /api/healthz first, for setup-only mode. It needs no
+  // session and answers in one same-origin round-trip, and the session
+  // check waits on it so that nothing keyed on 'authenticated' (the
+  // preferences load in authState.apply, the polls below) can start
+  // before it is known whether every one of those routes would 503.
+  // load() never rejects.
   $effect(() => {
-    authState.check()
+    serverModeState.load().then(() => authState.check())
+  })
+
+  // #1363: independent of sign-in state -- even the login screen is "an
+  // open page" that should notice a server upgrade. start() runs the
+  // 60-second poll; the visibility subscription reuses the same signal
+  // the stats/watchlist polling effect below reacts to, so a tab that
+  // was backgrounded through the upgrade checks the moment it is looked
+  // at again rather than waiting out the rest of its minute.
+  $effect(() => {
+    freshnessState.start()
+    const stopWatchingFreshnessVisibility = subscribeVisibility((hidden) => {
+      if (!hidden) void freshnessState.checkNow()
+    })
+    return () => {
+      stopWatchingFreshnessVisibility()
+      freshnessState.stop()
+    }
   })
 
   $effect(() => {
@@ -162,6 +213,11 @@
     // 401 bouncing back to the login view) -- same fine-grained
     // reactivity the filter-sync effect below relies on.
     if (authState.state !== 'authenticated') return
+    // #1347: in setup-only mode every one of these routes answers 503
+    // until the config is fixed and MikroView restarted, so none of them
+    // start -- no polls, no socket, no stale-numbers banner. Reading
+    // `loaded` here re-runs this effect once healthz has answered.
+    if (!serverModeState.loaded || serverModeState.setupOnly) return
 
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
@@ -295,6 +351,7 @@
 
   $effect(() => {
     if (authState.state !== 'authenticated') return
+    if (!serverModeState.loaded || serverModeState.setupOnly) return
 
     // Reading every field off appState.filters here is what makes this
     // effect re-run on any filter change (Svelte 5's fine-grained
@@ -331,7 +388,9 @@
        (#1249) -- both are sessions that can reach one route and nothing
        else, so every scene below would be a wall of 403s. -->
   <AuthLogin />
-{:else if authState.state === 'must-enrol-factor'}
+{:else if authState.state === 'must-enrol-factor' || authState.state === 'must-enrol-passkey'}
+  <!-- #1202: 'must-enrol-passkey' is the same door for an admin, with
+       passkey-only wording (AuthEnrolFactor reads authState.state). -->
   <!-- #1336: the forced-enrolment door (round 61's ratified "two
        keys") -- the same kind of one-route session as the two above
        (only the four enrolment routes answer), but its own component
@@ -339,7 +398,24 @@
        the door opened out into a short staged walk, not a field
        change. -->
   <AuthEnrolFactor />
+{:else if !serverModeState.loaded}
+  <!-- Blank for the one healthz round-trip, like 'loading' above: the
+       shell must not mount before it is known whether the server is in
+       setup-only mode (#1347). -->
+{:else if serverModeState.setupOnly}
+  <!-- #1347: the config was refused, so the server serves sign-in and
+       the config editor and nothing else. No deck, no navigation. -->
+  <ConfigEditor setupOnly />
+  <Toast />
 {:else}
+  {#if wizardJourney.holdDoor}
+    <!-- The door, held over the shell for the way in (#1386): the real
+         AuthScreen, so the journey's box leaves the real wordmark. It
+         comes down at the swap, or at once if no wizard is launching. -->
+    <div class="door-hold">
+      <AuthLogin />
+    </div>
+  {/if}
   <!-- First in tab order: rendered ahead of BottomBar and every scene's
        own bar, so a keyboard user reaches it before any navigation
        chrome rather than having to tab past it. -->
@@ -369,11 +445,10 @@
       <ConnectionBanner />
       <IngestLossDrawer />
       <ConfigProblemBanner />
+      <FreshnessBanner />
       <UpgradeNotice />
-      <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
-        {#if journeyState.phase === 'attach'}
-          <JourneyAttach />
-        {:else if inDeck}
+      <main id="main-content" class:bare={inDeck}>
+        {#if inDeck}
           <Deck />
         {:else}
           <SceneBar />
@@ -387,17 +462,29 @@
   <RouterLookupPopover />
   <NameEditorPopover />
   <HostDossier />
+  <WanDoors />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
-  <SetupWizard />
-  <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
-       beat 6 (the tour) rings the deck's own cards -- both stay mounted
-       alongside the shell above rather than replacing it, since the
-       whole point is that it plays out over the real, filling app. -->
-  {#if journeyState.phase === 'connecting' || journeyState.phase === 'glass'}
-    <JourneyGlass />
+  <Wizard />
+  <!-- The blocklist builder (#1360), its own chunk, fetched the first
+       time it is opened: most sessions never do. -->
+  {#if builderModule}
+    {@const Builder = builderModule.Builder}
+    <Builder />
   {/if}
-  {#if journeyState.phase === 'touring'}
+  <WizardJourney />
+  {#if configEditorState.visible}
+    <ConfigEditor />
+  {/if}
+  <!-- The tour's offer floats over the live fall; the tour rings the
+       deck's own cards -- both stay mounted alongside the shell above
+       rather than replacing it, since the whole point is that it plays
+       out over the real, filling app. The offer steps aside while the
+       wizard is open over it and is back once that Finish lands. -->
+  {#if tourState.offering && !wizardState.open}
+    <TourOffer />
+  {/if}
+  {#if tourState.active}
     <JourneyTour />
   {/if}
   <Toast />

@@ -2,9 +2,11 @@
 # GitLab is where mikroview is developed: branches, merge requests and
 # the dev -> preview -> main promotions all happen here, and this file is
 # the CI that gates them. GitHub is a read-only mirror of those three
-# branches -- the `sync` stage pushes each one after a merge -- and keeps
-# what already works there: CodeQL, the container registry and cosign
-# signing, Pages and secret scanning. #935 is the migration record; the
+# branches -- the `sync` stage pushes each one after a merge. Under the
+# mirror rule (#1464) only publish-from-gitlab, release-on-tag and CodeQL
+# run there by themselves, plus check-only secret scanning and the
+# RouterOS watcher; GitHub copies the image GitLab built and signed, and
+# everything else there runs by hand. #935 is the migration record; the
 # general model is in the gitlab-first-migration skill.
 #
 # The `sync` stage is inert until the owner sets MIRROR_TO_GITHUB=true as
@@ -12,15 +14,36 @@
 #
 # The live-check gate runs here too, sharded, since #1004: the `gate`
 # stage below. It used to be kept off CI on purpose -- 36 minutes holding
-# one host -- and the second-host loop on `dev` (AGENTS.md, "The gate runs
-# on `dev`") is still there until the CI gate has proven itself.
+# one host -- and the second-host loop on `dev` (docs/runner-host.md, "The dev loop
+# is retired") is still there until the CI gate has proven itself.
 # ============================================================
 #
 # Runner: rootless-Docker executor, single group runner, untagged jobs only.
 # Tool versions pinned below were verified current as of this session (Aug 2026)
 # in gitlab-ci-plan/01-tool-research.md — re-check before bumping blindly.
 
+include:
+  - project: ai/agent-infra
+    ref: 03499313d89b421212af02db3735662397eebfb3  # catchup-check/v2
+    file: scripts/catchup-check/ci-template.yml
+  - project: ai/agent-infra
+    ref: 063b5b95a96b139b0a858bb009466456a19e5674  # batch-intake/v1
+    file: scripts/batch-intake/ci-template.yml
+  - project: ai/agent-infra
+    ref: 1dca70057bd93f68ded22c6b159f315c987c1663  # dev-landing/v1
+    file: scripts/dev-landing/ci-template.yml
+  # The shared check for personal details (ai/agent-infra#32, #1460). The
+  # ref is the commit the tag names, not the tag: a tag can be deleted and
+  # created again on other code, and this template is merged into every
+  # pipeline here. Adopt a new tag by moving this commit, the comment and
+  # PRIVATE_DETAILS_SHA (variables: below) together, so the script the job
+  # runs is the pinned one too.
+  - project: ai/agent-infra
+    ref: 7430d171259104c4623040c2360699585d601bf5  # private-details/v4
+    file: scripts/private-details/ci-template.yml
+
 stages:
+  - readiness
   - lint
   - test
   - security
@@ -44,6 +67,15 @@ default:
 
 variables:
   GOFLAGS: "-mod=readonly"
+  # Fallback for the catch-up and batch-intake MR pipelines: their snippet
+  # workflow rules win first, so the MR rung below never sets this for them.
+  NPM_CACHE_POLICY: "pull"
+  # #1202: gauntlet is fetched straight from GitHub, never through the public
+  # Go proxy or checksum database (resolving it there would publish the
+  # version permanently). GOPRIVATE also sets GONOSUMDB.
+  GOPRIVATE: "github.com/tomlawesome/gauntlet"
+  # Same commit as the private-details include above (#1460).
+  PRIVATE_DETAILS_SHA: 7430d171259104c4623040c2360699585d601bf5
 
 # #1091: the only thing this workflow:rules block exists for is to set
 # NPM_CACHE_POLICY per pipeline, for .npm_cache below. `when: always` is
@@ -52,6 +84,9 @@ variables:
 # which pipelines run changes here, only a variable they carry.
 workflow:
   rules:
+    - !reference [.dev-landing, workflow_rules]
+    - !reference [.catchup-check, workflow_rules]
+    - !reference [.batch-intake, workflow_rules]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       variables:
         NPM_CACHE_POLICY: "pull"
@@ -70,9 +105,11 @@ workflow:
 # "run pipeline" should mean.
 .dev_or_mr: &dev_or_mr
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -118,7 +155,7 @@ workflow:
 # the accumulated batch, not the last commit. Promotions therefore see
 # code and run everything, which is what a promotion has to do.
 #
-# Not every job is gated. AGENTS.md ("The docs-only lane") lists the ones
+# Not every job is gated. docs/quality-strategy.md ("The docs-only lane") lists the ones
 # that always run and why -- Go tests read docs/configuration.md, and
 # test:build-checks link-checks the markdown, so prose really can fail
 # them, and a leaked secret can sit in a paragraph as easily as in code.
@@ -142,6 +179,9 @@ workflow:
   # byte-for-byte identical (#1317, check-release-surfaces.sh). It is a
   # sentence about a picture, and changes nothing the code does.
   - "docs/**/*.png.checked"
+  # The committed audit summary whose `Audited-through:` marker the
+  # merge gate reads (#1426). A record of a review, read by no code.
+  - ".agents/reviews/*.md"
   # The console transcript the weekly CHR exercise commits for the
   # RouterOS version it booted (#894, scripts/routeros-chr-open-mr.sh).
   # Same reasoning as the line above: it is a record of what a router
@@ -149,6 +189,11 @@ workflow:
   # that one tree rather than `**/*.log`, so an ordinary log file
   # appearing anywhere else still stops the guard and gets a decision.
   - "docs/routeros-verification-logs/**/*.log"
+  # The frame times a design round's screenshot drive records beside its
+  # shots (docs/design/screens/*/round-N/shots/times.txt, from round 11
+  # on): one line per frame saying when it was taken. A record about the
+  # pictures, like the .png.checked note above; nothing reads it back.
+  - "docs/design/**/shots/times.txt"
 
 .code_paths: &code_paths
   # Source extensions at any depth. These are what catch a file in a
@@ -169,6 +214,7 @@ workflow:
   - "**/*.yml"
   - "**/*.yaml"
   - "**/*.toml"
+  - ".shellcheckrc"
   - "**/*.sh"
   - "**/*.bash"
   - "**/*.py"
@@ -226,9 +272,11 @@ workflow:
 # on-demand CHR/Renovate runs still select themselves out (#951).
 .dev_or_mr_code: &dev_or_mr_code
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: *code_paths
@@ -249,9 +297,11 @@ workflow:
 # merged in from .dev_or_mr_code, which is why this block exists at all.
 .dev_or_mr_code_frontend: &dev_or_mr_code_frontend
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -286,6 +336,37 @@ workflow:
 # The check below exists because the Go wrapper swallows git's actual message.
 # If git is still unusable, fail here with the real error rather than three
 # stages later with a riddle.
+# Batch intake (ai/agent-infra#114, decision 60a): heavy jobs skip an MR into
+# batch-a/batch-b; the full pipeline runs once, on batch to dev.
+.dev_or_mr_heavy: &dev_or_mr_heavy
+  rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.dev_or_mr, rules]
+
+.dev_or_mr_code_heavy: &dev_or_mr_code_heavy
+  rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.dev_or_mr_code, rules]
+
+.dev_or_mr_code_frontend_heavy: &dev_or_mr_code_frontend_heavy
+  rules:
+    - !reference [.batch-intake, job_rule]
+    - !reference [.dev_or_mr_code_frontend, rules]
+
+# #1472: the two pipelines that publish the product image -- a push to
+# preview (a dev -> preview promotion landing) and a push of a v* release
+# tag. Build once, test the built bytes, promote by digest: build:image
+# builds the image a single time, every later job handles that build's
+# image.tar, and publish:image / sign:release-digest / publish:channel put
+# exactly that digest into this project's registry. Jobs that also run on
+# merge requests and dev add these rules beside their .dev_or_mr* ones;
+# the publish jobs run on these alone. Not docs-gated: a release is never
+# skipped because its last commit touched prose.
+.publish_ref:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "preview"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+
 .git_safe: &git_safe
   before_script:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
@@ -364,7 +445,7 @@ workflow:
 # fetches; a fixed key (not lockfile- or go.mod-keyed) because nothing in
 # the repo names which fixture versions exist -- the registry does, and
 # the script itself decides what is missing. Both jobs run as root in an
-# unmodified golang:1.27.1 container, so there is no cross-uid risk here.
+# unmodified golang:1.27.4 container, so there is no cross-uid risk here.
 .upgrade_fixtures_cache_entry: &upgrade_fixtures_cache_entry
   key: upgrade-fixtures
   paths:
@@ -402,6 +483,54 @@ workflow:
 # did, including a failure before this line.
 .reuse_evidence: &reuse_evidence node scripts/ci-reuse-gate.js evidence "$CI_JOB_NAME"
 
+# #1451: coverage of the real program, merged into the unit-test profile.
+# test:go and test:postgres run tests with MIKROVIEW_COVERDIR set, so every
+# binary those tests start is built with -cover and writes its counts
+# there (internal/authe2e's coverDir); this turns them into a text profile
+# (Go's documented method, https://go.dev/doc/build-cover) and merges it
+# with coverage-unit.out into coverage.out, each block once, covered if
+# either side covered it. No counts at all means the switch broke: fail,
+# rather than measure the unit tests alone and call it the whole figure.
+.merge_program_coverage: &merge_program_coverage |
+  covdir="$CI_PROJECT_DIR/.coverdata/go"
+  if ! ls "$covdir"/covcounters.* >/dev/null 2>&1; then
+    echo "no coverage counts from the real program in $covdir (#1451)"
+    exit 1
+  fi
+  go tool covdata textfmt -i="$covdir" -o=coverage-program.out
+  python3 scripts/merge-coverprofiles.py coverage.out coverage-unit.out coverage-program.out
+
+# ---------------------------------------------------------------------------
+# RELEASE READINESS (#1504). Runs first on a promotion merge request, dev ->
+# preview and preview -> main, and every other job in that pipeline waits
+# for it: by stage order where a job has no needs:, by an optional need where
+# it has `needs: []` (optional, so pipelines without this job still start
+# those jobs at once). Spec: docs/releases/readiness-checks.md. The checks
+# read the source commit; GIT_DEPTH 0 gives them the history. CI_COMMIT_SHA
+# is the source tip while merged-results pipelines are off; if they are ever
+# turned on, check out $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA instead.
+# ---------------------------------------------------------------------------
+release_readiness:
+  stage: readiness
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  interruptible: false
+  timeout: 10m
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && (($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "dev" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview") || ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "preview" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"))'
+  before_script:
+    - apk add --no-cache git python3 >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - git fetch --quiet --tags origin "+refs/heads/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "+refs/heads/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - git checkout --quiet --detach "$CI_COMMIT_SHA"
+    - python3 scripts/release-readiness.py --target "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --remote origin
+
 # ---------------------------------------------------------------------------
 # POLICY — the three-lane promotion order, dev -> preview -> main, with no
 # shortcuts. Replaces .github/workflows/branch-policy.yml, which cannot see
@@ -415,7 +544,8 @@ policy:promotion-hop:
   # Light lane (#949): a shell script, no build.
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: a gate for the dev -> preview -> main hop; a cancelled-mid-run
   # result must never be read as a pass.
   interruptible: false
@@ -423,6 +553,8 @@ policy:promotion-hop:
   # documentation-only merge request into main is still a merge request
   # into main, and still has to come from preview.
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   script:
     - 'echo "MR !$CI_MERGE_REQUEST_IID: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -> $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"'
@@ -451,9 +583,12 @@ policy:release-surfaces:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   interruptible: false
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main")'
   # GIT_DEPTH 0, as gitleaks and semgrep: check 6 needs `git describe` and
   # `git merge-base --is-ancestor` to see every tag and commit, not the
@@ -467,7 +602,8 @@ policy:release-surfaces:
 
 # ---------------------------------------------------------------------------
 # LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
-# not introducing golangci-lint since mikroview doesn't use it today.
+# plus the scanners added by #1462/#1463: shellcheck, golangci-lint and
+# zizmor (security stage) block; ruff, knip and jscpd are report-only.
 # ---------------------------------------------------------------------------
 
 # Short scanners run on the light lane (2 CPU / 2 GB, three at a time) so
@@ -489,7 +625,8 @@ lint:changed-paths-guard:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr
   variables:
     GIT_DEPTH: 0
@@ -497,6 +634,59 @@ lint:changed-paths-guard:
     - apk add --no-cache git python3 py3-yaml >/dev/null
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - python3 scripts/ci-changed-paths-guard.py --git
+
+# #1459: reads docs/flakes.md and goes red on a malformed sighting or a
+# flake at its third sighting with no issue link in its heading. Runs on
+# every MR and dev pipeline, outside the docs-only lane, because the log is
+# itself a docs/ file. alpine:3.24 is already in supply-chain/pins-policy.json
+# and has the sh and awk the script needs. --quarantined reads
+# scripts/quarantine.txt, the same file run-scenarios.sh skips, so the two
+# cannot drift. The "Scenarios exit 1 without a result" heading (#1458) is
+# tagged (host) in the log: a whole-job host flake no scenario skip can
+# quarantine, so the check wants an agent-infra issue link there instead.
+lint:flake-check:
+  stage: lint
+  tags: [light]
+  image: alpine:3.24
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr
+  script:
+    - sh scripts/ci/flake-check.sh --quarantined scripts/quarantine.txt docs/flakes.md
+    # #1456: no tracked text file may spell the owner's name (sha256 only).
+    # Reads docs too, so it lives in this docs-inclusive job.
+    - apk add --no-cache git nodejs >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - node --test scripts/names-guard.test.mjs
+
+# The shared check for personal details (ai/agent-infra#32, #1460): one set of
+# rules for every project, kept on the agent host and mounted read-only into
+# the job (/etc/private-details/rules.toml); no project carries its own copy.
+# The template defines the job; its stage, runner, rules and image pin are set
+# here. GitLab deep-merges an included job's mappings with this one, so the
+# image name is restated because this is where the project pins it: the
+# template names the tag only, and anyone who could repoint that tag would run
+# their image with the checkout, the mounted rules and the job token. Pinned
+# to the tag's OCI index digest through the image cache, like the Docker
+# images above. Blocking, like the other quick static checks, and on the same
+# rules as lint:flake-check. Invented test values that trip a rule are allowed
+# by rule and path in .private-details-allow.toml, never by commit.
+private-details:
+  stage: lint
+  tags: [light]
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr
+  image:
+    name: ${CI_IMAGE_CACHE_GHCR}/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    entrypoint: [""]
+  variables:
+    # The scan starts after this commit, the last on batch-b before the check
+    # was adopted (#1460): older history trips rules that no path entry can
+    # allow (AI credit lines, assistant account and branch names in merge
+    # commits and messages), and a full-history scan exhausts the runner's
+    # memory.
+    PRIVATE_DETAILS_SINCE: 36bcd936c4e1b617910fa2dc8d5a59c95076424a
 
 # #1068: both suites here test a script the pipeline itself leans on --
 # ci-changed-paths-guard.py decides whether a job is skipped, and
@@ -516,18 +706,33 @@ lint:script-tests:
   stage: lint
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   <<: *dev_or_mr_code
   script:
-    - apk add --no-cache bash git python3 py3-yaml nodejs >/dev/null
+    - apk add --no-cache bash git python3 py3-yaml nodejs coreutils >/dev/null
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash scripts/ci-changed-paths-guard.test.sh
     - bash scripts/ci-reuse-gate.test.sh
+    - bash scripts/gate-remote.test.sh
+    - bash scripts/coverage-floor.test.sh
+    - bash scripts/release-readiness.test.sh
+    - bash scripts/ci-batch-intake.test.sh
+    - bash scripts/merge-coverprofiles.test.sh
+    - bash scripts/ci/gitlab-await-tested-image.test.sh
+    - bash scripts/routeros-chr-open-mr.test.sh
+    # #1550: the allow file in the shape the private-details hook accepts,
+    # checked by the hook's own allow-shape.awk (fetched from ai/agent-config
+    # at a pinned commit) against the mounted rules' ids.
+    - node --test scripts/jscpd-baseline.test.mjs
 
 lint:go:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
-  image: golang:1.27.1
+  image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go build ./...
@@ -557,6 +762,9 @@ lint:go:
 # are meant to be testing. Move all of them together, or the split reopens.
 lint:frontend:
   stage: lint
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Light lane (#949): svelte-check and a few node:test files fit in 2 GB.
   tags: [light]
   image: node:26-alpine
@@ -569,9 +777,143 @@ lint:frontend:
     - npm ci
     - npx svelte-check --tsconfig ./tsconfig.app.json
 
+# The approved scanners (#1462, #1463; owner answer 13, 2026-11-15), all
+# CI-only and never shipped: shellcheck (GPL-3.0), golangci-lint (GPL-3.0),
+# ruff (MIT), knip (ISC), jscpd (MIT), and zizmor in the security stage (MIT).
+# "Report first, then block" (#1462): each runs here in report mode --
+# allow_failure, full report kept as an artifact -- and a later change makes
+# them block once one pipeline's noise has been triaged. Each tool is pinned:
+# an image by digest (through the image cache, like gitleaks above), or an npm
+# package by exact version in frontend/package-lock.json. Renovate reads the
+# image: lines and the package.json pins; see docs/ci-scanners.md.
+
+# shellcheck on every *.sh, warning and up. koalaman/shellcheck-alpine has no
+# entrypoint, so the script runs as in any other job; find stands in for
+# git ls-files because the checkout is all there is and the image has no git.
+lint:shellcheck:
+  stage: lint
+  tags: [light]
+  image: ${CI_IMAGE_CACHE_DOCKERHUB}/koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr_code
+  interruptible: true
+  # blocking since its findings reached zero (#1462)
+  script:
+    - rc=0
+    - find . -name '*.sh' -not -path './.git/*' -not -path '*/node_modules/*' -print0 | xargs -0 shellcheck --severity=warning --format=gcc > shellcheck-report.txt || rc=$?
+    - cat shellcheck-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - shellcheck-report.txt
+    expire_in: 30 days
+
+# golangci-lint v2 with .golangci.yml (the standard set plus dupl; gosec is
+# off because security:gosec runs it). GOPRIVATE comes from the global
+# variables, as for lint:go.
+lint:golangci:
+  stage: lint
+  tags: [light]
+  image: ${CI_IMAGE_CACHE_DOCKERHUB}/golangci/golangci-lint:v2.15.0@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: [*dev_or_mr_code, *git_safe]
+  interruptible: true
+  # blocking since its findings reached zero (#1462)
+  script:
+    - rc=0
+    - golangci-lint run --output.text.path=golangci-report.txt ./... || rc=$?
+    - cat golangci-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - golangci-report.txt
+    expire_in: 30 days
+
+# ruff with ruff.toml: the defaults plus the S (security) rules, on the
+# checkout's *.py files (ruff skips what .gitignore ignores). The -alpine image
+# has a shell; its default command is ruff, which the script replaces.
+lint:ruff:
+  stage: lint
+  tags: [light]
+  image: ${CI_IMAGE_CACHE_GHCR}/astral-sh/ruff:0.17.4-alpine@sha256:7a717be3a7cfbef698a9b99e1555add93ec6b195242fe273997683e49b051f51
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr_code
+  interruptible: true
+  # blocking since its findings reached zero (#1462)
+  script:
+    - rc=0
+    - ruff check --no-cache --output-format=concise . > ruff-report.txt || rc=$?
+    - cat ruff-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - ruff-report.txt
+    expire_in: 30 days
+
+# knip on frontend/ (unused files, exports and dependencies), configured by
+# frontend/knip.jsonc; an exact-version devDependency, installed with npm ci.
+lint:knip:
+  stage: lint
+  tags: [light]
+  image: node:26-alpine
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  interruptible: true
+  # blocking since its findings reached zero (#1463)
+  script:
+    - cd frontend
+    - npm ci
+    - rc=0
+    - npx knip > ../knip-report.txt || rc=$?
+    - cat ../knip-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - knip-report.txt
+    expire_in: 30 days
+
+# jscpd on frontend/src (.jscpd.json). Blocking on new findings (#1463):
+# jscpd runs with exit code 0 and scripts/jscpd-baseline.mjs compares its
+# report with frontend/.jscpd-baseline.txt, failing on a clone not listed and
+# on a listed entry that no longer matches, so the baseline only shrinks. Also
+# `npm audit signatures` -- the owner's condition for using jscpd -- checks
+# every installed package's registry signature and provenance attestation and
+# fails the job if one is invalid.
+lint:jscpd:
+  stage: lint
+  tags: [light]
+  image: node:26-alpine
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  interruptible: true
+  script:
+    - cd frontend
+    - npm ci
+    - npm audit signatures
+    - cd ..
+    - frontend/node_modules/.bin/jscpd --exit-code 0
+    - node scripts/jscpd-baseline.mjs jscpd-report/jscpd-report.json frontend/.jscpd-baseline.txt
+  artifacts:
+    when: always
+    paths:
+      - jscpd-report/
+    expire_in: 30 days
+
 lint:supply-chain-pins:
   stage: lint
-  # Light lane (#949): reads two files and a policy, no install.
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
+  # Light lane (#949): reads files and a policy; installs only bash and git.
   tags: [light]
   image: node:26-alpine
   <<: *dev_or_mr_code
@@ -579,7 +921,10 @@ lint:supply-chain-pins:
     # #711: every action SHA and image tag CI uses must be in
     # supply-chain/pins-policy.json with its review date. Fails on a pin the
     # policy does not record, or a recorded pin CI no longer uses.
-    - node --test tools/supply-chain/pins-policy.test.mjs
+    # Some suites drive shell scripts and git (gitlab-image.test.mjs, #1472).
+    - apk add --no-cache bash git >/dev/null
+    # A glob, so a new suite here runs without a CI edit (#1473).
+    - node --test tools/supply-chain/*.test.mjs
     - node tools/supply-chain/pins-policy.mjs
 
 # ---------------------------------------------------------------------------
@@ -589,13 +934,13 @@ lint:supply-chain-pins:
 test:go:
   stage: test
   # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
-  image: golang:1.27.1
+  image: golang:1.27.4
   # Not gated by #1038, and must not be: five tests read
   # docs/configuration.md and assert on its contents (ca_docs_test.go,
   # migrate_cli_test.go, internal/api/route_docs_test.go,
   # internal/config/env_docs_test.go and problem_docs_test.go). A prose
   # edit can fail this job for real, so it runs for prose.
-  <<: *dev_or_mr
+  <<: *dev_or_mr_heavy
   # #1304 item E8: shared with test:postgres below, so a fixture already
   # fetched by either job on an earlier pipeline is not fetched again --
   # see upgrade_fixtures_cache_entry above. fetch-upgrade-fixtures.sh
@@ -626,7 +971,25 @@ test:go:
     - scripts/fetch-upgrade-fixtures.sh
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
-    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
+    # #1392: -timeout 20m, not the 10m default. internal/api reached
+    # 430-600s under -race on the shared runner before #1392 cut its
+    # password-hashing cost; the timeout is here to catch a hang, not to
+    # time the suite.
+    #
+    # #1451: MIKROVIEW_COVERDIR makes every test that starts the real
+    # program (internal/authe2e's binary, internal/api's `go run` of
+    # scripts/routeroscommands) build it with -cover and leave its counts
+    # there; covdata turns them into a text profile, and the merge adds
+    # them to the unit-test profile block by block, so coverage.out counts
+    # code run from outside as well as code called directly. Unset (a
+    # plain local `go test`), nothing changes.
+    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test MIKROVIEW_COVERDIR='$CI_PROJECT_DIR/.coverdata/go' go test ./... -race -timeout 20m -coverprofile=coverage-unit.out"
+    - *merge_program_coverage
+    # #1333: the ratchet against supply-chain/coverage-floors.yml. Runs as
+    # root (back from `su` above), which is fine -- the profiles are
+    # ci-test-owned but world-readable, and the merge writes coverage.out
+    # beside them as root (after_script hands everything back).
+    - python3 scripts/coverage-floor.py coverage.out
   # The runner reuses its build directory between pipelines, so leaving the
   # checkout owned by ci-test hands the next pipeline's root-run jobs a
   # repository git will not touch. Give it back (#908).
@@ -635,13 +998,15 @@ test:go:
   artifacts:
     paths:
       - coverage.out
+      - coverage-unit.out
+      - coverage-program.out
     expire_in: 1 week
 
 test:frontend:
   stage: test
   tags: [light]
   image: node:26-alpine
-  <<: [*dev_or_mr_code_frontend, *npm_cache]
+  <<: [*dev_or_mr_code_frontend_heavy, *npm_cache]
   # The other half of #684. lint:frontend above proves the frontend compiles;
   # nothing here proved it behaves, so this lane had the same hole GitHub did
   # and 542 real assertions gated nothing on either. jsdom, so no browser and
@@ -649,7 +1014,13 @@ test:frontend:
   script:
     - cd frontend
     - npm ci
-    - npm test
+    # #1333: --coverage turns on vitest.config.ts's coverage.thresholds,
+    # so a regression below the measured ratchet fails this job.
+    # #1555: on a busy shared runner this job runs at half speed, and random
+    # tests crossed vitest's 5 s hang guard with every assertion passing.
+    # 20 s, the value City/CityHosts/DeclareFooter tests already set, keeps
+    # it a hang guard; #1555 stays open for why the runner slows.
+    - npm test -- --coverage --testTimeout=20000
 
 # The checks that need the frontend actually built, moved here from GitHub's
 # ci.yml `test` job (#935 step 7). Each one's reason is in the script it
@@ -664,18 +1035,24 @@ test:frontend:
 # packaged Go is too old to read this module.
 test:build-checks:
   stage: test
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   # Not gated by #1038: the last line below is tools/docs/check-anchors.mjs,
   # the markdown link and anchor check, and generate-notices --check reads
   # THIRD-PARTY-NOTICES.md. This job's whole reason to exist includes prose,
-  # so it keeps .dev_or_mr's plain rules rather than the ladder.
+  # so it keeps .dev_or_mr's plain rules rather than the ladder. It also runs
+  # on an MR into batch-a/batch-b (#1537): cheap, on the light lane.
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
     # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
     # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -691,8 +1068,8 @@ test:build-checks:
     - *go_toolchain_cache_entry
   script:
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - (cd frontend && npm ci && npm run build)
     - node frontend/scripts/check-bundle-budget.mjs
@@ -714,8 +1091,8 @@ test:build-checks:
 test:postgres:
   stage: test
   tags: [light]
-  image: golang:1.27.1
-  <<: *dev_or_mr_code
+  image: golang:1.27.4
+  <<: *dev_or_mr_code_heavy
   # #1304 item E8: shared with test:go above -- see
   # upgrade_fixtures_cache_entry and the comment on test:go's cache.
   cache:
@@ -771,38 +1148,229 @@ test:postgres:
     # internal/matchlog alongside internal/persist (#243 slice 6): its
     # Postgres backend is a second, independent SQL sink with its own
     # table and needs the same real-database coverage.
-    - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
+    #
+    # #1290: -coverprofile, now that this job owns these two packages'
+    # coverage outright -- test:go's own profile never runs their
+    # Postgres-backed statements (see supply-chain/coverage-floors.yml's
+    # header), and this run, with MIKROVIEW_TEST_POSTGRES set above, is a
+    # strict superset of what test:go covers for them.
+    - go test -race -count=1 -coverprofile=coverage-unit.out ./internal/persist/... ./internal/matchlog/...
+    # internal/authe2e's Postgres tests (#1202): the real binary against
+    # this job's database. They skip without MIKROVIEW_TEST_POSTGRES, so
+    # until now they ran nowhere in CI. Only those tests, by -run, not the
+    # whole package: test:go already runs the rest, and the whole package
+    # took about 4.6 minutes here without -race against about 2 with it
+    # for these alone. 'Postgres|TokensRow' matches every test in the
+    # package that opens the database (newPG); a new one has to carry
+    # one of those words to run here. Its own line, so -run does not
+    # filter the two packages above. No -coverprofile of its own: these
+    # test the binary from outside, so what they cover is the binary's run
+    # (#1451, MIKROVIEW_COVERDIR as in test:go), merged into
+    # coverage-postgres.out below -- only persist's and matchlog's share
+    # of it is checked here.
+    - MIKROVIEW_COVERDIR="$CI_PROJECT_DIR/.coverdata/go" go test -race -count=1 -run 'Postgres|TokensRow' ./internal/authe2e/...
+    - *merge_program_coverage
+    - mv coverage.out coverage-postgres.out
+    # The ratchet against postgres-floors: in supply-chain/coverage-floors.yml
+    # -- the same mechanism test:go's coverage-floor.py call uses, scoped to
+    # just the two packages this job measures.
+    - python3 scripts/coverage-floor.py --section postgres-floors coverage-postgres.out
     - *reuse_evidence
   artifacts:
     paths:
       - ci-reuse-evidence/
+      - coverage-postgres.out
+      - coverage-unit.out
+      - coverage-program.out
     expire_in: 1 week
 
+# Docker-in-Docker for every job that needs a Docker daemon (#1457,
+# ai/agent-infra#31). The shared `light` and `big` runners used to mount
+# their own Docker socket into every job, which let any job inspect or exec
+# into any other job's container on that Docker and read its variables,
+# tokens included. The `docker` runner is privileged and has no socket;
+# each job instead gets a throwaway daemon of its own, as a service,
+# reached over TCP. Copied from ai/orbit's `.dind_service`/`.dind`.
+#
+# The daemon dies with the job, so nothing here has to clean up after
+# itself, and an image one job builds is not visible to another: pass it
+# on as an artifact (`docker save`/`docker load`) or through the registry.
+# Its layer cache starts empty every time, so builds are slower until
+# ai/agent-infra#17 (registry-backed BuildKit cache); base-image pulls are
+# served from the local image cache (ai/agent-infra#14).
+#
+# Held at 29.6.2, and so is the docker:*-cli image below (ai/orbit#827):
+# Docker 29.7.0 changed how a push tracks layers across repositories
+# (moby/moby#53081) and the daemon can skip a blob the registry does not
+# have, so a push fails with "blob unknown to registry" (moby/moby#53293).
+# Both are pinned by digest and pulled once (`if-not-present`).
+.dind_service:
+  tags:
+    - docker
+  services:
+    - name: ${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-dind@sha256:bfec1f5159c63a81ca6fdedbd81404d2c0e16378ed0feec3bb3fbf3998847659
+      # GitLab derives a service's hostname from its image name; through
+      # the cache that name is the whole path, not "docker", and every
+      # `tcp://docker:2375` below would stop resolving.
+      alias: docker
+      pull_policy: if-not-present
+      # The inner daemon pulls through the image cache, so plain Docker Hub
+      # names stay unchanged and the pulls are local. The three variables
+      # are set on every runner. The runner expands variables in a service's
+      # `name` but not in `command:` or `entrypoint:`, so the flags go
+      # through `sh -c`, where the shell expands them; a literal in
+      # `command:` made the daemon exit with "insecure registry … is not
+      # valid" on the first run (ai/agent-infra#31).
+      entrypoint:
+        - /bin/sh
+        - -c
+        - exec dockerd-entrypoint.sh --registry-mirror="http://$CI_IMAGE_CACHE_DOCKERHUB" --insecure-registry="$CI_IMAGE_CACHE_DOCKERHUB" --insecure-registry="$CI_IMAGE_CACHE_GHCR" --insecure-registry="$CI_IMAGE_CACHE_MCR"
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  # The daemon takes about 15 seconds to come up, and a job that runs
+  # docker as its first command would otherwise fail on a refused
+  # connection. A job that defines its own before_script must repeat this.
+  before_script:
+    - |
+      for _ in $(seq 1 60); do
+        docker info > /dev/null 2>&1 && break
+        sleep 1
+      done
+      docker info > /dev/null 2>&1 || { echo "the dind service daemon is not reachable at ${DOCKER_HOST}"; exit 1; }
+
+# The job image every Docker job here shares: just the CLI, talking to the
+# service above.
+.dind:
+  extends: .dind_service
+  image:
+    name: ${CI_IMAGE_CACHE_DOCKERHUB}/library/docker:29.6.2-cli@sha256:be132a9f282288de4afaf63379dff75711fda0147c6b72a9df44e51841402144
+    pull_policy: if-not-present
+
+# #1472 job 1: the one build of the product image (build once, test the
+# built bytes, promote by digest). Every job after it -- test:container,
+# test:install-line, check:upgrade-fixture-recorder, release:check-version,
+# security:trivy-image and the publish jobs -- loads this job's image.tar
+# rather than building again, so what is scanned, smoke-tested, pushed and
+# signed is one set of bytes. (gate:image's `docker build` is a different
+# image: the live-check harness, built from live-check.Dockerfile and never
+# shipped.)
+#
+# No reuse gate: it always builds (orbit ADR-0028); the jobs after it keep
+# theirs. Its rules are the union of its consumers', so a job that needs
+# image.tar can never find it missing: the publishing refs, a merge
+# request into preview (check:upgrade-fixture-recorder, which is not
+# docs-gated), and the heavy code ladder test:container uses.
+#
+# --provenance=false --sbom=false: one plain manifest, no BuildKit
+# attestation index. The registry refused that index ("blob unknown to
+# registry", gate:image, pipeline 539), and a single manifest keeps a
+# registry-side retag on the same digest (#1407). The SBOM is made from
+# the built tar by security:trivy-image instead, and attested to the
+# pushed digest by sign:release-digest.
+#
+# VERSION is stamped into the binary and the frontend bundle (#1363), so a
+# release tag builds with the tag itself and every other pipeline with
+# preview:<short sha>, the same values .github/workflows/docker.yml passes
+# (owner decision #572: a release is built from its own tag, never by
+# retagging preview's bytes). image.source is the public GitHub repository,
+# as docker.yml's metadata-action sets it today, so the GHCR copy keeps
+# the label GHCR links the package by.
+#
+# No registry layer cache: a cache any developer pipeline could write
+# would feed the release build. One more build of an unchanged tree is the
+# cheaper risk; ai/agent-infra#17 can revisit it.
+build:image:
+  extends: .dind
+  stage: test
+  needs:
+    - {job: release_readiness, optional: true}
+  rules:
+    - !reference [.publish_ref, rules]
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+    - !reference [.dev_or_mr_code_heavy, rules]
+  variables:
+    MV_CI_IMAGE: mikroview-ci:$CI_COMMIT_SHA
+  script:
+    - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
+    - |
+      set -eu
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        version="$CI_COMMIT_TAG"
+      else
+        version="preview:$(printf '%.7s' "$CI_COMMIT_SHA")"
+      fi
+      echo "build:image: building $MV_CI_IMAGE with VERSION=$version"
+      docker buildx build --load --provenance=false --sbom=false \
+        --build-arg VERSION="$version" \
+        --label org.opencontainers.image.revision="$CI_COMMIT_SHA" \
+        --label org.opencontainers.image.source="https://github.com/tomlawesome/mikroview" \
+        --label org.opencontainers.image.version="$version" \
+        --label org.opencontainers.image.created="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --tag "$MV_CI_IMAGE" .
+    - docker save -o image.tar "$MV_CI_IMAGE"
+    - ls -l image.tar
+  artifacts:
+    paths:
+      - image.tar
+    expire_in: 1 day
+
+# #1472 job 3: a release tag's own checks, the two .github/workflows/
+# docker.yml makes today before it publishes -- the tag must equal
+# v<VERSION> at the tagged commit (docs/decisions/release-versioning.md),
+# and the binary build:image stamped must report that same tag. Either
+# one failing means the tag names the wrong commit, or VERSION was not
+# bumped, and nothing may publish. Tag pipelines only; publish:image
+# needs it there (optional, so a preview push does not wait for it).
+release:check-version:
+  extends: .dind
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+  needs:
+    - job: build:image
+      artifacts: true
+  script:
+    - |
+      set -eu
+      want="v$(tr -d '[:space:]' < VERSION)"
+      if [ "$CI_COMMIT_TAG" != "$want" ]; then
+        echo "release:check-version: tag '$CI_COMMIT_TAG' but VERSION says '$want' -- tag the commit whose VERSION matches, or bump VERSION first" >&2
+        exit 1
+      fi
+    - docker load -i image.tar
+    - |
+      set -eu
+      got="$(docker run --rm --entrypoint /mikroview "mikroview-ci:$CI_COMMIT_SHA" -version)"
+      echo "binary reports: $got"
+      if [ "$got" != "$CI_COMMIT_TAG" ]; then
+        echo "release:check-version: binary reports '$got' but this release is '$CI_COMMIT_TAG'" >&2
+        exit 1
+      fi
+
 # Container smoke test, ported from GitHub's ci.yml (#942, the second
-# half). Builds the production image and runs it the way
+# half). Loads the production image build:image built (#1472) and runs it the way
 # deploy/docker-compose.yml runs it -- read-only root, tmpfs for /tmp and
 # the data directory, every capability dropped, no-new-privileges, pid,
 # memory and CPU limits -- and asks /api/healthz whether it came up.
 #
-# This is the one job that needs a Docker daemon from inside a job. The
-# runner is a rootless-Docker executor with no privileged mode, so the
-# owner binds the runner's own rootless daemon socket into every job
-# (`volumes = [".../docker.sock:/var/run/docker.sock"]` in the runner's
-# config.toml; owner decision 137a on #942, 2026-09-05). Consequences
-# this job is written around:
+# This is one of the jobs that needs a Docker daemon from inside a job; it
+# takes a throwaway one of its own from .dind above. Consequences this job
+# is written around:
 #
-# - The daemon is the runner host's, not this container's. `docker build`
-#   ships the checkout over the socket as its context, so paths inside
-#   this job container do not matter; `--publish` would bind a port on
-#   the runner host, which this container cannot reach, so nothing is
-#   published. The health check instead runs in a throwaway container
+# - The daemon is the dind service's, not this container's. `docker load`
+#   streams image.tar to it over TCP, so paths inside this job
+#   container do not matter; `--publish` would bind a port on the service
+#   container, which this container does not reach as 127.0.0.1, so nothing
+#   is published. The health check instead runs in a throwaway container
 #   joined to the app container's network namespace, where 127.0.0.1 is
 #   the app.
-# - Two pipelines can run at once on the one daemon, so every name here
-#   carries $CI_JOB_ID, and after_script removes the container and the
-#   image tag whatever happened. The layer cache stays on the daemon,
-#   which is what keeps the build quick when the Dockerfile inputs have
-#   not changed.
+# - The daemon is the job's alone and dies with it, so there is no cleanup
+#   to do and no other pipeline to collide with; the names still carry
+#   $CI_JOB_ID, which costs nothing. The layer cache starts empty each
+#   time (ai/agent-infra#17 will back it with the registry).
 # - The image runs as uid 1000 (Dockerfile), so the tmpfs at the data
 #   directory is created with that owner: without a writable data
 #   directory the container has nowhere to persist its CA, and the app
@@ -812,26 +1380,71 @@ test:postgres:
 # `-k` on the health check: TLS is on by default (self-signed, generated
 # on first start -- internal/servertls), and this only asks whether the
 # server answers, not whether the chain verifies.
+#
+# On a publishing ref (#1472) -- a push to preview or a v* tag -- the
+# script skips the reuse gate outright and runs in full, so a publishing run
+# always tests the bytes it ships. That skip is in the script, not left to
+# ci-reuse-gate.js (#1066), so a change there cannot reopen it. Dev pushes and
+# merge requests still go through the gate.
 test:container:
+  extends: .dind
   stage: test
-  tags: [light]
-  image: docker:29-cli
-  <<: *dev_or_mr_code
+  rules:
+    - !reference [.publish_ref, rules]
+    - !reference [.dev_or_mr_code_heavy, rules]
+  needs:
+    - job: build:image
+      artifacts: true
   variables:
-    DOCKER_HOST: unix:///var/run/docker.sock
     APP: mikroview-test-$CI_JOB_ID
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
+  # The same vulnerability database security:trivy-fs fetches, cached
+  # rather than downloaded on every run (#1462); .dockerignore keeps it
+  # out of the build context.
+  cache:
+    key: trivy-db
+    paths:
+      - .trivy-cache
   script:
     # apk before the reuse gate: this image is Alpine and carries neither
     # Node nor curl by default, and #1066's gate (scripts/ci-reuse-gate.js)
     # needs Node to run at all.
     - apk add --no-cache nodejs >/dev/null
-    - *reuse_gate
+    # The reuse gate, skipped outright on a publishing ref (#1472): a push
+    # to preview or a v* tag tests the bytes it ships, whatever
+    # scripts/ci-reuse-gate.js would decide. Same test as .publish_ref's
+    # rules; on dev and merge requests the gate runs as *reuse_gate does.
+    - |
+      publish_ref=false
+      if [ "${CI_PIPELINE_SOURCE:-}" = "push" ]; then
+        [ "${CI_COMMIT_BRANCH:-}" = "preview" ] && publish_ref=true
+        case "${CI_COMMIT_TAG:-}" in v[0-9]*) publish_ref=true ;; esac
+      fi
+      if [ "$publish_ref" = true ]; then
+        echo "test:container: publishing ref -- reuse gate skipped, testing the image this pipeline ships"
+      elif node scripts/ci-reuse-gate.js gate "$CI_JOB_NAME"; then
+        exit 0
+      fi
     - docker version --format 'client {{.Client.Version}} / daemon {{.Server.Version}}'
-    - docker build --tag "$APP" .
+    - docker load -i image.tar
+    - docker tag "mikroview-ci:$CI_COMMIT_SHA" "$APP"
+    # From v0.7.0 the server refuses to start without a key (#1202, ruling
+    # 2), so the job makes a throwaway one the way install.sh does: in a
+    # volume, written by a helper container, mounted read-only. A volume
+    # rather than a bind mount because this socket is the host's daemon,
+    # which cannot see the job's own filesystem.
+    - docker volume create "$APP-etc" >/dev/null
+    - >-
+      docker run --rm -v "$APP-etc:/etc/mikroview" alpine:3.24 sh -c
+      'mkdir -p /etc/mikroview/keys &&
+      head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key &&
+      chown 1000:1000 /etc/mikroview/keys/history.key &&
+      chmod 600 /etc/mikroview/keys/history.key'
     - >-
       docker run --detach --name "$APP"
       --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
       --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
+      -v "$APP-etc:/etc/mikroview:ro"
       --cap-drop ALL --security-opt no-new-privileges
       --pids-limit 64 --memory 128m --cpus 0.5
       "$APP"
@@ -849,24 +1462,33 @@ test:container:
           exit 1
         fi
       done
+    # Image scan (#1462): the image tested above, for vulnerable OS packages
+    # and Go modules, without building it again. This job's image is the
+    # Docker CLI, so trivy's static binary is copied out of the pinned
+    # Trivy image through the daemon. trivy reads build:image's image.tar
+    # (#1472) with --input -- the same bytes just loaded and smoke-tested,
+    # so no `docker save` is needed. Before *reuse_evidence, so a reused
+    # run stands on a scan that passed.
+    - cid=$(docker create "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb")
+    - docker cp "$cid:/usr/local/bin/trivy" /usr/local/bin/trivy
+    - docker rm "$cid" >/dev/null
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --input image.tar
     - *reuse_evidence
-  after_script:
-    - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
-    - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
   artifacts:
     paths:
       - ci-reuse-evidence/
     expire_in: 1 week
 
 # The one-line pastable install (#1242) tested against a real daemon,
-# beside test:container above -- same image, same rootless-daemon-on-the-
-# runner-host caveats, so read that job's header first.
+# beside test:container above -- same image, same throwaway daemon, so read
+# that job's header first.
 #
 # Ports: install.sh's docker run really publishes -p on the daemon's own
-# host (unlike test:container, which never publishes), so two jobs on one
-# runner would collide on a fixed port. $CI_JOB_ID picks a pair in
-# 20000-39999 per job instead -- never 443/6514/8080 (what a real install
-# uses) and never the workstation's own live-test ranges.
+# host (unlike test:container, which never publishes), which is now the
+# job's own dind service, so no other job can collide with it.
+# $CI_JOB_ID still picks a pair in 20000-39999 per job -- never
+# 443/6514/8080 (what a real install uses) and never the workstation's own
+# live-test ranges -- so the pair stays out of a real install's way.
 #
 # No curl in this image on purpose: install.sh's own healthz wait then
 # just says so and skips, which is the real behaviour for an operator who
@@ -880,18 +1502,20 @@ test:container:
 # an install.sh-only push would wrongly stand on an earlier run that
 # never touched it.
 test:install-line:
+  extends: .dind
   stage: test
-  tags: [light]
-  image: docker:29-cli
-  <<: *dev_or_mr_code
+  <<: *dev_or_mr_code_heavy
+  # build:image's image.tar (#1472), not a second build of the same tree.
+  needs:
+    - job: build:image
+      artifacts: true
   variables:
-    DOCKER_HOST: unix:///var/run/docker.sock
     APP: mikroview-install-$CI_JOB_ID
-    IMG: mikroview-install-image-$CI_JOB_ID
+    IMG: mikroview-ci:$CI_COMMIT_SHA
   script:
     - apk add --no-cache nodejs >/dev/null
     - *reuse_gate
-    - docker build --tag "$IMG" .
+    - docker load -i image.tar
     - |
       HTTPS_PORT=$((20000 + CI_JOB_ID % 20000))
       SYSLOG_PORT=$((HTTPS_PORT + 1))
@@ -914,11 +1538,18 @@ test:install-line:
         fi
       done
     - id1="$(docker container inspect --format '{{.Id}}' "$APP")"
+    - |
+      k1="$(docker run --rm -v "$APP-etc:/etc/mikroview:ro" alpine:3.24 sha256sum /etc/mikroview/keys/history.key)"
+      [ -n "$k1" ] || { echo "test:install-line: no history.key was made on the fresh run"; exit 1; }
     # The same line is also the upgrade line (#1240) -- running it twice
     # must stop and remove the first container, re-creating it on the
     # same two named volumes, not just leave it be.
     - echo "test:install-line -- running install.sh a second time"
     - sh install.sh
+    - |
+      k2="$(docker run --rm -v "$APP-etc:/etc/mikroview:ro" alpine:3.24 sha256sum /etc/mikroview/keys/history.key)"
+      [ "$k1" = "$k2" ] || { echo "test:install-line: history.key changed on the second run -- an upgrade must keep the key"; exit 1; }
+      echo "test:install-line: history.key survived the re-run unchanged"
     - |
       id2="$(docker container inspect --format '{{.Id}}' "$APP")"
       [ "$id1" != "$id2" ] || { echo "test:install-line: container was not re-created on the second run"; exit 1; }
@@ -930,10 +1561,6 @@ test:install-line:
       done
       echo "test:install-line: re-create verified, both named volumes survived"
     - *reuse_evidence
-  after_script:
-    - docker rm --force "$APP" >/dev/null 2>&1 || true
-    - docker volume rm "${APP}-data" "${APP}-etc" >/dev/null 2>&1 || true
-    - docker image rm "$IMG" >/dev/null 2>&1 || true
   artifacts:
     paths:
       - ci-reuse-evidence/
@@ -984,21 +1611,20 @@ test:install-line:
 # of trivy and the Go compiles, on the four-slot light lane they would
 # fill -- exactly the contention #831 measured.
 gate:image:
+  extends: .dind
   stage: test
-  tags: [light]
-  image: docker:29-cli
   # Not gated by #1038. When live-check.Dockerfile has not changed this
   # job is a registry lookup and a retag -- seconds -- and gate:scenarios,
   # gate:scripts and perf:promotion all name the per-branch tag it
   # publishes. Skipping it to save nothing would risk a promotion finding
   # no tag to pull.
-  <<: *dev_or_mr
-  needs: []
+  <<: *dev_or_mr_heavy
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: pushes to the registry -- never cut mid-write.
   interruptible: false
   timeout: 45m
   variables:
-    DOCKER_HOST: unix:///var/run/docker.sock
     IMAGE: $CI_REGISTRY_IMAGE/live-check
   script:
     # apk before the reuse gate (#1066): this image is Alpine and carries
@@ -1021,7 +1647,17 @@ gate:image:
         docker push "$IMAGE:latest"
       fi
       # Retag in the registry, without pulling: the shards name this tag.
-      docker buildx imagetools create -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+      # --prefer-index=false: $IMAGE:$TAG is a single manifest (built
+      # --provenance=false --sbom=false above), and imagetools create
+      # otherwise wraps it in a new OCI index under a different digest
+      # (#1407). Then confirm the tag actually landed on that digest.
+      docker buildx imagetools create --prefer-index=false -t "$IMAGE:$CI_COMMIT_REF_SLUG" "$IMAGE:$TAG"
+      src_digest="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')"
+      got_digest="$(docker buildx imagetools inspect "$IMAGE:$CI_COMMIT_REF_SLUG" --format '{{.Manifest.Digest}}')"
+      if [ "$got_digest" != "$src_digest" ]; then
+        echo "retag moved the digest: $IMAGE:$CI_COMMIT_REF_SLUG is $got_digest, expected $src_digest from $IMAGE:$TAG" >&2
+        exit 1
+      fi
     - *reuse_evidence
   artifacts:
     paths:
@@ -1163,12 +1799,12 @@ gate:image:
     expire_in: 1 week
 
 gate:scenarios:
-  <<: [*dev_or_mr_code, *git_safe, *gate_scenarios_shard]
+  <<: [*dev_or_mr_code_heavy, *git_safe, *gate_scenarios_shard]
 
 # #1306: dev -> preview also runs the scenario suite under Firefox and
 # WebKit, not only Chromium -- owner ruling 2026-09-20. The live-check
-# image already carries all three engines (AGENTS.md, "The second host
-# live-check runs on"); #659 shipped a static `style` attribute Chromium
+# image already carries all three engines (docs/runner-host.md, "Browser
+# engines"); #659 shipped a static `style` attribute Chromium
 # tolerates and Firefox refuses under this app's CSP, past a
 # Chromium-only gate, found only by the owner opening the app -- these
 # two engines are part of the dev -> preview promotion specifically so
@@ -1183,6 +1819,8 @@ gate:scenarios:
 gate:scenarios:firefox:
   <<: [*git_safe, *gate_scenarios_shard]
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
     MV_BROWSER: firefox
@@ -1190,18 +1828,67 @@ gate:scenarios:firefox:
 gate:scenarios:webkit:
   <<: [*git_safe, *gate_scenarios_shard]
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
   variables:
     MV_BROWSER: webkit
 
+# #1459: the scenarios listed in scripts/quarantine.txt are skipped by every
+# gate:scenarios shard above; this job runs just those, so a quarantined
+# flake keeps being exercised and its docs/flakes.md log can still grow
+# sightings. Never blocks: allow_failure is on, and a red run here is a
+# sighting to log, not a reason to hold a merge. Same lane, image, cache and
+# rules as a Chromium shard, but no `parallel` (the list is short) and no
+# reuse-gate evidence (a pass here proves nothing a merge may lean on), so it
+# is written out rather than merged from the shard anchor, whose
+# `parallel: 4` and CI_NODE_INDEX script cannot be undone. MV_SHARD=1/1 keeps
+# `make live-check` to the browser scenarios only, as in a shard. An empty
+# list is the normal state once every flake is fixed, so it exits 0 with a
+# message rather than driving a whole instance for nothing.
+gate:scenarios:quarantined:
+  <<: [*dev_or_mr_code_heavy, *git_safe]
+  stage: gate
+  tags: [light]
+  image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
+  timeout: 30m
+  allow_failure: true
+  variables:
+    MV_QUARANTINE: only
+    MV_SHARD: "1/1"
+    # #1426 (D-F3): every scenario in scripts/quarantine.txt is a
+    # Firefox-only flake (docs/flakes.md: live-sw-navigation's worker
+    # fetch error only Firefox surfaces, live-viewer-surfaces' sightings
+    # all under Firefox), so under the default Chromium this job could
+    # never see them fail or grow a sighting. Quarantining a flake seen
+    # under another engine means revisiting this line.
+    MV_BROWSER: firefox
+  cache:
+    - *live_check_npm_cache_entry
+  script:
+    - set -o pipefail
+    - |
+      if [ -z "$(scripts/run-scenarios.sh --list)" ]; then
+        echo "gate:scenarios:quarantined: scripts/quarantine.txt lists no scenarios -- nothing to run"
+        exit 0
+      fi
+    - (cd frontend && npm ci)
+    - make live-check 2>&1 | tee gate-quarantined.log
+  artifacts:
+    when: always
+    paths:
+      - gate-quarantined.log
+    expire_in: 1 week
+
 # The four standalone shell checks (scripts/run-live-scripts.sh), once,
-# plus the quiet-host unit tests (#1003) -- plain bash, no live instance
-# needed, so they run here rather than earning their own job.
+# plus the quiet-host and other plain-bash unit tests (#1003, #1337) --
+# no live instance needed, so they run here rather than earning their
+# own job.
 gate:scripts:
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe]
+  <<: [*dev_or_mr_code_heavy, *git_safe]
   timeout: 30m
   # #1304 item E7: same live-check-user npm cache gate:scenarios' shards
   # share -- see live_check_npm_cache_entry above.
@@ -1221,6 +1908,17 @@ gate:scripts:
     - scripts/install.test.sh
     - scripts/ensure-cosign.test.sh
     - scripts/sign-release-digest.test.sh
+    - scripts/verify-release-signature.test.sh
+    - scripts/govulncheck-gate.test.sh
+    # #1358: these four existed but nothing ran them, so the recorder's
+    # scripted session broke on v0.6.1 with every test still green.
+    - scripts/record-upgrade-fixture.test.sh
+    - scripts/upgrade-fixture-session.test.sh
+    - scripts/check-upgrade-fixtures-recorded.test.sh
+    - scripts/live-web-dist.test.sh
+    - scripts/gate-summary.test.sh
+    - scripts/demo-up.test.sh
+    - scripts/precheck.test.sh
   artifacts:
     when: always
     paths:
@@ -1295,6 +1993,8 @@ perf:promotion:
   # promotion merge request is diffed against the preview tip and so
   # carries every commit since the last promotion.
   rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
       changes: *code_paths
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
@@ -1405,8 +2105,11 @@ perf:promotion:
 
 security:semgrep:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
-  image: semgrep/semgrep:1.177.0
+  image: semgrep/semgrep:1.184.0
   <<: *dev_or_mr_code
   variables:
     # The whole history, as gitleaks below. On a merge request the scan
@@ -1475,14 +2178,17 @@ security:semgrep:
 
 security:gosec:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   # Stays on big: gosec loads the whole module graph and peaks at ~6.7 GB,
   # over the light lane's 6 GB cap.
   # ghcr, not Docker Hub. gosec stopped publishing to Docker Hub after
   # 2.24.6, so `securego/gosec:2.28.0` resolved to nothing and the job
   # failed before it started -- an image pull failure, which reads like
   # a registry outage rather than a tag that was never published.
-  # Bumped to the current release while here, per AGENTS.md's
-  # pin-to-latest rule (#912).
+  # Bumped to the current release while here (#912); Renovate
+  # tracks it now (docs/gitlab-delivery.md, "Dependency pins").
   #
   # entrypoint: [""] for the same reason gitleaks and trivy below carry
   # it: this image's entrypoint is a wrapper that execs `/bin/gosec $@`,
@@ -1490,11 +2196,12 @@ security:gosec:
   # rather than as a script to run. That is the failure this job would
   # have hit next, once the pull succeeded.
   image:
-    name: ghcr.io/securego/gosec:2.29.0
+    name: ghcr.io/securego/gosec:2.30.0
     entrypoint: [""]
   <<: *dev_or_mr_code
   # The image ships its own Go (1.27.0 in 2.29.0) with GOTOOLCHAIN=local,
-  # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.1)
+  # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.3;
+  # 1.27.4 since #1202)
   # gosec cannot load a single package -- and in SARIF mode it says
   # nothing about why: exit 1, an empty results array, one second of
   # runtime. The fix installs the exact go.mod toolchain over the
@@ -1517,8 +2224,8 @@ security:gosec:
     # need.
     - apk add --no-cache curl
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
@@ -1543,18 +2250,20 @@ security:gosec:
 
 security:govulncheck:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
-  image: golang:1.27.1
+  image: golang:1.27.4
   <<: [*dev_or_mr_code, *git_safe]
   script:
-    - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
     - govulncheck -format=json ./... > govulncheck.json
     # The JSON run above exits 0 whatever it finds -- that is how -format
-    # json behaves -- so on its own this job could only ever pass. The
-    # plain run is the gate: it exits non-zero on a reachable
-    # vulnerability, as GitHub's ci.yml did before #935 step 7 moved that
-    # check here.
-    - govulncheck ./...
+    # json behaves. The gate fails on a reachable vulnerability unless the
+    # reviewed list records it as not affected, with its reason and issue
+    # (#1558; govulncheck itself cannot accept a finding).
+    - python3 scripts/govulncheck-gate.py govulncheck.json security/govulncheck-not-affected.json
   artifacts:
     when: always
     paths:
@@ -1582,8 +2291,8 @@ security:govulncheck:
 security:fuzz:
   stage: security
   tags: [light]
-  image: golang:1.27.1
-  <<: [*dev_or_mr_code, *git_safe]
+  image: golang:1.27.4
+  <<: [*dev_or_mr_code_heavy, *git_safe]
   timeout: 15m
   script:
     - go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
@@ -1595,8 +2304,42 @@ security:fuzz:
       - internal/*/testdata/fuzz/
     expire_in: 30 days
 
+# zizmor (MIT) on .github/workflows/, offline (no GitHub token). It has no
+# release checksums file and its image sets an entrypoint a job script cannot
+# use, so the release tarball is fetched into node:26-bookworm and checked
+# with sha256sum -c; the sum is GitHub's recorded digest for the asset and was
+# checked against a download.
+security:zizmor:
+  stage: security
+  tags: [light]
+  image: node:26-bookworm
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr
+  interruptible: true
+  # blocking since its findings reached zero (#1462)
+  variables:
+    ZIZMOR_VERSION: "1.32.0"
+    ZIZMOR_SHA256: bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+  script:
+    - curl -fsSL -o /tmp/zizmor.tgz "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+    - echo "${ZIZMOR_SHA256}  /tmp/zizmor.tgz" | sha256sum -c -
+    - tar -xzf /tmp/zizmor.tgz -C /tmp zizmor
+    - rc=0
+    - /tmp/zizmor --offline --format=plain .github/workflows/ > zizmor-report.txt || rc=$?
+    - cat zizmor-report.txt
+    - exit $rc
+  artifacts:
+    when: always
+    paths:
+      - zizmor-report.txt
+    expire_in: 30 days
+
 security:npm-audit:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-alpine
   <<: [*dev_or_mr_code_frontend, *npm_cache]
@@ -1623,7 +2366,15 @@ security:npm-audit:
     # runs, so the image's own bundled version never gets a say.
     - npm install -g npm@12.0.2
     - npm ci
-    - npm audit --audit-level=high
+    # #1505: `npm audit --audit-level=high` cannot express a time-limited
+    # exemption. Write the JSON report (npm exits non-zero when it finds
+    # anything, which is tolerated here), and let the script decide:
+    # it also refuses a file that is not a report. Exemptions live in
+    # supply-chain/npm-audit-exemptions.json.
+    - npm audit --json > /tmp/npm-audit.json || true
+    - cd ..
+    - node tools/supply-chain/npm-audit.mjs /tmp/npm-audit.json
+    - node --test tools/supply-chain/npm-audit.test.mjs
 
 # Checks the licence of every dependency mikroview actually ships -- Go
 # modules and the frontend's bundled npm packages, the same inventory
@@ -1642,6 +2393,13 @@ security:npm-audit:
 # so the two checks cannot drift apart into disagreeing about what is
 # allowed.
 #
+# licence-policy.mjs also looks inside what ships (#1432): npm
+# bundleDependencies by the same licence rules, and a recorded
+# bundled-assets review for every npm asset file (images, styles, fonts,
+# media, wasm and binary/data/archive types; not .json/.txt/.md/.map), every
+# Go //go:embed file of any type, licence-less vendored Go directory and
+# inlined other-project source the shipped packages carry. That is why the job's last step needs Go on PATH too.
+#
 # mikroview itself is AGPL-3.0-only (LICENSE) -- go-licenses' --ignore flag
 # below excludes mikroview's own module, so this never flags the project
 # shipping under its own licence. That is not the same as allowing AGPL: it
@@ -1654,6 +2412,9 @@ security:npm-audit:
 # Debian's packaged Go is too old to read this module.
 security:licence-policy:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image: node:26-bookworm
   <<: [*dev_or_mr_code, *git_safe]
@@ -1666,8 +2427,8 @@ security:licence-policy:
   script:
     - node --test tools/licenses/licence-policy.test.mjs
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.4.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     # `go install` drops the binary in $(go env GOPATH)/bin, which the node
     # image does not have on PATH; pipeline 287 failed with "command not
@@ -1685,6 +2446,9 @@ security:licence-policy:
 
 security:gitleaks:
   stage: security
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
   tags: [light]
   image:
     name: ghcr.io/gitleaks/gitleaks:v8.30.1
@@ -1693,7 +2457,21 @@ security:gitleaks:
   # code -- a token in a README example, a key in a migration guide -- and
   # this job scans the whole tree, so a docs-only diff is exactly the case
   # it has to keep covering.
-  <<: *dev_or_mr
+  #
+  # A fast check (ai/agent-infra#113): it is one of the few jobs that runs on
+  # the push to dev, with the 5 minute timeout from .dev-landing-check. Its
+  # own rules otherwise stay .dev_or_mr's, minus that anchor's dev-landing
+  # skip, which would switch it off on that push.
+  extends: .dev-landing-check
+  rules:
+    - !reference [.dev-landing-check, rules]
+    - !reference [.catchup-check, job_rule]
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_TAG != "")
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
   variables:
     # The whole history, not GitLab's shallow default. This job reported
     # 28 leaks that are not leaks, and the depth is why: `.gitleaksignore`
@@ -1729,19 +2507,35 @@ security:gitleaks:
     max: 2
     when: [runner_system_failure, api_failure]
 
-security:trivy-fs:
+# Shared by the Trivy jobs. Pinned by digest, never by tag (#1462): Trivy's
+# own release channels were hijacked in March 2026 (CVE-2026-33634) by
+# repointing tags. The digest is the multi-arch index of 0.76.2, the same
+# on Docker Hub and GHCR. test:container copies the binary out of this
+# same reference; change both together (supply-chain/pins-policy.json).
+.trivy:
   stage: security
   tags: [light]
   image:
-    name: aquasec/trivy:0.74.0
+    name: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
     entrypoint: [""]
-  <<: *dev_or_mr_code
   variables:
     TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
   cache:
     key: trivy-db
     paths:
       - .trivy-cache
+  # See security:gosec's retry comment above (#950): same artifact-upload
+  # flake, same fix.
+  retry:
+    max: 2
+    when: [runner_system_failure, api_failure]
+
+security:trivy-fs:
+  extends: .trivy
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr_code
   script:
     # Full-severity report kept as the SARIF artifact for visibility only --
     # exit-code 0, never fails the job by itself. --include-dev-deps:
@@ -1766,11 +2560,47 @@ security:trivy-fs:
     paths:
       - trivy-fs.sarif
     expire_in: 1 week
-  # See security:gosec's retry comment above (#950): same artifact-upload
-  # flake, same fix.
-  retry:
-    max: 2
-    when: [runner_system_failure, api_failure]
+
+# Misconfiguration scan (#1462) of the whole checkout: every Dockerfile
+# (Dockerfile, live-check.Dockerfile, scripts/live-routeros*.dockerfile)
+# and deploy/docker-compose.yml. Trivy 0.76 has no compose checks, so it
+# lists the compose file as nothing to scan; it is named here so it is
+# covered the day it gains them. False alarms sit in .trivyignore.yaml,
+# which, unlike .trivyignore, can scope an ignore to one file, so a check
+# waived for a workstation fixture still runs on the shipped Dockerfile.
+security:trivy-config:
+  extends: .trivy
+  # #1537: uses no other job's output, so it starts at once.
+  needs:
+    - {job: release_readiness, optional: true}
+  <<: *dev_or_mr_code
+  script:
+    - trivy config --ignorefile .trivyignore.yaml --exit-code 1 --severity HIGH,CRITICAL .
+
+# #1472 job 4: the SBOM of the image build:image built, read straight from
+# its image.tar -- no daemon, no rebuild -- in SPDX JSON, kept 90 days as
+# the evidence sign:release-digest attests to the pushed digest (`cosign
+# attest --type spdxjson`). The second command is a vulnerability gate at
+# security:trivy-fs's policy (fixed-available HIGH or CRITICAL fails), on
+# the image rather than the checkout; test:container runs the same scan
+# (#1462), which is cheap, and this one is the one publish:image names.
+# Runs on merge requests and dev too, so a broken SBOM step shows up
+# before a promotion rather than on the push that should publish.
+security:trivy-image:
+  extends: .trivy
+  rules:
+    - !reference [.publish_ref, rules]
+    - !reference [.dev_or_mr_code_heavy, rules]
+  needs:
+    - job: build:image
+      artifacts: true
+  script:
+    - trivy image --input image.tar --format spdx-json -o image.spdx.json
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --input image.tar
+  artifacts:
+    paths:
+      - image.spdx.json
+    expire_in: 90 days
 
 # ---------------------------------------------------------------------------
 # SYNC — GitHub is a mirror of dev, preview and main, and of release tags.
@@ -1813,7 +2643,8 @@ sync:mirror-to-github:
   # `needs: []`: the mirror reflects the branch, not the pipeline. The merge
   # request already ran lint, test and security before it merged; a flaky
   # test on the post-merge run must not leave GitHub behind, silently.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: pushes to GitHub -- never cut mid-write.
   interruptible: false
   # Not gated by #1038: the mirror reflects the branch, not the diff. A
@@ -1851,6 +2682,157 @@ sync:mirror-to-github:
     - git push github "HEAD:$MIRROR_REF"
 
 # ---------------------------------------------------------------------------
+# PUBLISH (#1472) -- GitLab builds, signs and publishes the product image;
+# GitHub only copies the signed digest to GHCR (.github/workflows/
+# publish-from-gitlab.yml on preview, release-on-tag.yml on a v* tag;
+# docker.yml no longer builds).
+#
+# Build once, test the built bytes, promote by digest -- orbit's shape
+# (build_image -> record_image -> sign_evidence -> publish_channel):
+#
+#   build:image          the one build, saved as image.tar
+#   test:container,      smoke test, release checks and SBOM/vulnerability
+#   release:check-version, scan, all on that tar
+#   security:trivy-image
+#   publish:image        pushes the tar to $CI_REGISTRY_IMAGE:sha-<commit>,
+#                        records the digest it landed on (evidence JSON)
+#   sign:release-digest  key-based signature + SPDX attestation, on that digest
+#   publish:channel      verifies the signature, then gives the digest its
+#                        consumable name: :preview or :vX.Y.Z
+#
+# Registry scheme, registry.tomlawson.io/ai/mikroview: sha-<full sha>
+# (kept 7 days by the cleanup policy), preview and vX.Y.Z (kept). No
+# `latest` here: latest is GHCR's, moved by GitHub on the highest release
+# tag (owner, #1472). Nothing consumable exists before its signature verifies.
+# ---------------------------------------------------------------------------
+
+# #1472 job 5. The needs are the full bar on a publishing ref: every
+# test:* and security:* job that runs there (the rest run on the merge
+# request that was promoted), plus the release checks on a tag.
+#
+# The pushed digest is pulled back and its image ID compared with the
+# tested image's (orbit's publish-image.sh): the evidence then names the
+# bytes that were tested, not merely whatever the sha- tag resolved to.
+# The evidence is written the moment that check passes, before anything
+# else (scripts/gitlab-record-tested-image.sh says why). No channel tag
+# moves here; publish:channel does that once the signature verifies.
+publish:image:
+  extends: .dind
+  stage: sync
+  # Pushes to the registry -- never cut mid-write (#952).
+  interruptible: false
+  timeout: 20m
+  rules:
+    - !reference [.publish_ref, rules]
+  needs:
+    - job: build:image
+      artifacts: true
+    - job: release:check-version
+      optional: true
+    - job: test:container
+    - job: security:trivy-image
+  script:
+    - apk add --no-cache bash >/dev/null
+    - docker load -i image.tar
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      set -eu
+      tested_id="$(docker image inspect --format '{{.Id}}' "mikroview-ci:$CI_COMMIT_SHA")"
+      built_at="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' "mikroview-ci:$CI_COMMIT_SHA")"
+      docker tag "mikroview-ci:$CI_COMMIT_SHA" "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA"
+      docker push "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA"
+      digest="$(docker buildx imagetools inspect "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA" --format '{{.Manifest.Digest}}')"
+      case "$digest" in
+        sha256:????????????????????????????????????????????????????????????????) ;;
+        *) echo "publish:image: the registry returned no sha256 digest for sha-$CI_COMMIT_SHA (got '$digest')" >&2; exit 1 ;;
+      esac
+      docker pull "$CI_REGISTRY_IMAGE@$digest"
+      published_id="$(docker image inspect --format '{{.Id}}' "$CI_REGISTRY_IMAGE@$digest")"
+      if [ "$published_id" != "$tested_id" ]; then
+        echo "publish:image: $CI_REGISTRY_IMAGE@$digest is image $published_id, not the tested $tested_id" >&2
+        exit 1
+      fi
+      bash scripts/gitlab-record-tested-image.sh "$CI_REGISTRY_IMAGE@$digest" "$digest" "$built_at"
+      cat .mv-supply-chain/gitlab-tested-image.json
+  artifacts:
+    paths:
+      - .mv-supply-chain/gitlab-tested-image.json
+    expire_in: 90 days
+
+# #1472 job 7. Verifies the key-based signature on the recorded digest
+# against the committed cosign.pub -- the same classification
+# countersign.yml uses (scripts/verify-release-signature.sh: absence,
+# expiry, mismatch, ambiguity all refuse) -- and only then creates the
+# channel tag, registry-side (`imagetools create`: no bytes move, so the
+# digest cannot change between verification and publication).
+#
+# The source of the retag is the verified digest itself, not the sha- tag:
+# a tag is mutable, a digest is not. The sha- tag must still name that
+# digest (anything else means the registry moved under the pipeline and
+# nothing is published), and the channel tag is re-read afterwards and
+# must resolve to it (gate:image's pattern; --prefer-index=false keeps a
+# single manifest on its own digest, #1407).
+publish:channel:
+  extends: .dind
+  stage: sync
+  # Publishes a consumable name -- never cut mid-write (#952).
+  interruptible: false
+  # #1472: one channel retag at a time, project-wide. GitLab runs a
+  # resource group's jobs one by one but not in pipeline order, so an
+  # older pipeline can still reach the retag after a newer one; the head
+  # check below is what stops that rolling :preview back.
+  resource_group: publish-channel
+  timeout: 20m
+  rules:
+    - !reference [.publish_ref, rules]
+  needs:
+    - job: publish:image
+      artifacts: true
+    - job: sign:release-digest
+  script:
+    # bash for both scripts; curl and coreutils for ensure-cosign.sh's
+    # pinned, checksum-verified download; python3 for the evidence and
+    # for verify-release-signature.sh's JSON check.
+    - apk add --no-cache bash coreutils curl git python3 >/dev/null
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      set -eu
+      digest="$(python3 -I scripts/gitlab-tested-image.py digest .mv-supply-chain/gitlab-tested-image.json "$CI_REGISTRY_IMAGE")"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        channel="$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+      else
+        channel="$CI_REGISTRY_IMAGE:preview"
+      fi
+      MV_COSIGN="$(bash scripts/ensure-cosign.sh)" bash scripts/verify-release-signature.sh "$CI_REGISTRY_IMAGE@$digest"
+      sha_digest="$(docker buildx imagetools inspect "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHA" --format '{{.Manifest.Digest}}')"
+      if [ "$sha_digest" != "$digest" ]; then
+        echo "publish:channel: sha-$CI_COMMIT_SHA now names $sha_digest, not the signed $digest -- publishing nothing" >&2
+        exit 1
+      fi
+      # A preview push publishes only while its commit is still preview's
+      # head: a newer push's pipeline owns :preview from then on, and an
+      # older one finishing late must not move it back. Read through
+      # CI_REPOSITORY_URL (the job token's own read access); the URL
+      # carries that token, so it is never echoed. A v* tag names one
+      # commit for good, so tags skip the check.
+      if [ -z "${CI_COMMIT_TAG:-}" ]; then
+        # ls-remote matches by suffix (zz/refs/heads/preview would match too),
+        # so keep only the line for exactly this branch's ref.
+        head="$(git ls-remote "$CI_REPOSITORY_URL" "refs/heads/$CI_COMMIT_BRANCH" | awk -v r="refs/heads/$CI_COMMIT_BRANCH" '$2 == r { print $1 }')"
+        if [ "$head" != "$CI_COMMIT_SHA" ]; then
+          echo "publish:channel: $CI_COMMIT_BRANCH is now at ${head:-<unknown>}, not this pipeline's $CI_COMMIT_SHA -- a newer pipeline publishes :preview; publishing nothing" >&2
+          exit 1
+        fi
+      fi
+      docker buildx imagetools create --prefer-index=false -t "$channel" "$CI_REGISTRY_IMAGE@$digest"
+      got="$(docker buildx imagetools inspect "$channel" --format '{{.Manifest.Digest}}')"
+      if [ "$got" != "$digest" ]; then
+        echo "publish:channel: retag moved the digest: $channel is $got, expected $digest" >&2
+        exit 1
+      fi
+      echo "publish:channel: published $CI_REGISTRY_IMAGE@$digest as $channel"
+
+# ---------------------------------------------------------------------------
 # RECORD:UPGRADE-FIXTURE — #1247, the second half of the upgrade
 # framework (docs/decisions/upgrade-framework.md). Every release needs a
 # recording of what it actually wrote, so the next release's gate can
@@ -1858,37 +2840,35 @@ sync:mirror-to-github:
 # scripts/record-upgrade-fixture.sh by hand after every tag, and a
 # release nobody remembered is a release nothing tests.
 #
-# The wait is the whole reason this is a job of its own. The recording
-# boots the *released image*, which .github/workflows/docker.yml publishes
-# to GHCR from the same tag — so at the moment this pipeline starts, the
-# image usually does not exist yet. It polls for it rather than assuming
-# an ordering between two CI systems.
+# The recording boots the *released image*. Since #1472 that is the one
+# this same tag pipeline built, signed and published to this project's
+# registry, so the job simply needs publish:channel and pulls the exact
+# digest publish:image recorded -- no polling another CI system for it any
+# more. scripts/record-upgrade-fixture.sh is handed that reference through
+# MV_IMAGE_REF; by hand it still defaults to the GHCR tag.
 #
 # allow_failure is scoped to exit code 75 (EX_TEMPFAIL), deliberately,
-# not a blanket true (#1268 finding 6). A release that builds slowly, a
-# GHCR outage, or an image that never appears must not turn a tag
-# pipeline red: the tag is already cut and the artefacts already
-# published by then, so there is nothing to fix by failing -- the poll
-# loop below exits 75 for exactly that case, and only that case is
-# allowed to pass quietly. Any other failure -- a bug in
-# record-upgrade-fixture.sh or upgrade-fixture-session.py, a Docker
-# problem, pg_dump breaking -- exits some other code and blocks the
-# pipeline for real, because those mean the recording nobody is
-# watching for (see below) silently did not happen for a reason that
-# recurs on the next tag too. A red-but-allowed job (the 75 case) says
-# "run scripts/record-upgrade-fixture.sh <tag> by hand", which is
-# exactly the remedy.
+# not a blanket true (#1268 finding 6). The tag is already cut and the
+# image already published by the time this runs, so a registry pull that
+# fails is not worth a red tag pipeline -- the pull below exits 75 for
+# exactly that case, and only that case is allowed to pass quietly. Any
+# other failure -- a bug in record-upgrade-fixture.sh or
+# upgrade-fixture-session.py, a Docker problem, pg_dump breaking -- exits
+# some other code and blocks the pipeline for real, because those mean
+# the recording nobody is watching for (see below) silently did not
+# happen for a reason that recurs on the next tag too. A red-but-allowed
+# job (the 75 case) says "run scripts/record-upgrade-fixture.sh <tag> by
+# hand", which is exactly the remedy.
 #
 # Nothing in this job watches for either kind of failure and says so
 # out loud: check:upgrade-fixture-recorded below does (#1274), by
 # listing the registry against the committed fixtures on every push
 # to dev. This job only stopped lying about which failures are fine.
 #
-# Stage `sync`, beside the GitHub mirror: it is the same kind of work —
-# something published outside this pipeline once the commit is final. The
-# two stages after it exist only for the scheduled CHR and Renovate
-# lanes, which a release job has no business sitting in. `needs: []`
-# because it waits on GHCR, not on this pipeline's lint and test.
+# Stage `sync`, beside the GitHub mirror and the publish jobs: it is the
+# same kind of work — something published outside this pipeline once the
+# commit is final. The two stages after it exist only for the scheduled
+# CHR and Renovate lanes, which a release job has no business sitting in.
 #
 # Uploads use CI_JOB_TOKEN. That token can write a package and nothing
 # else — it cannot push a branch or open a merge request — which is why
@@ -1901,49 +2881,47 @@ sync:mirror-to-github:
 
 record:upgrade-fixture:
   stage: sync
-  # Light lane (#949): it waits, then runs three short-lived containers.
-  tags: [light]
-  # Same image and socket as test:container -- read that job's header for
-  # what the runner's shared rootless daemon does and does not allow.
-  # Nothing here publishes a port, which is what makes that work: the
-  # recording drives the released container from inside its own network
-  # namespace (scripts/upgrade-fixture-session.py).
-  image: docker:29-cli
-  needs: []
+  # Three short-lived containers on a throwaway daemon of its own (.dind)
+  # -- read test:container's header for what that does and does not
+  # allow. Nothing here publishes a port, which is what makes that work:
+  # the recording drives the released container from inside its own
+  # network namespace (scripts/upgrade-fixture-session.py).
+  extends: .dind
+  # The digest comes from publish:image's evidence; publish:channel is
+  # what says that digest verified and is now the release.
+  needs:
+    - job: publish:image
+      artifacts: true
+    - job: publish:channel
   # #952: this job uploads packages -- never cut mid-write.
   interruptible: false
-  # 75 (EX_TEMPFAIL) is only the "GHCR never published it in time" exit
+  # 75 (EX_TEMPFAIL) is only the "could not pull the released image" exit
   # below -- everything else fails the job for real. See the header
   # comment above for why a blanket true was wrong.
   allow_failure:
     exit_codes: 75
-  # 45 minutes of polling plus three container starts and a pg_dump.
-  timeout: 1h
+  # Three container starts and a pg_dump.
+  timeout: 30m
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
-  variables:
-    DOCKER_HOST: unix:///var/run/docker.sock
   script:
     # bash because both scripts are `#!/usr/bin/env bash` and Alpine
-    # ships ash; python3 for the manifest the recording writes; curl for
-    # the package upload; coreutils for `sort -V`, which busybox's sort
-    # does not have and the script's version comparison needs. No
-    # postgresql-client: pg_dump runs inside the Postgres container
-    # itself, so the client is always the server's own major version.
+    # ships ash; python3 for the manifest the recording writes and the
+    # evidence read below; curl for the package upload; coreutils for
+    # `sort -V`, which busybox's sort does not have and the script's
+    # version comparison needs. No postgresql-client: pg_dump runs inside
+    # the Postgres container itself, so the client is always the server's
+    # own major version.
     - apk add --no-cache bash coreutils curl python3 >/dev/null
     - |
-      image="ghcr.io/tomlawesome/mikroview:$CI_COMMIT_TAG"
-      echo "waiting for $image on GHCR (every 60s, up to 45 minutes)"
-      found=0
-      for attempt in $(seq 1 45); do
-        if docker manifest inspect "$image" >/dev/null 2>&1; then found=1; break; fi
-        echo "  attempt $attempt/45: not published yet"
-        [ "$attempt" = 45 ] || sleep 60
-      done
+      digest="$(python3 -I scripts/gitlab-tested-image.py digest .mv-supply-chain/gitlab-tested-image.json "$CI_REGISTRY_IMAGE")" || exit 1
+      export MV_IMAGE_REF="$CI_REGISTRY_IMAGE@$digest"
       # 75 (EX_TEMPFAIL): the one exit code allow_failure above tolerates
       # -- see this job's header comment.
-      [ "$found" = 1 ] || { echo "$image never appeared -- record it by hand with scripts/record-upgrade-fixture.sh $CI_COMMIT_TAG"; exit 75; }
-      echo "$image is published"
+      echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY" &&
+        docker pull "$MV_IMAGE_REF" ||
+        { echo "could not pull $MV_IMAGE_REF -- record it by hand with scripts/record-upgrade-fixture.sh $CI_COMMIT_TAG"; exit 75; }
+      echo "recording $CI_COMMIT_TAG from $MV_IMAGE_REF"
     # The file backend's recording: uploads the tarball and the manifest.
     - bash scripts/record-upgrade-fixture.sh "$CI_COMMIT_TAG"
     # The database's: the same scripted session against a throwaway
@@ -1953,12 +2931,46 @@ record:upgrade-fixture:
     # missing one costs a hand step nobody will remember.
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
 
+# #1358 item 3: record:upgrade-fixture above only ever runs on a v* tag,
+# against the released image -- so the one time the recorder's scripted
+# session first runs against a real image is after the release is cut.
+# That is exactly how #1358 happened: v0.6.1 added a second-factor
+# enrolment step the session did not do, and nothing caught it before the
+# tag because nothing exercised the session any earlier.
+#
+# There is no published image to point at on a dev -> preview merge
+# request -- preview's image is only published after this MR merges, and
+# dev deliberately publishes nothing. So this job runs the session against
+# build:image's image.tar from this pipeline (#1472): the same Dockerfile
+# and checkout, content-identical to what preview will publish once this
+# MR lands bar the VERSION stamp. scripts/record-upgrade-fixture.sh
+# --check runs the same session against it and never uploads (enforced in
+# the script itself, not just by omitting a flag here). Nothing here
+# pushes the image anywhere, and nothing commits a fixture; a red job is
+# only ever "the session broke."
+check:upgrade-fixture-recorder:
+  extends: .dind
+  stage: test
+  needs:
+    - job: build:image
+      artifacts: true
+  rules:
+    - !reference [.dev-landing, job_rule]
+    - !reference [.catchup-check, job_rule]
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+  timeout: 20m
+  script:
+    - apk add --no-cache bash coreutils python3 >/dev/null
+    - docker load -i image.tar
+    - bash scripts/record-upgrade-fixture.sh --check "mikroview-ci:$CI_COMMIT_SHA"
+
 # The GitLab half of #1309's two signatures, and the automatic one: this
-# job runs on every v* tag pipeline and adds a key-based signature from a
-# private key that exists only on this dedicated, protected
-# `mikroview-signing` runner's host, mounted read-only into its jobs. The
-# second, keyless (Sigstore/OIDC) signature is GitHub's, added by
-# .github/workflows/countersign.yml -- deliberately manual, started by
+# job runs on every publishing pipeline -- a push to preview and a v* tag
+# (owner, #1472: preview images are signed too) -- and adds a key-based
+# signature from a private key that exists only on this dedicated,
+# protected `mikroview-signing` runner's host, mounted read-only into its
+# jobs. The second, keyless (Sigstore/OIDC) signature is GitHub's, added
+# by .github/workflows/countersign.yml -- deliberately manual, started by
 # the owner by hand after it verifies this key-based signature against
 # the committed cosign.pub (docs/release-signing.md). Requiring the
 # owner's own GitHub login for that half is the point: compromising
@@ -1969,65 +2981,80 @@ record:upgrade-fixture:
 # environments or environment-scoped variables, so a CI/CD variable would
 # be readable by every job in a protected-branch pipeline.
 #
-# Waits for GHCR to have the image GitHub Actions publishes (same tag
-# pipeline, same 45-minute budget as record:upgrade-fixture above), then
-# resolves and signs its digest. All the logic is in the script -- unit
-# tested in scripts/sign-release-digest.test.sh against stubbed
-# docker/cosign, never the network -- so this job only installs what it
-# needs and calls it.
+# Since #1472 it signs the digest publish:image pushed to this project's
+# registry and recorded in its evidence, rather than waiting for GHCR,
+# and attests security:trivy-image's SPDX SBOM to the same digest
+# (`cosign attest --type spdxjson`). publish:channel verifies the
+# signature before anything gets a consumable name. All the logic is in
+# the script -- unit tested in scripts/sign-release-digest.test.sh
+# against stubbed docker/cosign, never the network -- so this job only
+# installs what it needs and calls it.
 sign:release-digest:
   stage: sync
   tags: [mikroview-signing]
   # No daemon and no dind, the same shape orbit's sign_evidence job uses:
-  # `docker manifest inspect`, `docker buildx imagetools inspect` and
-  # `docker login` are all registry operations the CLI performs itself over
-  # HTTPS, and cosign talks to the registry directly too. Verified against a
-  # real GHCR tag with DOCKER_HOST pointed at a socket that does not exist
-  # (2026-09-22). So this job needs no Docker socket mounted into it, which
-  # matters: the signing runner is the better-protected half of the pair,
-  # and handing it daemon access to earn a digest lookup would be a poor
-  # trade. Setting DOCKER_HOST here at all was misleading and is gone.
-  image: docker:29-cli
-  # Waits on GHCR, not on this pipeline's own lint/test/security -- same
-  # reasoning as record:upgrade-fixture's needs: [].
-  needs: []
-  # A cancelled signing run leaves a published release with only one of
-  # its two signatures and nothing to show why -- never cut mid-write.
+  # `docker buildx imagetools inspect` and `docker login` are registry
+  # operations the CLI performs itself over HTTPS, and cosign talks to the
+  # registry directly too. Verified against a real GHCR tag with
+  # DOCKER_HOST pointed at a socket that does not exist (2026-09-22). So
+  # this job needs no Docker socket mounted into it, which matters: the
+  # signing runner is the better-protected half of the pair, and handing
+  # it daemon access to earn a digest lookup would be a poor trade.
+  #
+  # Pinned by digest (#1472): this job holds the signing key. Plain Docker
+  # Hub, not the image cache the dind jobs use, as before. 29.9.2 is the
+  # newest 29.x CLI at least 3 days old on 2026-11-15 (29.9.3's digest was
+  # two days old); the multi-arch index digest, as Docker Hub lists it.
+  # Change with supply-chain/pins-policy.json.
+  image: docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb
+  # Optional only for the SIGN_TAG exercise pipeline below, which has
+  # neither job; in a publishing pipeline both are present and must pass.
+  needs:
+    - job: publish:image
+      artifacts: true
+      optional: true
+    - job: security:trivy-image
+      artifacts: true
+      optional: true
+  # A cancelled signing run leaves a published digest with only part of
+  # its signature and attestation and nothing to show why -- never cut
+  # mid-write.
   interruptible: false
-  timeout: 1h
+  # One signing run at a time, across pipelines (GitLab's standard way to
+  # serialise a job): two runs on one digest could otherwise both pass the
+  # script's already-signed check and both sign, which
+  # verify-release-signature.sh then refuses as ambiguous.
+  resource_group: sign-release-digest
+  timeout: 20m
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
-    # The exercise path (#1309). A v* tag on this project *is* a release --
-    # the mirror job pushes it to GitHub and GitHub's docker workflow
-    # publishes from it -- so there is no throwaway tag that exercises
-    # signing without also cutting a release. Instead the job can be started
-    # by hand against an already-published tag, the same web/API-plus-
-    # variable shape CHR_EXERCISE and CHR_WATCH use, and SIGN_EXERCISE is on
-    # their `never` lists above so triggering it does not re-run all of dev
+    # A publishing pipeline: preview or a v* tag. The script signs the
+    # digest in publish:image's evidence.
+    - !reference [.publish_ref, rules]
+    # The exercise path (#1309). A v* tag on this project *is* a release,
+    # so there is no throwaway tag that exercises signing without also
+    # cutting a release. Instead the job is started by hand against an
+    # already-published tag in this project's registry, and SIGN_TAG is on
+    # the `never` lists above so triggering it does not re-run all of dev
     # (#951).
     #
-    # Owner decision, 2026-09-22: exercise it by signing v0.6.0's digest for
-    # real rather than dry-running, so the GHCR write and the signature push
-    # are proved too, not just the key mount and the digest lookup. Signing
-    # an already-published release adds a valid second signature to it; it
-    # changes nothing about what that release contains.
-    #
-    # Run it from the web UI on a protected branch -- the signing runner
-    # refuses unprotected refs -- with SIGN_EXERCISE=true and
-    # SIGN_TAG=v0.6.0.
-    - if: '$SIGN_EXERCISE == "true" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
+    # SIGN_TAG is the only variable: naming a tag by hand is already
+    # unambiguous intent, so a second SIGN_EXERCISE switch was one more name
+    # to spell correctly and nothing else. It was misspelled on the first
+    # attempt (pipeline 1483, 2026-09-22), which silently ran all of dev and
+    # signed nothing.
+    - if: '$SIGN_TAG != "" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
   script:
     # bash because the script is `#!/usr/bin/env bash` and Alpine ships
     # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
-    # checksum verification inside it.
-    - apk add --no-cache bash coreutils curl >/dev/null
-    # SIGN_TAG only when exercising by hand; a tag pipeline has no SIGN_TAG
-    # and signs its own CI_COMMIT_TAG. If neither is set the script refuses
-    # rather than sign something it guessed.
-    - bash scripts/sign-release-digest.sh "${SIGN_TAG:-$CI_COMMIT_TAG}"
+    # checksum verification inside it; python3 to read the evidence.
+    - apk add --no-cache bash coreutils curl python3 >/dev/null
+    # No argument in a publishing pipeline: the script signs the recorded
+    # digest. SIGN_TAG only when exercising by hand: the script resolves
+    # that tag in $CI_REGISTRY_IMAGE instead.
+    - bash scripts/sign-release-digest.sh ${SIGN_TAG:+"$SIGN_TAG"}
 
-# record:upgrade-fixture above is allow_failure (a slow build or a GHCR
-# blip must not redden a tag already cut -- see its own header), so it
+# record:upgrade-fixture above is allow_failure (a registry pull failure
+# must not redden a tag already cut -- see its own header), so it
 # can fail unseen. This is #1274's automated replacement for the manual
 # "Promote to main" checklist line that used to be the only thing
 # catching that: it asserts every released v[0-9]* tag has a fixture
@@ -2039,8 +3066,13 @@ check:upgrade-fixture-recorded:
   stage: sync
   tags: [light]
   image: alpine:3.24
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
+  # A fast history check (ai/agent-infra#113): runs on the push to dev with
+  # the 5 minute timeout.
+  extends: .dev-landing-check
   rules:
+    - !reference [.dev-landing-check, rules]
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
   variables:
     GIT_DEPTH: 0
@@ -2080,7 +3112,7 @@ check:upgrade-fixture-recorded:
 
 chr-exercise:run:
   stage: chr-exercise
-  image: golang:1.27.1
+  image: golang:1.27.4
   # #952: this job pushes chr/last-run.json to the chr-reports branch on
   # every run (scripts/chr-report.sh) and, on a fully clean exercise, also
   # pushes a branch and opens a merge request
@@ -2094,7 +3126,8 @@ chr-exercise:run:
   # it had never run once, in any pipeline, because something earlier
   # always failed first (#908, #923). A skipped job reports nothing while
   # looking like it was considered.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   # The weekly schedule, plus an on-demand path from the web UI or the
   # API. Without one, a change to this job can only be tested by waiting
   # for the next Monday, which in practice means it never gets tested --
@@ -2199,7 +3232,8 @@ chr-watch:run:
   # to the GitLab API -- nothing earlier in the pipeline can invalidate
   # that, and it must still run (and still be able to report a stale report)
   # even if something earlier in the same pipeline failed.
-  needs: []
+  needs:
+    - {job: release_readiness, optional: true}
   rules:
     - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CHR_WATCH == "true" && $CI_PIPELINE_SOURCE == "web"'
@@ -2225,8 +3259,13 @@ chr-watch:run:
 
 renovate:run:
   stage: renovate
-  image: renovate/renovate:44
-  needs: []
+  # Pinned by version and digest (#1434): this job holds RENOVATE_TOKEN, so
+  # whoever can publish a new image under a moving tag would run code with
+  # it. Renovate's gitlabci manager keeps both current, after the same
+  # 7-day wait as every other update.
+  image: renovate/renovate:44.222.2@sha256:227e723ed8c57f1b8b629066c7e0ad8d8f933d905f4a2f6fb4d597a74118637c
+  needs:
+    - {job: release_readiness, optional: true}
   # #952: opens and updates merge requests via the GitLab API -- never cut
   # mid-write.
   interruptible: false

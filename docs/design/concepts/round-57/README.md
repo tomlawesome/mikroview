@@ -39,7 +39,7 @@ today.
   three sub-fields (scope from the `Scope` union — internal/external
   — country from observed countries, or typed IP/text), committing to
   ONE composite token rendered the way the ratified chip already
-  reads: `source:198.51.100.34 · external · DE` (scene 05). Fewer
+  reads: `source:203.0.113.34 · external · DE` (scene 05). Fewer
   than three parts render with fewer joins — `sideValue()` already
   skips blanks, so a scope-only or address-only pick still renders
   correctly.
@@ -98,7 +98,7 @@ same devices, same rules, same rows in every scene:
   DROP, repeating every ~64 s since 13:52:07, 14 times so far,
   flagged. Drives `tokens-and-text`.
 - **rb5009's four logged WAN scans**, `input` chain, `wan-in-drop`
-  rule, DROP: 198.51.100.34 (DE) on :8291, 198.51.100.90 (CN) on
+  rule, DROP: 203.0.113.34 (DE) on :8291, 203.0.113.90 (CN) on
   :22, 203.0.113.199 (RU) on :443, 203.0.113.11 (NL) on :8291. The DE
   one (6 attempts today) drives `saved-applied` and `drawer-beside`.
 - Known devices (the `device` value menu): cam-porch, hue-bridge,

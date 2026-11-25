@@ -26,7 +26,7 @@
 // order, and a lane an earlier scenario also pushed rules for would
 // make this scenario's reading depend on run order.
 
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -49,7 +49,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-declared', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-declared', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

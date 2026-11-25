@@ -12,7 +12,7 @@
 // "exactly" (the same reasoning live-topography-reality.mjs gives for
 // its own alarm-count check).
 
-import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo, clickSvgText } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo, clickSvgText, tokenMint } from './live-browser.mjs'
 
 /**
  * Poll a selector's own transform+opacity signature until it stops
@@ -80,7 +80,7 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-topo-furniture', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-topo-furniture', kind: 'ingest', device: DEVICE }),
 })
 check(tokenRes.status() === 201, `an ingest token is issued (${tokenRes.status()})`)
 const token = (await tokenRes.json()).value
@@ -100,7 +100,8 @@ async function api(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // A 204 (every DELETE since #1538) carries no body to parse.
+  return { status: res.status(), body: res.status() < 400 && res.status() !== 204 ? await res.json() : null }
 }
 
 // The LAN's own pushed range: the aggregate bar and the node card's
@@ -182,6 +183,7 @@ await page.click('[data-card="topography"] .dial >> nth=0')
 await page.waitForSelector('[data-card="topography"] .dial-panel .dp-row', { timeout: 5000 })
 await page.click('[data-card="topography"] .dial-panel .dp-row >> nth=0')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'clicking the flags dial, then its own panel row, opens the docket on the flags tab')
 
 // goTo, not a bare rail click: it waits for the deck to actually finish
@@ -204,8 +206,9 @@ const bars = await page.locator('[data-card="topography"] .zone .hbar-g').count(
 check(bars >= 2, `the LAN island draws both halves of the aggregate bar (${bars} found)`)
 check((await page.locator('[data-card="topography"] .zone .hb-div').count()) >= 1, 'a centre divider is drawn between them')
 
-await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="watcher"]')
+await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="open the watchlist"]')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=watchlist', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the purple half opens the watchlist')
 
 // goTo, not a bare rail click: it waits for the deck to actually finish
@@ -218,6 +221,7 @@ await toZonesStop(page)
 await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 await activate(page, '[data-card="topography"] .zone .hbar-g[aria-label*="open flag"]')
 await page.waitForSelector('[data-card="docket"] [role="tab"][aria-selected="true"] >> text=flags', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the red half opens the flags tab, pre-filtered to the zone')
 
 // goTo, not a bare rail click: it waits for the deck to actually finish
@@ -247,6 +251,7 @@ check((ticksText ?? '').trim() === '', 'the ticks carry no text, symbols only')
 
 await range.fill('2')
 await page.waitForSelector('[data-card="topography"] .camera.cam-zones', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'moving the slider to zones applies the flat ground-plan camera')
 
 // #976 item 1: the lane-based trunk and the traffic edges used to stay
@@ -296,6 +301,7 @@ check(cardText.includes('watched'), 'the card says it is watched')
 
 await page.click('.node-card .nc-act >> text=open in stream ▸')
 await page.waitForFunction(() => location.search.includes('Query='), null, { timeout: 5000 })
+// safe: waitForFunction above throws on timeout
 check(true, 'the open-in-stream action filters the live view to this address')
 
 // #972: leave the shared instance as found -- later scenarios that count

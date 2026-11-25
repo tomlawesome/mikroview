@@ -5,7 +5,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -32,11 +35,26 @@ import (
 // JSON, exactly as every mikroview release before #853 did -- including a
 // file that predates the key, or one from a deployment that has since
 // removed it.
-func backupBackendFor(path string, key *retention.Key) persist.Backend {
+//
+// name is the store's name in backedUpStores, which is the name the
+// server opens it under, so a sealed file is opened bound to the same
+// store name the server sealed it with (#1450).
+func backupBackendFor(path, name string, key *retention.Key) persist.Backend {
 	if key == nil {
 		return persist.NewFileBackend(path)
 	}
-	return persist.NewEncryptedFileBackend(path, key)
+	return persist.NewEncryptedFileBackend(path, name, key)
+}
+
+// backupReaderFor is backupBackendFor for runBackup's reads, which never
+// write to the data directory (#1450 S2): a file still sealed under its
+// pre-#1450 path binding is read as it is, not re-sealed -- the server
+// does that at its next start.
+func backupReaderFor(path, name string, key *retention.Key) persist.Backend {
+	if key == nil {
+		return persist.NewFileBackend(path)
+	}
+	return persist.NewEncryptedFileBackend(path, name, key).WithoutRebind()
 }
 
 // backedUpStores is every store the envelope carries, paired with where
@@ -61,6 +79,9 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"auth", cfg.Auth.StorePath},
 		{"tokens", cfg.Auth.TokensStorePath},
 		{"recovery_keys", cfg.Auth.RecoveryKeysPath},
+		// The sign-in history (#1202): who signed in from where, kept
+		// with the accounts it describes.
+		{"signins", cfg.Auth.SignInsStorePath},
 		{"flags", cfg.Flags.StorePath},
 		{"rule_usage", cfg.Flags.RuleUsageStorePath},
 		{"entities", cfg.Entities.StorePath},
@@ -94,6 +115,12 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		// missing this would silently reset every user back to the
 		// defaults their own module ships with.
 		{"prefs", cfg.Prefs.StorePath},
+		// The config editor's snapshots (#1347): whole config files an
+		// admin kept, and the copy taken before each Carry forward --
+		// the one a rollback needs. At a fixed place in the data
+		// directory rather than a configured path; see
+		// configSnapshotsPath.
+		{configSnapshotsStore, configSnapshotsPath(cfg)},
 	}
 }
 
@@ -180,9 +207,11 @@ var excludedFromBackup = map[string]string{
 		"host is more likely to be wrong than right (different hostname/IP SANs, a CA nothing has " +
 		"trusted yet), and regenerating it is one restart away, so there is nothing here a restore " +
 		"is actually saving.",
-	"GeoIP.DBPath": "an external MaxMind database file the operator downloads themselves (#372), not " +
-		"a store MikroView writes -- there is nothing here for a restore to reproduce that a fresh " +
-		"download would not already give back.",
+	"GeoIP.CachePath": "a cache of the country databases MikroView downloads from DB-IP, IPinfo and " +
+		"MaxMind (#1352), not MikroView's own state -- the next refresh fetches them again. They are " +
+		"also somebody else's data under their own licence terms (CC BY 4.0, CC BY-SA 4.0, the GeoLite " +
+		"EULA), and a backup is a copy that travels. The API keys that fetch them are not excluded: " +
+		"they ride in the settings store, still sealed under the retention key the way router backups are.",
 	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not MikroView's own state -- the " +
 		"next refresh re-fetches it in seconds, so a restore saves nothing. It is also somebody " +
 		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +
@@ -191,8 +220,17 @@ var excludedFromBackup = map[string]string{
 }
 
 // jsonLinesStore is the one backedUpStores entry whose on-disk shape is
-// not a single JSON document: internal/matchlog's append-only
-// newline-delimited JSON file (#372). internal/backup.Envelope holds
+// not a single JSON document: internal/matchlog's append-only log, a
+// sealed framed file since #1470. It is not read through
+// persist.LoadDocument: -backup opens it with the key
+// (matchlog.ReadLines) and carries its lines as plain JSON lines, per
+// #853's "the backup envelope stays plain, readable JSON", and -restore
+// seals them again under the restoring deployment's key
+// (matchlog.WriteSealed), so the envelope's shape for it is the one v0.6
+// wrote and a v0.6 backup still restores; a torn line in a v0.6 file is
+// left out and said so in the log. Both need the key: the file
+// cannot be read without it, and is never written in the clear (rule 2
+// of the #853 amendment). internal/backup.Envelope holds
 // each store as json.RawMessage, which requires exactly one JSON value --
 // fine for every other store here, which is a single JSON object, but a
 // match log with more than one line is many JSON values concatenated,
@@ -218,7 +256,7 @@ const jsonLinesStore = "match_log"
 // ingest -- the demo's seven nights, generated by cmd/demo-history and
 // loaded through `-restore` rather than by faking a live feed (see that
 // issue's decision: "restore it, do not ingest it"). `-restore` is
-// already an explicit, operator-invoked, --force-gated overwrite of this
+// already an explicit, operator-invoked, -force-gated overwrite of this
 // deployment's own state, so accepting one more named store there is a
 // narrower door than reopening what `-backup` collects.
 //
@@ -257,6 +295,23 @@ func wrapForEnvelope(name string, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("encoding %s for the backup: %w", name, err)
 	}
 	return wrapped, nil
+}
+
+// readMatchLogForBackup is runBackup's read of jsonLinesStore: the
+// sealed log's lines as plain JSON lines, nil when there is nothing to
+// carry. With no key, a match log on disk is refused rather than skipped
+// -- a backup that silently left it out would read as complete -- and
+// an absent or empty file is nothing to carry.
+func readMatchLogForBackup(path string, key *retention.Key) ([]byte, error) {
+	if key == nil {
+		// #nosec G703 -- this deployment's own store path, from config.
+		if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+			return nil, errors.New("the match log is sealed and cannot be read without history.keyFile -- " +
+				"configure the key the server runs with and re-run -backup")
+		}
+		return nil, nil
+	}
+	return matchlog.ReadLines(path, key)
 }
 
 // unwrapFromEnvelope reverses wrapForEnvelope on restore.
@@ -449,7 +504,7 @@ func runBackup(args []string) int {
 	logger := logging.New("backup")
 	dest, ok := firstNonFlag(args)
 	if !ok {
-		logger.Error("usage: mikroview -backup <file> [--force]")
+		logger.Error("usage: mikroview -backup <file> [-force]")
 		return 2
 	}
 
@@ -485,7 +540,13 @@ func runBackup(args []string) int {
 		if s.Path == "" {
 			continue
 		}
-		data, _, err := persist.LoadDocument(ctx, backupBackendFor(s.Path, ourKey))
+		var data []byte
+		var err error
+		if s.Name == jsonLinesStore {
+			data, err = readMatchLogForBackup(s.Path, ourKey)
+		} else {
+			data, _, err = persist.LoadDocument(ctx, backupReaderFor(s.Path, s.Name, ourKey))
+		}
 		if err != nil {
 			logger.Error(fmt.Sprintf("reading %s (%s): %v", s.Name, s.Path, err))
 			return 1
@@ -548,7 +609,7 @@ func runBackup(args []string) int {
 		return 1
 	}
 
-	if err := writeBackup(dest, hasFlag(args, "--force"), stores); err != nil {
+	if err := writeBackup(dest, forceFlag(args), stores); err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
@@ -569,36 +630,70 @@ func writeBackup(dest string, force bool, stores map[string][]byte) error {
 		if fi, err := os.Stat(dir); err == nil && fi.Mode().Perm()&0o007 != 0 {
 			return fmt.Errorf("refusing to write a backup into %s, which is world-readable -- "+
 				"this file carries your accounts and recovery-key digests. Choose a private "+
-				"directory, or pass --force if you are certain", dir)
+				"directory, or pass -force if you are certain", dir)
 		}
 	}
 
-	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
-	if force {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	}
+	// O_EXCL is tried first even under -force, so created says exactly
+	// whether this run made the file: only then may a failure remove it.
+	created := true
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
-	f, err := os.OpenFile(dest, flags, 0o600)
+	f, err := openBackupFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil && os.IsExist(err) && force {
+		created = false
+		// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
+		f, err = openBackupFile(dest, os.O_WRONLY|os.O_TRUNC, 0o600)
+	}
 	if err != nil {
 		if os.IsExist(err) {
 			return fmt.Errorf("%s already exists -- refusing to overwrite it. "+
-				"Choose another name, or pass --force", dest)
+				"Choose another name, or pass -force", dest)
 		}
 		return err
 	}
-	defer f.Close()
+	// Durable write (#1483): write, fsync, close, each error checked, so
+	// success is only reported for a backup known to be on disk.
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
-	if err := os.Chmod(dest, 0o600); err != nil {
-		return err
+	err = os.Chmod(dest, 0o600)
+	if err == nil {
+		err = backup.Write(f, version, stores)
 	}
-	return backup.Write(f, version, stores)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		if created {
+			// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag.
+			if rmErr := os.Remove(dest); rmErr != nil {
+				return fmt.Errorf("the backup is incomplete and could not be removed (%v); delete %s and do not use it: %w", rmErr, dest, err)
+			}
+			return fmt.Errorf("the backup is incomplete and has been removed: %w", err)
+		}
+		return fmt.Errorf("the backup is incomplete -- do not use %s: %w", dest, err)
+	}
+	return nil
+}
+
+// backupFile is what writeBackup writes through; an *os.File, or a test
+// double whose Sync or Close fails.
+type backupFile interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+var openBackupFile = func(name string, flag int, perm os.FileMode) (backupFile, error) {
+	return os.OpenFile(name, flag, perm)
 }
 
 func runRestore(args []string) int {
 	logger := logging.New("restore")
 	src, ok := firstNonFlag(args)
 	if !ok {
-		logger.Error("usage: mikroview -restore <file> [--force]")
+		logger.Error("usage: mikroview -restore <file> [-force]")
 		return 2
 	}
 
@@ -629,7 +724,7 @@ func runRestore(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Parsed and fully validated before anything on disk is touched.
 	env, err := backup.Read(f)
@@ -733,13 +828,30 @@ func runRestore(args []string) int {
 			logger.Error(fmt.Sprintf("%v -- nothing has been changed", err))
 			return 1
 		}
+		if name == jsonLinesStore && ourKey == nil {
+			logger.Error(fmt.Sprintf("this backup carries a match log (store %q) but no history.keyFile is "+
+				"configured on this deployment -- the match log is sealed under the key and is never written "+
+				"in the clear. Nothing has been changed", jsonLinesStore))
+			return 1
+		}
+		if name == jsonLinesStore {
+			skipped, err := matchlog.ValidateLines(data)
+			if err != nil {
+				logger.Error(fmt.Sprintf("backup: store %q: %v -- nothing has been changed", jsonLinesStore, err))
+				return 1
+			}
+			if skipped > 0 {
+				logger.Warn(fmt.Sprintf("backup: store %q: %d line(s) do not decode and are left out of the restored match log -- "+
+					"a torn write from an unclean shutdown, which the release that wrote the backup skipped on replay too", jsonLinesStore, skipped))
+			}
+		}
 		decoded[name] = data
 	}
 
 	vaultDir := backupVaultDirectory(cfg)
-	const forceAdvice = "Re-run with --force once you are sure -- copy the data directory " +
+	const forceAdvice = "Re-run with -force once you are sure -- copy the data directory " +
 		"somewhere safe first if you want a way back to what is on it now"
-	if !hasFlag(args, "--force") {
+	if !forceFlag(args) {
 		for name := range env.Stores {
 			if name == vaultStoreName {
 				continue
@@ -813,7 +925,7 @@ func runRestore(args []string) int {
 	// to warn a startup about; if rollback itself cannot fully put
 	// everything back, the marker is left in place on purpose.
 	restoreMarker := restoreMarkerPath(cfg)
-	markerBody := "A restore (mikroview -restore " + src + " --force) began overwriting this data " +
+	markerBody := "A restore (mikroview -restore " + src + " -force) began overwriting this data " +
 		"directory and did not finish. If mikroview refused to start because of this file, re-run " +
 		"that same -restore command again, or replace this data directory with your own copy of it.\n"
 	if err := persist.WriteFileAtomic(restoreMarker, []byte(markerBody), 0o600); err != nil {
@@ -866,7 +978,17 @@ func runRestore(args []string) int {
 			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", path, name, err))
 			return 1
 		}
-		backend := backupBackendFor(path, ourKey)
+		if name == jsonLinesStore {
+			// Sealed again under this deployment's key, whatever key
+			// (or, from v0.6, none) the backup was taken under. ourKey
+			// is non-nil here: checked in the validation pass above.
+			if err := matchlog.WriteSealed(path, ourKey, data); err != nil {
+				rollback(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+				return 1
+			}
+			continue
+		}
+		backend := backupBackendFor(path, name, ourKey)
 		// The version to overwrite with, read without needing the
 		// existing document to actually decrypt -- see
 		// persist.EncryptedFileBackend.Version's doc comment. Backends
@@ -982,8 +1104,8 @@ func runRestore(args []string) int {
 	return 0
 }
 
-// firstNonFlag picks the path argument out of args, so `-backup x --force`
-// and `-backup --force x` both work.
+// firstNonFlag picks the path argument out of args, so `-backup x -force`
+// and `-backup -force x` both work.
 //
 // This is the single point every path-taking CLI command reads its
 // argument through -- -backup, -restore and -migrate-data -- and it is

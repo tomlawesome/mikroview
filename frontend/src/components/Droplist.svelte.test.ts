@@ -7,7 +7,7 @@
 // remove, the setup card's four blocks, and #1225's flag-drawer draft
 // handoff.
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
@@ -15,9 +15,20 @@ vi.mock('../lib/api', () => ({
   deleteDroplistEntry: vi.fn(),
   mintDroplistKey: vi.fn(),
   revokeDroplistKey: vi.fn(),
+  fetchSetupCommands: vi.fn(),
+  fetchBlocklistBuilder: vi.fn(() => new Promise(() => {})),
+  fetchBlocklistCommands: vi.fn(),
+  createToken: vi.fn(),
 }))
 
-import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
+import {
+  createDroplistEntry,
+  deleteDroplistEntry,
+  mintDroplistKey,
+  revokeDroplistKey,
+  fetchSetupCommands,
+} from '../lib/api'
+import type { SetupCommandsResponse } from '../lib/types'
 import { droplistNavState } from '../lib/droplistNav.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import Droplist from './Droplist.svelte'
@@ -39,6 +50,14 @@ function resp(over: Partial<DroplistResponse> = {}): DroplistResponse {
   }
 }
 
+// #1447: minting asks for the admin's password first, like the wizard's
+// mint step: a field labelled "Your password", Enter to submit.
+async function typePasswordAndSubmit(value = 'correct horse') {
+  const field = screen.getByLabelText('Your password') as HTMLInputElement
+  await fireEvent.input(field, { target: { value } })
+  await fireEvent.keyDown(field, { key: 'Enter' })
+}
+
 const entry = {
   cidr: '203.0.113.0/24',
   addedBy: 'alex',
@@ -46,9 +65,28 @@ const entry = {
   reason: 'ssh brute force',
 }
 
+function setupCommands(over: Partial<SetupCommandsResponse> = {}): SetupCommandsResponse {
+  return {
+    routeros: { minimum: '7.18', newest: '7.24.4', rows: [], upgrades: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: { commands: '', note: '' },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+      backup: { commands: '', note: '' },
+      backupSchedule: { commands: '', note: '' },
+    },
+    ...over,
+  }
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   droplistNavState.pendingDraft = null
+  vi.mocked(fetchSetupCommands).mockResolvedValue(setupCommands())
 })
 
 describe('entries', () => {
@@ -153,7 +191,8 @@ describe('the pull key', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'replace key' }))
     expect(mintDroplistKey).not.toHaveBeenCalled()
     await fireEvent.click(screen.getByRole('button', { name: /confirm/ }))
-    expect(mintDroplistKey).toHaveBeenCalled()
+    await typePasswordAndSubmit()
+    await waitFor(() => expect(mintDroplistKey).toHaveBeenCalled())
     expect(onrefresh).toHaveBeenCalled()
   })
 
@@ -178,7 +217,8 @@ describe('the pull key', () => {
     render(Droplist, { props: { resp: resp(), onrefresh } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
-    expect(screen.getByText('the-fresh-key')).toBeTruthy()
+    await typePasswordAndSubmit()
+    await waitFor(() => expect(screen.getByText('the-fresh-key')).toBeTruthy())
     expect(screen.getByText(/\/system scheduler add name=mikroview-drop-pull \.\.\. the-fresh-key/)).toBeTruthy()
     expect(screen.getByText(/shown once/)).toBeTruthy()
     expect(onrefresh).toHaveBeenCalled()
@@ -203,7 +243,26 @@ describe('the pull key', () => {
     render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
-    expect(mintDroplistKey).toHaveBeenCalledWith('operator-saved.example:8443')
+    await typePasswordAndSubmit()
+    await waitFor(() => expect(mintDroplistKey).toHaveBeenCalledWith('operator-saved.example:8443', 'correct horse'))
+  })
+
+  it('asks for the password first: clicking mint key alone calls nothing (#1447)', async () => {
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    expect(screen.getByLabelText('Your password')).toBeTruthy()
+    expect(mintDroplistKey).not.toHaveBeenCalled()
+  })
+
+  it('shows the server error text on a refused mint and reveals no key (#1447)', async () => {
+    vi.mocked(mintDroplistKey).mockResolvedValue('password is incorrect')
+    const onrefresh = vi.fn(async () => {})
+    render(Droplist, { props: { resp: resp(), onrefresh } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    await typePasswordAndSubmit('wrong')
+    await waitFor(() => expect(screen.getByText('Could not mint the key: password is incorrect')).toBeTruthy())
+    expect(screen.queryByText(/shown once/)).toBeNull()
+    expect(onrefresh).not.toHaveBeenCalled()
   })
 })
 
@@ -218,6 +277,46 @@ describe('the setup card', () => {
     expect(screen.getByText('drop rule')).toBeTruthy()
     expect(screen.getByText('emergency: disable the rule')).toBeTruthy()
     expect(screen.getByText('emergency: empty the list')).toBeTruthy()
+  })
+})
+
+describe('upgrade warnings on the setup card (#1378)', () => {
+  it('shows the block once the card is opened when the setup commands response carries one', async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      setupCommands({
+        routeros: {
+          minimum: '7.18',
+          newest: '7.24.4',
+          rows: [],
+          upgrades: [
+            {
+              id: 'cert-store-7.24.3',
+              from: '7.24.3',
+              steps: ['droplist'],
+              heading: 'RouterOS 7.24.3 stopped trusting one public root certificate, GoDaddy Class 2.',
+              body: 'Check the chain your certificate uses.',
+            },
+          ],
+        },
+        routers: [
+          { id: 'core', name: 'core', routerosVersion: '7.24.4', standing: 'reviewed', upgrades: ['cert-store-7.24.3'] },
+        ],
+      }),
+    )
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'setup ▸' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/core \(7\.24\.4\) runs RouterOS 7\.24\.3 or later\./)).toBeTruthy()
+    })
+  })
+
+  it('renders no block when the response carries no upgrade for any router', async () => {
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'setup ▸' }))
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+    expect(document.querySelector('.note.upgrade')).toBeNull()
   })
 })
 
@@ -259,7 +358,7 @@ describe('the add form', () => {
     await fireEvent.input(screen.getByLabelText('reason'), { target: { value: 'why' } })
     await fireEvent.click(screen.getByRole('button', { name: 'add' }))
 
-    expect(screen.getByText('the address is not valid')).toBeTruthy()
+    expect(screen.getByText('Could not add this address: the address is not valid')).toBeTruthy()
     expect((screen.getByLabelText('address') as HTMLInputElement).value).toBe('not-an-address')
   })
 
@@ -290,5 +389,96 @@ describe('a pending draft from a flag\'s block… (#1225)', () => {
     expect((screen.getByLabelText('reason') as HTMLInputElement).value).toBe('distributed brute-force from 203.0.113.5')
     expect(createDroplistEntry).not.toHaveBeenCalled()
     expect(droplistNavState.pendingDraft).toBeNull()
+  })
+})
+
+// #1360: the blocklist builder's door is one line in the group.
+describe('the blocklist builder door', () => {
+  it('opens the builder for the group’s router', async () => {
+    const { blocklistState } = await import('../lib/blocklist.svelte')
+    blocklistState.reset()
+    render(Droplist, {
+      props: {
+        resp: resp({ routers: [{ device: 'rb5009', held: 3, total: 3, confirmedAt: '2026-09-14T00:00:00Z' }] }),
+        onrefresh: vi.fn(),
+      },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Block known-bad addresses…' }))
+    expect(blocklistState.open).toBe(true)
+    expect(blocklistState.device).toBe('rb5009')
+    blocklistState.reset()
+  })
+})
+
+// #1539 C2 (decision 18a): Escape disarms an armed control, same as a
+// click elsewhere. Today each stays armed (red) after Escape.
+describe('Escape disarms every armed control (#1539 C2)', () => {
+  it('an armed entry remove goes back to "remove" on Escape and deletes nothing', async () => {
+    render(Droplist, { props: { resp: resp({ entries: [entry] }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    expect(screen.getByRole('button', { name: /^confirm/ })).toBeTruthy()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+    expect(deleteDroplistEntry).not.toHaveBeenCalled()
+  })
+
+  it('an armed revoke goes back to "revoke" on Escape and revokes nothing', async () => {
+    render(Droplist, { props: { resp: resp({ key: { present: true } as never }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'revoke' }))
+    expect(screen.getByRole('button', { name: /^confirm/ })).toBeTruthy()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
+    expect(revokeDroplistKey).not.toHaveBeenCalled()
+  })
+
+  it('an armed replace key goes back to "replace key" on Escape', async () => {
+    render(Droplist, { props: { resp: resp({ key: { present: true } as never }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'replace key' }))
+    expect(screen.getByRole('button', { name: /^confirm/ })).toBeTruthy()
+
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(screen.queryByRole('button', { name: /^confirm/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'replace key' })).toBeTruthy()
+  })
+})
+
+// #1540 (C4): the three failure paths go through the shared failure line:
+// role="alert", a "Could not <verb> <thing>:" lead-in, the server's words kept.
+describe('failures use the shared failure line (#1540 C4)', () => {
+  function expectSharedLine(words: string) {
+    const line = screen.getByRole('alert')
+    expect(line.textContent?.trim()).toMatch(new RegExp(`^Could not [a-z]+ .+: ${words}$`))
+    expect(line.classList.contains('failure-line')).toBe(true)
+  }
+
+  it('a refused add', async () => {
+    vi.mocked(createDroplistEntry).mockResolvedValue('the address is not valid')
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn() } })
+    await fireEvent.input(screen.getByLabelText('address'), { target: { value: 'not-an-address' } })
+    await fireEvent.input(screen.getByLabelText('reason'), { target: { value: 'why' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'add' }))
+    expectSharedLine('the address is not valid')
+  })
+
+  it('a refused remove', async () => {
+    vi.mocked(deleteDroplistEntry).mockResolvedValue('the router said no')
+    render(Droplist, { props: { resp: resp({ entries: [entry] }), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'remove' }))
+    await fireEvent.click(screen.getByRole('button', { name: /confirm/ }))
+    await waitFor(() => expectSharedLine('the router said no'))
+  })
+
+  it('a refused key mint', async () => {
+    vi.mocked(mintDroplistKey).mockResolvedValue('password is incorrect')
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    await typePasswordAndSubmit('wrong')
+    await waitFor(() => expectSharedLine('password is incorrect'))
   })
 })

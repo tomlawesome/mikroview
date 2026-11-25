@@ -61,6 +61,8 @@ import {
   launchBrowser,
   pushFrom,
   enrolFactorAndSignIn,
+  tokenMint,
+  adminPassword,
 } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
@@ -320,11 +322,11 @@ if ((await older.count()) > 0) {
 // test-only knob added just for this.
 
 await enrolDevice(page.request, URL_BASE, ROUTER_ID, ROUTER_ADDR)
-const ingest = await api('POST', '/api/tokens', {
+const ingest = await api('POST', '/api/tokens', tokenMint({
   name: 'live-r33',
   kind: 'ingest',
   device: ROUTER_ID,
-})
+}))
 check(ingest.status === 201, `an ingest token is issued (${ingest.status})`)
 
 check(
@@ -611,7 +613,7 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 // #1335: a fresh account holds no second factor at all, so the forced-
 // enrolment door sits between the password step and the app itself.
-await enrolFactorAndSignIn(viewerPage)
+await enrolFactorAndSignIn(viewerPage, VIEWER_PASS)
 await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
 const viewerLabels = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
@@ -639,7 +641,7 @@ for (const e of leftovers.body?.definitions ?? leftovers.body ?? []) {
 const users = await api('GET', '/api/auth/users')
 const viewerAccount = (Array.isArray(users.body) ? users.body : []).find((u) => u.username === VIEWER_USER)
 if (viewerAccount) {
-  const del = await api('DELETE', `/api/auth/users/${encodeURIComponent(viewerAccount.id)}`)
+  const del = await api('DELETE', `/api/auth/users/${encodeURIComponent(viewerAccount.id)}`, { password: adminPassword })
   check(del.status < 300, `the viewer account "${VIEWER_USER}" is removed again (${del.status})`)
 } else {
   check(false, `could not find the viewer account "${VIEWER_USER}" to clean it up`)

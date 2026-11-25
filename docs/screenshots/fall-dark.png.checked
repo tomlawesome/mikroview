@@ -1,0 +1,4 @@
+Recaptured at f40cfbb2 (2026-11-19) from a seeded demo (scripts/demo-up.sh) and the output matched the committed image in
+what it shows (only clock times, ports, secrets and event rates differ): Fall.svelte and fall.svelte.ts changed, but the fall shows the same lanes, bands and ticker; live traffic differs as it always does.
+Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
+cannot move.

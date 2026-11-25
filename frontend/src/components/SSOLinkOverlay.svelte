@@ -18,11 +18,20 @@
   // dialog: what is gained, not what is destroyed. Warning somebody
   // about a deletion that will not happen is how real warnings stop
   // being read.
+  import { tick } from 'svelte'
+  import { trapFocus } from '../lib/focusTrap'
   import { authState } from '../lib/auth.svelte'
   import { startSSOLink } from '../lib/api'
 
   let error = $state<string | null>(null)
   let submitting = $state(false)
+
+  // #1202 U10: gauntlet re-checks the caller's own password before the
+  // link starts. Typed here, spent on the one call: emptied the moment
+  // it is sent, so it is never held longer than the prompt, and never
+  // put in a URL.
+  let password = $state('')
+  let passwordInput = $state<HTMLInputElement | null>(null)
 
   // The admin is the deployment's way in when the provider is down, and
   // the only account that keeps its password through a link -- and, since
@@ -40,6 +49,7 @@
     authState.showSSOLink = false
     error = null
     submitting = false
+    password = ''
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -51,6 +61,12 @@
   }
 
   async function confirm() {
+    const typed = password
+    if (!typed) {
+      passwordInput?.focus()
+      return
+    }
+    password = ''
     error = null
     submitting = true
     // startSSOLink answers a refusal as a string, and since api.ts's
@@ -63,13 +79,17 @@
     // missed.
     let result: { url: string } | string
     try {
-      result = await startSSOLink()
+      result = await startSSOLink(typed)
     } catch (err) {
       result = err instanceof Error ? err.message : String(err)
     }
     if (typeof result === 'string') {
       error = result
       submitting = false
+      // The field was emptied above; put the person back in it to try
+      // again, once the button and field are enabled again.
+      await tick()
+      passwordInput?.focus()
       return
     }
     // Full navigation, not fetch: the provider needs to see the browser
@@ -83,7 +103,7 @@
 
 {#if authState.showSSOLink}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Connect SSO" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Connect SSO" tabindex="-1" use:trapFocus>
       <div class="modal-header">
         <span class="title">Connect SSO to your account</span>
         <button type="button" class="close" onclick={close} aria-label="Close">✕</button>
@@ -109,11 +129,11 @@
           <div class="warning">
             <strong>Your MikroView password and second step will be deleted.</strong>
             <p>
-              Both go: the password, and the authenticator app or passkeys you use
-              for the second step. This can't be undone from MikroView. After
-              connecting, signing in goes through your identity provider only — and
-              if you ever lose access to it, MikroView can't recover this account
-              for you.
+              All of it goes: the password, the authenticator app or passkeys you
+              use for the second step, and your ten recovery codes. This can't be
+              undone from MikroView. After connecting, signing in goes through your
+              identity provider only — and if you ever lose access to it, MikroView
+              can't recover this account for you.
             </p>
           </div>
         {/if}
@@ -123,9 +143,22 @@
           signed out.
         </p>
 
-        {#if error}
-          <p class="error">{error}</p>
-        {/if}
+        <label class="passlabel" for="sso-link-password">Your password</label>
+        <input
+          id="sso-link-password"
+          type="password"
+          class="passfield"
+          autocomplete="current-password"
+          bind:this={passwordInput}
+          bind:value={password}
+          disabled={submitting}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') confirm()
+          }}
+        />
+        <!-- Present before any error so a screen reader announces the
+             message when it arrives. -->
+        <p class="error" role="status" aria-live="polite">{error ?? ''}</p>
       </div>
 
       <div class="actions">
@@ -256,6 +289,24 @@
   .error {
     color: var(--reject);
     font-size: 12px;
+  }
+
+  .error:empty {
+    display: none;
+  }
+
+  .passlabel {
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  .passfield {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-size: 13px;
   }
 
   .actions {

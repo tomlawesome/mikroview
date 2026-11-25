@@ -53,7 +53,7 @@ func TestValidateEntryRejectsInvalidText(t *testing.T) {
 	cases := []Entry{
 		{ID: "e1", Ports: []int{22}, Name: "bad\x00null"},
 		{ID: "e1", Ports: []int{22}, Name: "bad\x01control"},
-		{ID: "e1", Ports: []int{22}, DestIP: "1.2.3.4\x00"},
+		{ID: "e1", Ports: []int{22}, DestIP: "192.0.2.4\x00"},
 	}
 	for _, e := range cases {
 		if err := ValidateEntry(e); !errors.Is(err, ErrInvalidText) {

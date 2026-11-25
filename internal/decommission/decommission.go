@@ -23,7 +23,7 @@
 // chassis's envelope), it does not decide when a segment departed
 // (internal/routerstate observes that from the pushed address table), and
 // it does not talk to the router -- nothing here initiates anything, per
-// AGENTS.md's observe-never-probe invariant.
+// the observe-never-probe invariant (docs/decisions/observe-never-probe.md).
 //
 // The split matters for one structural reason beyond tidiness:
 // internal/routerstate and internal/engine may not import each other in
@@ -116,7 +116,7 @@ const (
 //
 // Snapshotted rather than looked up live, for the import-edge reason in
 // the package comment, and honest by construction about the absence rule
-// AGENTS.md states: an entry exists only where a push actually covered
+// observe-never-probe implies (docs/decisions/observe-never-probe.md): an entry exists only where a push actually covered
 // that address. A range no push ever named yields no stragglers at all,
 // and a violation from it is reported as a bare address rather than
 // dressed in a guess.

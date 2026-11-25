@@ -21,10 +21,21 @@
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { droplistNavState } from '../lib/droplistNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
-  import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
+  import { blocklistState } from '../lib/blocklist.svelte'
+  import {
+    createDroplistEntry,
+    deleteDroplistEntry,
+    mintDroplistKey,
+    revokeDroplistKey,
+    fetchSetupCommands,
+  } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
+  import { CopyFlash } from '../lib/copyFlash.svelte'
   import { formatRelative } from '../lib/format'
-  import type { DroplistResponse } from '../lib/types'
+  import type { DroplistResponse, SetupCommandsResponse } from '../lib/types'
+  import UpgradeWarnings from './UpgradeWarnings.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
 
   let {
     resp,
@@ -35,6 +46,12 @@
      * rather than each control inferring the new state itself. */
     onrefresh: () => Promise<void>
   } = $props()
+
+  // The blocklist builder's door (#1360, BUILD.md part 8): one line,
+  // opening the page for this group's router -- the first that has
+  // reported its address lists, else the first the instance knows. The
+  // page carries its own router picker for the rest.
+  const blocklistDevice = $derived(resp.routers?.[0]?.device ?? appState.devices[0]?.id ?? '')
 
   const sortedEntries = $derived(
     [...resp.entries].sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime()),
@@ -47,7 +64,34 @@
   let armedRevokeKey = $state(false)
   let armedReplaceKey = $state(false)
 
+  // #1447: minting asks for the admin's own password at that moment, as
+  // the wizard's mint step does (StepMint.svelte, #1291) -- the key lets
+  // any machine that holds it fetch the list, so an admin session alone
+  // is not enough. "mint key" and a confirmed "replace key" open this
+  // prompt; Enter (or its mint button) spends the password on the one
+  // call. A refusal reads back under the field and leaves the old key as
+  // it was -- the server checks before it touches anything.
+  let askingPassword = $state(false)
+  let password = $state('')
+  let passEl = $state<HTMLInputElement | null>(null)
+  $effect(() => {
+    passEl?.focus()
+  })
+
+  function askPassword() {
+    keyError = null
+    password = ''
+    askingPassword = true
+  }
+
+  function cancelPassword() {
+    askingPassword = false
+    password = ''
+    keyError = null
+  }
+
   async function mintKey() {
+    if (submittingKey) return
     keyError = null
     submittingKey = true
     // wizardState.address (#1213) is the operator's own saved answer to
@@ -56,12 +100,19 @@
     // copyRouterLines for the same rule applied to the ingest push
     // script. Reading it live at mint time rather than once, since the
     // operator may save it well after this card first mounted.
-    const result = await mintDroplistKey(wizardState.address)
+    const result = await mintDroplistKey(wizardState.address, password)
     submittingKey = false
     if (typeof result === 'string') {
-      keyError = result
+      keyError = couldNot('mint', 'the key', result)
+      password = ''
+      // The field was disabled while the request ran, which drops focus:
+      // put the person back in it to try again.
+      await tick()
+      passEl?.focus()
       return
     }
+    askingPassword = false
+    password = ''
     justMinted = { key: result.key, scheduler: result.scheduler }
     await onrefresh()
   }
@@ -74,7 +125,7 @@
     e.stopPropagation()
     if (armedReplaceKey) {
       armedReplaceKey = false
-      void mintKey()
+      askPassword()
       return
     }
     disarmAll()
@@ -98,7 +149,7 @@
     const err = await revokeDroplistKey()
     submittingKey = false
     if (err) {
-      keyError = err
+      keyError = couldNot('revoke', 'the key', err)
       return
     }
     justMinted = null
@@ -107,17 +158,29 @@
 
   // --- the setup card (#1225): printed, never applied ---------------------
   let setupOpen = $state(false)
-  let copiedLabel = $state<string | null>(null)
-  let copiedTimer: ReturnType<typeof setTimeout> | undefined
+  const flash = new CopyFlash()
 
-  async function copyBlock(key: string, text: string) {
-    const ok = await copyToClipboard(text)
-    if (!ok) return
-    copiedLabel = key
-    if (copiedTimer) clearTimeout(copiedTimer)
-    copiedTimer = setTimeout(() => {
-      if (copiedLabel === key) copiedLabel = null
-    }, 1500)
+  // upgradeCommands (#1378): this card never fetched POST
+  // /api/setup/commands before -- it prints its own four blocks
+  // (scheduler, drop rule, the two emergency ones) from `resp` alone --
+  // so the wizard's upgrade-breaks-a-command warning (#1344) never
+  // reached an operator who only ever opens this card. Fetched once, the
+  // first time the card is opened, rather than on mount: the card starts
+  // closed (see the test below), and a request nobody will see yet is
+  // wasted work. wizardState.address is the same operator-saved answer
+  // mintKey above already reads -- the least this needs, since this card
+  // has no device or token of its own to send.
+  let upgradeCommands = $state<SetupCommandsResponse | null>(null)
+  $effect(() => {
+    if (!setupOpen || upgradeCommands) return
+    fetchSetupCommands({ address: wizardState.address }).then((result) => {
+      if (typeof result === 'string') return
+      upgradeCommands = result
+    })
+  })
+
+  function copyBlock(key: string, text: string) {
+    return flash.run(key, () => copyToClipboard(text))
   }
 
   // --- the add form --------------------------------------------------------
@@ -136,7 +199,7 @@
     const result = await createDroplistEntry({ cidr: newCidr.trim(), reason: newReason.trim(), flagID: newFlagID })
     adding = false
     if (typeof result === 'string') {
-      addError = result
+      addError = couldNot('add', 'this address', result)
       return
     }
     if (result.warning) addWarning = result.warning
@@ -181,7 +244,7 @@
     removeError = null
     const err = await deleteDroplistEntry(cidr)
     if (err) {
-      removeError = err
+      removeError = couldNot('remove', 'this address', err)
       return
     }
     await onrefresh()
@@ -206,7 +269,7 @@
   }
 </script>
 
-<svelte:window onclick={disarmAll} />
+<svelte:window onclick={disarmAll} onkeydown={(e) => e.key === 'Escape' && disarmAll()} />
 
 <div class="wleft">
   {#if resp.routers && resp.routers.length > 0}
@@ -251,28 +314,59 @@
         </button>
       {:else}
         no key — the router cannot fetch the list until one is minted ·
-        <button type="button" class="olink" disabled={submittingKey} onclick={mintKey}>mint key</button>
+        <button type="button" class="olink" disabled={submittingKey} onclick={askPassword}>mint key</button>
       {/if}
     </span>
   </div>
-  {#if keyError}<p class="oghint err" role="alert">{keyError}</p>{/if}
+  {#if askingPassword}
+    <div class="dform passform">
+      <label class="lab">
+        your password, to mint the key
+        <input
+          type="password"
+          placeholder="password"
+          aria-label="Your password"
+          disabled={submittingKey}
+          bind:value={password}
+          bind:this={passEl}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') void mintKey()
+          }}
+        />
+      </label>
+      <button type="button" class="olink" disabled={submittingKey} onclick={mintKey}>
+        {submittingKey ? 'minting…' : 'mint'}
+      </button>
+      <button type="button" class="olink quiet" disabled={submittingKey} onclick={cancelPassword}>cancel</button>
+    </div>
+  {/if}
+  {#if keyError}<div class="oghint"><FailureLine text={keyError} /></div>{/if}
 
   {#if justMinted}
     <div class="reveal">
       <div class="rk">
         <code>{justMinted.key}</code>
         <button type="button" class="olink" onclick={() => copyBlock('reveal-key', justMinted?.key ?? '')}>
-          {copiedLabel === 'reveal-key' ? 'copied' : 'copy'}
+          {flash.label('reveal-key', 'copy')}
         </button>
       </div>
       <div class="rnote">shown once — mikroview does not keep it in the clear, so copy it now</div>
       <div class="rk">
         <code>{justMinted.scheduler}</code>
         <button type="button" class="olink" onclick={() => copyBlock('reveal-scheduler', justMinted?.scheduler ?? '')}>
-          {copiedLabel === 'reveal-scheduler' ? 'copied' : 'copy'}
+          {flash.label('reveal-scheduler', 'copy')}
         </button>
       </div>
       <button type="button" class="olink quiet" onclick={() => (justMinted = null)}>done</button>
+    </div>
+  {/if}
+
+  {#if blocklistDevice}
+    <div class="orow">
+      <span>lists</span>
+      <span class="ov">
+        <button type="button" class="olink" onclick={() => blocklistState.openFor(blocklistDevice)}>Block known-bad addresses…</button>
+      </span>
     </div>
   {/if}
 
@@ -288,32 +382,35 @@
   {#if setupOpen}
     <div class="setupcard">
       <p class="oghint">printed, never applied — paste these on the router yourself</p>
+      {#if upgradeCommands}
+        <UpgradeWarnings commands={upgradeCommands} />
+      {/if}
       <div class="setupblock">
         <span class="sblab">scheduler</span>
         <code>{resp.setup.scheduler}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-scheduler', resp.setup.scheduler)}>
-          {copiedLabel === 'setup-scheduler' ? 'copied' : 'copy'}
+          {flash.label('setup-scheduler', 'copy')}
         </button>
       </div>
       <div class="setupblock">
         <span class="sblab">drop rule</span>
         <code>{resp.setup.rule}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-rule', resp.setup.rule)}>
-          {copiedLabel === 'setup-rule' ? 'copied' : 'copy'}
+          {flash.label('setup-rule', 'copy')}
         </button>
       </div>
       <div class="setupblock">
         <span class="sblab">emergency: disable the rule</span>
         <code>{resp.setup.disableRule}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-disable', resp.setup.disableRule)}>
-          {copiedLabel === 'setup-disable' ? 'copied' : 'copy'}
+          {flash.label('setup-disable', 'copy')}
         </button>
       </div>
       <div class="setupblock">
         <span class="sblab">emergency: empty the list</span>
         <code>{resp.setup.emptyList}</code>
         <button type="button" class="olink" onclick={() => copyBlock('setup-empty', resp.setup.emptyList)}>
-          {copiedLabel === 'setup-empty' ? 'copied' : 'copy'}
+          {flash.label('setup-empty', 'copy')}
         </button>
       </div>
     </div>
@@ -346,7 +443,7 @@
       {adding ? 'adding…' : 'add'}
     </button>
   </div>
-  {#if addError}<p class="oghint err" role="alert">{addError}</p>{/if}
+  {#if addError}<div class="oghint"><FailureLine text={addError} /></div>{/if}
   {#if addWarning}<p class="oghint">{addWarning}</p>{/if}
 
   {#if sortedEntries.length === 0}
@@ -377,7 +474,7 @@
       </div>
     {/each}
   {/if}
-  {#if removeError}<p class="oghint err" role="alert">{removeError}</p>{/if}
+  {#if removeError}<div class="oghint"><FailureLine text={removeError} /></div>{/if}
 </div>
 
 <style>
@@ -431,11 +528,6 @@
     font-size: 11.5px;
     font-style: italic;
     color: var(--fg-dim);
-  }
-
-  .oghint.err {
-    color: var(--reject);
-    font-style: normal;
   }
 
   .oghint.dfoot {
@@ -550,6 +642,10 @@
     flex-wrap: wrap;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .dform.passform {
+    margin-top: 4px;
   }
 
   .dform .lab {

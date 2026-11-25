@@ -4,6 +4,18 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // #1363: the version this tab's bundle was built with, baked in as a
+  // real constant (not read at runtime) so freshness.svelte.ts always
+  // has something fixed to compare against a fresh /api/healthz answer
+  // -- the first thing that answer would otherwise change is this
+  // baseline too, and a tab opened after the upgrade would never see a
+  // difference. Same VERSION the Dockerfile stamps into the Go binary
+  // via -ldflags (main.go's `version`), so the two sides speak the same
+  // string; "dev:local" matches main.go's own un-stamped default, so a
+  // plain `npm run build` compares equal to a plain `go run` server.
+  define: {
+    __MIKROVIEW_VERSION__: JSON.stringify(process.env.VERSION ?? 'dev:local'),
+  },
   plugins: [
     svelte(),
     VitePWA({

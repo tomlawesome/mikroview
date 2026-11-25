@@ -7,6 +7,7 @@ import {
   type RouterNatRule,
   type RouterTable,
 } from './api'
+import { plainWords } from './plainWords'
 import { partitionNatTable, type NatEventFacts, type NatPartition } from './natMatch'
 import { appState } from './state.svelte'
 
@@ -15,7 +16,7 @@ interface Anchor {
   y: number
 }
 
-export type RouterLookupMode = 'rule' | 'nat'
+type RouterLookupMode = 'rule' | 'nat'
 
 // Which of the NAT popup's two modes is showing. They are two different
 // claims and #445 requires that they never share a rendering, so this is
@@ -36,7 +37,7 @@ export type NatMode = 'logged' | 'not-logged'
 // as the whole group's.
 export type NatEvidence = 'row' | 'group-head'
 
-export interface NatLookupContext {
+interface NatLookupContext {
   // ruleLabel is the event's log-prefix slug, empty when the rule was
   // not tagged. It alone decides which of the two modes this is.
   ruleLabel: string
@@ -194,9 +195,9 @@ class RouterLookupState {
         if (id !== this.requestId) return
         this.loading = false
       },
-      () => {
+      (err) => {
         if (id !== this.requestId) return
-        this.error = 'Lookup failed'
+        this.error = plainWords(err)
         this.loading = false
       },
     )
@@ -241,7 +242,7 @@ export function natChip(natMode: NatMode): string {
 // "N|port-fwd|" is exactly what #445's logged mode resolves through. A
 // list that stopped at "ADRL" would have made every logged NAT
 // translation report itself as unresolvable.
-export function prefixMatchesLabel(logPrefix: string, label: string): boolean {
+function prefixMatchesLabel(logPrefix: string, label: string): boolean {
   if (label === '') return false
   if (logPrefix === label) return true
   return (

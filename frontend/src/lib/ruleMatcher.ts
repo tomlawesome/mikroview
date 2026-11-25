@@ -24,7 +24,7 @@
 // a terminated Worker loses nothing.
 
 /** How long one batch gets before its Worker is terminated. */
-export const RULE_MATCH_TIMEOUT_MS = 500
+const RULE_MATCH_TIMEOUT_MS = 500
 
 /** What the matcher needs from an event. */
 export type MatchCandidate = { id: number; ruleLabel: string; raw: string }

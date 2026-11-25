@@ -79,7 +79,7 @@ export function offsetPoly(hull: readonly Pt[], d: number): Pt[] {
 }
 
 /** A hull as one closed path. */
-export function hullPath(hull: readonly Pt[]): string {
+function hullPath(hull: readonly Pt[]): string {
   return 'M' + hull.map((p) => R2(p[0]) + ' ' + R2(p[1])).join('L') + 'Z'
 }
 

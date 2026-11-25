@@ -18,6 +18,8 @@
   // unrecognized actions still get a plain, readable fallback rather
   // than a dumped field).
   import { onMount } from 'svelte'
+  import FailureLine from './FailureLine.svelte'
+  import GhostRows from './GhostRows.svelte'
   import { auditState } from '../lib/audit.svelte'
   import { appState } from '../lib/state.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
@@ -326,7 +328,9 @@
   {/if}
 
   {#if auditState.error}
-    <p class="empty error">Could not load the audit log: {auditState.error}</p>
+    <FailureLine text={auditState.error} />
+  {:else if !auditState.loaded}
+    <GhostRows label="Reading the audit log…" rows={5} />
   {:else if auditState.loaded && auditState.list.length === 0}
     <p class="empty">No admin actions recorded yet.</p>
   {:else if auditState.list.length > 0}
@@ -344,9 +348,9 @@
           </th>
         </tr>
         <tr class="filters">
-          <td><input bind:value={filters.time} placeholder="filter…" aria-label="Filter by time" /></td>
-          <td><input bind:value={filters.actor} placeholder="filter…" aria-label="Filter by actor" /></td>
-          <td><input bind:value={filters.what} placeholder="filter…" aria-label="Filter by what" /></td>
+          <td><input bind:value={filters.time} placeholder="filter" aria-label="Filter by time" /></td>
+          <td><input bind:value={filters.actor} placeholder="filter" aria-label="Filter by actor" /></td>
+          <td><input bind:value={filters.what} placeholder="filter" aria-label="Filter by what" /></td>
         </tr>
       </thead>
       <tbody>

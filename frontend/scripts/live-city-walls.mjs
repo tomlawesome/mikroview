@@ -23,7 +23,7 @@
 // pair the city-wide wall escalates, the same wording and the same code
 // path either way.
 
-import { session, check, done, feedAndSettle } from './live-browser.mjs'
+import { session, check, done, feedAndSettle, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // The one host that sends the unplanned, no-rule-label traffic below --
@@ -99,6 +99,7 @@ if (!prePushed) {
   const preGates = await page.locator('[data-card="topography"] .city [data-gate]').count()
   check(preGates === 0, `before any push the walls stand with no gates (${preGates} gate posts)`)
 } else {
+  // safe: real state branch (an earlier scenario already pushed), not a swallowed failure
   check(true, 'an earlier scenario already pushed a rule table -- the pre-push honesty state is asserted on standalone runs')
 }
 
@@ -106,7 +107,7 @@ if (!prePushed) {
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { name: 'live-city-walls', kind: 'ingest', device: DEVICE },
+  data: tokenMint({ name: 'live-city-walls', kind: 'ingest', device: DEVICE }),
 })
 const token = (await tokenRes.json()).value
 

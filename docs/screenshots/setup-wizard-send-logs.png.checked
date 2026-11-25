@@ -1,0 +1,4 @@
+Recaptured at f40cfbb2 (2026-11-19) from a seeded demo (scripts/demo-up.sh) and the output matched the committed image in
+what it shows (only clock times, ports, secrets and event rates differ): the wizard changes do not alter the command block and token line.
+Recorded here because an identical recapture leaves git nothing to commit, so the image's own commit
+cannot move.

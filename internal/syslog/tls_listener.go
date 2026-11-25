@@ -50,7 +50,7 @@ func ListenTLS(ctx context.Context, addr string, cert CertificateSource, out cha
 //
 // Satisfied by servertls.Reloader. Kept as a local interface rather than
 // importing that package, for the same dependency-direction reason
-// internal/oidc keeps its config as plain fields.
+// gauntlet/oidc keeps its config as plain fields.
 type CertificateSource interface {
 	GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 }

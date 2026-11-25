@@ -11,6 +11,8 @@ import {
   dayLabel,
   dayX,
   daysAtX,
+  deleteArmedLabel,
+  deletePasswordLabel,
   heldRow,
   loadOrMintHistoryKey,
   memoryHint,
@@ -19,7 +21,6 @@ import {
   pageStepDays,
   proposeCap,
   proposeDays,
-  proposeOff,
   restartRow,
   saveHistoryKeyForSession,
   stateRow,
@@ -255,21 +256,26 @@ describe('the cap', () => {
   })
 })
 
-describe('turning off', () => {
-  it('names every day on disk and the link deletes them', () => {
-    const p = proposeOff(story(), en)!
-    expect(p.kind).toBe('doff')
-    expect(p.sentence).toBe('off deletes all 27 days on disk, back to 7 Aug, and keeps nothing after')
-    expect(p.applyLabel).toBe('delete 27 days')
-    expect(p.keepLabel).toBe('keep them')
-    expect(p.cut).toBe(27)
-    expect(p.newOldest).toBeNull()
-    expect(p.cutLabel).toBe('all 27 days would let go')
-    expect({ enabled: p.enabled, days: p.days, maxBytes: p.maxBytes }).toEqual({ enabled: false, days: 30, maxBytes: GIB })
+describe('turned off with the files kept (#1354)', () => {
+  it('reads the kept window as a range, with how to use it again', () => {
+    // August dates: en-GB writes September "Sept" on some runtimes.
+    const held = { days: 14, oldest: '2026-08-07', newest: '2026-08-20', bytes: 812 * MIB }
+    expect(heldRow(story({ enabled: false, held }), 'en-GB')).toBe(
+      '14 days · 7 Aug – 20 Aug · 812 MiB — kept on disk; turn history on with the same key to use them',
+    )
   })
 
-  it('is not a proposal when nothing is on disk to delete', () => {
-    expect(proposeOff(story({ held: null }))).toBeNull()
+  it('names one day once', () => {
+    const held = { days: 1, oldest: '2026-08-20', newest: '2026-08-20', bytes: 3 * MIB }
+    expect(heldRow(story({ enabled: false, held }), 'en-GB')).toBe(
+      '1 day · 20 Aug · 3 MiB — kept on disk; turn history on with the same key to use them',
+    )
+  })
+
+  it('words the delete action by the days it would delete', () => {
+    expect(deleteArmedLabel(27)).toBe('confirm — delete 27 days')
+    expect(deleteArmedLabel(1)).toBe('confirm — delete 1 day')
+    expect(deletePasswordLabel(27)).toBe('Your password, to delete 27 days of history')
   })
 })
 
@@ -283,18 +289,24 @@ describe('the stopped state’s line', () => {
   it('leaves the span out when there is nothing in memory yet', () => {
     expect(memoryHint(null)).toBe('nothing on disk — events live in memory only; on keeps those and every day after')
   })
+
+  it('does not claim the disk is empty while kept files are on it', () => {
+    expect(memoryHint(null, true)).toBe(
+      'nothing new is kept on disk — events live in memory only; on keeps those and every day after',
+    )
+  })
 })
 
 describe('the memory group’s on-restart row (round 43, #921)', () => {
   it('with history on, names the days that stay and the one thing that reads them', () => {
-    expect(restartRow(story())).toBe('the buffer clears — the 27 days on disk stay; trying a watcher reads them')
+    expect(restartRow(story())).toBe('the buffer clears — the 27 days on disk stay; trying a detector reads them')
     expect(restartRow(story({ held: { days: 1, oldest: '2026-09-02', newest: '2026-09-02', bytes: 3 * MIB } }))).toBe(
-      'the buffer clears — the 1 day on disk stays; trying a watcher reads it',
+      'the buffer clears — the 1 day on disk stays; trying a detector reads it',
     )
   })
 
   it('just turned on with nothing filed yet, claims no count', () => {
-    expect(restartRow(story({ held: null }))).toBe('the buffer clears — what is on disk stays; trying a watcher reads it')
+    expect(restartRow(story({ held: null }))).toBe('the buffer clears — what is on disk stays; trying a detector reads it')
   })
 
   it('off with a key points one storey down; no key says why nothing outlives it elsewhere', () => {

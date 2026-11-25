@@ -79,6 +79,9 @@
   // that omits it is not the rule table. It stays unnameable: the row
   // is plain dim text with no rename affordance, for every tier.
   import { onMount } from 'svelte'
+  import GhostRows from './GhostRows.svelte'
+  import FailureLine from './FailureLine.svelte'
+  import { couldNot } from '../lib/plainWords'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -88,6 +91,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { familyOf } from '../lib/flagPalette'
   import {
+    deleteDevice,
     fetchDeviceMACs,
     fetchRouterRules,
     fetchRouterAddresses,
@@ -101,8 +105,11 @@
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
   import {
+    deleteContract,
     deviceState,
+    loggingLeftovers,
     multihomedEcho,
+    routerAddress,
     setupEcho,
     sortedDevices,
     ratePerSecond,
@@ -111,7 +118,9 @@
   } from '../lib/fleet'
   import { REFUSED_STRIP_LEAD } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
+  import LoggingLeftovers from './LoggingLeftovers.svelte'
   import type {
+    Device,
     EntityType,
     MACRegistryEntry,
     RefusedSender,
@@ -212,11 +221,44 @@
     wizardState.openReEnrol(deviceId)
   }
 
-  // Finish registering… (#1291) opens the router ledger straight at
-  // Register, for a router whose only gap is that one step -- its
-  // enrolment already stands, so nothing here mints a fresh token.
-  function finishRegistering(deviceId: string) {
-    wizardState.openRegister(deviceId)
+  // Remove… (#1369): DELETE /api/devices/{id}. Only ever offered on a
+  // card whose device is not configured: true -- a config.yaml-declared
+  // device is rebuilt from that file every boot, so the server refuses
+  // it (ErrDeviceConfigured) and the card shows a note instead of this
+  // control (see the config-declared branch in the template below).
+  //
+  // The confirm state lives on the page, one device id at a time --
+  // DecommissionCard's own force-remove is the same shape (a card
+  // turning into its own confirmation rather than a separate dialog),
+  // asking what goes before it goes.
+  let deletingId = $state<string | null>(null)
+  let deleteError = $state<string | null>(null)
+  let deleteBusy = $state(false)
+
+  function startDelete(deviceId: string) {
+    deletingId = deviceId
+    deleteError = null
+  }
+
+  function cancelDelete() {
+    deletingId = null
+    deleteError = null
+  }
+
+  async function confirmDelete(deviceId: string) {
+    deleteBusy = true
+    deleteError = null
+    try {
+      const err = await deleteDevice(deviceId)
+      if (err) {
+        deleteError = couldNot('remove', 'this router', err)
+        return
+      }
+      deletingId = null
+      await appState.refreshDevicesAndStats().catch(() => {})
+    } finally {
+      deleteBusy = false
+    }
   }
 
   // Renaming is an edit, so the viewer tier does not get the affordance
@@ -679,7 +721,7 @@
     renameSaving = false
     if (err && renameSeq === requestSeq) {
       renamingKey = wasRenaming
-      renameError = err
+      renameError = couldNot('rename', 'this name', err)
     }
   }
 
@@ -719,27 +761,46 @@
     type="button"
     class="row-action"
     onclick={() => reEnrol(deviceId)}
-    aria-label="Re-enrol {label} — mint a fresh enrolment token for it"
+    aria-label="Re-enrol {label} — mint a fresh ingest token for it"
   >
     Re-enrol…
   </button>
 {/snippet}
 
-{#snippet finishRegisteringButton(deviceId: string, label: string)}
-  <!-- Finish registering… (#1291): the ledger at Register, keeping the
-       router's device and history, with no fresh token minted -- for a
-       router whose enrolment already stands and is only short of the
-       ledger's own confirmation. Re-enrol… stays offered beside it for
-       when the enrolment itself is the problem; this is for the one
-       step nearly finished, not the whole walk again. -->
+{#snippet removeButton(d: Device)}
+  <!-- Remove… (#1369): DELETE /api/devices/{id}, admin-only like every
+       other device-identity write, next to Re-enrol… on the same card.
+       Only ever rendered for a device that is not configured: true --
+       see the config-declared note in the templates below for the
+       other case. -->
   <button
     type="button"
     class="row-action"
-    onclick={() => finishRegistering(deviceId)}
-    aria-label="Finish registering {label} — resume the Register step for it"
+    onclick={() => startDelete(d.id)}
+    aria-label="Remove {d.name || d.sourceIp} — delete this router from mikroview"
   >
-    Finish registering…
+    Remove…
   </button>
+{/snippet}
+
+{#snippet removeConfirm(d: Device)}
+  <!-- The confirm step: what goes and what stays, in the card itself
+       rather than a separate dialog, the same reason DecommissionCard's
+       own force-remove confirm stays on the card -- the evidence (here,
+       the router's own name/address/enrolment) has to be visible at the
+       moment of the decision. -->
+  <div class="frow dim">{deleteContract(d)}</div>
+  {#if deleteError}<FailureLine text={deleteError} />{/if}
+  <button
+    type="button"
+    class="row-action reject"
+    disabled={deleteBusy}
+    onclick={() => confirmDelete(d.id)}
+    aria-label="Confirm removing {d.name || d.sourceIp}"
+  >
+    Remove it
+  </button>
+  <button type="button" class="row-action" disabled={deleteBusy} onclick={cancelDelete}>cancel</button>
 {/snippet}
 
 <div class="page scrollbar op-page">
@@ -752,6 +813,10 @@
             {@const detail = routerDetail[d.id]}
             <div class="fcard" class:live={d.status === 'live'}>
               <div class="fhead"><b>{d.name}</b><span class="fstate {st.cls}">{st.mark} {st.text}</span></div>
+              <!-- #1372: the address under the name, same fallback chain
+                   Fleet.svelte's card reads (lib/fleet.ts's
+                   routerAddress) so the two surfaces cannot disagree. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
@@ -783,9 +848,17 @@
                      router reports of the wizard's own logging setup. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: another action, or a built-in, still sending
+                   logs here from a setup the wizard has moved past. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
               {#if isAdmin}
                 {@render reEnrolButton(d.id, d.name)}
+                <!-- #1369: this card's device is always configured: true
+                     (registeredRouters filters on it), so DELETE always
+                     refuses it (ErrDeviceConfigured) -- a note instead
+                     of a button that could only ever fail. -->
+                <div class="frow dim">declared in config.yaml — remove it there</div>
               {/if}
             </div>
           {/each}
@@ -793,13 +866,20 @@
             {@const detail = routerDetail[d.id]}
             <div class="fcard unreg">
               <div class="fhead">
-                <b>{d.name || d.sourceIp}</b><span class="fstate warn">● PUSHING · UNREGISTERED</span>
+                <b>{d.name || d.sourceIp}</b><!-- The chip follows registeredAt: set means the wizard enrolled it. -->
+                <span class="fstate warn">● PUSHING · {d.registeredAt ? 'ENROLLED' : 'UNDECLARED'}</span>
               </div>
+              <!-- #1372: same address line as the registered cards above. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
               </div>
-              <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>
+              <div class="frow dim">
+                {d.registeredAt
+                  ? 'enrolled by the wizard; not declared in config.yaml'
+                  : 'its lines are kept; it has no name until it is enrolled or declared in config.yaml'}
+              </div>
               {#if setupEcho(d)}
                 <!-- #1241's line belongs here too: a router discovered by
                      its own push and never declared is the common case,
@@ -807,41 +887,23 @@
                      off here hid the one card most likely to need it. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: same as the registered cards above. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
-              <!-- #1291: enrolling and the ledger's Register step are
-                   independent, so the pair says how far the operator
-                   actually got. This card is where it has to be said --
-                   every router the wizard adds is drawn here, and the
-                   config.yaml-declared cards above can never carry a
-                   registeredAt at all (the server refuses to register
-                   one, since config.yaml rebuilds it every boot).
-                   Worded as "the Register step" rather than
-                   "registered": on this card that word already means
-                   declared in config.yaml, which is the chip in the
-                   header, and the two senses must not be read as one. -->
-              {#if d.acceptedIp && !d.registeredAt}
-                <div class="frow">its logs are accepted, but the Register step was never finished</div>
-              {:else if d.registeredAt && !d.acceptedIp}
-                <div class="frow dim">
-                  the Register step is done; still waiting for its enrolment token to arrive
-                </div>
-              {/if}
               {#if isAdmin}
-                {#if d.acceptedIp && !d.registeredAt}
-                  <!-- #1291: this router's only gap is the Register
-                       step -- offer to finish that directly rather than
-                       sending it through Re-enrol's full mint-a-fresh-
-                       token walk for one step it nearly completed. -->
-                  {@render finishRegisteringButton(d.id, d.name || d.sourceIp)}
-                {/if}
                 <!-- Re-enrol… belongs on this card most of all: since
                      #1281 a router earns its place by presenting a
                      token, and a router the ledger declared is not in
                      config.yaml, so every router the wizard itself adds
                      is drawn here rather than above. -->
                 {@render reEnrolButton(d.id, d.name || d.sourceIp)}
+                {#if deletingId === d.id}
+                  {@render removeConfirm(d)}
+                {:else}
+                  {@render removeButton(d)}
+                {/if}
               {/if}
             </div>
           {/each}
@@ -887,6 +949,13 @@
               <div class="frow dim">
                 {r.lines} line{r.lines === 1 ? '' : 's'} · first seen {formatHM(r.firstSeen)} · last seen {formatHM(r.lastSeen)}
               </div>
+              {#if r.note}
+                <!-- #1373: this address is not a stranger's -- it is an
+                     enrolled router's own pushed /ip/address table, so a
+                     logging action from an earlier setup is almost
+                     certainly still sending from it. -->
+                <div class="frow dim">{r.note}</div>
+              {/if}
               <div class="frow dim">{REFUSED_STRIP_LEAD} Re-enrol the router it belongs to, or add it as a new one.</div>
             </div>
           {/each}
@@ -936,7 +1005,14 @@
       >
     </div>
 
-    {#if activeView === 'hosts'}
+    {#if entitiesState.loadError !== null}
+      <FailureLine verb="load" thing="the names" said={entitiesState.loadError} />
+    {/if}
+    {#if !entitiesState.loaded}
+      <GhostRows label="Reading the names…" rows={5} />
+    {:else if entitiesState.loadError !== null && !entitiesState.hasLoaded}
+      <!-- A failed first load: the line above stands alone. -->
+    {:else if activeView === 'hosts'}
       <table class="etable">
         <thead>
           <tr>
@@ -1012,7 +1088,7 @@
               </td>
             </tr>
             {#if isRenaming('host', row.key) && renameError}
-              <tr><td colspan="7" class="rename-error">{renameError}</td></tr>
+              <tr><td colspan="7"><FailureLine text={renameError} /></td></tr>
             {/if}
           {/each}
           {#if rows.length === 0}
@@ -1062,7 +1138,7 @@
               </td>
             </tr>
             {#if isRenaming('rule', row.key) && renameError}
-              <tr><td colspan="4" class="rename-error">{renameError}</td></tr>
+              <tr><td colspan="4"><FailureLine text={renameError} /></td></tr>
             {/if}
           {/each}
           {#if ruleRows.length === 0}
@@ -1106,7 +1182,7 @@
               <td class={row.lastSeen ? '' : 'dim'}>{row.lastSeen ? formatSpacedAge(row.lastSeen, appState.now) : '—'}</td>
             </tr>
             {#if isRenaming('port', row.key) && renameError}
-              <tr><td colspan="3" class="rename-error">{renameError}</td></tr>
+              <tr><td colspan="3"><FailureLine text={renameError} /></td></tr>
             {/if}
           {/each}
           {#if portRows.length === 0}
@@ -1218,9 +1294,9 @@
     border-color: var(--hair-2);
   }
 
-  /* The unregistered router, standing in the berth's slot (rounds
+  /* The router not declared in config.yaml, standing in the berth's slot (rounds
      37-38). Its border is --now -- the time/attention ink, not --alarm:
-     a router that pushes without being registered is something to look
+     a router that pushes without being declared is something to look
      at, not something going wrong, and its lines are being kept either
      way. No new colour is introduced for it. */
   .fcard.unreg {
@@ -1260,6 +1336,20 @@
   .row-action:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  /* Remove it (#1369): the one destructive control on this card, in the
+     same reject ink the shared failure line already carries elsewhere on this
+     page -- no new colour, just this button reading as the one that
+     actually deletes something. */
+  .row-action.reject {
+    color: var(--reject);
+    border-color: color-mix(in srgb, var(--reject) 45%, transparent);
+  }
+
+  .row-action.reject:hover {
+    color: var(--reject);
+    border-color: var(--reject);
   }
 
   /* The empty berth (#718): a further grid cell in .fcards, same
@@ -1344,7 +1434,7 @@
     color: var(--fg-dim);
   }
 
-  /* PUSHING · UNREGISTERED: the time/attention ink, not the alarm one
+  /* PUSHING · ENROLLED / UNDECLARED: the time/attention ink, not the alarm one
      (see .fcard.unreg). */
   .fstate.warn {
     color: var(--now);
@@ -1352,6 +1442,13 @@
 
   .fcard .frow {
     padding: 3px 0;
+  }
+
+  /* Same field as Fleet.svelte's own .mono (#1372): the address line
+     under a router card's name. */
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
   }
 
   /* --- the named-things table ------------------------------------------ */
@@ -1446,12 +1543,6 @@
     color: var(--fg);
     width: 100%;
     min-width: 120px;
-  }
-
-  .rename-error {
-    color: var(--reject);
-    font-family: var(--font-sans, inherit);
-    font-size: 12px;
   }
 
   .lz {

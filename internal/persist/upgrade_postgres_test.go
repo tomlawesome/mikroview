@@ -37,9 +37,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -125,17 +123,11 @@ func testOnePostgresFixture(t *testing.T, root, version, adminDSN, dumpPath stri
 		t.Errorf("schema after migration = %d, want CurrentSchema() = %d", after, persist.CurrentSchema())
 	}
 
-	// 3. The admin and viewer accounts exist and their passwords verify.
-	authStore, err := auth.OpenWithBackend(persist.NewPostgresBackend(pool, "auth"))
-	if err != nil {
-		t.Fatalf("opening the accounts store: %v", err)
-	}
-	if _, err := authStore.Authenticate(manifest.AdminUsername, fixtureAdminPassword, time.Now()); err != nil {
-		t.Errorf("admin login (%s): %v", manifest.AdminUsername, err)
-	}
-	if _, err := authStore.Authenticate(manifest.ViewerUsername, fixtureAdminPassword, time.Now()); err != nil {
-		t.Errorf("viewer login (%s): %v", manifest.ViewerUsername, err)
-	}
+	// 3. The accounts: opened through gauntlet with the row sealed under
+	// a key, the admin's and viewer's passwords checked, in
+	// TestUpgradeFixturesPostgresOpenOnGauntlet
+	// (upgrade_gauntlet_postgres_test.go, #1202 section C) --
+	// internal/auth, which this step used to open them with, is gone.
 
 	// 4. The named entity.
 	entityStore, err := entities.OpenWithBackend(persist.NewPostgresBackend(pool, "entities"))
@@ -228,7 +220,7 @@ func restoreDump(t *testing.T, adminDSN, version, dumpPath string) string {
 	// mapped to [a-z0-9_] above and checked again here -- a dump named
 	// anything else is refused rather than concatenated.
 	for _, r := range database {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+		if r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 			t.Fatalf("recorded version %q does not map to a safe database identifier (%q)", version, database)
 		}
 	}

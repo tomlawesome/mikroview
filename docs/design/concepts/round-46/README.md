@@ -241,6 +241,7 @@ by giving it a negative `animation-delay` and then pausing it, and
 
 <!-- owner's verdict goes here -->
 
+Written 2026-09-06.
 
 ## Owner verdict — ratified, 2026-09-06
 

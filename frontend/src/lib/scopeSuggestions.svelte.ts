@@ -13,7 +13,7 @@
 //
 // Nothing here contacts a router. The rule labels come from tables the
 // router's own scheduled script pushed to mikroview (#186), which is the
-// only place they can come from -- see AGENTS.md's "mikroview observes;
+// only place they can come from -- see docs/decisions/observe-never-probe.md, "mikroview observes;
 // it never scans or connects".
 
 import { fetchEntities, fetchRouterRules } from './api'

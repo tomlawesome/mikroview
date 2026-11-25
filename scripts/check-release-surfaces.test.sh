@@ -133,6 +133,26 @@ services:
       - ./mikroview:/etc/mikroview:ro
 EOF
 
+  # The release job's smoke-test step, reduced to what check 10 reads: it
+  # must make a key and mount it read-only at the app folder (CFG-0083).
+  cat >"$dir/.github/workflows/docker.yml" <<'EOF'
+name: docker
+on: push
+jobs:
+  release:
+    steps:
+      - name: Smoke-test the image that will become latest
+        run: |
+          docker volume create release-test-etc >/dev/null
+          docker run --rm -v release-test-etc:/etc/mikroview alpine:3.24 sh -c \
+            'head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key'
+          docker run -d --name release-test -p 8080:8080 \
+            -v release-test-etc:/etc/mikroview:ro \
+            $IMAGE:$VERSION
+      - name: Verify the binary reports the release version
+        run: echo ok
+EOF
+
   commit "$dir" "2026-01-01T00:00:00" "initial"
 }
 
@@ -298,6 +318,28 @@ check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a screenshot referenced b
 check "$(case "$out" in *"FAIL: docs/screenshots/stream-dark.png -- untracked (never committed)"*) echo true;; *) echo false;; esac)" \
   "and names it as untracked"
 
+# a screenshot used only by site/index.html (as img/<name>.png, which
+# the Pages job copies from docs/screenshots/) is checked too (#1456:
+# stream-dark.png was named by neither README.md nor docs/*.md, so its
+# staleness was never looked at)
+c6e="$TMP/case6e-site-only"
+cp -r "$shots" "$c6e"
+printf '<!doctype html><title>x</title>\n<img src="img/stream-dark.png" alt="s" />\n' >"$c6e/site/index.html"
+printf 'png-s1\n' >"$c6e/docs/screenshots/stream-dark.png"
+for f in components/EventRow.svelte components/LiveTable.svelte components/FilterBar.svelte lib/columns.svelte.ts lib/tokenBar.ts; do
+  printf 'export const v = 1;\n' >"$c6e/frontend/src/$f"
+done
+commit "$c6e" "2026-01-05T00:00:00" "add the site-only screenshot and its sources"
+run "$c6e"
+check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/stream-dark.png"*) echo true;; *) echo false;; esac)" \
+  "a site-only screenshot fresh against its sources is checked and passes"
+printf 'export const v = 2;\n' >"$c6e/frontend/src/components/EventRow.svelte"
+commit "$c6e" "2026-01-06T00:00:00" "move a component the site screenshot shows"
+run "$c6e"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a site-only screenshot whose source moved after capture fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/screenshots/stream-dark.png -- frontend/src/components/EventRow.svelte changed at"*) echo true;; *) echo false;; esac)" \
+  "and names the site-only screenshot and the moved source"
+
 # --- check 7: review records -----------------------------------------------
 
 # no record for VERSION -> FAIL, names the missing version
@@ -373,6 +415,51 @@ check "$(case "$out" in *"FAIL: docs/x.md:"*"shot marker 'the widget in its coll
 run "$good"
 check "$(case "$out" in *"ok: no unrealized shot markers"*) echo true;; *) echo false;; esac)" \
   "a fixture with no shot markers passes"
+
+# two markers sharing one line are reported as two failures, each with
+# its own marker text -- not one garbled failure spanning both (#1345
+# S6S-F2)
+c9b="$TMP/case9b-two-shot-markers-one-line"
+cp -r "$good" "$c9b"
+printf '\n<!-- shot: the widget collapsed --><!-- shot: the widget expanded -->\n' >>"$c9b/docs/x.md"
+commit "$c9b" "2026-01-02T00:00:00" "add two unrealized shot markers on one line"
+run "$c9b"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "two shot markers on one line fails (rc=$rc)"
+check "$(case "$out" in *"shot marker 'the widget collapsed' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
+  "and names the first marker's own text"
+check "$(case "$out" in *"shot marker 'the widget expanded' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
+  "and the second marker's own text, not garbled together with the first"
+
+# --- check 10: the release smoke test mounts a key ------------------------
+# From v0.7.0 the server exits with CFG-0083 when no key is mounted, so a
+# smoke test that starts the image bare never sees healthz and latest never
+# moves.
+c10a="$TMP/case10a-no-key-mount"
+cp -r "$good" "$c10a"
+grep -vF -- '-v release-test-etc:/etc/mikroview:ro' "$c10a/.github/workflows/docker.yml" >"$c10a/docker.yml.new"
+mv "$c10a/docker.yml.new" "$c10a/.github/workflows/docker.yml"
+commit "$c10a" "2026-01-02T00:00:00" "drop the key mount from the smoke test"
+run "$c10a"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a smoke test with no key mount fails (rc=$rc)"
+check "$(case "$out" in *"release smoke test"*) echo true;; *) echo false;; esac)" \
+  "and names the release smoke test"
+
+c10b="$TMP/case10b-no-key-file"
+cp -r "$good" "$c10b"
+grep -vF -- 'history.key' "$c10b/.github/workflows/docker.yml" >"$c10b/docker.yml.new"
+mv "$c10b/docker.yml.new" "$c10b/.github/workflows/docker.yml"
+commit "$c10b" "2026-01-02T00:00:00" "drop the key file from the smoke test"
+run "$c10b"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a smoke test that never makes a key fails (rc=$rc)"
+
+c10c="$TMP/case10c-no-docker-yml"
+cp -r "$good" "$c10c"
+git -C "$c10c" rm -q .github/workflows/docker.yml
+commit "$c10c" "2026-01-02T00:00:00" "remove docker.yml"
+run "$c10c"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "no docker.yml still passes (rc=$rc)"
+check "$(case "$out" in *"skip: release smoke test key mount (.github/workflows/docker.yml not present)"*) echo true;; *) echo false;; esac)" \
+  "and prints the skip line"
 
 echo
 if [ "$fails" -ne 0 ]; then

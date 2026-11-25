@@ -40,7 +40,7 @@ func TestBackupRestoreRoundTripCarriesAnEncryptedStore(t *testing.T) {
 
 	flagsPath := filepath.Join(dir, "flags.json")
 	const marker = `{"flags":[{"ip":"203.0.113.9","reason":"e2e-853-marker"}]}`
-	if _, err := persist.NewEncryptedFileBackend(flagsPath, key).Save(context.Background(), []byte(marker), 0); err != nil {
+	if _, err := persist.NewEncryptedFileBackend(flagsPath, "flags", key).Save(context.Background(), []byte(marker), 0); err != nil {
 		t.Fatalf("seeding the encrypted flags store: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestBackupRestoreRoundTripCarriesAnEncryptedStore(t *testing.T) {
 		t.Fatal("the restored flags file is plaintext on disk -- #853 requires it stay encrypted")
 	}
 
-	snap, err := persist.NewEncryptedFileBackend(newFlagsPath, key).Load(context.Background())
+	snap, err := persist.NewEncryptedFileBackend(newFlagsPath, "flags", key).Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load after restore: %v", err)
 	}

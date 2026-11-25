@@ -9,7 +9,7 @@ import (
 )
 
 // appFolderRoot is the folder an operator mounts read-only at
-// /etc/mikroview: config, GeoIP database, history key, certificate, all
+// /etc/mikroview: config, history key, certificate, all
 // in one place, so adding a feature is dropping a file in and
 // restarting rather than adding another mount line
 // (docs/decisions/app-folder.md, #1209).
@@ -24,9 +24,11 @@ var appFolderRoot = "/etc/mikroview"
 // The fixed layout inside the folder. The names are the contract --
 // docs/decisions/app-folder.md prints this same list -- so an operator
 // can put a file in the right place without reading any code.
+//
+// GeoLite2-Country.mmdb left the list with geoip.dbPath (#1352):
+// MikroView now downloads country data itself.
 const (
 	appFolderConfigFile  = "config.yaml"
-	appFolderGeoIPFile   = "GeoLite2-Country.mmdb"
 	appFolderHistoryKey  = "keys/history.key"
 	appFolderTLSCertFile = "certs/tls.crt"
 	appFolderTLSKeyFile  = "certs/tls.key"
@@ -45,7 +47,7 @@ func DefaultConfigPath() string { return filepath.Join(appFolderRoot, appFolderC
 // logger, and one loop at the call site keeps the boot lines in one
 // place and in a fixed order.
 type AppFolderLookup struct {
-	// Key names the setting the file fills -- "geoip.dbPath" -- so the
+	// Key names the setting the file fills -- "history.keyFile" -- so the
 	// boot line connects to the configuration reference. The config
 	// file itself has no key and reads as "config file".
 	Key string
@@ -93,12 +95,6 @@ func applyAppFolder(cfg *Config) ([]AppFolderLookup, error) {
 		return path, found
 	}
 
-	if cfg.GeoIP.DBPath == "" {
-		if path, found := look("geoip.dbPath", appFolderGeoIPFile); found {
-			cfg.GeoIP.DBPath = path
-		}
-	}
-
 	if cfg.History.KeyFile == "" {
 		if path, found := look("history.keyFile", appFolderHistoryKey); found {
 			cfg.History.KeyFile = path
@@ -131,3 +127,15 @@ func applyAppFolder(cfg *Config) ([]AppFolderLookup, error) {
 
 	return lookups, nil
 }
+
+// AppFolderHistoryKeyPath is where the app folder's history key is
+// looked for, for a message that has to name it.
+func AppFolderHistoryKeyPath() string { return filepath.Join(appFolderRoot, appFolderHistoryKey) }
+
+// SetAppFolderForTest moves the app folder for a process-level test
+// (#1202): the binary is started with config.yaml and keys/history.key in
+// a temp directory, where it has to find them by itself, as it would at
+// /etc/mikroview. main calls it only when MV_TEST_HOOKS=1 is set as well
+// as MV_TEST_APP_FOLDER -- the same off-unless-asked rule as every other
+// test hook, and still not an operator setting (see appFolderRoot).
+func SetAppFolderForTest(path string) { appFolderRoot = path }

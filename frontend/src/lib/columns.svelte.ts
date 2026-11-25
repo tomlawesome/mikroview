@@ -294,7 +294,11 @@ const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key
 // -- the same "restored, not essential to a fast read" reasoning #1150
 // already used for MAC and Interfaces (NAT is still one tap away in the
 // row's detail sheet). columns.svelte.test.ts pins the resulting sum.
-const NARROW_BREAKPOINT = 1600
+// Named COLUMN_ because viewport.svelte.ts has its own NARROW_BREAKPOINT
+// (1300, for the chip/drawer layout); the two widths answer different
+// questions (when the chips fit vs when the full column set fits) and are
+// both intended.
+const COLUMN_NARROW_BREAKPOINT = 1600
 const NARROW_DEFAULT_HIDDEN: readonly string[] = ['mac', 'iface', 'nat']
 
 // Read once, at module load, and deliberately not tracked: this is where
@@ -306,7 +310,7 @@ const NARROW_DEFAULT_HIDDEN: readonly string[] = ['mac', 'iface', 'nat']
 // what #729 shipped.
 function startsNarrow(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia(`(max-width: ${NARROW_BREAKPOINT}px)`).matches
+    ? window.matchMedia(`(max-width: ${COLUMN_NARROW_BREAKPOINT}px)`).matches
     : false
 }
 
@@ -360,7 +364,7 @@ class ColumnState {
   constructor() {
     // Hydrated once the shared record has loaded -- until then this
     // stays the same starting point a signed-out reader always saw
-    // (all fifteen, narrowed below NARROW_BREAKPOINT).
+    // (all fifteen, narrowed below COLUMN_NARROW_BREAKPOINT).
     preferencesState.register(PREFS_KEY, (value) => {
       const record = value as { widths?: unknown; visible?: unknown } | undefined
       this.widths = sanitizeWidths(record?.widths)

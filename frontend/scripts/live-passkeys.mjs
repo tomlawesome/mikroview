@@ -20,6 +20,10 @@ if ((process.env.MV_BROWSER || 'chromium') !== 'chromium') {
   console.log(
     `live-passkeys: skipping -- a virtual authenticator needs CDP's WebAuthn domain, which only Chromium exposes (MV_BROWSER=${process.env.MV_BROWSER})`,
   )
+  // Without a verdict line of its own, this scenario counts as started
+  // (`== `) but never reported, which the gate summary (#661) reads as a
+  // silent death -- on every Firefox/WebKit run, not just a real one.
+  console.log(`RESULT: SKIP (needs Chromium's CDP WebAuthn domain, MV_BROWSER=${process.env.MV_BROWSER})`)
   process.exit(0)
 }
 
@@ -71,9 +75,10 @@ async function api(method, path, body) {
 // factor rather than the account's first, so no recovery codes would be
 // minted) and leave "Passkeys · 1" untrue before this run has done
 // anything. Clear any survivors through the API first so registration
-// always starts from the same "no factor yet" account. This is setup,
-// not verification -- the registration and login themselves are driven
-// through the UI below.
+// always starts from the same "no passkey yet" account -- the account's
+// authenticator-app factor from #1253/live-env.sh, if any, is untouched
+// here. This is setup, not verification -- the registration and login
+// themselves are driven through the UI below.
 {
   const existing = await api('GET', '/api/auth/passkeys')
   for (const pk of existing.body ?? []) {
@@ -136,6 +141,13 @@ check(
   'adding asks for a name before the browser prompt fires',
 )
 await page.fill('input[placeholder="this laptop"]', 'live-check authenticator')
+// #1418/#1422: adding now also needs the account's current password,
+// checked server-side before the browser prompt ever fires.
+check(
+  await visible('input[type="password"]'),
+  'adding also asks for the current password before the browser prompt fires',
+)
+await page.fill('input[type="password"]', PASS)
 await page.click('button:has-text("Continue")')
 
 // The ceremony (navigator.credentials.create(), begin -> browser prompt
@@ -211,11 +223,11 @@ check(
 )
 
 // --- Clean up: leave the account exactly as this run found it ------------
-// Removing the only passkey also clears the recovery codes it minted
-// (DeletePasskey: "if no factor of either kind remains afterwards,
-// clear RecoveryCodes too"), so this restores the "no factor" account
-// the run started from -- the same reasoning live-change-password
-// restores the password it changed.
+// This account's authenticator-app factor from #1253/live-env.sh
+// remains after the passkey is gone (DeletePasskey only clears
+// RecoveryCodes when no factor of either kind remains), so this
+// restores the "no passkey" account the run started from -- the same
+// reasoning live-change-password restores the password it changed.
 
 await page.click('.account .menu button.row:has-text("Passkeys · 1")')
 check(await visible('[aria-label="Passkeys"]'), 'the Passkeys dialog reopens to remove it')

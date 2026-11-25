@@ -394,7 +394,7 @@
         <g class="isl-card">
           <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12"/>
           <text x="-82" y="-3" class="n-name">Internet</text>
-          <text x="-82" y="14" class="n-cidr">ether1 · 203.0.113.7</text>
+          <text x="-82" y="14" class="n-cidr">ether1 · 192.0.2.7</text>
           <text x="48" y="-6" class="cov cov-l">LOGGED</text>
         </g>
         <g class="g-dot">
@@ -418,7 +418,7 @@
         <g class="isl-card">
           <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12"/>
           <text x="-66" y="-2" class="n-name" style="font-size:13px">WireGuard</text>
-          <text x="-66" y="14" class="n-cidr">wg0 · 203.0.113.0/24</text>
+          <text x="-66" y="14" class="n-cidr">wg0 · 198.51.100.128/27</text>
           <text x="54" y="-4" class="cov cov-q">QUIET</text>
         </g>
         <g class="g-dot">
@@ -430,7 +430,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--lan)"/>
-          <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">203.0.113.0/24</text>
+          <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">198.51.100.0/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">alex-desktop · phone-alex · laptop-anna · +9</text>
           <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         </g>
@@ -443,7 +443,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--srv)"/>
-          <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">198.51.100.0/24</text>
+          <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">198.51.100.32/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">nas · pihole · unifi</text>
           <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         </g>
@@ -456,7 +456,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--iot)"/>
-          <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">198.51.100.0/24</text>
+          <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">198.51.100.64/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">cam-porch · hue-bridge · thermostat · +4</text>
           <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         </g>
@@ -470,7 +470,7 @@
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--guest)"/>
-          <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">192.0.2.0/24</text>
+          <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">198.51.100.96/27</text>
           <text x="-90" y="52" class="n-sub" style="font-size:10px">guest-e8b2 · +2</text>
           <text x="-90" y="74" class="cov cov-d">DARK TOWARD WAN</text>
           <text x="-90" y="88" class="n-sub">no log rule on this boundary</text>
@@ -550,7 +550,7 @@
   <div class="scene-tag" style="top:66px">Round 10, scene 2 — the descent. Clicking IoT zooms the camera in: the zone card holds the centre, its clients nestle around it, and every tab lands on its owner — cam-porch carries the ✱ ×14 flag; the broken egress watch hangs on the zone itself. The rest of the map recedes at the edges, still alive. ◂ backs out.</div>
   <div class="scenebar">
     <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
-    <span class="scname">Topography<span class="epi">IoT · 198.51.100.0/24 · descended</span></span>
+    <span class="scname">Topography<span class="epi">IoT · 198.51.100.64/27 · descended</span></span>
     <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><span class="flagchip">6</span><span class="who">alex (admin)</span></span>
   </div>
   <div class="wlens2"><span>traffic</span><span>policy</span><span>coverage</span><span class="on" style="color:var(--alarm)">flags 6</span><span class="on">watch</span></div>
@@ -566,7 +566,7 @@
         <rect class="isl" x="540" y="250" width="320" height="150" rx="14" stroke="rgba(201,133,0,0.5)"/>
         <circle cx="572" cy="286" r="4.5" fill="var(--iot)"/>
         <text x="588" y="292" class="n-name" style="font-size:20px">IoT</text>
-        <text x="700" y="292" class="n-cidr" style="font-size:13px">198.51.100.0/24</text>
+        <text x="700" y="292" class="n-cidr" style="font-size:13px">198.51.100.64/27</text>
         <text x="572" y="322" class="n-sub">7 clients · egress guarded · logged both ways</text>
         <text x="572" y="378" class="cov cov-l" style="font-size:10px">LOGGED BOTH WAYS</text>
         <rect x="540" y="400" width="164" height="17" class="wtab-r"/><text x="622" y="413" text-anchor="middle" class="wtab">◉ egress watch — broken 12:58</text>
@@ -577,7 +577,7 @@
         <rect class="isl" x="300" y="540" width="220" height="76" rx="10" stroke="rgba(255,84,112,0.55)"/>
         <circle cx="326" cy="566" r="3.5" fill="var(--iot)"/>
         <text x="340" y="571" class="n-name" style="font-size:14px">cam-porch</text>
-        <text x="326" y="594" class="n-sub" style="font-size:10.5px">198.51.100.11 · rtsp :554 · knocks :445</text>
+        <text x="326" y="594" class="n-sub" style="font-size:10.5px">198.51.100.78 · rtsp :554 · knocks :445</text>
         <rect x="300" y="616" width="160" height="16" class="ftab-r"/><text x="380" y="628" text-anchor="middle" class="ftab">✱ new_talker · ×14 · 13:52</text>
       </g>
       <g>
@@ -585,14 +585,14 @@
         <rect class="isl" x="600" y="530" width="200" height="70" rx="10"/>
         <circle cx="626" cy="556" r="3.5" fill="var(--iot)"/>
         <text x="640" y="561" class="n-name" style="font-size:14px">hue-bridge</text>
-        <text x="626" y="584" class="n-sub" style="font-size:10.5px">198.51.100.4 · ntp · quiet</text>
+        <text x="626" y="584" class="n-sub" style="font-size:10.5px">198.51.100.68 · ntp · quiet</text>
       </g>
       <g>
         <path class="rib" d="M780 400 C 850 470, 920 505, 980 535" stroke="var(--iot)" stroke-width="1.4" opacity="0.6"/>
         <rect class="isl" x="880" y="535" width="200" height="70" rx="10"/>
         <circle cx="906" cy="561" r="3.5" fill="var(--iot)"/>
         <text x="920" y="566" class="n-name" style="font-size:14px">thermostat</text>
-        <text x="906" y="589" class="n-sub" style="font-size:10.5px">198.51.100.9 · ntp :123</text>
+        <text x="906" y="589" class="n-sub" style="font-size:10.5px">198.51.100.73 · ntp :123</text>
       </g>
       <g>
         <path class="rib" d="M860 340 C 960 340, 1040 360, 1110 390" stroke="var(--iot)" stroke-width="1.2" opacity="0.45"/>

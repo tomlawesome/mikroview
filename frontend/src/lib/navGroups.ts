@@ -13,7 +13,7 @@ import type { IconName } from '../components/RailIcon.svelte'
 // The record calls "Run setup…" an action, not a page, and since #487 it
 // is one: it opens the setup modal over whatever the operator is already
 // looking at.
-export type NavAction = 'run-setup'
+type NavAction = 'run-setup'
 
 export type NavItem = {
   label: string

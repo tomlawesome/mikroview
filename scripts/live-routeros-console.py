@@ -60,7 +60,7 @@ class Console:
     def _pump(self):
         try:
             data = self.s.recv(8192)
-        except socket.timeout:
+        except TimeoutError:
             return False
         if not data:
             raise EOFError('serial console closed -- is the VM still running?')
@@ -114,8 +114,7 @@ class Console:
         self.read_until(PASSWORD_PROMPT, 60)
         self.send(self.password)  # CHR ships with a blank admin password
         deadline = time.time() + 180
-        first_boot = re.compile('|'.join(
-            (LICENCE_PROMPT.pattern, PASSWORD_CHANGE.pattern, PROMPT.pattern)))
+        first_boot = re.compile(f'{LICENCE_PROMPT.pattern}|{PASSWORD_CHANGE.pattern}|{PROMPT.pattern}')
         while time.time() < deadline:
             seen = self.read_until(first_boot, 180)
             if LICENCE_PROMPT.search(seen):

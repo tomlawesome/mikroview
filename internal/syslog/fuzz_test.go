@@ -29,7 +29,7 @@ import (
 //     and it pins the "prefix that doesn't parse stays in Message"
 //     contract the doc comment promises.
 func FuzzParseEnvelope(f *testing.F) {
-	f.Add([]byte("<134>Aug  6 20:15:04 router1 A|lan-wan|forward: proto TCP, 1.2.3.4:80->198.51.100.8:443, len 60"))
+	f.Add([]byte("<134>Aug  6 20:15:04 router1 A|lan-wan|forward: proto TCP, 192.0.2.4:80->192.0.2.8:443, len 60"))
 	f.Add([]byte("<0>Jan  1 00:00:00 h m"))
 	f.Add([]byte("<191>Dec 31 23:59:59 host message"))
 	f.Add([]byte("<192>Aug  6 20:15:04 router1 msg")) // PRI above the legal max

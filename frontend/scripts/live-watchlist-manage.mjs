@@ -19,7 +19,7 @@
 // learn (item 4) -> permit one place, then fence the rest -> edit its
 // name (item 5) -> remove it (item 5, round 28's arm/confirm gesture).
 
-import { session, feedRaw, feedPortScan, check, done, goTo, waitForFlag } from './live-browser.mjs'
+import { session, feedRaw, feedPortScan, check, done, goTo, waitForFlag, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -57,7 +57,7 @@ feedPortScan(20, SCAN_IP)
 // behind, rather than assuming a clean slate.
 const device = (await api(page, 'GET', '/api/devices')).body?.devices?.[0]?.id
 check(!!device, `the instance reports a device (${device})`)
-const coverageToken = await api(page, 'POST', '/api/tokens', { name: 'manage-coverage', kind: 'ingest', device })
+const coverageToken = await api(page, 'POST', '/api/tokens', tokenMint({ name: 'manage-coverage', kind: 'ingest', device }))
 check(coverageToken.status === 201, `an ingest token is issued (${coverageToken.status})`)
 const pushedCoverage = await fetch(`${URL_BASE}/api/ingest/routeros`, {
   method: 'POST',
@@ -135,6 +135,7 @@ function openDrawer() {
 }
 
 await rowFor(NAME).waitFor({ timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'start watching creates a real entry and the draft closes')
 
 const created = await api(page, 'GET', '/api/definitions')
@@ -245,6 +246,7 @@ const RENAMED = 'live manage cam (renamed)'
 await page.fill('.wt-drawer input[aria-label="Watch name"]', RENAMED)
 await page.click('.wt-drawer button:has-text("save")')
 await rowFor(RENAMED).waitFor({ timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'edit saves the rename onto the real entry')
 
 // The drawer is already open from before the rename -- saving swaps its
@@ -258,6 +260,7 @@ check(
 )
 await openDrawer().getByRole('button', { name: /confirm/ }).click()
 await rowFor(RENAMED).waitFor({ state: 'detached', timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'the second click actually removes the watch')
 
 const afterDelete = await api(page, 'GET', '/api/definitions')

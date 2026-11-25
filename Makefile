@@ -1,4 +1,4 @@
-.PHONY: build frontend backend test dev-backend dev-frontend docker clean
+.PHONY: build frontend backend test precheck dev-backend dev-frontend docker clean
 
 BINARY := mikroview
 
@@ -22,6 +22,9 @@ backend:
 test:
 	go test ./...
 	cd frontend && npx svelte-check --tsconfig ./tsconfig.app.json
+
+precheck:
+	scripts/precheck.sh
 
 dev-backend:
 	go run . -http :8080
@@ -104,7 +107,7 @@ clean:
 # straight away instead of waiting out the rest of the browser phase.
 # The same gate, on the second host, so it does not hold this machine for
 # the better part of an hour. scripts/gate-remote.sh has the reasoning;
-# AGENTS.md's "The second host live-check runs on" has the account.
+# docs/runner-host.md's "The account" section has the account.
 live-check-remote:
 	@scripts/gate-remote.sh $(if $(MV_BROWSER),--browser $(MV_BROWSER),) $(if $(MV_SHARDS),--shards $(MV_SHARDS),)
 
@@ -334,4 +337,9 @@ fidelity:
 release-surfaces:
 	@scripts/check-release-surfaces.sh
 
-.PHONY: release-surfaces
+# release-readiness: the checks the release_readiness CI job runs first on a
+# promotion merge request (#1504). TARGET=preview or main; see docs/releasing.md.
+release-readiness:
+	@python3 scripts/release-readiness.py --target $(TARGET)
+
+.PHONY: release-surfaces release-readiness

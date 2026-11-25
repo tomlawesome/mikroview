@@ -63,8 +63,8 @@ every layout decision the three rejected rounds made.
 | s3 | The same bar at **field** with `dst` typed, the list down to destination address / destination port, first highlighted, each row in its own ink |
 | s4 | Complete and tried — the receipt and its ticks, save live; below the bench the same detector as a viewer sees it (no `×`, no ring, no pills) and at 390 px |
 
-Data story unchanged since round 5: the garage range `203.0.113.0/24` and
-its two stragglers, `203.0.113.14 garage-cam` and `203.0.113.31 ev-charger`.
+Data story unchanged since round 5: the garage range `198.51.100.224/27` and
+its two stragglers, `198.51.100.238 garage-cam` and `198.51.100.225 ev-charger`.
 
 Every colour here is one the app already ratified — the flag-family
 palette, the action badges, `--accept` / `--now` / `--accent` — so no new

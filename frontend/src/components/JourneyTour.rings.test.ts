@@ -122,6 +122,14 @@ vi.mock('../lib/api', () => ({
     ownRangesKnown: false,
     setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
   })),
+  fetchGeoSettings: vi.fn(async () => ({
+    source: null,
+    sources: {
+      dbip: { loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+      ipinfo: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+      maxmind: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+    },
+  })),
   clearAllFlags: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
@@ -166,9 +174,9 @@ import { persistenceState } from '../lib/persistence.svelte'
 import { emptyFilters } from '../lib/types'
 import { TOUR_HIGHLIGHTS } from '../lib/tourHighlights'
 
-// jsdom has neither matchMedia nor ResizeObserver -- SceneBar mounts
-// AccountMenu (ThemeMenu pulls in lib/viewport.svelte.ts, whose
-// ViewportState singleton calls matchMedia at module-load time) and
+// jsdom has neither matchMedia nor ResizeObserver -- several mounted
+// pieces (Flags, LiveTable, FilterBar, Whisper) read lib/viewport.svelte.ts,
+// whose ViewportState singleton calls matchMedia at module-load time, and
 // Fall/Metrics measure their own box with `bind:clientWidth`, compiled
 // to a ResizeObserver. Both polyfilled before the dynamic imports below
 // -- static imports are hoisted ahead of any plain statement in this
@@ -207,6 +215,7 @@ const { default: Docket } = await import('./Docket.svelte')
 const { default: Entities } = await import('./Entities.svelte')
 const { default: EngineRoom } = await import('./EngineRoom.svelte')
 const { default: LogEveryRule } = await import('./LogEveryRule.svelte')
+const { default: Fleet } = await import('./Fleet.svelte')
 
 function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
   return {
@@ -296,6 +305,25 @@ const CARD_MOUNTERS: Record<string, (target: HTMLElement) => void> = {
       } as Device,
     ]
     render(LogEveryRule, { target })
+  },
+  fleet: (target) => {
+    // The first router card only renders once a device exists -- empty
+    // appState.devices draws the empty state instead (Fleet.svelte's
+    // own rows.length === 0 guard), which is not the state this ring
+    // names.
+    appState.devices = [
+      {
+        id: 'edge-1',
+        name: 'edge-1',
+        sourceIp: '192.0.2.1',
+        configured: true,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: '2026-09-03T00:00:00Z',
+        eventCount: 100,
+        status: 'live',
+      } as Device,
+    ]
+    render(Fleet, { target })
   },
 }
 

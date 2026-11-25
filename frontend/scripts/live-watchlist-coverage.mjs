@@ -30,7 +30,7 @@
 // re-reads the list and picks the one definition out, rather than
 // indexing a separate map.
 
-import { session, check, done, feedSyslog, goTo } from './live-browser.mjs'
+import { session, check, done, feedSyslog, goTo, tokenMint } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -42,7 +42,8 @@ async function api(method, path_, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // A 204 (every DELETE since #1538) carries no body to parse.
+  return { status: res.status(), body: res.status() < 400 && res.status() !== 204 ? await res.json() : null }
 }
 
 async function coverageFor(id) {
@@ -79,7 +80,7 @@ feedSyslog(3, 'coverage-probe')
 const device = ((await api('GET', '/api/devices')).body?.devices ?? []).find((d) => d.id === 'live-router')?.id
 check(!!device, `the harness's own router is in the registry (${device})`)
 
-const token = await api('POST', '/api/tokens', { name: 'coverage', kind: 'ingest', device })
+const token = await api('POST', '/api/tokens', tokenMint({ name: 'coverage', kind: 'ingest', device }))
 check(token.status === 201, `an ingest token is issued (${token.status})`)
 
 async function push(records) {

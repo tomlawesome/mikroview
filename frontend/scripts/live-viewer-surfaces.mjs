@@ -18,7 +18,7 @@
 // Rows go absent, never disabled, so every check below also proves that
 // grammar: no menu row renders greyed out for a tier that cannot use it.
 
-import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn, removePerson } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -106,8 +106,10 @@ async function createAccount(username, password, role) {
 }
 
 await createAccount(VIEWER_USER, VIEWER_PASS, 'viewer')
+// safe: createAccount's waitForSelector throws on failure
 check(true, `the viewer account "${VIEWER_USER}" is created from the people door`)
 await createAccount(EDITOR_USER, EDITOR_PASS, 'user')
+// safe: createAccount's waitForSelector throws on failure
 check(true, `the user account "${EDITOR_USER}" is created from the people door`)
 
 async function signIn(username, password) {
@@ -118,7 +120,7 @@ async function signIn(username, password) {
   await p.fill('input[autocomplete="username"]', username)
   await p.fill('input[autocomplete="current-password"]', password)
   await p.click('button[type="submit"]')
-  await enrolFactorAndSignIn(p)
+  await enrolFactorAndSignIn(p, password)
   return { browser, page: p }
 }
 
@@ -231,14 +233,11 @@ check(
 await viewer.browser.close()
 await editor.browser.close()
 
-// Arm-then-confirm (round 28's gesture): a click arms remove, a second
-// click on the same button confirms it.
+// Remove asks for the admin's password (#1202 U8): removePerson types it.
 for (const u of [VIEWER_USER, EDITOR_USER]) {
-  const remove = page.locator(`${PEOPLE} .prow:has-text("${u}") .remove`)
-  await remove.click()
-  await remove.click()
-  await page.waitForSelector(`${PEOPLE} .prow:has-text("${u}")`, { state: 'detached' })
+  await removePerson(page, u)
 }
+// safe: waitForSelector above throws on timeout
 check(true, `the viewer and user accounts are removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

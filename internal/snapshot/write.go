@@ -134,8 +134,8 @@ func (w *Writer) writeDocument(doc Document) (string, error) {
 	}
 	tmp := f.Name()
 	cleanup := func() {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 	}
 	// 0600 to match every other document mikroview writes. A snapshot
 	// holds no event lines, but it does hold counts and identifiers that
@@ -157,11 +157,11 @@ func (w *Writer) writeDocument(doc Document) (string, error) {
 		return "", err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return "", err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return "", err
 	}
 	if d, err := os.Open(w.dir); err == nil {

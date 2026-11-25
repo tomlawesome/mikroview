@@ -52,7 +52,7 @@ func TestPromoteMovesFromObservedToPermitted(t *testing.T) {
 func TestPromoteAllowsAPairNeverObserved(t *testing.T) {
 	e := inverted("e1", nil)
 
-	e.Promote([]PermittedDest{{DestIP: "1.2.3.4", Port: 443}})
+	e.Promote([]PermittedDest{{DestIP: "192.0.2.4", Port: 443}})
 
 	if len(e.Permitted) != 1 {
 		t.Errorf("Permitted = %+v, want the pair promoted despite never being observed", e.Permitted)
@@ -61,7 +61,7 @@ func TestPromoteAllowsAPairNeverObserved(t *testing.T) {
 
 func TestPromoteIsIdempotent(t *testing.T) {
 	e := inverted("e1", nil)
-	pair := []PermittedDest{{DestIP: "1.2.3.4", Port: 443}}
+	pair := []PermittedDest{{DestIP: "192.0.2.4", Port: 443}}
 
 	e.Promote(pair)
 	e.Promote(pair)
@@ -74,7 +74,7 @@ func TestPromoteIsIdempotent(t *testing.T) {
 func TestPromoteDoesNotChangeObserving(t *testing.T) {
 	e := inverted("e1", nil) // Observing: true
 
-	e.Promote([]PermittedDest{{DestIP: "1.2.3.4", Port: 443}})
+	e.Promote([]PermittedDest{{DestIP: "192.0.2.4", Port: 443}})
 
 	if !e.Observing {
 		t.Error("Promote must not change Observing -- that is the caller's job")

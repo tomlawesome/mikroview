@@ -5,6 +5,7 @@ package ingest
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,9 @@ func TestDecodePayloadAcceptsEachKind(t *testing.T) {
 		{"wireguard-interface", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"site-to-site","publicKey":"abc123","listenPort":51820}]}`},
 		{"wireguard-peer", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`},
 		{"ip-address", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`},
+		{"ip-service", `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":"10.0.0.0/8","certificate":"mikrotik-ca"}]}`},
+		{"raw-rule", `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","comment":"mikroview blocklist: et (from)","chain":"prerouting","action":"drop","srcAddressList":"mv-bl-et","log":true,"packets":3,"bytes":180}]}`},
+		{"address-list-count", `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":633,"loadedAt":"2026-10-01 04:31:07"}]}`},
 		{"logging", `{"kind":"logging","page":1,"pages":1,"wizardVersion":1,"records":[{"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},{"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}]}`},
 	}
 	for _, c := range cases {
@@ -589,6 +593,290 @@ func TestIPAddressRejectsControlAndFormatCharacters(t *testing.T) {
 	decodeErr(t, `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24\u202e","network":"","interface":"","comment":""}]}`)
 }
 
+// TestIPServiceRoundTripsFields is issue #1329's own acceptance case: a
+// pushed /ip/service row survives decode with every field intact,
+// Address included -- RouterOSList takes the plain-string shape here
+// the same way it takes a filter rule's connection-state.
+func TestIPServiceRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":"10.0.0.0/8","certificate":"mikrotik-ca"}]}`)
+	if len(p.IPServices) != 1 {
+		t.Fatalf("len(IPServices) = %d, want 1", len(p.IPServices))
+	}
+	got := p.IPServices[0]
+	if got.Name != "www-ssl" || got.Disabled || int(got.Port) != 443 || got.Certificate != "mikrotik-ca" {
+		t.Errorf("IPServices[0] = %+v, unexpected", got)
+	}
+	if len(got.Address) != 1 || got.Address[0] != "10.0.0.0/8" {
+		t.Errorf("IPServices[0].Address = %+v, want [10.0.0.0/8]", got.Address)
+	}
+}
+
+// TestIPServiceWithNoAddressRestrictionDecodesToAnEmptyList is the case
+// that matters most downstream (#1329): a service RouterOS reports with
+// no address restriction at all -- reachable from anywhere -- must
+// decode to an empty/nil Address, never to a restriction of zero
+// entries being confused with "restricted to nothing." This is purely
+// about RouterOSList's own decode shape; it is exercised both as an
+// absent key and as an explicit empty string, but an address key
+// genuinely absent from a real router's push is #1405's dynamic-fallback
+// signal, not "no restriction" -- see IsDynamic and the routerstate
+// tests that cover what that does to the served list.
+func TestIPServiceWithNoAddressRestrictionDecodesToAnEmptyList(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"winbox","disabled":false,"port":8291,"certificate":""}]}`)
+	if len(p.IPServices) != 1 {
+		t.Fatalf("len(IPServices) = %d, want 1", len(p.IPServices))
+	}
+	if got := p.IPServices[0].Address; len(got) != 0 {
+		t.Errorf("Address (key absent) = %+v, want empty", got)
+	}
+
+	p = decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"winbox","disabled":false,"port":8291,"address":"","certificate":""}]}`)
+	if got := p.IPServices[0].Address; len(got) != 0 {
+		t.Errorf("Address (empty string) = %+v, want empty", got)
+	}
+}
+
+// TestDecodeRealIPServiceDisabled is #1410's: the ip-service page a real
+// RouterOS 7.18.2 CHR produced on 2026-10-01 from blockSpecs["ip-service"],
+// saved as a script under the push policy and run with its fetch swapped
+// for :put (docs/routeros-verification-logs/7.18.2-push-ip-service.log).
+// telnet was disabled by hand and www-ssl is disabled out of the box.
+// disabled is read with get, so both arrive true -- where the script
+// before #1410, reading it off print as-value, sent null on every row and
+// both decoded as enabled (the "before" body, same transcript).
+func TestDecodeRealIPServiceDisabled(t *testing.T) {
+	const body = `{"kind":"ip-service","page":1,"pages":1,"records":[
+	  {"address":[],"certificate":null,"disabled":true,"dynamic":null,"name":"telnet","port":23},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ftp","port":21},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"www","port":80},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ssh","port":22},
+	  {"address":[],"certificate":"none","disabled":true,"dynamic":null,"name":"www-ssl","port":443},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"api","port":8728},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"winbox","port":8291},
+	  {"address":[],"certificate":"none","disabled":false,"dynamic":null,"name":"api-ssl","port":8729}
+	],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`
+	p := decodeOK(t, body)
+	disabled := map[string]bool{}
+	for _, s := range p.IPServices {
+		disabled[s.Name] = s.Disabled
+	}
+	if len(disabled) != 8 {
+		t.Fatalf("decoded %d services, want 8: %v", len(disabled), disabled)
+	}
+	for name, want := range map[string]bool{
+		"telnet": true, "www-ssl": true,
+		"ftp": false, "www": false, "ssh": false, "api": false, "winbox": false, "api-ssl": false,
+	} {
+		if got, ok := disabled[name]; !ok || got != want {
+			t.Errorf("%s: disabled = %v (present %v), want %v", name, got, ok, want)
+		}
+	}
+
+	// The defect, from the same transcript: the old script's page decodes
+	// with telnet looking enabled.
+	before := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"telnet","port":23},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"ftp","port":21},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"www","port":80},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"ssh","port":22},
+	  {"address":[],"certificate":"none","disabled":null,"dynamic":null,"name":"www-ssl","port":443},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"api","port":8728},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"winbox","port":8291},
+	  {"address":[],"certificate":"none","disabled":null,"dynamic":null,"name":"api-ssl","port":8729}
+	],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`)
+	for _, s := range before.IPServices {
+		if s.Name == "telnet" && s.Disabled {
+			t.Error("the pre-#1410 7.18.2 body decoded telnet as disabled -- this test no longer pins what was wrong")
+		}
+	}
+}
+
+// TestDecodeRealIPServiceAddressRestriction is #1411's: the ip-service
+// page real CHRs produced on 2026-10-01 from blockSpecs["ip-service"],
+// saved as a script under the push policy and run with its fetch swapped
+// for :put (docs/routeros-verification-logs/<version>-push-ip-service-address.log),
+// with ssh restricted to two prefixes, winbox to one and telnet open.
+// Up to 7.23.3 the router fills "address"; from 7.24 it fills
+// "availableFrom" (RouterOS's available-from) and sends address null.
+// Either way Address carries the restriction.
+func TestDecodeRealIPServiceAddressRestriction(t *testing.T) {
+	bodies := map[string]string{
+		"7.18.2": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"telnet","port":23},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"ftp","port":21},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"www","port":80},
+		  {"address":["192.168.88.0/24","10.0.0.1/32"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"ssh","port":22},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":true,"dynamic":null,"name":"www-ssl","port":443},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"api","port":8728},
+		  {"address":["192.168.88.0/24"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"winbox","port":8291},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":false,"dynamic":null,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`,
+		"7.23.3": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+		  {"address":["192.168.88.0/24","10.0.0.1/32"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+		  {"address":["192.168.88.0/24"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.23.3 (stable)","wizardVersion":6}`,
+		"7.24": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+		  {"address":null,"availableFrom":["192.168.88.0/24","10.0.0.1/32"],"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+		  {"address":null,"availableFrom":["192.168.88.0/24"],"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.24 (stable)","wizardVersion":6}`,
+		"7.24.4": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+		  {"address":null,"availableFrom":["192.168.88.0/24","10.0.0.1/32"],"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+		  {"address":null,"availableFrom":["192.168.88.0/24"],"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`,
+	}
+	want := map[string][]string{
+		"ssh":    {"192.168.88.0/24", "10.0.0.1/32"},
+		"winbox": {"192.168.88.0/24"},
+		"telnet": nil,
+	}
+	for version, body := range bodies {
+		p := decodeOK(t, body)
+		if p.RouterOSVersion != version+" (stable)" {
+			t.Fatalf("decoded version %q, want %s (stable)", p.RouterOSVersion, version)
+		}
+		seen := 0
+		for _, s := range p.IPServices {
+			w, ok := want[s.Name]
+			if !ok {
+				continue
+			}
+			seen++
+			if !slices.Equal([]string(s.Address), w) {
+				t.Errorf("%s %s: Address = %q, want %q", version, s.Name, s.Address, w)
+			}
+			if s.IsDynamic() {
+				t.Errorf("%s %s: IsDynamic = true for a configurable service", version, s.Name)
+			}
+		}
+		if seen != len(want) {
+			t.Errorf("%s: found %d of the %d fixture services", version, seen, len(want))
+		}
+	}
+
+	// The defect, from the 7.24.4 transcript: the script before #1411
+	// sent address null, so the restricted ssh decoded as open.
+	before := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+	  {"address":null,"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+	  {"address":null,"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+	  {"address":null,"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+	],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`)
+	for _, s := range before.IPServices {
+		if s.Name == "ssh" && len(s.Address) != 0 {
+			t.Errorf("the pre-#1411 7.24.4 body decoded ssh with Address %q -- this test no longer pins what was wrong", s.Address)
+		}
+	}
+}
+
+// A body carrying a restriction under both names is not something a
+// router sends; address wins, as the name every release before 7.24 uses.
+func TestIPServiceAddressWinsOverAvailableFrom(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":["10.0.0.0/8"],"availableFrom":["192.0.2.0/24"],"certificate":null,"dynamic":false}]}`)
+	if got := p.IPServices[0].Address; !slices.Equal([]string(got), []string{"10.0.0.0/8"}) {
+		t.Errorf("Address = %q, want [10.0.0.0/8]", got)
+	}
+}
+
+// TestIPServiceRejectsUnknownRecordField pins the same strict-decoding
+// contract every other kind in this file gets: a field this schema does
+// not know about refuses the whole page rather than being silently
+// dropped.
+func TestIPServiceRejectsUnknownRecordField(t *testing.T) {
+	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":"","certificate":"","tls-version":"only-1.2"}]}`)
+}
+
+// TestIPServiceRejectsControlAndFormatCharacters mirrors
+// TestIPAddressRejectsControlAndFormatCharacters for this kind's own
+// text fields.
+func TestIPServiceRejectsControlAndFormatCharacters(t *testing.T) {
+	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"evil\u0007bell","disabled":false,"port":22,"address":"","certificate":""}]}`)
+	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":"","certificate":"cert\u202e"}]}`)
+}
+
+// TestIPServiceCertificateNoneDecodesAsEmpty is #1405: RouterOS reports
+// "none" -- the literal word, not an absent key -- for a TLS service
+// with no certificate set. That must decode the same way an absent
+// certificate key already does: "", never the word itself.
+func TestIPServiceCertificateNoneDecodesAsEmpty(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":[],"certificate":"none"}]}`)
+	if got := p.IPServices[0].Certificate; got != "" {
+		t.Errorf("Certificate = %q, want \"\" (\"none\" means no certificate)", got)
+	}
+}
+
+// TestIPServiceIsDynamicUsesTheDynamicKeyWhenPresent is #1405: a router
+// running the current wizard script marks each row directly, both ways
+// -- true for one of RouterOS's own four, false for one of the eight an
+// operator configures -- and IsDynamic must trust that key over anything
+// else once it's there.
+func TestIPServiceIsDynamicUsesTheDynamicKeyWhenPresent(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[`+
+		`{"name":"btest","disabled":false,"port":2000,"dynamic":true},`+
+		`{"name":"ssh","disabled":false,"port":22,"address":[],"dynamic":false}]}`)
+	if !p.IPServices[0].IsDynamic() {
+		t.Errorf("btest (dynamic:true) IsDynamic() = false, want true")
+	}
+	if p.IPServices[1].IsDynamic() {
+		t.Errorf("ssh (dynamic:false) IsDynamic() = true, want false")
+	}
+}
+
+// TestIPServiceIsDynamicFallsBackToAddressAbsenceWithoutTheDynamicKey is
+// #1405's fallback: a router still running a script pasted before
+// "dynamic" existed sends no "dynamic" key on any record at all, so
+// IsDynamic must fall back to RouterOS's own distinction -- a static,
+// configurable service always carries an "address" key (even an empty
+// one), a dynamic one never does.
+func TestIPServiceIsDynamicFallsBackToAddressAbsenceWithoutTheDynamicKey(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[`+
+		`{"name":"btest","disabled":false,"port":2000},`+
+		`{"name":"ssh","disabled":false,"port":22,"address":[]}]}`)
+	if !p.IPServices[0].IsDynamic() {
+		t.Errorf("btest (no dynamic key, no address key) IsDynamic() = false, want true")
+	}
+	if p.IPServices[1].IsDynamic() {
+		t.Errorf("ssh (no dynamic key, address key present) IsDynamic() = true, want false")
+	}
+}
+
 // TestDecodeRealFilterRulePush decodes a payload captured verbatim from a
 // real RouterOS 7.23.3, produced by the exact script in
 // docs/routeros-setup.md section 4c -- not by a hand-written body that
@@ -850,7 +1138,7 @@ func TestDecodeLoggingPageTakesAYesNoFieldInEitherShape(t *testing.T) {
 // /system logging: anything else the router might send about its logging
 // is refused, like every other kind's unknown field.
 func TestDecodeLoggingPageRefusesAFieldTheWizardNeverSends(t *testing.T) {
-	decodeErr(t, `{"kind":"logging","page":1,"pages":1,"records":[{"type":"action","name":"mikroview","srcAddress":"192.168.1.1"}]}`)
+	decodeErr(t, `{"kind":"logging","page":1,"pages":1,"records":[{"type":"action","name":"mikroview","comment":"not part of the page"}]}`)
 }
 
 // A script predating the stamp sends no wizardVersion at all, which
@@ -867,4 +1155,259 @@ func TestDecodeWizardVersionIsOptionalAndBounded(t *testing.T) {
 	if err := decodeErr(t, `{"kind":"arp","page":1,"pages":1,"wizardVersion":100000,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`); !errors.Is(err, ErrBadWizardVersion) {
 		t.Errorf("an absurd wizardVersion gave %v, want ErrBadWizardVersion", err)
 	}
+}
+
+// TestDecodeRealRawRulePush is the body a real RouterOS 7.18.2 CHR
+// produced from blockSpecs["raw-rule"] on 2026-10-01, captured with the
+// fetch line swapped for :put (docs/routeros-verification-logs/
+// 7.18.2-push-blocklist.log). Keys are alphabetical, unset properties
+// null -- an unlogged rule's log and logPrefix, a "from" rule's
+// dstAddressList -- and disabled and the counters are whole numbers and
+// booleans because the script reads them with get. 7.18.2 rather than
+// 7.24.4 because it is the release whose print as-value drops disabled:
+// the third rule is the one that would have arrived enabled.
+func TestDecodeRealRawRulePush(t *testing.T) {
+	const body = `{"kind":"raw-rule","page":1,"pages":1,"records":[
+	  {"action":"drop","bytes":224,"chain":"prerouting","comment":"mikroview blocklist: et (from)","disabled":false,"dstAddressList":null,"family":"ip","log":true,"logPrefix":"D|probe|","ordinal":0,"packets":4,"srcAddressList":"mv-bl-et"},
+	  {"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: et (to)","disabled":false,"dstAddressList":"mv-bl-et","family":"ip","log":true,"logPrefix":"D|probe|","ordinal":1,"packets":0,"srcAddressList":null},
+	  {"action":"accept","bytes":0,"chain":"prerouting","comment":"an operator rule, disabled","disabled":true,"dstAddressList":null,"family":"ip","log":null,"logPrefix":null,"ordinal":2,"packets":0,"srcAddressList":"mgmt"},
+	  {"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: spamhaus (from)","disabled":false,"dstAddressList":null,"family":"ipv6","log":null,"logPrefix":null,"ordinal":0,"packets":0,"srcAddressList":"mv-bl-spamhaus6"}
+	],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`
+
+	p := decodeOK(t, body)
+	if p.Kind != KindRawRule || p.RecordCount() != 4 {
+		t.Fatalf("decoded kind %q with %d records, want raw-rule with 4", p.Kind, p.RecordCount())
+	}
+	want := []RawRule{
+		{Ordinal: 0, Family: FamilyIP, Comment: "mikroview blocklist: et (from)", Chain: "prerouting", Action: "drop", SrcAddressList: "mv-bl-et", LogPrefix: "D|probe|", Log: true, Packets: 4, Bytes: 224},
+		{Ordinal: 1, Family: FamilyIP, Comment: "mikroview blocklist: et (to)", Chain: "prerouting", Action: "drop", DstAddressList: "mv-bl-et", LogPrefix: "D|probe|", Log: true},
+		{Ordinal: 2, Family: FamilyIP, Comment: "an operator rule, disabled", Chain: "prerouting", Action: "accept", SrcAddressList: "mgmt", Disabled: true},
+		{Ordinal: 0, Family: FamilyIPv6, Comment: "mikroview blocklist: spamhaus (from)", Chain: "prerouting", Action: "drop", SrcAddressList: "mv-bl-spamhaus6"},
+	}
+	for i, w := range want {
+		if got := p.RawRules[i]; got != w {
+			t.Errorf("rule %d:\n got  %+v\n want %+v", i, got, w)
+		}
+	}
+	if p.RouterOSVersion != "7.18.2 (stable)" || p.WizardVersion != 6 {
+		t.Errorf("envelope = %q / %d, want 7.18.2 (stable) / 6", p.RouterOSVersion, p.WizardVersion)
+	}
+}
+
+// TestDecodeRealFilterRuleCounters is #1409's: the filter-rule page a
+// real CHR produced on 2026-10-01 from blockSpecs["filter-rule"], saved
+// as a script under the push policy and run with its fetch swapped for
+// :put (docs/routeros-verification-logs/<version>-push-filter-counters.log).
+// One rule an output-chain ping moved (3 packets, 168 bytes), one
+// disabled, one enabled and unlogged. disabled and the counters are read
+// with get, so they arrive as booleans and whole numbers on both
+// releases -- where the script before #1409, reading them off print
+// as-value, sent null for both counters everywhere and, on 7.18.2, null
+// for disabled even on the disabled rule (the "before" bodies, same
+// transcripts).
+func TestDecodeRealFilterRuleCounters(t *testing.T) {
+	bodies := map[string]string{
+		"7.18.2": `{"kind":"filter-rule","page":1,"pages":1,"records":[
+		  {"action":"accept","bytes":168,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":false,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":3,"protocol":"icmp","srcAddress":null,"srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":0,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":false,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":0,"protocol":null,"srcAddress":null,"srcAddressList":null}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`,
+		"7.24.4": `{"kind":"filter-rule","page":1,"pages":1,"records":[
+		  {"action":"accept","bytes":168,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":false,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":3,"protocol":"icmp","srcAddress":null,"srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":true,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":0,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},
+		  {"action":"drop","bytes":0,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":false,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":0,"protocol":null,"srcAddress":null,"srcAddressList":null}
+		],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`,
+	}
+	want := []struct {
+		comment        string
+		disabled       bool
+		packets, bytes int64
+	}{
+		{"probe: counted", false, 3, 168},
+		{"probe: disabled", true, 0, 0},
+		{"probe: enabled, unlogged", false, 0, 0},
+	}
+	for version, body := range bodies {
+		p := decodeOK(t, body)
+		if p.RouterOSVersion != version+" (stable)" || len(p.FilterRules) != len(want) {
+			t.Fatalf("%s: decoded %q with %d rules, want %d", version, p.RouterOSVersion, len(p.FilterRules), len(want))
+		}
+		for i, w := range want {
+			got := p.FilterRules[i]
+			if got.Comment != w.comment || got.Disabled != w.disabled || int64(got.Packets) != w.packets || int64(got.Bytes) != w.bytes {
+				t.Errorf("%s rule %d = %q disabled=%v packets=%d bytes=%d, want %q disabled=%v packets=%d bytes=%d",
+					version, i, got.Comment, got.Disabled, got.Packets, got.Bytes, w.comment, w.disabled, w.packets, w.bytes)
+			}
+		}
+	}
+
+	// The defect, from the same transcripts: the old script's 7.18.2 page
+	// decodes, but says the disabled rule is enabled and nothing fired.
+	before := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[
+		  {"action":"accept","bytes":null,"chain":"output","comment":"probe: counted","connectionState":null,"disabled":null,"dstAddress":"10.0.2.2","dstPort":null,"inInterface":null,"log":true,"logPrefix":"A|probe|","ordinal":0,"outInterface":null,"packets":null,"protocol":"icmp","srcAddress":null,"srcAddressList":null},
+		  {"action":"drop","bytes":null,"chain":"input","comment":"probe: disabled","connectionState":null,"disabled":null,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":1,"outInterface":null,"packets":null,"protocol":null,"srcAddress":"192.0.2.9","srcAddressList":null},
+		  {"action":"drop","bytes":null,"chain":"forward","comment":"probe: enabled, unlogged","connectionState":"invalid","disabled":null,"dstAddress":null,"dstPort":null,"inInterface":null,"log":null,"logPrefix":null,"ordinal":2,"outInterface":null,"packets":null,"protocol":null,"srcAddress":null,"srcAddressList":null}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`)
+	if r := before.FilterRules[1]; r.Disabled || before.FilterRules[0].Packets != 0 {
+		t.Errorf("the pre-#1409 7.18.2 body decoded disabled=%v packets=%d -- this test no longer pins what was wrong", r.Disabled, before.FilterRules[0].Packets)
+	}
+}
+
+// TestDecodeRealAddressListDynamic is #1409's other half: the
+// address-list page from the same CHR runs. On 7.18.2 the script before
+// #1409 sent "dynamic":null for the timed entry, so it decoded as an
+// operator's own; read with get it arrives true on both releases.
+func TestDecodeRealAddressListDynamic(t *testing.T) {
+	for version, body := range map[string]string{
+		"7.18.2": `{"kind":"address-list","page":1,"pages":1,"records":[
+		  {"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},
+		  {"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`,
+		"7.24.4": `{"kind":"address-list","page":1,"pages":1,"records":[
+		  {"address":"192.0.2.1","comment":"operator entry","dynamic":false,"list":"mgmt"},
+		  {"address":"192.0.2.2","comment":"timed entry, so dynamic","dynamic":true,"list":"scanners"}
+		],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`,
+	} {
+		p := decodeOK(t, body)
+		want := []AddressListEntry{
+			{List: "mgmt", Address: "192.0.2.1", Comment: "operator entry"},
+			{List: "scanners", Address: "192.0.2.2", Comment: "timed entry, so dynamic", Dynamic: true},
+		}
+		if len(p.AddressList) != len(want) {
+			t.Fatalf("%s: decoded %d entries, want %d", version, len(p.AddressList), len(want))
+		}
+		for i, w := range want {
+			if got := p.AddressList[i]; got != w {
+				t.Errorf("%s entry %d = %+v, want %+v", version, i, got, w)
+			}
+		}
+	}
+}
+
+// TestRuleCountersPast2GiBDecode is #1409's width fix. Not a CHR body:
+// pushing 2 GiB through a software-emulated router to move a real
+// counter that far is not practical here, so the values are written in
+// the shape the CHR bodies above show for a counter (a bare whole
+// number) and in :serialize's float shape for one. int32 refused both,
+// and with them the whole page.
+func TestRuleCountersPast2GiBDecode(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"action":"accept","bytes":5000000000,"chain":"forward","comment":"busy","disabled":false,"ordinal":0,"packets":3000000000.000000}]}`)
+	if r := p.FilterRules[0]; r.Bytes != 5000000000 || r.Packets != 3000000000 {
+		t.Errorf("filter rule counters = %d/%d, want 3000000000/5000000000", r.Packets, r.Bytes)
+	}
+	p = decodeOK(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"action":"drop","bytes":5000000000,"chain":"prerouting","comment":"busy","disabled":false,"family":"ip","ordinal":0,"packets":3000000000}]}`)
+	if r := p.RawRules[0]; r.Bytes != 5000000000 || r.Packets != 3000000000 {
+		t.Errorf("raw rule counters = %d/%d, want 3000000000/5000000000", r.Packets, r.Bytes)
+	}
+}
+
+// TestDecodeRealAddressListCountPush is the body a real RouterOS 7.24.4
+// CHR produced from the address-list-count block on 2026-10-01
+// (docs/routeros-verification-logs/7.24.4-push-blocklist.log): every
+// catalogue name on both families, 0 and "" for a list the router does
+// not hold, and the first entry's creation-time in the router's own
+// format for the two it does.
+func TestDecodeRealAddressListCountPush(t *testing.T) {
+	const body = `{"kind":"address-list-count","page":1,"pages":1,"records":[
+	  {"count":0,"family":"ip","list":"mv-bl-spamhaus","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-spamhaus","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-spamhaus6","loadedAt":""},
+	  {"count":1,"family":"ipv6","list":"mv-bl-spamhaus6","loadedAt":"2026-10-01 17:38:02"},
+	  {"count":2,"family":"ip","list":"mv-bl-et","loadedAt":"2026-10-01 17:37:51"},
+	  {"count":0,"family":"ipv6","list":"mv-bl-et","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-cins","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-cins","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-blde","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-blde","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-greensnow","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-greensnow","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-dshield","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-dshield","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-bindef","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-bindef","loadedAt":""}
+	],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`
+
+	p := decodeOK(t, body)
+	if p.Kind != KindAddressListCount || p.RecordCount() != 16 {
+		t.Fatalf("decoded kind %q with %d records, want address-list-count with 16 (eight names, two families)", p.Kind, p.RecordCount())
+	}
+	held := map[string]AddressListCount{}
+	for _, c := range p.AddressListCounts {
+		if c.Count > 0 {
+			held[c.List+"/"+c.Family] = c
+		} else if c.LoadedAt != "" {
+			t.Errorf("%s/%s holds nothing but carries loadedAt %q", c.List, c.Family, c.LoadedAt)
+		}
+	}
+	for key, w := range map[string]AddressListCount{
+		"mv-bl-et/ip":          {List: "mv-bl-et", Family: FamilyIP, Count: 2, LoadedAt: "2026-10-01 17:37:51"},
+		"mv-bl-spamhaus6/ipv6": {List: "mv-bl-spamhaus6", Family: FamilyIPv6, Count: 1, LoadedAt: "2026-10-01 17:38:02"},
+	} {
+		if got := held[key]; got != w {
+			t.Errorf("%s = %+v, want %+v", key, got, w)
+		}
+	}
+	if len(held) != 2 {
+		t.Errorf("%d lists held, want 2: %+v", len(held), held)
+	}
+}
+
+func TestRawRuleRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":3,"family":"ipv6","comment":"c","chain":"prerouting","action":"drop","srcAddressList":"a","dstAddressList":"b","logPrefix":"D|x|","log":true,"disabled":true,"packets":41000.000000,"bytes":2460000}]}`)
+	want := RawRule{Ordinal: 3, Family: FamilyIPv6, Comment: "c", Chain: "prerouting", Action: "drop", SrcAddressList: "a", DstAddressList: "b", LogPrefix: "D|x|", Log: true, Disabled: true, Packets: 41000, Bytes: 2460000}
+	if len(p.RawRules) != 1 || p.RawRules[0] != want {
+		t.Errorf("RawRules = %+v, want [%+v]", p.RawRules, want)
+	}
+}
+
+func TestRawRuleRejectsUnknownRecordField(t *testing.T) {
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","chain":"prerouting","action":"drop","dstPort":22}]}`)
+}
+
+// family is the script's own literal, so anything but the two menu
+// roots -- including none at all -- is a body MikroView did not write.
+func TestRawRuleAndCountRejectAnUnknownFamily(t *testing.T) {
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"bridge","chain":"prerouting","action":"drop"}]}`)
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"prerouting","action":"drop"}]}`)
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"IP","count":1,"loadedAt":""}]}`)
+}
+
+func TestRawRuleRejectsControlAndFormatCharacters(t *testing.T) {
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","comment":"evil\u0007bell","chain":"prerouting","action":"drop"}]}`)
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","chain":"prerouting","action":"drop","dstAddressList":"list\u202e"}]}`)
+}
+
+func TestAddressListCountRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-cins","family":"ip","count":15000.000000,"loadedAt":"2026-10-01 04:45:12"}]}`)
+	want := AddressListCount{List: "mv-bl-cins", Family: FamilyIP, Count: 15000, LoadedAt: "2026-10-01 04:45:12"}
+	if len(p.AddressListCounts) != 1 || p.AddressListCounts[0] != want {
+		t.Errorf("AddressListCounts = %+v, want [%+v]", p.AddressListCounts, want)
+	}
+}
+
+func TestAddressListCountRejectsUnknownFieldsAndNegativeCounts(t *testing.T) {
+	// An entry's address is exactly what this kind exists not to carry.
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":1,"loadedAt":"","address":"198.51.100.7"}]}`)
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":-1,"loadedAt":""}]}`)
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":1,"loadedAt":"2026\u0007"}]}`)
+}
+
+func TestFilterAndNATRuleRoundTripInInterfaceList(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"input","action":"accept","inInterfaceList":"LAN"},{"ordinal":1,"chain":"input","action":"accept","inInterface":"ether1"}]}`)
+	if len(p.FilterRules) != 2 {
+		t.Fatalf("len(FilterRules) = %d, want 2", len(p.FilterRules))
+	}
+	if got := p.FilterRules[0].InInterfaceList; got != "LAN" {
+		t.Errorf("FilterRules[0].InInterfaceList = %q, want LAN", got)
+	}
+	if got := p.FilterRules[1].InInterfaceList; got != "" {
+		t.Errorf("an absent inInterfaceList must decode as unset, got %q", got)
+	}
+	n := decodeOK(t, `{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","inInterfaceList":"LAN"}]}`)
+	if len(n.NATRules) != 1 || n.NATRules[0].InInterfaceList != "LAN" {
+		t.Errorf("NATRules = %+v, want InInterfaceList LAN", n.NATRules)
+	}
+	// Screened like every other text field.
+	decodeErr(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"input","action":"accept","inInterfaceList":"LAN\u0007"}]}`)
+	decodeErr(t, `{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","inInterfaceList":"LAN\u0007"}]}`)
 }

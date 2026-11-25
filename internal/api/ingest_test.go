@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/gauntlet"
+
 	"github.com/tomlawesome/mikroview/internal/audit"
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -42,7 +43,7 @@ func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, s
 
 	// registerAdmin also gives the account a confirmed factor and
 	// records it, so a later loggedInClient(t, ts.URL, "admin",
-	// "password123") (e.g. TestIngestPushIsReadableFromTheTableEndpoints)
+	// fixtureAdminPassword) (e.g. TestIngestPushIsReadableFromTheTableEndpoints)
 	// can reach the non-enrolment routes it needs and complete #1249's
 	// second step, not just this setup's own store lookups below.
 	registerAdmin(t, s, ts)
@@ -51,7 +52,7 @@ func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, s
 		t.Fatal("the admin account was not created")
 	}
 
-	raw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, device, admin, time.Now())
+	raw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, device, admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -164,9 +165,9 @@ func TestIngestRouteRefusesAPushFromAnUnenrolledAddress(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", fixtureAdminPassword)).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
-	raw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", admin, time.Now())
+	raw, _, err := s.Tokens.Create("router-1", gauntlet.TokenKindIngest, "router-1", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -198,9 +199,9 @@ func TestIngestRouteRejectsAReadOnlyToken(t *testing.T) {
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", fixtureAdminPassword)).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
-	apiRaw, _, err := s.Tokens.Create("birdcage", auth.TokenKindAPI, "", admin, time.Now())
+	apiRaw, _, err := s.Tokens.Create("birdcage", gauntlet.TokenKindAPI, "", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -281,8 +282,9 @@ func TestIngestRouteRejectsARevokedToken(t *testing.T) {
 	// actual caller of this route -- refuses to parse the 401 at all
 	// ("ERROR parsing http: 401 should contain www-authenticate
 	// header") instead of reporting the refusal, per RFC 9110 §15.5.2.
-	if got := resp.Header.Get("WWW-Authenticate"); got != `Bearer realm="mikroview"` {
-		t.Errorf(`expected WWW-Authenticate: Bearer realm="mikroview", got %q`, got)
+	// The refusal is gauntlet's gate's since #1202, under its realm.
+	if got := resp.Header.Get("WWW-Authenticate"); got != `Bearer realm="gate"` {
+		t.Errorf(`expected WWW-Authenticate: Bearer realm="gate", got %q`, got)
 	}
 }
 
@@ -295,7 +297,7 @@ func TestIngestRouteRejectsAnInvalidPayload(t *testing.T) {
 	}{
 		{"unknown kind", `{"kind":"routing-table","page":1,"pages":1,"records":[]}`},
 		{"unknown top-level field", `{"kind":"arp","page":1,"pages":1,"records":[],"extra":1}`},
-		{"unknown record field", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"1.1.1.1","mac":"","owner":"admin"}]}`},
+		{"unknown record field", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.1","mac":"","owner":"admin"}]}`},
 		{"malformed JSON", `{not json`},
 		{"empty body", ``},
 	}
@@ -318,12 +320,12 @@ func TestIngestRouteRateLimitsPerToken(t *testing.T) {
 	// A tight limiter so the test doesn't need 120 requests to prove the
 	// point -- IngestLimiter is swapped after server construction since
 	// there's no other seam to inject a smaller threshold.
-	s.IngestLimiter = auth.NewLoginLimiter(2, time.Minute)
+	s.IngestLimiter = mustLimiter(t, 2, time.Minute)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", setupRequest(t, s, "admin", fixtureAdminPassword)).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
 
 	// Two routers, two addresses -- an address belongs to one router.
@@ -335,11 +337,11 @@ func TestIngestRouteRateLimitsPerToken(t *testing.T) {
 	s.TrustedProxies = proxies
 	enrolIngestTestDeviceAt(t, s, "router-a", "192.0.2.10")
 	enrolIngestTestDeviceAt(t, s, "router-b", "192.0.2.11")
-	rawA, _, err := s.Tokens.Create("router-a", auth.TokenKindIngest, "router-a", admin, time.Now())
+	rawA, _, err := s.Tokens.Create("router-a", gauntlet.TokenKindIngest, "router-a", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
-	rawB, _, err := s.Tokens.Create("router-b", auth.TokenKindIngest, "router-b", admin, time.Now())
+	rawB, _, err := s.Tokens.Create("router-b", gauntlet.TokenKindIngest, "router-b", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -426,7 +428,7 @@ func TestIngestPushIsReadableFromTheTableEndpoints(t *testing.T) {
 		t.Fatalf("push: status = %d, want 200", resp.StatusCode)
 	}
 
-	adminClient := loggedInClient(t, ts.URL, "admin", "password123")
+	adminClient := loggedInClient(t, ts.URL, "admin", fixtureAdminPassword)
 	get := func(t *testing.T, path string) routerTableResponse {
 		t.Helper()
 		res, err := adminClient.Get(ts.URL + path)
@@ -493,7 +495,7 @@ func TestIngestPushedIPAddressesAreReadableFromTheTableEndpoint(t *testing.T) {
 		t.Fatalf("push: status = %d, want 200", resp.StatusCode)
 	}
 
-	adminClient := loggedInClient(t, ts.URL, "admin", "password123")
+	adminClient := loggedInClient(t, ts.URL, "admin", fixtureAdminPassword)
 	res, err := adminClient.Get(ts.URL + "/api/routeros/router-7/addresses")
 	if err != nil {
 		t.Fatal(err)
@@ -516,6 +518,57 @@ func TestIngestPushedIPAddressesAreReadableFromTheTableEndpoint(t *testing.T) {
 	first, _ := addrs[0].(map[string]any)
 	if first["address"] != "192.168.1.1/24" {
 		t.Errorf("first address = %+v, want the lower address first (sorted)", first)
+	}
+}
+
+// TestIngestPushedIPServicesAreReadableFromTheTableEndpoint is issue
+// #1329's own acceptance case: a pushed /ip/service table lands in
+// RouterState and is readable back through the services endpoint,
+// including a row with no address restriction -- the case that matters
+// most downstream, since it means "reachable from anywhere" rather than
+// an omitted field being confused with a real restriction. winbox
+// carries an explicit "address":[] here, the shape a real static service
+// actually sends (#1405); an address key entirely absent instead marks
+// one of RouterOS's own dynamic rows, which the endpoint now leaves out.
+func TestIngestPushedIPServicesAreReadableFromTheTableEndpoint(t *testing.T) {
+	ts, _, raw := ingestTestServer(t, "router-7")
+
+	push := `{"kind":"ip-service","page":1,"pages":1,"records":[` +
+		`{"name":"winbox","disabled":false,"port":8291,"address":[],"certificate":""},` +
+		`{"name":"api","disabled":true,"port":8728,"address":"10.0.0.0/8","certificate":""}]}`
+	resp := postIngest(t, ts, raw, push)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: status = %d, want 200", resp.StatusCode)
+	}
+
+	adminClient := loggedInClient(t, ts.URL, "admin", fixtureAdminPassword)
+	res, err := adminClient.Get(ts.URL + "/api/routeros/router-7/services")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET services: status = %d, want 200", res.StatusCode)
+	}
+	var got routerTableResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Available || got.UpdatedAt == nil {
+		t.Fatalf("services table = %+v, want available with an updatedAt", got)
+	}
+	services, ok := got.Rules.([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("services = %#v, want 2 entries", got.Rules)
+	}
+	first, _ := services[0].(map[string]any)
+	if first["name"] != "api" {
+		t.Errorf("first service = %+v, want api first (sorted by name)", first)
+	}
+	second, _ := services[1].(map[string]any)
+	if addr, ok := second["address"].([]any); !ok || len(addr) != 0 {
+		t.Errorf("winbox address = %#v, want an empty list (no restriction)", second["address"])
 	}
 }
 

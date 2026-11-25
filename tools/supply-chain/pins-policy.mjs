@@ -20,11 +20,12 @@
 // the review record against reality, not a stricter policy this repo
 // does not implement.
 //
-// #1312: the Go toolchain is also pinned four separate times -- go.mod's
+// #1312: the Go toolchain is also pinned several separate times -- go.mod's
 // `go` directive, Dockerfile's `FROM golang:X-alpine`, live-check.Dockerfile's
-// `ARG GO_VERSION=X` and every `image: golang:X` in .gitlab-ci.yml -- and
+// `ARG GO_VERSION=X`, every `image: golang:X` in .gitlab-ci.yml, and (#1356)
+// every `actions/setup-go` `go-version:` in .github/workflows/*.yml -- and
 // nothing tied them together, so CI floated on a patch the shipped image
-// never saw. This script additionally fails when those four disagree,
+// never saw. This script additionally fails when those disagree,
 // independently of the policy-vs-reality check above.
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -71,8 +72,20 @@ export function extractActionPins(fileTexts) {
       const match = ACTION_PIN.exec(line);
       if (!match) continue;
       const [, name, commit, version] = match;
-      if (!pins.has(name)) pins.set(name, { commit, version, locations: new Set() });
+      if (!pins.has(name)) {
+        const entry = { commit, version, locations: new Set() };
+        // Every file's own pin, not just the first one seen: two files can pin
+        // the same action to different commits, and keeping only the first
+        // let a stale pin in a later file pass unchecked. Non-enumerable so
+        // the entry's public shape ({commit, version, locations}) is unchanged.
+        Object.defineProperty(entry, "pinsByFile", { value: [] });
+        pins.set(name, entry);
+      }
       pins.get(name).locations.add(file);
+      const byFile = pins.get(name).pinsByFile;
+      if (!byFile.some((p) => p.file === file && p.commit === commit && p.version === version)) {
+        byFile.push({ file, commit, version });
+      }
     }
   }
   return pins;
@@ -134,17 +147,19 @@ const GO_MOD_DIRECTIVE = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m;
 const DOCKERFILE_GOLANG_FROM = /^\s*FROM\s+golang:(\d+\.\d+(?:\.\d+)?)(?:-\S+)?/im;
 const GO_VERSION_ARG = /^\s*ARG\s+GO_VERSION=(\d+\.\d+(?:\.\d+)?)\s*$/m;
 const GITLAB_GOLANG_IMAGE = /image:\s*golang:(\d+\.\d+(?:\.\d+)?)\b/g;
+const WORKFLOW_GO_VERSION = /^\s*go-version:\s*['"]?(\d+\.\d+(?:\.\d+)?)['"]?\s*$/;
 
 /**
- * Reads the Go toolchain version named in each of the four places that
- * name one (#1312): go.mod's `go` directive, the Dockerfile's golang
- * base image, live-check.Dockerfile's checksummed-tarball ARG, and every
- * `image: golang:X` in .gitlab-ci.yml. Returns a map from a short label
- * to the version string found there -- one entry per `.gitlab-ci.yml`
- * `image:` line found, distinctly labelled, so two differing CI jobs are
- * both reported rather than one silently winning.
+ * Reads the Go toolchain version named in each of the places that name
+ * one (#1312, plus GitHub workflows since #1356): go.mod's `go`
+ * directive, the Dockerfile's golang base image, live-check.Dockerfile's
+ * checksummed-tarball ARG, every `image: golang:X` in .gitlab-ci.yml, and
+ * every `actions/setup-go` `go-version:` in .github/workflows/*.yml.
+ * Returns a map from a short label to the version string found there --
+ * one entry per matching line, distinctly labelled, so two differing CI
+ * jobs are both reported rather than one silently winning.
  */
-export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, gitlabCi }) {
+export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, gitlabCi, workflows }) {
   const pins = new Map();
 
   if (goMod !== undefined) {
@@ -166,6 +181,15 @@ export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, g
       const match = GITLAB_GOLANG_IMAGE.exec(line);
       if (match) pins.set(`${gitlabCi.file}:${index + 1}`, match[1]);
     });
+  }
+  if (workflows !== undefined) {
+    for (const [file, text] of Object.entries(workflows)) {
+      const lines = text.split("\n");
+      lines.forEach((line, index) => {
+        const match = WORKFLOW_GO_VERSION.exec(line);
+        if (match) pins.set(`${file}:${index + 1}`, match[1]);
+      });
+    }
   }
 
   return pins;
@@ -238,6 +262,7 @@ export function collectRepositoryPins(root = repositoryRoot) {
     liveCheckDockerfile:
       liveCheckDockerfileText === undefined ? undefined : { file: "live-check.Dockerfile", text: liveCheckDockerfileText },
     gitlabCi: gitlabCiText === undefined ? undefined : { file: ".gitlab-ci.yml", text: gitlabCiText },
+    workflows: fileTexts,
   });
 
   return {
@@ -264,15 +289,21 @@ export function diffPolicy(policy, { actionPins, imagePins }) {
       problems.push(`ci action pinned but not recorded in the policy: ${name}@${found.commit}`);
       continue;
     }
-    if (recorded.commit !== found.commit) {
-      problems.push(
-        `ci action ${name} is pinned to ${found.commit} but the policy records ${recorded.commit}`,
-      );
-    }
-    if (found.version !== undefined && recorded.version !== found.version) {
-      problems.push(
-        `ci action ${name} pin comment says ${found.version} but the policy records ${recorded.version}`,
-      );
+    // Compare each file's pin, so a mismatch names the file it is in; an
+    // entry built by hand without pinsByFile is checked as a single pin.
+    const perFile = found.pinsByFile ?? [{ commit: found.commit, version: found.version }];
+    for (const pin of perFile) {
+      const where = pin.file === undefined ? "" : ` in ${pin.file}`;
+      if (recorded.commit !== pin.commit) {
+        problems.push(
+          `ci action ${name}${where} is pinned to ${pin.commit} but the policy records ${recorded.commit}`,
+        );
+      }
+      if (pin.version !== undefined && recorded.version !== pin.version) {
+        problems.push(
+          `ci action ${name}${where} pin comment says ${pin.version} but the policy records ${recorded.version}`,
+        );
+      }
     }
   }
   for (const name of policyActions.keys()) {

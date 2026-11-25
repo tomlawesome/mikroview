@@ -4,6 +4,7 @@ import {
   fetchAuthSession,
   login,
   logout,
+  onForcedAuthGate,
   PENDING_LOGIN_EXPIRED,
   register,
   setNewPasswordAfterReset,
@@ -15,6 +16,7 @@ import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
 import { watchlistState } from "./watchlist.svelte";
 import { wizardState } from "./wizard.svelte";
+import { wizardRun } from "./wizardRun.svelte";
 import { logEveryRuleWorkState } from "./logEveryRuleWork.svelte";
 import { forgetHistoryKeyForSession } from "./history";
 import { tokensState } from "./tokens.svelte";
@@ -23,7 +25,10 @@ import { auditState } from "./audit.svelte";
 import { persistenceState } from "./persistence.svelte";
 import { configProblemsState } from "./configProblems.svelte";
 import { configUpgradeState } from "./configUpgrade.svelte";
+import { configEditorState } from "./configEditor.svelte";
+import { serverModeState } from "./serverMode.svelte";
 import { preferencesState } from "./preferences.svelte";
+import { tourState } from "./tour.svelte";
 import type { AuthSession } from "./types";
 
 // 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
@@ -38,6 +43,23 @@ export const pageReload = {
     location.reload();
   },
 };
+
+// #1363: a server restart -- every upgrade is one -- ends every session
+// (SessionStore is memory-only), so after an upgrade an open tab's next
+// poll answers 401 and handleUnauthorized below would reload it at
+// once: on a busy tab, out from under whatever the operator was typing,
+// before the freshness check (which owns the reload-or-banner decision
+// for an upgrade) ever got its say. Registered once by main.ts with
+// freshnessState.claimUnauthorized -- freshness.svelte.ts imports this
+// file, so the hook keeps that import one-way. Resolves true when the
+// 401 was the upgrade and freshness has dealt with it; false (or no
+// hook at all, as in every test that never wires one) means the
+// ordinary bounce below.
+let unauthorizedClaim: (() => Promise<boolean>) | null = null;
+
+export function onUnauthorizedClaim(claim: (() => Promise<boolean>) | null): void {
+  unauthorizedClaim = claim;
+}
 
 // The way-out beat flag has to outlive the reload, so it rides in
 // sessionStorage (tab-scoped, like the wizard's history key) and is
@@ -71,6 +93,12 @@ function clearSessionState() {
   // previous operator's pasted firewall export, and the key that
   // decrypts this instance's stored history.
   wizardState.reset();
+  // The wizard's run (v0.7.0 pre-release audit): wizardRun.pass is the
+  // admin password typed into Mint and not yet spent, a module-level
+  // field like the rest, that only begin() cleared on the next open --
+  // so a failed logout, which deliberately keeps the page up, left it
+  // in memory.
+  wizardRun.reset();
   logEveryRuleWorkState.reset();
   forgetHistoryKeyForSession();
   // Same audit, same batch, still missed: tokensState, usersState,
@@ -90,8 +118,14 @@ function clearSessionState() {
   // accessAdmin rows of internal/api/authz_matrix_test.go) whose
   // answer lived in a module-level store rather than a component.
   configUpgradeState.reset();
+  // #1347: the config editor's text, its revealed secret values and the
+  // snapshot list -- admin-only, and the secrets are the last thing the
+  // next person on this tab should be handed.
+  configEditorState.reset();
+  // The deck tour's pending offer, or a tour in progress (#1386).
+  tourState.reset();
   // #1283: the shared per-user preferences record (presets, top-talker
-  // widgets, colorway, and the rest of the nine modules that used to
+  // widgets, and the rest of the modules that used to
   // read/write localStorage directly). logout() below has already
   // flushed anything pending while the session was still good; this
   // just drops the in-memory copy so the next sign-in on this tab
@@ -129,11 +163,17 @@ function clearSessionState() {
 // door rather than falling out of it. 'must-change-password' wins when
 // both hold, matching requireAuth's own gate order: a session owing
 // both is sent to set a password first.
-export type AuthViewState =
+// 'must-enrol-passkey' (#1202) is gauntlet's third door: an admin with no
+// passkey under the admin passkey rule. Same shape as 'must-enrol-factor',
+// from the session's mustEnrolPasskey, and AuthEnrolFactor draws it with
+// passkey-only wording. Order of the doors: password change, then this
+// one, then the any-factor door.
+type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"
   | "must-change-password"
+  | "must-enrol-passkey"
   | "must-enrol-factor"
   | "pending-factor"
   | "authenticated";
@@ -222,6 +262,9 @@ class AuthState {
   // Mirrors sessionResponse.mustEnrolSecondFactor (#1336), kept beside
   // `state` for the same reason mustChangePassword above is.
   mustEnrolSecondFactor = $state(false);
+  // Mirrors sessionResponse.mustEnrolPasskey (#1202), kept beside `state`
+  // for the same reason.
+  mustEnrolPasskey = $state(false);
   // #677's sessions row ("this device ... signed in 4 d") -- this
   // session's own IssuedAt, RFC3339, from sessionResponse.signedInSince.
   // Empty while unauthenticated or against an older server.
@@ -266,7 +309,7 @@ class AuthState {
     } else if (code === "link_failed") {
       this.ssoError = "Connecting SSO to your account failed. Nothing was changed.";
     } else {
-      this.ssoError = "SSO sign-in failed -- try again, or sign in with your password below.";
+      this.ssoError = "SSO sign-in failed — try again, or sign in with your password below.";
     }
     params.delete("ssoError");
     const qs = params.toString();
@@ -315,20 +358,30 @@ class AuthState {
     }
   }
 
-  private apply(session: AuthSession) {
+  // #1362: no longer private -- api.ts's forced-auth-gate handler
+  // (registered below) calls this straight off a fresh
+  // GET /api/auth/session the moment a 403 comes back carrying that
+  // signal, the same call check() above makes, so a session that just
+  // lost its second factor or was forced to a password change lands on
+  // the matching door without waiting for the next poll or a reload.
+  apply(session: AuthSession) {
     this.ssoAvailable = session.ssoAvailable;
     if (session.setupRequired) {
       this.state = "setup-required";
     } else if (session.authenticated) {
       this.mustChangePassword = session.mustChangePassword ?? false;
       this.mustEnrolSecondFactor = session.mustEnrolSecondFactor ?? false;
-      // The password change comes first when both are owed, matching
-      // requireAuth's gate order (see AuthViewState's own comment).
+      this.mustEnrolPasskey = session.mustEnrolPasskey ?? false;
+      // The password change comes first when several are owed, matching
+      // requireAuth's gate order (see AuthViewState's own comment); the
+      // admin's passkey comes before the any-factor door.
       this.state = this.mustChangePassword
         ? "must-change-password"
-        : this.mustEnrolSecondFactor
-          ? "must-enrol-factor"
-          : "authenticated";
+        : this.mustEnrolPasskey
+          ? "must-enrol-passkey"
+          : this.mustEnrolSecondFactor
+            ? "must-enrol-factor"
+            : "authenticated";
       this.username = session.username ?? "";
       this.role = (session.role as "admin" | "user" | "viewer") ?? "";
       // Absent on an older server: treated as "has one", which only
@@ -353,7 +406,9 @@ class AuthState {
       // already in flight), so calling it here on every pass is cheap
       // and simpler than tracking "did this transition freshly into
       // authenticated" separately.
-      if (this.state === "authenticated") void preferencesState.ensureLoaded();
+      // #1347: not in setup-only mode, where /api/me/preferences is one
+      // of the routes answering 503 until the config is fixed.
+      if (this.state === "authenticated" && !serverModeState.setupOnly) void preferencesState.ensureLoaded();
     } else {
       this.state = "unauthenticated";
       this.username = "";
@@ -362,6 +417,7 @@ class AuthState {
       this.ssoConnected = false;
       this.mustChangePassword = false;
       this.mustEnrolSecondFactor = false;
+      this.mustEnrolPasskey = false;
       this.signedInSince = "";
       this.hasTOTP = false;
       this.passkeyCount = 0;
@@ -373,8 +429,8 @@ class AuthState {
   // register/login/logout are thin wrappers over lib/api.ts's calls,
   // updating local state on success -- register/login return an error
   // string on failure (for the form to display) rather than throwing.
-  async register(username: string, password: string): Promise<string | null> {
-    const err = await register(username, password);
+  async register(username: string, password: string, setupCode: string): Promise<string | null> {
+    const err = await register(username, password, setupCode);
     if (err) return err;
     await this.check();
     return null;
@@ -478,6 +534,7 @@ class AuthState {
     this.role = "";
     this.mustChangePassword = false;
     this.mustEnrolSecondFactor = false;
+    this.mustEnrolPasskey = false;
     this.pendingSecondFactor = [];
     this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
@@ -502,6 +559,7 @@ class AuthState {
     this.role = "";
     this.mustChangePassword = false;
     this.mustEnrolSecondFactor = false;
+    this.mustEnrolPasskey = false;
     this.pendingSecondFactor = [];
     this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
@@ -515,27 +573,56 @@ class AuthState {
   // a fresh session in the same response (see handleAuthLogoutAll) --
   // so this just re-reads the session to pick up the new
   // signedInSince, rather than dropping to 'unauthenticated'.
-  async signOutEverywhere(): Promise<string | null> {
-    const err = await signOutEverywhere();
+  //
+  // #1202 U9: the caller's own password (absent for an SSO-only account)
+  // goes straight to api.ts and is not kept here.
+  async signOutEverywhere(password?: string): Promise<string | null> {
+    const err = await signOutEverywhere(password);
     if (!err) await this.check();
     return err;
   }
+
+  // Set while unauthorizedClaim (see its own comment above) is deciding,
+  // so the rest of a burst of 401s waits on that one answer.
+  private unauthorizedClaimPending = false;
 
   // Called by any fetch wrapper that gets a 401 mid-session (an expired
   // or reset-invalidated session). The state guard is what stops a
   // burst of 401s from several in-flight polls reloading more than
   // once.
   handleUnauthorized() {
-    if (
+    if (!this.inSession()) return;
+    if (!unauthorizedClaim) {
+      this.bounceUnauthorized();
+      return;
+    }
+    if (this.unauthorizedClaimPending) return;
+    this.unauthorizedClaimPending = true;
+    unauthorizedClaim()
+      .catch(() => false)
+      .then((claimed) => {
+        this.unauthorizedClaimPending = false;
+        if (!claimed) this.bounceUnauthorized();
+      });
+  }
+
+  private inSession(): boolean {
+    return (
       this.state === "authenticated" ||
       this.state === "must-change-password" ||
+      this.state === "must-enrol-passkey" ||
       this.state === "must-enrol-factor"
-    ) {
+    );
+  }
+
+  private bounceUnauthorized() {
+    if (this.inSession()) {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
       this.mustChangePassword = false;
       this.mustEnrolSecondFactor = false;
+      this.mustEnrolPasskey = false;
       clearSessionState();
       pageReload.now();
     }
@@ -543,3 +630,24 @@ class AuthState {
 }
 
 export const authState = new AuthState();
+
+// #1362: called once by App.svelte, alongside consumeSSOErrorFromURL --
+// never at this module's own load, since that module is imported (for
+// the authState singleton alone) by dozens of component tests that never
+// mount App and would otherwise all have to know about api.ts's
+// forced-auth-gate registration too. From here on, every fetch anywhere
+// in the app -- a poll, a view's own load, whatever hit the gate -- ends
+// up at apply() through api.ts's shared fetch wrapper, rather than each
+// view needing its own catch for this. `gate` itself is not read: the
+// fresh session apply() is handed is the source of truth, and it may no
+// longer agree (the factor was enrolled from another tab in the time
+// this recheck took), in which case apply() correctly lands back on
+// 'authenticated'.
+let forcedAuthGateWired = false;
+export function wireForcedAuthGate(): void {
+  if (forcedAuthGateWired) return;
+  forcedAuthGateWired = true;
+  onForcedAuthGate((_gate, session) => {
+    authState.apply(session);
+  });
+}
