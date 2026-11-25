@@ -360,8 +360,10 @@ func runSetupOnly(result config.Result, problems int) int {
 		rootMux.Handle("/", ui)
 	}
 	httpServer := &http.Server{
-		Addr:              cfg.Listen.HTTP,
-		Handler:           securityHeaders(srv.RestrictToAllowList(rootMux), cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
+		Addr: cfg.Listen.HTTP,
+		// Setup-only mode serves the sign-in routes too: same 60 s write
+		// deadline as main.go's server (#1561, #1552).
+		Handler:           slowAuthWriteDeadline(securityHeaders(srv.RestrictToAllowList(rootMux), cfg.TLS.Enabled && cfg.TLS.CertFile != ""), 60*time.Second),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
