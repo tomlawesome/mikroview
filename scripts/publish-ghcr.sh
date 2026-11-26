@@ -18,7 +18,7 @@
 # What it does, after a preflight that refuses -- writing nothing -- on a
 # missing token, key, evidence or SBOM, or on a ref it does not publish:
 #
-#   1. logs in to GHCR with GHCR_PUSH_TOKEN on stdin;
+#   1. logs in to GHCR with the token from the signing host's ghcr-token file, on stdin;
 #   2. copies the recorded digest, by digest, to its immutable tag
 #      (`docker buildx imagetools create --prefer-index=false`, so the GHCR
 #      digest is the GitLab digest) -- preview-<short7> on a push to
@@ -45,9 +45,16 @@
 #                        does no git of its own.
 #   MV_HIGHEST_TAG       On a tag: the highest vX.Y.Z tag now, read the
 #                        same way.
-#   GHCR_PUSH_TOKEN      A GitHub token that can write this one package
-#                        (protected, masked CI/CD variable). Piped to
-#                        `docker login --password-stdin`; never an argument.
+#   MV_SIGNING_DIR/ghcr-token
+#                        The GHCR push token (#1569): a classic personal
+#                        access token with only write:packages (GHCR takes
+#                        only classic tokens), stored by the owner next to
+#                        cosign.key in the signing host's read-only mount.
+#                        There is no CI/CD variable. Piped to
+#                        `docker login --password-stdin`; never an argument,
+#                        never logged. The script logs out on exit.
+#   GHCR_PUSH_TOKEN      Overrides that file when non-empty, only so tests
+#                        can set it, as COSIGN_PASSWORD does below.
 #   MV_GHCR_IMAGE        Destination repository. Default:
 #                        ghcr.io/tomlawesome/mikroview.
 #   MV_GHCR_REGISTRY     Registry to log in to. Default: ghcr.io.
@@ -113,11 +120,19 @@ else
 fi
 
 # --- preflight: refuse before any login or write ---
-[[ -n "${GHCR_PUSH_TOKEN:-}" ]] ||
-  fail "GHCR_PUSH_TOKEN is empty -- the owner stores it as a protected, masked CI/CD variable"
 [[ -n "$source_repo" ]] || fail "CI_REGISTRY_IMAGE is not set -- this runs in a GitLab job, which predefines it"
 
 signing_dir="${MV_SIGNING_DIR:-/etc/mikroview-signing}"
+if [[ -n "${GHCR_PUSH_TOKEN:-}" ]]; then
+  ghcr_token="$GHCR_PUSH_TOKEN"
+else
+  token_path="${signing_dir}/ghcr-token"
+  [[ -f "$token_path" ]] ||
+    fail "no GHCR push token at ${token_path} -- the signing runner mounts it read-only alongside cosign.key; set MV_SIGNING_DIR if it lives elsewhere"
+  ghcr_token="$(<"$token_path")"
+  [[ -n "$ghcr_token" ]] || fail "the GHCR push token at ${token_path} is empty"
+fi
+unset GHCR_PUSH_TOKEN
 if [[ -n "${COSIGN_PRIVATE_KEY:-}" ]]; then
   key_path="$COSIGN_PRIVATE_KEY"
 else
@@ -145,9 +160,14 @@ source_ref="${source_repo}@${digest}"
 target="${ghcr_image}@${digest}"
 
 # --- log in, copy the immutable tag by digest, read it back ---
-printf '%s' "$GHCR_PUSH_TOKEN" |
+printf '%s' "$ghcr_token" |
   "$docker_cmd" login "$ghcr_registry" -u "$ghcr_user" --password-stdin ||
   fail "docker login to ${ghcr_registry} failed"
+unset ghcr_token
+# Log out however the script ends from here; a failed logout does not
+# change the exit status.
+ghcr_logout() { "$docker_cmd" logout "$ghcr_registry" >/dev/null 2>&1 || true; }
+trap ghcr_logout EXIT
 
 copy_tag() {
   local dest="${ghcr_image}:$1" inspect_out got

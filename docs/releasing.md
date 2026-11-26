@@ -24,7 +24,8 @@ Words this guide uses:
    moved to the next one, and each capability milestone's exit criteria are
    checked off on the promote issue. Moving an issue out is the owner's call.
 2. On the open batch, before the audit freezes it: set `VERSION` to `X.Y.Z`
-   and refresh the release surfaces. Read `README.md` (Features, Quickstart),
+   and the `written-by:` line in `deploy/config.example.yaml` to match (a
+   Go test refuses a mismatch), and refresh the release surfaces. Read `README.md` (Features, Quickstart),
    `site/index.html`, `SECURITY.md` and `docs/development.md` against the
    changelog; recapture any `docs/screenshots/*.png` whose components changed,
    from a seeded demo of this version; if the wizard's router commands

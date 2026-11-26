@@ -81,10 +81,13 @@ destination.
 
 `publish:ghcr` (`scripts/publish-ghcr.sh`) runs on the signing runner after
 `publish:channel`, on a push to `preview` or a `v*` tag only. It refuses,
-writing nothing, if the evidence, the SBOM, the key or `GHCR_PUSH_TOKEN` is
-missing. Then it:
+writing nothing, if the evidence, the SBOM, the key or the push token is
+missing. The push token is the file `ghcr-token` next to `cosign.key` in the
+signing runner's read-only mount (#1569); there is no CI/CD variable. Then it:
 
-1. logs in to `ghcr.io` with `GHCR_PUSH_TOKEN`, piped on stdin;
+1. logs in to `ghcr.io` with that token, piped on stdin -- never on a command
+   line or in the log -- and logs out again when it finishes, whether it
+   succeeded or failed;
 2. copies the recorded digest, by digest, to `ghcr.io/tomlawesome/mikroview`
    with `docker buildx imagetools create --prefer-index=false`, so the GHCR
    digest is the GitLab digest, under its immutable tag: `preview-<short7>`
@@ -118,17 +121,17 @@ path.
 
 Owner steps, none of which an assistant can do:
 
-- create a GitHub token that can write this one package and nothing else: a
-  fine-grained token with `write` on packages for `tomlawesome/mikroview`'s
-  package only (or, if a fine-grained token cannot be scoped to the package,
-  a classic token with `write:packages` alone), fresh, never an old value;
-- store it on GitLab ai/mikroview as the CI/CD variable `GHCR_PUSH_TOKEN`,
-  protected and masked;
+- create a GitHub classic personal access token with only `write:packages`
+  (GHCR accepts only classic tokens), fresh, never an old value;
+- store it on the signing runner host as `/etc/mikroview-signing/ghcr-token`,
+  next to `cosign.key` (see "Owner-only setup on the runner host"). It is not
+  a CI/CD variable; if a `GHCR_PUSH_TOKEN` CI/CD variable was added earlier,
+  delete it: nothing reads it;
 - after the first good release through this path, delete the GitHub secrets
   `GITLAB_READ_TOKEN_NAME` and `GITLAB_READ_TOKEN`, and revoke the GitLab
   read-only project access token they held: nothing reads them any more;
 - if the `GHCR_PUBLISH_TOKEN` CI/CD variable from before #1472 is still
-  there, delete it: nothing reads it (`GHCR_PUSH_TOKEN` is the new one);
+  there, delete it: nothing reads it;
 - check the registry cleanup policy keeps `sha-*` for 7 days and `v*` and
   `preview` for good, and keeps `sha256-[0-9a-f]{64}.*` (signatures and
   attestations) for as long as the digests they sign.
@@ -174,9 +177,12 @@ install -m 0600 -o gitlab-runner -g gitlab-runner /path/to/cosign.key \
 ( umask 077 && IFS= read -r -s -p 'key password: ' p && \
   printf '%s' "$p" > /etc/mikroview-signing/password ); echo
 chown gitlab-runner:gitlab-runner /etc/mikroview-signing/password
+( umask 077 && IFS= read -r -s -p 'GHCR token: ' t && \
+  printf '%s' "$t" > /etc/mikroview-signing/ghcr-token ); echo
+chown gitlab-runner:gitlab-runner /etc/mikroview-signing/ghcr-token
 ```
 
-`read -s` keeps the password off the command line and out of shell history.
+`read -s` keeps the password and the token off the command line and out of shell history.
 Shred any copy left outside the directory — a key still sitting in a home
 directory defeats the fence.
 
@@ -216,7 +222,7 @@ key derived from the private one — never the key or the password:
 
 ```sh
 sudo sh -c 'cd /etc/mikroview-signing || { echo "DIR MISSING"; exit 1; }; \
-  for f in cosign.key password; do [ -s "$f" ] && \
+  for f in cosign.key password ghcr-token; do [ -s "$f" ] && \
     stat -c "%n  mode=%a owner=%U:%G size=%s" "$f" || echo "$f MISSING OR EMPTY"; done; \
   h=$(COSIGN_PASSWORD="$(cat password)" cosign public-key --key cosign.key 2>/dev/null \
     | sha256sum | cut -d" " -f1); \
@@ -224,7 +230,7 @@ sudo sh -c 'cd /etc/mikroview-signing || { echo "DIR MISSING"; exit 1; }; \
     && echo "PAIRING OK" || echo "PAIRING FAIL - got: ${h:-nothing}"'
 ```
 
-Both files should be owned by `gitlab-runner`, and the pairing should pass.
+All three files should be owned by `gitlab-runner`, and the pairing should pass.
 If cosign is not installed on that host the file checks still stand, and the
 job does the real pairing check the first time it runs.
 
