@@ -18,7 +18,7 @@
 # What it does, after a preflight that refuses -- writing nothing -- on a
 # missing token, key, evidence or SBOM, or on a ref it does not publish:
 #
-#   1. logs in to GHCR with GHCR_PUSH_TOKEN on stdin;
+#   1. logs in to GHCR with the token from the signing host's ghcr-token file, on stdin;
 #   2. copies the recorded digest, by digest, to its immutable tag
 #      (`docker buildx imagetools create --prefer-index=false`, so the GHCR
 #      digest is the GitLab digest) -- preview-<short7> on a push to
