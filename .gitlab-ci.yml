@@ -5,7 +5,8 @@
 # branches -- the `sync` stage pushes each one after a merge. Under the
 # mirror rule (#1464) only publish-from-gitlab, release-on-tag and CodeQL
 # run there by themselves, plus check-only secret scanning and the
-# RouterOS watcher; GitHub copies the image GitLab built and signed, and
+# RouterOS watcher; GitHub verifies and attests the image GitLab built,
+# signed and pushed to GHCR (#1563), and
 # everything else there runs by hand. #935 is the migration record; the
 # general model is in the gitlab-first-migration skill.
 #
@@ -719,7 +720,6 @@ lint:script-tests:
     - bash scripts/release-readiness.test.sh
     - bash scripts/ci-batch-intake.test.sh
     - bash scripts/merge-coverprofiles.test.sh
-    - bash scripts/ci/gitlab-await-tested-image.test.sh
     - bash scripts/routeros-chr-open-mr.test.sh
     # #1550: the allow file in the shape the private-details hook accepts,
     # checked by the hook's own allow-shape.awk (fetched from ai/agent-config
@@ -2684,10 +2684,10 @@ sync:mirror-to-github:
     - git push github "HEAD:$MIRROR_REF"
 
 # ---------------------------------------------------------------------------
-# PUBLISH (#1472) -- GitLab builds, signs and publishes the product image;
-# GitHub only copies the signed digest to GHCR (.github/workflows/
-# publish-from-gitlab.yml on preview, release-on-tag.yml on a v* tag;
-# docker.yml no longer builds).
+# PUBLISH (#1472) -- GitLab builds, signs and publishes the product image,
+# and since #1563 pushes it, signed, to GHCR too (publish:ghcr); GitHub only
+# verifies and attests it there (.github/workflows/publish-from-gitlab.yml
+# on preview, release-on-tag.yml on a v* tag; docker.yml no longer builds).
 #
 # Build once, test the built bytes, promote by digest -- orbit's shape
 # (build_image -> record_image -> sign_evidence -> publish_channel):
@@ -2701,11 +2701,13 @@ sync:mirror-to-github:
 #   sign:release-digest  key-based signature + SPDX attestation, on that digest
 #   publish:channel      verifies the signature, then gives the digest its
 #                        consumable name: :preview or :vX.Y.Z
+#   publish:ghcr         copies that digest to GHCR, signs and attests it
+#                        there (#1563)
 #
 # Registry scheme, registry.tomlawson.io/ai/mikroview: sha-<full sha>
 # (kept 7 days by the cleanup policy), preview and vX.Y.Z (kept). No
-# `latest` here: latest is GHCR's, moved by GitHub on the highest release
-# tag (owner, #1472). Nothing consumable exists before its signature verifies.
+# `latest` here: latest is GHCR's, moved by publish:ghcr on the highest
+# release tag (owner, #1472; #1563). Nothing consumable exists before its signature verifies.
 # ---------------------------------------------------------------------------
 
 # #1472 job 5. The needs are the full bar on a publishing ref: every
@@ -2833,6 +2835,65 @@ publish:channel:
         exit 1
       fi
       echo "publish:channel: published $CI_REGISTRY_IMAGE@$digest as $channel"
+
+# #1563: GitLab pushes the signed digest to GHCR. The owner's GitLab
+# geo-blocks GitHub's hosted runners (owner, 2026-11-25), so GitHub can no
+# longer pull from here; the pattern is push from the trusted side, the
+# signed evidence travels with the digest, verify at the destination.
+# scripts/publish-ghcr.sh copies the recorded digest by digest to
+# ghcr.io/tomlawesome/mikroview (preview-<short7> and, while still the
+# head, preview; or vX.Y.Z and, when highest, latest), reads every tag
+# back, then signs and attests the GHCR digest with the fenced key, as
+# sign:release-digest does here. The GitHub workflows only verify that
+# and attest (docs/release-signing.md).
+#
+# The signing runner, because the key is there. GHCR_PUSH_TOKEN is a
+# protected, masked CI/CD variable the owner creates: a GitHub token that
+# can write this one package. This GitLab is CE (see sign:release-digest),
+# so any job in a protected pipeline could read it; it can write only the
+# package. The head and highest-tag checks are read here with git, so the
+# script stays git-free and testable; the resource group serialises runs
+# so a late, older pipeline reads a head or tag list that already shows
+# the newer one and leaves preview / latest alone.
+publish:ghcr:
+  stage: sync
+  tags: [mikroview-signing]
+  # Same pinned CLI image as sign:release-digest: registry operations
+  # only, no daemon (that job's comment says why none is mounted).
+  image: docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb
+  # Writes GHCR tags and signatures -- never cut mid-write (#952).
+  interruptible: false
+  resource_group: publish-ghcr
+  timeout: 20m
+  rules:
+    - !reference [.publish_ref, rules]
+  needs:
+    - job: publish:image
+      artifacts: true
+    - job: security:trivy-image
+      artifacts: true
+    - job: publish:channel
+  script:
+    # bash for the script; curl and coreutils for ensure-cosign.sh (and
+    # coreutils for sort -V); git for ls-remote; python3 for the evidence.
+    - apk add --no-cache bash coreutils curl git python3 >/dev/null
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      set -eu
+      # Read through CI_REPOSITORY_URL (the job token's read access); the
+      # URL carries that token, so it is never echoed. ls-remote matches by
+      # suffix, so keep only exact refs.
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        MV_HIGHEST_TAG="$(git ls-remote --tags --refs "$CI_REPOSITORY_URL" 'refs/tags/v*' |
+          awk '{ sub("^refs/tags/", "", $2); print $2 }' |
+          grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+        export MV_HIGHEST_TAG
+      else
+        MV_PREVIEW_HEAD="$(git ls-remote "$CI_REPOSITORY_URL" "refs/heads/$CI_COMMIT_BRANCH" |
+          awk -v r="refs/heads/$CI_COMMIT_BRANCH" '$2 == r { print $1 }')"
+        export MV_PREVIEW_HEAD
+      fi
+      bash scripts/publish-ghcr.sh
 
 # ---------------------------------------------------------------------------
 # RECORD:UPGRADE-FIXTURE — #1247, the second half of the upgrade
