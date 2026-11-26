@@ -2,8 +2,9 @@
 
 A release goes `dev` -> `preview` -> `main`, each step a merge request on
 GitLab (`ai/mikroview`), and is made by a `vX.Y.Z` tag on `main`'s commit.
-GitLab builds, tests, signs and publishes the image; GitHub is a mirror that
-copies the signed digest to GHCR and adds the owner's second signature. How
+GitLab builds, tests, signs and publishes the image, to GHCR too; GitHub is a
+mirror that verifies and attests the GHCR digest and adds the owner's second
+signature. How
 the two signatures work, and the owner-only signing setup, is in
 [release-signing.md](release-signing.md). Why the version lives in `VERSION`
 and the tag is the trigger is in
@@ -50,9 +51,10 @@ Words this guide uses:
    preview bar (all three browser engines, `perf:promotion`, the upgrade-fixture
    recorder). The owner approves; merge it when the pipeline is green.
 6. Check the preview was published. The push pipeline on `preview` must pass
-   `publish:image`, `sign:release-digest` and `publish:channel`, then
-   GitHub's `publish-from-gitlab` run must put `preview-<short sha>` on GHCR.
-   Link both runs on the promote issue.
+   `publish:image`, `sign:release-digest`, `publish:channel` and
+   `publish:ghcr`, which puts `preview-<short sha>` (and `preview`) on GHCR,
+   signed; then GitHub's `publish-from-gitlab` run must verify that GHCR
+   digest and attest it. Link both runs on the promote issue.
 7. Try the preview. Deploy that digest the way an operator would
    ([install.md](install.md)), upgrade to it from the last release
    ([upgrades.md](upgrades.md)), and do every operator step named on the
@@ -67,8 +69,10 @@ Words this guide uses:
    release: `git tag vX.Y.Z <main's merge commit>` and
    `git push gitlab vX.Y.Z`. The tag pipeline checks the tag equals
    `v<VERSION>` and the binary reports it (`release:check-version`), then
-   publishes and signs, and mirrors the tag to GitHub, whose `release-on-tag`
-   run copies the digest to GHCR as `vX.Y.Z` and moves `latest`. A failed
+   publishes and signs, pushes the signed digest to GHCR as `vX.Y.Z`
+   (moving `latest` when it is the highest release; `publish:ghcr`), and
+   mirrors the tag to GitHub, whose `release-on-tag` run verifies that GHCR
+   digest and attests it. A failed
    release is re-run on the same tag once the cause is fixed; nothing is
    deleted or renumbered.
 10. The owner countersigns the tag's digest with the `countersign.yml`
