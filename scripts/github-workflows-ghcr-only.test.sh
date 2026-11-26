@@ -43,53 +43,55 @@ PY
 done
 
 # --- .gitlab-ci.yml: the publish:ghcr job ---
-if python3 -c 'import yaml' 2>/dev/null; then
-  py_out="$(python3 -I - <<'PY'
-import yaml, sys
+# Standard library only (the gate image has no PyYAML): each job's block is
+# cut as text, from its `name:` line to the next line starting with a
+# character that is neither a space nor `#`.
+py_out="$(python3 -I - <<'PY'
+import re
 
-class L(yaml.SafeLoader):
-    pass
-L.add_constructor("!reference", lambda loader, node: {"__reference__": loader.construct_sequence(node)})
-doc = yaml.load(open(".gitlab-ci.yml"), Loader=L)
+lines = open(".gitlab-ci.yml").read().split("\n")
 
-def lines(job):
-    out = []
-    for key in ("before_script", "script", "after_script"):
-        v = job.get(key) or []
-        out += [str(x) for x in (v if isinstance(v, list) else [v])]
-    return "\n".join(out)
+def block(name):
+    for i, line in enumerate(lines):
+        if line == name + ":":
+            out = []
+            for nxt in lines[i + 1:]:
+                if nxt and nxt[0] not in " #":
+                    break
+                out.append(nxt)
+            return "\n".join(out)
+    return None
 
-def flat(x):
-    return yaml.safe_dump(x) if x is not None else ""
+def code(text):
+    return "\n".join(l for l in text.split("\n") if not l.lstrip().startswith("#"))
 
-job = doc.get("publish:ghcr") if isinstance(doc, dict) else None
-print("exists=" + ("yes" if isinstance(job, dict) else "no"))
-if not isinstance(job, dict):
-    sys.exit(0)
-needs = job.get("needs") or []
-names = [n if isinstance(n, str) else n.get("job") for n in needs]
-print("needs_channel=" + ("yes" if "publish:channel" in names else "no"))
-rules = flat(job.get("rules"))
-# rules either spell the refs out or reuse .publish_ref (preview push or v* tag)
-pub = flat(doc.get(".publish_ref"))
-protected = ("publish_ref" in rules) or ('"preview"' in rules or "preview" in rules) and "v[0-9" in rules
-print("protected_refs=" + ("yes" if protected and "publish_ref" in rules + pub or protected else "no"))
-sign_tags = doc["sign:release-digest"].get("tags")
-print("tags=" + ("yes" if sign_tags and job.get("tags") == sign_tags else "no"))
-# CI_REPOSITORY_URL carries the job token: never on a command line
-print("repourl=" + ("no" if "CI_REPOSITORY_URL" in lines(job) else "yes"))
-print("script=" + ("yes" if "scripts/publish-ghcr.sh" in lines(job) else "no"))
+job = block("publish:ghcr")
+sign = block("sign:release-digest")
+print("exists=" + ("yes" if job is not None else "no"))
+if job is None:
+    raise SystemExit
+job = code(job)
+needs = re.search(r"^  needs:\n((?:    .*\n?|  #.*\n?)*)", job + "\n", re.M)
+print("needs_channel=" + ("yes" if needs and re.search(r"^\s+- (job: )?publish:channel\b|job: publish:channel\b", needs.group(1), re.M) else "no"))
+rules = re.search(r"^  rules:\n((?:    .*\n?)*)", job + "\n", re.M)
+r = rules.group(1) if rules else ""
+protected = "publish_ref" in r or ("preview" in r and "v[0-9" in r)
+print("protected_refs=" + ("yes" if protected else "no"))
+tag_re = r"^  tags:.*$"
+jt = re.search(tag_re, job, re.M)
+st = re.search(tag_re, code(sign or ""), re.M)
+print("tags=" + ("yes" if jt and st and jt.group(0) == st.group(0) else "no"))
+# CI_REPOSITORY_URL carries the job token: never in the job
+print("repourl=" + ("no" if "CI_REPOSITORY_URL" in job else "yes"))
+print("script=" + ("yes" if "scripts/publish-ghcr.sh" in job else "no"))
 PY
 )"
-  get() { printf '%s\n' "$py_out" | sed -n "s/^$1=//p"; }
-  check "$(get exists)" "yes" ".gitlab-ci.yml defines job publish:ghcr"
-  check "$(get needs_channel)" "yes" "publish:ghcr needs publish:channel"
-  check "$(get protected_refs)" "yes" "publish:ghcr runs only on protected refs (preview push or v* tag)"
-  check "$(get tags)" "yes" "publish:ghcr uses the signing runner's tags (as sign:release-digest)"
-  check "$(get repourl)" "yes" "publish:ghcr script does not use CI_REPOSITORY_URL (it carries the job token)"
-  check "$(get script)" "yes" "publish:ghcr script calls scripts/publish-ghcr.sh"
-else
-  echo "FAIL - PyYAML is not available; cannot check .gitlab-ci.yml structure"; fail=1
-fi
+get() { printf '%s\n' "$py_out" | sed -n "s/^$1=//p"; }
+check "$(get exists)" "yes" ".gitlab-ci.yml defines job publish:ghcr"
+check "$(get needs_channel)" "yes" "publish:ghcr needs publish:channel"
+check "$(get protected_refs)" "yes" "publish:ghcr runs only on protected refs (preview push or v* tag)"
+check "$(get tags)" "yes" "publish:ghcr uses the signing runner's tags (as sign:release-digest)"
+check "$(get repourl)" "yes" "publish:ghcr script does not use CI_REPOSITORY_URL (it carries the job token)"
+check "$(get script)" "yes" "publish:ghcr script calls scripts/publish-ghcr.sh"
 
 exit "$fail"
