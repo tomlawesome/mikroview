@@ -133,3 +133,10 @@ older record still carries the literal marker `<!-- pending-disclosure:
 #n #m -->` -- a review may defer naming its security findings with that
 line, but the line must be replaced by the real findings before the
 next release.
+
+A marker may instead read `<!-- pending-disclosure: #n allowed-for: vX.Y.Z
+-->`. The check then lets it stand for that one release only, and prints
+an `ok` line saying so; every marker in the file must name the release
+being cut. This needs the owner's decision recorded on an issue for each
+release. First use: v0.7.1 keeps the v0.7.0 marker, because it fixes none
+of the deferred findings (owner, 2026-11-26, issue #1570).
