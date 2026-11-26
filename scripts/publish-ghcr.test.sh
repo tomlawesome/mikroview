@@ -59,6 +59,7 @@ case "$1" in
   login)
     cat >> "${STUB_LOGIN_STDIN:-/dev/null}"
     exit "${STUB_LOGIN_EXIT:-0}" ;;
+  logout) exit 0 ;;
   buildx)
     if [ "$2 $3" = "imagetools inspect" ]; then
       printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest:    %s\n' "$4" "${STUB_INSPECT_DIGEST}"
@@ -254,5 +255,42 @@ check "$(has "-t ${GHCR}:latest " "$TMP/order.log")" "no" "cosign failure (tag):
 run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" STUB_VERIFY_EXIT=0 STUB_VERIFY_OUTPUT='[{"critical":{}}]' STUB_COSIGN_EXIT=1; status=$?
 check "$([ "$status" -ne 0 ] && echo refused)" "refused" "attest failure: refuses"
 check "$(has "-t ${GHCR}:preview ${SRC}" "$TMP/order.log")" "no" "attest failure: no floating preview tag"
+
+# 13. The push token comes from KEYDIR/ghcr-token (#1569); GHCR_PUSH_TOKEN
+# only overrides it so tests can set it.
+FILE_TOKEN="ghp_FAKEfileTokenForTestsOnly9876543210"
+printf '%s\n' "$FILE_TOKEN" > "$KEYDIR/ghcr-token"
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" GHCR_PUSH_TOKEN=; status=$?
+file_out="$LAST_OUT"
+check "$status" "0" "token file only: exits 0"
+check "$(tr -d '\n' < "$TMP/stdin.log")" "$FILE_TOKEN" "token file only: file's token arrives on login's stdin"
+check "$(has "$FILE_TOKEN" "$TMP/docker.log")$(has "$FILE_TOKEN" "$TMP/cosign.log")" "nono" "token file only: token absent from every argv"
+check "$(printf '%s' "$file_out" | grep -cF -- "$FILE_TOKEN" || true)" "0" "token file only: token absent from script output"
+check "$(count '^logout ghcr.io$' "$TMP/docker.log")" "1" "token file only: docker logout ghcr.io on success"
+
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" GHCR_PUSH_TOKEN="$TOKEN"; status=$?
+env_out="$LAST_OUT"
+check "$status" "0" "env and file both set: exits 0"
+check "$(cat "$TMP/stdin.log")" "$TOKEN" "env and file both set: the env value is used"
+check "$(printf '%s%s' "$env_out" "$(cat "$TMP/docker.log")" | grep -cF -- "$FILE_TOKEN" || true)" "0" "env and file both set: file token unused"
+check "$(printf '%s' "$env_out" | grep -cF -- "$TOKEN" || true)" "0" "env set: token absent from script output"
+
+# a failure after login still logs out
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" GHCR_PUSH_TOKEN= STUB_CREATE_EXIT=1; status=$?
+check "$([ "$status" -ne 0 ] && echo refused)" "refused" "copy failure after login: refuses"
+check "$(count '^login' "$TMP/docker.log")" "1" "copy failure after login: login happened"
+check "$(count '^logout ghcr.io$' "$TMP/docker.log")" "1" "copy failure after login: docker logout ghcr.io"
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" GHCR_PUSH_TOKEN= STUB_INSPECT_DIGEST="$OTHER_DIGEST"; status=$?
+check "$([ "$status" -ne 0 ] && echo refused)" "refused" "read-back failure after login: refuses"
+check "$(count '^logout ghcr.io$' "$TMP/docker.log")" "1" "read-back failure after login: docker logout ghcr.io"
+check "$(printf '%s' "$LAST_OUT" | grep -cF -- "$FILE_TOKEN" || true)" "0" "read-back failure: token absent from script output"
+
+# neither file nor variable: refuses before any registry call, names the path
+rm -f "$KEYDIR/ghcr-token"
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" GHCR_PUSH_TOKEN=; status=$?
+check "$([ "$status" -ne 0 ] && echo refused)" "refused" "no token file, no variable: refuses"
+check "$(nothing_written)" "0" "no token file, no variable: nothing written"
+check "$(wc -c < "$TMP/docker.log" | tr -d ' ')" "0" "no token file, no variable: no docker call at all"
+check "$(printf '%s' "$LAST_OUT" | grep -cF -- "$KEYDIR/ghcr-token" || true)" "1" "no token file, no variable: error names the ghcr-token path"
 
 exit "$fail"
