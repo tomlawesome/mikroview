@@ -19,18 +19,20 @@
 # missing token, key, evidence or SBOM, or on a ref it does not publish:
 #
 #   1. logs in to GHCR with GHCR_PUSH_TOKEN on stdin;
-#   2. copies the recorded digest, by digest, to each tag
+#   2. copies the recorded digest, by digest, to its immutable tag
 #      (`docker buildx imagetools create --prefer-index=false`, so the GHCR
-#      digest is the GitLab digest), and reads each tag back, refusing
+#      digest is the GitLab digest) -- preview-<short7> on a push to
+#      preview, vX.Y.Z on a release tag -- and reads it back, refusing
 #      unless it resolves to the recorded digest;
-#        a push to preview:  preview-<short7>, plus preview while this
-#                            commit is still preview's head;
-#        a vX.Y.Z tag:       vX.Y.Z, plus latest when it is the highest
-#                            vX.Y.Z tag;
 #   3. signs the GHCR digest with the fenced key and attests the SPDX SBOM
 #      to it, idempotently, as scripts/sign-release-digest.sh does in the
 #      GitLab registry: an existing signature or attestation that verifies
-#      against cosign.pub is left alone.
+#      against cosign.pub is left alone;
+#   4. only then moves the floating tag, the same way: preview while this
+#      commit is still preview's head, latest when this is the highest
+#      vX.Y.Z tag. A failed copy, sign or attest exits before this, so
+#      preview and latest never name a digest that is not signed and
+#      attested on GHCR; they keep their previous digest instead.
 #
 # Inputs (environment):
 #   CI_COMMIT_BRANCH / CI_COMMIT_TAG
@@ -81,7 +83,8 @@ commit="${CI_COMMIT_SHA:-}"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "CI_COMMIT_SHA is not a 40-hex commit: '${commit}'"
 short="${commit:0:7}"
 
-tags=()
+immutable=""
+floating=""
 if [[ -n "${CI_COMMIT_TAG:-}" ]]; then
   version="$CI_COMMIT_TAG"
   [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
@@ -89,9 +92,9 @@ if [[ -n "${CI_COMMIT_TAG:-}" ]]; then
   highest="${MV_HIGHEST_TAG:-}"
   [[ "$highest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
     fail "MV_HIGHEST_TAG is not vX.Y.Z ('${highest}') -- cannot tell whether latest should move"
-  tags+=("$version")
+  immutable="$version"
   if [[ "$highest" == "$version" ]]; then
-    tags+=("latest")
+    floating="latest"
   else
     say "latest not moved: ${version} is not the highest release tag (${highest} is)"
   fi
@@ -99,9 +102,9 @@ elif [[ "${CI_COMMIT_BRANCH:-}" == "preview" ]]; then
   head="${MV_PREVIEW_HEAD:-}"
   [[ "$head" =~ ^[0-9a-f]{40}$ ]] ||
     fail "MV_PREVIEW_HEAD is not a 40-hex commit ('${head}') -- cannot tell whether preview should move"
-  tags+=("preview-${short}")
+  immutable="preview-${short}"
   if [[ "$head" == "$commit" ]]; then
-    tags+=("preview")
+    floating="preview"
   else
     say "preview not moved: preview is now at ${head}, not ${commit}; publishing preview-${short} only"
   fi
@@ -141,13 +144,13 @@ digest="$(python3 -I scripts/gitlab-tested-image.py digest "$evidence" "$source_
 source_ref="${source_repo}@${digest}"
 target="${ghcr_image}@${digest}"
 
-# --- log in, copy by digest, read every tag back ---
+# --- log in, copy the immutable tag by digest, read it back ---
 printf '%s' "$GHCR_PUSH_TOKEN" |
   "$docker_cmd" login "$ghcr_registry" -u "$ghcr_user" --password-stdin ||
   fail "docker login to ${ghcr_registry} failed"
 
-for tag in "${tags[@]}"; do
-  dest="${ghcr_image}:${tag}"
+copy_tag() {
+  local dest="${ghcr_image}:$1" inspect_out got
   # --prefer-index=false: a single-manifest source is not wrapped in a new
   # index under a different digest (#1407).
   "$docker_cmd" buildx imagetools create --prefer-index=false -t "$dest" "$source_ref" ||
@@ -156,9 +159,11 @@ for tag in "${tags[@]}"; do
     fail "could not read back ${dest}: ${inspect_out}"
   got="$(printf '%s\n' "$inspect_out" | awk '$1 == "Digest:" { print $2; exit }')"
   [[ "$got" == "$digest" ]] ||
-    fail "${dest} resolves to ${got:-nothing}, not the recorded ${digest} -- refusing, nothing signed"
+    fail "${dest} resolves to ${got:-nothing}, not the recorded ${digest} -- refusing"
   say "copied ${source_ref} to ${dest}"
-done
+}
+
+copy_tag "$immutable"
 
 # --- sign and attest the GHCR digest, idempotently ---
 cosign_cmd="${MV_COSIGN:-}"
@@ -221,4 +226,9 @@ else
     "$target" ||
     fail "cosign could not attest ${sbom} to ${target}"
   say "attested ${sbom} (spdxjson) to ${target}"
+fi
+
+# --- only now, signed and attested: the floating tag ---
+if [[ -n "$floating" ]]; then
+  copy_tag "$floating"
 fi

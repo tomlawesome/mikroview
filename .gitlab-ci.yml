@@ -2707,7 +2707,10 @@ sync:mirror-to-github:
 # Registry scheme, registry.tomlawson.io/ai/mikroview: sha-<full sha>
 # (kept 7 days by the cleanup policy), preview and vX.Y.Z (kept). No
 # `latest` here: latest is GHCR's, moved by publish:ghcr on the highest
-# release tag (owner, #1472; #1563). Nothing consumable exists before its signature verifies.
+# release tag (owner, #1472; #1563). Nothing consumable exists before its
+# signature verifies: here publish:channel verifies first; on GHCR
+# publish:ghcr moves preview or latest only after it has signed and attested
+# the digest there.
 # ---------------------------------------------------------------------------
 
 # #1472 job 5. The needs are the full bar on a publishing ref: every
@@ -2841,10 +2844,10 @@ publish:channel:
 # longer pull from here; the pattern is push from the trusted side, the
 # signed evidence travels with the digest, verify at the destination.
 # scripts/publish-ghcr.sh copies the recorded digest by digest to
-# ghcr.io/tomlawesome/mikroview (preview-<short7> and, while still the
-# head, preview; or vX.Y.Z and, when highest, latest), reads every tag
-# back, then signs and attests the GHCR digest with the fenced key, as
-# sign:release-digest does here. The GitHub workflows only verify that
+# ghcr.io/tomlawesome/mikroview as preview-<short7> or vX.Y.Z, reads it
+# back, signs and attests the GHCR digest with the fenced key (as
+# sign:release-digest does here), and only then moves preview (while still
+# the head) or latest (when highest). The GitHub workflows only verify that
 # and attest (docs/release-signing.md).
 #
 # The signing runner, because the key is there. GHCR_PUSH_TOKEN is a
@@ -2880,19 +2883,29 @@ publish:ghcr:
     - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - |
       set -eu
-      # Read through CI_REPOSITORY_URL (the job token's read access); the
-      # URL carries that token, so it is never echoed. ls-remote matches by
-      # suffix, so keep only exact refs.
+      # Read with the job token's own read access, but never with the token
+      # on a command line: the predefined repository URL embeds it, and git hands the
+      # URL to git-remote-https as an argument. The URL here is bare; the
+      # token travels as an HTTP header set through git's environment
+      # config (GIT_CONFIG_*), built with printf, a shell builtin.
+      # ls-remote matches by suffix, so keep only exact refs.
+      repo="${CI_SERVER_URL}/${CI_PROJECT_PATH}.git"
+      GIT_CONFIG_COUNT=1
+      GIT_CONFIG_KEY_0=http.extraHeader
+      GIT_CONFIG_VALUE_0="Authorization: Basic $(printf '%s' "gitlab-ci-token:${CI_JOB_TOKEN}" | base64 -w0)"
+      export GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
       if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        MV_HIGHEST_TAG="$(git ls-remote --tags --refs "$CI_REPOSITORY_URL" 'refs/tags/v*' |
+        MV_HIGHEST_TAG="$(git ls-remote --tags --refs "$repo" 'refs/tags/v*' |
           awk '{ sub("^refs/tags/", "", $2); print $2 }' |
           grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
         export MV_HIGHEST_TAG
       else
-        MV_PREVIEW_HEAD="$(git ls-remote "$CI_REPOSITORY_URL" "refs/heads/$CI_COMMIT_BRANCH" |
+        MV_PREVIEW_HEAD="$(git ls-remote "$repo" "refs/heads/$CI_COMMIT_BRANCH" |
           awk -v r="refs/heads/$CI_COMMIT_BRANCH" '$2 == r { print $1 }')"
         export MV_PREVIEW_HEAD
       fi
+      # The header stays in this shell only: the script does no git.
+      unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
       bash scripts/publish-ghcr.sh
 
 # ---------------------------------------------------------------------------

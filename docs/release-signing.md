@@ -87,14 +87,16 @@ missing. Then it:
 1. logs in to `ghcr.io` with `GHCR_PUSH_TOKEN`, piped on stdin;
 2. copies the recorded digest, by digest, to `ghcr.io/tomlawesome/mikroview`
    with `docker buildx imagetools create --prefer-index=false`, so the GHCR
-   digest is the GitLab digest: `preview-<short7>`, plus `preview` while the
-   commit is still `preview`'s head; or `vX.Y.Z`, plus `latest` when the tag is
-   the highest `vX.Y.Z`. The job reads the head and the tag list with
-   `git ls-remote`; the `publish-ghcr` resource group runs one at a time. Each
-   tag is read back and must resolve to the recorded digest;
+   digest is the GitLab digest, under its immutable tag: `preview-<short7>`
+   or `vX.Y.Z`. It is read back and must resolve to the recorded digest;
 3. signs the GHCR digest with the fenced key and attests the SPDX SBOM to it,
    leaving an existing signature or attestation that verifies alone, as
-   `sign:release-digest` does in the GitLab registry.
+   `sign:release-digest` does in the GitLab registry;
+4. only then moves the floating tag, read back the same way: `preview` while
+   the commit is still `preview`'s head, or `latest` when the tag is the
+   highest `vX.Y.Z`. The job reads the head and the tag list with
+   `git ls-remote`, the job token in a header rather than the URL; the
+   `publish-ghcr` resource group runs one at a time.
 
 `.github/workflows/publish-from-gitlab.yml` (a push to `preview`) and
 `.github/workflows/release-on-tag.yml` (a `v*` tag) build and tag nothing.
@@ -106,9 +108,11 @@ whose predicate becomes the SBOM GitHub attests; then attests provenance and
 that SBOM (`actions/attest`) and verifies both with `gh attestation verify`.
 
 `countersign.yml` verifies the key-based signature and SBOM attestation on
-the GHCR digest, adds the keyless signature there and verifies it. If
-`publish:ghcr` fails, GHCR keeps its previous `preview`/`latest`; re-run the
-job, then the GitHub workflow. `docker.yml` is `workflow_dispatch` only and
+the GHCR digest, adds the keyless signature there and verifies it.
+`preview` and `latest` never name a digest that is not signed and attested on
+GHCR: a copy, signature or attestation that fails stops `publish:ghcr` before
+step 4, so they keep their previous digest. Re-run the job, then the GitHub
+workflow. `docker.yml` is `workflow_dispatch` only and
 is deleted once two preview publishes and one release have gone through this
 path.
 

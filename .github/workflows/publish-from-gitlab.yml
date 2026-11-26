@@ -89,9 +89,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # publish:ghcr writes the tag first and the attestation last, so the
-      # tag alone is not "published": wait until the attestation is there
-      # too. Each probe is read-only.
+      # publish:ghcr writes preview-<short7> before it signs and attests, so
+      # the tag alone is not "published": wait until the attestation is
+      # there too. Each probe is read-only. Whatever digest this settles on
+      # is key-verified in the next step before anything attests it.
       - name: Wait for preview-<short7> and its attestation on GHCR
         id: wait
         run: |
