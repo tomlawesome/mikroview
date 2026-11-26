@@ -76,6 +76,8 @@ protected = ("publish_ref" in rules) or ('"preview"' in rules or "preview" in ru
 print("protected_refs=" + ("yes" if protected and "publish_ref" in rules + pub or protected else "no"))
 sign_tags = doc["sign:release-digest"].get("tags")
 print("tags=" + ("yes" if sign_tags and job.get("tags") == sign_tags else "no"))
+# CI_REPOSITORY_URL carries the job token: never on a command line
+print("repourl=" + ("no" if "CI_REPOSITORY_URL" in lines(job) else "yes"))
 print("script=" + ("yes" if "scripts/publish-ghcr.sh" in lines(job) else "no"))
 PY
 )"
@@ -84,6 +86,7 @@ PY
   check "$(get needs_channel)" "yes" "publish:ghcr needs publish:channel"
   check "$(get protected_refs)" "yes" "publish:ghcr runs only on protected refs (preview push or v* tag)"
   check "$(get tags)" "yes" "publish:ghcr uses the signing runner's tags (as sign:release-digest)"
+  check "$(get repourl)" "yes" "publish:ghcr script does not use CI_REPOSITORY_URL (it carries the job token)"
   check "$(get script)" "yes" "publish:ghcr script calls scripts/publish-ghcr.sh"
 else
   echo "FAIL - PyYAML is not available; cannot check .gitlab-ci.yml structure"; fail=1

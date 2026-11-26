@@ -54,6 +54,7 @@ DOCKER_STUB="$TMP/docker"
 cat > "$DOCKER_STUB" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_DOCKER_CALLS:-/dev/null}"
+printf 'docker %s\n' "$*" >> "${STUB_ORDER_LOG:-/dev/null}"
 case "$1" in
   login)
     cat >> "${STUB_LOGIN_STDIN:-/dev/null}"
@@ -73,6 +74,7 @@ COSIGN_STUB="$TMP/cosign"
 cat > "$COSIGN_STUB" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_COSIGN_CALLS:-/dev/null}"
+printf 'cosign %s\n' "$*" >> "${STUB_ORDER_LOG:-/dev/null}"
 case "$1" in
   verify) printf '%s' "${STUB_VERIFY_OUTPUT:-}"; exit "${STUB_VERIFY_EXIT:-1}" ;;
   verify-attestation) printf '%s' "${STUB_VERIFY_ATT_OUTPUT:-}"; exit "${STUB_VERIFY_ATT_EXIT:-1}" ;;
@@ -83,7 +85,7 @@ chmod +x "$COSIGN_STUB"
 
 LAST_OUT=""
 run() {  # run <name>=<value>...  (fresh logs each time)
-  rm -f "$TMP/docker.log" "$TMP/cosign.log" "$TMP/stdin.log"
+  rm -f "$TMP/docker.log" "$TMP/cosign.log" "$TMP/stdin.log" "$TMP/order.log"
   : > "$TMP/docker.log"; : > "$TMP/cosign.log"; : > "$TMP/stdin.log"
   LAST_OUT="$(env -i PATH="/usr/bin:/bin" \
     CI_REGISTRY=registry.example.test \
@@ -99,6 +101,7 @@ run() {  # run <name>=<value>...  (fresh logs each time)
     MV_COSIGN="$COSIGN_STUB" \
     MV_EVIDENCE="$EVIDENCE" \
     MV_SBOM="$SBOM" \
+    STUB_ORDER_LOG="$TMP/order.log" \
     STUB_DOCKER_CALLS="$TMP/docker.log" \
     STUB_COSIGN_CALLS="$TMP/cosign.log" \
     STUB_LOGIN_STDIN="$TMP/stdin.log" \
@@ -212,5 +215,43 @@ check "$(has "verify-attestation --key" "$TMP/cosign.log")" "yes" "skip check us
 # 10. Default destination when MV_GHCR_IMAGE is unset.
 run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" MV_GHCR_IMAGE=; status=$?
 check "$(has "-t ghcr.io/tomlawesome/mikroview:preview-${SHORT} " "$TMP/docker.log")" "yes" "default destination is ghcr.io/tomlawesome/mikroview"
+
+# 11. Order: the immutable tag first, then sign and attest the GHCR digest,
+# and only then the floating tags (preview / latest).
+line_of() {  # first line number in the order log matching a fixed string, or 0
+  grep -nF -- "$1" "$TMP/order.log" | head -1 | cut -d: -f1 | grep . || echo 0
+}
+last_line_of() { grep -nF -- "$1" "$TMP/order.log" | tail -1 | cut -d: -f1 | grep . || echo 0; }
+before() { [ "$1" -gt 0 ] && [ "$2" -gt 0 ] && [ "$1" -lt "$2" ] && echo yes || echo no; }
+
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT"
+imm="$(line_of "-t ${GHCR}:preview-${SHORT} ")"
+flo="$(line_of "-t ${GHCR}:preview ")"
+sgn="$(last_line_of "cosign sign ")"
+att="$(last_line_of "cosign attest ")"
+check "$(before "$imm" "$sgn")" "yes" "preview: immutable tag written before cosign sign"
+check "$(before "$sgn" "$flo")" "yes" "preview: cosign sign before the floating preview tag"
+check "$(before "$att" "$flo")" "yes" "preview: cosign attest before the floating preview tag"
+
+run CI_COMMIT_TAG=v1.2.3 MV_HIGHEST_TAG=v1.2.3
+imm="$(line_of "-t ${GHCR}:v1.2.3 ")"
+flo="$(line_of "-t ${GHCR}:latest ")"
+sgn="$(last_line_of "cosign sign ")"
+att="$(last_line_of "cosign attest ")"
+check "$(before "$imm" "$sgn")" "yes" "tag: vX.Y.Z written before cosign sign"
+check "$(before "$sgn" "$flo")" "yes" "tag: cosign sign before the latest tag"
+check "$(before "$att" "$flo")" "yes" "tag: cosign attest before the latest tag"
+
+# 12. Failed sign or attest: no floating tag is written at all.
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" STUB_COSIGN_EXIT=1; status=$?
+check "$([ "$status" -ne 0 ] && echo refused)" "refused" "cosign failure (preview): refuses"
+check "$(has "-t ${GHCR}:preview ${SRC}" "$TMP/order.log")" "no" "cosign failure (preview): no floating preview tag"
+run CI_COMMIT_TAG=v1.2.3 MV_HIGHEST_TAG=v1.2.3 STUB_COSIGN_EXIT=1; status=$?
+check "$([ "$status" -ne 0 ] && echo refused)" "refused" "cosign failure (tag): refuses"
+check "$(has "-t ${GHCR}:latest " "$TMP/order.log")" "no" "cosign failure (tag): no latest tag"
+# attest alone failing (sign already verifies): still no floating tag
+run CI_COMMIT_BRANCH=preview MV_PREVIEW_HEAD="$COMMIT" STUB_VERIFY_EXIT=0 STUB_VERIFY_OUTPUT='[{"critical":{}}]' STUB_COSIGN_EXIT=1; status=$?
+check "$([ "$status" -ne 0 ] && echo refused)" "refused" "attest failure: refuses"
+check "$(has "-t ${GHCR}:preview ${SRC}" "$TMP/order.log")" "no" "attest failure: no floating preview tag"
 
 exit "$fail"
