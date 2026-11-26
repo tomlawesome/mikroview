@@ -87,6 +87,7 @@ LAST_OUT=""
 run() {  # run <name>=<value>...  (fresh logs each time)
   rm -f "$TMP/docker.log" "$TMP/cosign.log" "$TMP/stdin.log" "$TMP/order.log"
   : > "$TMP/docker.log"; : > "$TMP/cosign.log"; : > "$TMP/stdin.log"
+  # shellcheck disable=SC2034  # kept for debugging a failing case
   LAST_OUT="$(env -i PATH="/usr/bin:/bin" \
     CI_REGISTRY=registry.example.test \
     CI_REGISTRY_USER=gitlab-ci-token \
