@@ -1910,6 +1910,8 @@ gate:scripts:
     - scripts/sign-release-digest.test.sh
     - scripts/verify-release-signature.test.sh
     - scripts/govulncheck-gate.test.sh
+    - scripts/publish-ghcr.test.sh
+    - scripts/github-workflows-ghcr-only.test.sh
     # #1358: these four existed but nothing ran them, so the recorder's
     # scripted session broke on v0.6.1 with every test still green.
     - scripts/record-upgrade-fixture.test.sh
