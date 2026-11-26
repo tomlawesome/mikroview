@@ -2850,11 +2850,12 @@ publish:channel:
 # the head) or latest (when highest). The GitHub workflows only verify that
 # and attest (docs/release-signing.md).
 #
-# The signing runner, because the key is there. GHCR_PUSH_TOKEN is a
-# protected, masked CI/CD variable the owner creates: a GitHub token that
-# can write this one package. This GitLab is CE (see sign:release-digest),
-# so any job in a protected pipeline could read it; it can write only the
-# package. The head and highest-tag checks are read here with git, so the
+# The signing runner, because the key and the GHCR push token are there.
+# The token is a classic personal access token with only write:packages
+# (GHCR accepts only classic tokens); the owner stores it as the file
+# ghcr-token next to cosign.key in the runner's read-only mount (#1569).
+# There is no CI/CD variable: this GitLab is CE (see sign:release-digest),
+# so any job in a protected pipeline could read one. The head and highest-tag checks are read here with git, so the
 # script stays git-free and testable; the resource group serialises runs
 # so a late, older pipeline reads a head or tag list that already shows
 # the newer one and leaves preview / latest alone.
