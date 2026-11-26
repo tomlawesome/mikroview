@@ -370,10 +370,18 @@ check "$([ "$rc" -eq 0 ] && echo true || echo false)" "the current version's own
 
 # --- #1570: pending-disclosure `allowed-for: vX` passes for that release only
 
+# cut_release <dir> <version>: VERSION, a dated changelog heading and a
+# review record for <version>, so only the markers decide the result.
+cut_release() {
+  printf '%s\n' "$2" >"$1/VERSION"
+  printf '# Changelog\n\n## [%s] - 2026-02-01\n\nFixes.\n\n## [0.1.0] - 2026-01-01\n\nInitial release.\n' "$2" >"$1/CHANGELOG.md"
+  printf '# Review v%s\n' "$2" >"$1/docs/reviews/2026-02-01-v$2.md"
+}
+
 # older record, marker allowed for the version being cut -> passes, ok line names file and version
 c7d="$TMP/case7d-allowed-for-current"
 cp -r "$good" "$c7d"
-printf '0.2.0\n' >"$c7d/VERSION"
+cut_release "$c7d" 0.2.0
 printf '\n<!-- pending-disclosure: #1 allowed-for: v0.2.0 -->\n' >>"$c7d/docs/reviews/2026-01-01-v0.1.0.md"
 run "$c7d"
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "an older record's marker allowed-for the version being cut passes (rc=$rc)"
@@ -383,7 +391,7 @@ check "$(printf '%s\n' "$out" | grep 'ok:' | grep -F 'docs/reviews/2026-01-01-v0
 # same marker, a different version being cut -> fails, names the file
 c7e="$TMP/case7e-allowed-for-other"
 cp -r "$good" "$c7e"
-printf '0.3.0\n' >"$c7e/VERSION"
+cut_release "$c7e" 0.3.0
 printf '\n<!-- pending-disclosure: #1 allowed-for: v0.2.0 -->\n' >>"$c7e/docs/reviews/2026-01-01-v0.1.0.md"
 run "$c7e"
 check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a marker allowed-for another version fails (rc=$rc)"
@@ -393,7 +401,7 @@ check "$(case "$out" in *"FAIL: docs/reviews/2026-01-01-v0.1.0.md"*) echo true;;
 # two markers, one allowed for this release and one without allowed-for -> fails
 c7f="$TMP/case7f-allowed-and-bare"
 cp -r "$good" "$c7f"
-printf '0.2.0\n' >"$c7f/VERSION"
+cut_release "$c7f" 0.2.0
 printf '\n<!-- pending-disclosure: #1 allowed-for: v0.2.0 -->\n<!-- pending-disclosure: #2 -->\n' >>"$c7f/docs/reviews/2026-01-01-v0.1.0.md"
 run "$c7f"
 check "$([ "$rc" -ne 0 ] && echo true || echo false)" "one allowed marker plus one bare marker fails (rc=$rc)"
@@ -403,7 +411,7 @@ check "$(case "$out" in *"FAIL: docs/reviews/2026-01-01-v0.1.0.md"*) echo true;;
 # two markers, one allowed for this release and one for another version -> fails
 c7g="$TMP/case7g-allowed-and-other"
 cp -r "$good" "$c7g"
-printf '0.2.0\n' >"$c7g/VERSION"
+cut_release "$c7g" 0.2.0
 printf '\n<!-- pending-disclosure: #1 allowed-for: v0.2.0 -->\n<!-- pending-disclosure: #2 allowed-for: v0.9.0 -->\n' >>"$c7g/docs/reviews/2026-01-01-v0.1.0.md"
 run "$c7g"
 check "$([ "$rc" -ne 0 ] && echo true || echo false)" "one allowed marker plus one for another version fails (rc=$rc)"
@@ -411,7 +419,7 @@ check "$([ "$rc" -ne 0 ] && echo true || echo false)" "one allowed marker plus o
 # two markers both allowed for this release -> passes
 c7h="$TMP/case7h-two-allowed"
 cp -r "$good" "$c7h"
-printf '0.2.0\n' >"$c7h/VERSION"
+cut_release "$c7h" 0.2.0
 printf '\n<!-- pending-disclosure: #1 allowed-for: v0.2.0 -->\n<!-- pending-disclosure: #2 allowed-for: v0.2.0 -->\n' >>"$c7h/docs/reviews/2026-01-01-v0.1.0.md"
 run "$c7h"
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "two markers both allowed-for the version being cut pass (rc=$rc)"
