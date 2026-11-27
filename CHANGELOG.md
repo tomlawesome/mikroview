@@ -16,6 +16,15 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-26
+
+### Security
+
+- **The token that writes images to GHCR stays on the signing host**
+  (#1569). It is read only by the job that publishes, from the same
+  read-only mount as the signing key, rather than from a CI/CD variable
+  every job in a release pipeline could read.
+
 ### Fixed
 
 - **Images reach GHCR again** (#1563). GitHub's hosted runners cannot reach
