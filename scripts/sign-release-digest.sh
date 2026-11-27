@@ -170,9 +170,9 @@ fi
 
 # The signature goes into the transparency log, unlike orbit's key-based
 # signing, which sets --tlog-upload=false. That is the one place the two
-# projects genuinely differ: since #1472 step 3 this signature stays in the
-# GitLab registry (GitHub copies the image only), so the Rekor entry is its
-# one public record, and it outlives the registry's retention.
+# projects genuinely differ: the Rekor entry is this signature's public
+# record, and it outlives the registry's retention (publish-ghcr.sh signs
+# the GHCR copy the same way, #1563).
 #
 # It is not a preference. `cosign verify --key` requires a log entry by
 # default (--insecure-ignore-tlog defaults to false, and cosign's own help

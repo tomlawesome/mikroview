@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -135,7 +136,10 @@ func TestUpgradeFixturesOpenOnGauntlet(t *testing.T) {
 				apiTokenName:     m.APITokenName,
 				apiTokenKindless: version == "v0.1.0", // #1202 review R12
 				totp:             m.SecondFactorEnrolled,
-				oldFormat:        true, // recorded by a release before #1450
+				// #1450 shipped in v0.7.0: recordings from v0.7.0 on are
+				// already bound to the store name and must open unchanged
+				// (#1566).
+				oldFormat: recordedBefore(version, "v0.7.0"),
 			})
 		})
 	}
@@ -323,4 +327,36 @@ func productionStoreName(t *testing.T, file string) string {
 		t.Fatalf("no production store name known for %s", file)
 	}
 	return n
+}
+
+// recordedBefore reports whether release version (vX.Y.Z) is older than
+// than. A name that does not parse counts as older: every recording
+// before the fixtures were named by version is pre-#1450.
+func recordedBefore(version, than string) bool {
+	parse := func(v string) ([3]int, bool) {
+		var n [3]int
+		parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+		if len(parts) != 3 {
+			return n, false
+		}
+		for i, p := range parts {
+			x, err := strconv.Atoi(p)
+			if err != nil {
+				return n, false
+			}
+			n[i] = x
+		}
+		return n, true
+	}
+	a, okA := parse(version)
+	b, okB := parse(than)
+	if !okA || !okB {
+		return true
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }

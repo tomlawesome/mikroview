@@ -536,8 +536,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   itself.** Every image on GHCR carries GitHub's provenance and SBOM
   attestations, and a release also carries the owner's keyless
   Sigstore/cosign signature once `countersign.yml` has run; GitLab's
-  key-based signature and SBOM attestation stay on the same digest in the
-  GitLab registry. All of them are bound to the image *digest* rather than
+  key-based signature and SBOM attestation are on the same GHCR digest
+  (#1563). All of them are bound to the image *digest* rather than
   a tag (a tag is a mutable pointer; signing one would let it
   later point at different content and still verify).
 
@@ -547,12 +547,11 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   its own runner; the other is made keyless on GitHub, by hand, only after
   the first has been checked. Two signatures from the same place would be
   one signature — whoever drives the first drives the second — so the
-  second is a separate custody on two separate hosts. The two live in
-  different registries: the key-based signature stays on the GitLab
-  digest, and the keyless one is on GHCR. GitHub copies a digest only
-  after the key-based signature verifies, so on GHCR you check the
-  keyless one (step 2); with read access to the GitLab registry you can
-  check both yourself (steps 2 and 3). **Treat a release as good only if
+  second is a separate custody on two separate hosts. Both are on the
+  GHCR digest: GitLab pushes the image there and signs it with its key,
+  and GitHub attests and countersigns only after that key-based signature
+  verifies on GHCR, so you can check both yourself (steps 2 and 3).
+  **Treat a release as good only if
   every check you can run verifies. If the keyless signature is missing
   on GHCR, do not trust it**, and do not fall back to the attestations
   alone: a release without the countersignature has not had its second,
@@ -572,39 +571,36 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     --certificate-identity-regexp '^https://github.com/tomlawesome/mikroview/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-  # 3. GitLab's key-based signature and SBOM attestation live beside the
-  #    image in the GitLab registry, not on GHCR; needs read access to
-  #    registry.tomlawson.io/ai/mikroview.
-  cosign verify --key cosign.pub registry.tomlawson.io/ai/mikroview@sha256:...
+  # 3. GitLab's key-based signature and SBOM attestation, on the same
+  #    GHCR digest
+  cosign verify --key cosign.pub ghcr.io/tomlawesome/mikroview@sha256:...
   cosign verify-attestation --key cosign.pub --type spdxjson \
-    registry.tomlawson.io/ai/mikroview@sha256:...
+    ghcr.io/tomlawesome/mikroview@sha256:...
   ```
 
-  The key-based signature is not on GHCR. GitHub refuses to copy a digest
-  unless that signature and the SBOM attestation verify against
-  `cosign.pub` in the GitLab registry first, records the verification in the
-  publish run's uploaded evidence, and the signature is in the public Rekor
-  log; checking it yourself needs read access to the GitLab registry
-  (step 3).
+  GitHub attests nothing unless that signature and the SBOM attestation
+  verify against `cosign.pub` on the GHCR digest first, and records the
+  verification in the run's uploaded evidence; the signature is also in
+  the public Rekor log.
 
-  **Preview images carry the provenance and SBOM attestations** (step 1);
-  the key-based signature is on the GitLab digest. The second custody is
+  **Preview images carry the provenance and SBOM attestations** (step 1)
+  and the key-based signature (step 3). The second custody is
   for releases: a preview is not something to trust, it is something to
   test.
 
   **GHCR holds GitLab's bytes, never a rebuild.** GitLab builds each
   preview and release image once, runs the container tests and, for a
   release, checks that the binary reports the tag being released, all
-  against that build; then it signs the digest. GitHub builds nothing: it
-  verifies GitLab's key-based signature and SBOM attestation against
-  `cosign.pub` on the GitLab registry digest, and only then copies the
-  image itself (manifest and layers, by digest, with `docker buildx
-  imagetools create`) to GHCR; the signature stays in the GitLab registry.
+  against that build; then it signs the digest, copies the image itself
+  (manifest and layers, by digest, with `docker buildx imagetools create`)
+  to GHCR, and signs and attests the GHCR digest with the same key (#1563).
   Each GHCR tag is read back and must resolve to the same digest. `latest`
-  moves only on the highest release tag, to that release's digest,
-  re-checked after the move. GitHub then attests provenance and the SBOM
-  (the one from GitLab's verified attestation) on the GHCR digest; the
-  provenance records the GitHub workflow that published the digest, and the
+  moves only on the highest release tag, to that release's digest. GitHub
+  builds and tags nothing: it verifies GitLab's key-based signature and
+  SBOM attestation against `cosign.pub` on the GHCR digest, and only then
+  attests provenance and the SBOM (the one from GitLab's verified
+  attestation) there; the provenance records the GitHub workflow that
+  attested the digest, and the
   build itself is GitLab's, recorded by its signed evidence. See
   [docs/release-signing.md](docs/release-signing.md) and
   [docs/decisions/release-versioning.md](docs/decisions/release-versioning.md).
