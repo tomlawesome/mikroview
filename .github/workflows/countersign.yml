@@ -8,24 +8,19 @@ name: countersign
 # the owner's own GitHub login to run this means a bad release needs two
 # independent compromises on two hosts, not one.
 #
-# It verifies GitLab's evidence where it lives: the key-based signature
-# and SPDX attestation on the GitLab registry digest
-# (registry.tomlawson.io/ai/mikroview@<digest>), against the committed
-# cosign.pub, *before* adding anything, and refuses on mismatch, absence,
+# It verifies GitLab's evidence on the GHCR digest itself
+# (ghcr.io/tomlawesome/mikroview@<digest>): since #1563 GitLab's publish:ghcr
+# pushes the image there and signs and attests it with the fenced key, and
+# GitHub's runners cannot reach the owner's GitLab at all (geo-blocked). The
+# key-based signature and SPDX attestation must verify against the committed
+# cosign.pub *before* anything is added; it refuses on mismatch, absence,
 # ambiguity or expiry rather than falling through to a generic failure.
-# Only once that verification passes does it add the keyless
-# (Sigstore/OIDC) signature to the GHCR digest, then verifies it.
+# Only then does it add the keyless (Sigstore/OIDC) signature to the same
+# GHCR digest, and verify it. Dispatch this with the digest release-on-tag.yml
+# reports. A re-run of release-on-tag.yml leaves this countersignature in
+# place.
 #
-# Since #1472 step 3 the GHCR digest is GitLab's own bytes: release-on-tag.yml
-# (and publish-from-gitlab.yml for preview) verifies at the source and copies
-# the image only, by digest; GitLab's signature stays in the GitLab registry,
-# so this checks it there. Dispatch this with the digest release-on-tag.yml
-# reports; the digest must also resolve on GHCR. A re-run of
-# release-on-tag.yml leaves this countersignature in place.
-#
-# Secrets: GITLAB_READ_TOKEN_NAME and GITLAB_READ_TOKEN, the read-only GitLab
-# project access token the publish workflows use, to read the GitLab
-# registry; plus the built-in GITHUB_TOKEN with id-token: write (keyless
+# Secrets: only the built-in GITHUB_TOKEN, with id-token: write (keyless
 # signing) and packages: write (pushing the signature to our own package).
 #
 # No GitLab job replaces this, by design: it is the GitHub half of two
@@ -52,7 +47,6 @@ jobs:
       id-token: write
     env:
       IMAGE: ghcr.io/${{ github.repository }}
-      SOURCE_IMAGE: registry.tomlawson.io/ai/mikroview
       # Reaches every run: step through this variable, never inline as
       # ${{ inputs.digest }} -- inline, a crafted input would be pasted
       # into the shell as code (semgrep run-shell-injection), matching
@@ -77,13 +71,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to the GitLab registry (read only)
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: registry.tomlawson.io
-          username: ${{ secrets.GITLAB_READ_TOKEN_NAME }}
-          password: ${{ secrets.GITLAB_READ_TOKEN }}
-
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: v3.1.3
@@ -100,10 +87,10 @@ jobs:
       # each explicit and named, never a fall-through) lives in
       # scripts/verify-release-signature.sh, tested by
       # scripts/verify-release-signature.test.sh (Q6-F1).
-      - name: Verify GitLab's key-based signature and SBOM attestation at the source
+      - name: Verify GitLab's key-based signature and SBOM attestation on GHCR
         run: |
-          scripts/verify-release-signature.sh "${SOURCE_IMAGE}@${DIGEST}"
-          cosign verify-attestation --key cosign.pub --type spdxjson "${SOURCE_IMAGE}@${DIGEST}" > /dev/null
+          scripts/verify-release-signature.sh "ghcr.io/tomlawesome/mikroview@${DIGEST}"
+          cosign verify-attestation --key cosign.pub --type spdxjson "${IMAGE}@${DIGEST}" > /dev/null
 
       - name: Countersign keyless
         run: cosign sign --yes "${IMAGE}@${DIGEST}"

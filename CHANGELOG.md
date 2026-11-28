@@ -16,6 +16,27 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-26
+
+### Security
+
+- **The token that writes images to GHCR stays on the signing host**
+  (#1569). It is read only by the job that publishes, from the same
+  read-only mount as the signing key, rather than from a CI/CD variable
+  every job in a release pipeline could read.
+
+### Fixed
+
+- **Images reach GHCR again** (#1563). GitHub's hosted runners cannot reach
+  the GitLab server the image is built on, so the copy to GHCR timed out
+  (v0.7.0's failed four times). GitLab now pushes the signed digest to
+  `ghcr.io/tomlawesome/mikroview` itself and signs and attests it there;
+  GitHub reads only GHCR, verifies that signature and the SBOM attestation
+  against `cosign.pub`, then adds its provenance and SBOM attestations. The
+  key-based signature can now be checked on GHCR directly:
+  `cosign verify --key cosign.pub ghcr.io/tomlawesome/mikroview@sha256:...`
+  ([SECURITY.md](SECURITY.md)).
+
 ## [0.7.0] - 2026-11-21
 
 ### Breaking changes

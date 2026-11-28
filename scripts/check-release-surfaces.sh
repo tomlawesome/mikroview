@@ -259,8 +259,26 @@ for f in docs/reviews/*-v*.md; do
   fver=$(echo "$f" | sed -nE 's#^docs/reviews/.*-v([0-9]+\.[0-9]+\.[0-9]+)\.md$#\1#p')
   [ -n "$fver" ] || continue
   if version_lt "$fver" "$version" && grep -qF 'pending-disclosure' "$f" 2>/dev/null; then
-    fail "$f -- still carries a pending-disclosure marker from before v$version, replace it with the findings before this release"
-    pending_fails=$((pending_fails + 1))
+    # A marker may carry `allowed-for: v<version>` to stay for exactly
+    # that release (owner decision recorded on an issue, #1570). Every
+    # marker line must name the release being cut.
+    unallowed=0
+    while IFS= read -r line; do
+      case "$line" in
+        *pending-disclosure*)
+          case "$line" in
+            *"allowed-for: v$version "* | *"allowed-for: v$version") ;;
+            *) unallowed=1 ;;
+          esac
+          ;;
+      esac
+    done <"$f"
+    if [ "$unallowed" -eq 0 ]; then
+      ok "$f -- pending-disclosure allowed for v$version (owner decision on the issue)"
+    else
+      fail "$f -- still carries a pending-disclosure marker from before v$version, replace it with the findings before this release"
+      pending_fails=$((pending_fails + 1))
+    fi
   fi
 done
 if [ "$pending_fails" -eq 0 ]; then
